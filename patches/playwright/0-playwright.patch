@@ -1478,17 +1478,7 @@ index 31b29ac946..f8c6335c0a 100644
  #include "mozilla/dom/MouseEvent.h"
  #include "mozilla/dom/NumericInputTypes.h"
  #include "mozilla/dom/ProgressEvent.h"
-@@ -787,16 +788,23 @@ nsresult HTMLInputElement::InitFilePicker(FilePickerType aType) {
-   if (mPickerRunning) {
-     NS_WARNING("Just one nsIFilePicker is allowed");
-     return NS_ERROR_FAILURE;
-   }
- 
-   // Get parent nsPIDOMWindow object.
-   nsCOMPtr<Document> doc = OwnerDoc();
- 
-   RefPtr<BrowsingContext> bc = doc->GetBrowsingContext();
-   if (!bc) {
+@@ -848,6 +848,13 @@ nsresult HTMLInputElement::InitFilePicker(FilePickerType aType) {
      return NS_ERROR_FAILURE;
    }
  
