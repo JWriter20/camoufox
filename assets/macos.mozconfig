@@ -16,5 +16,5 @@ ac_add_options --disable-update-agent
 # export HOST_CC="$CROSS/clang/bin/clang"
 # export HOST_CXX="$CROSS/cla   ng/bin/clang++"
 
-# Only temporary
-# ac_add_options --with-macos-sdk="$MOZBUILD/MacOSX14.4.sdk"
+# Use pre-installed SDK (Apple CDN URLs expire)
+ac_add_options --with-macos-sdk="$HOME/.mozbuild/MacOSX26.1.sdk"

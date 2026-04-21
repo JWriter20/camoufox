@@ -537,7 +537,14 @@ export class PageHandler {
       this._pageTarget.ensureContextMenuClosed();
       // If someone asks us to dispatch mouse event outside of viewport, then we normally would drop it.
       const boundingBox = this._pageTarget._linkedBrowser.getBoundingClientRect();
-      if (x < 0 || y < 0 || x > boundingBox.width || y > boundingBox.height) {
+      // Use >= rather than > so that coordinates on the exact viewport edge
+      // fall into the out-of-viewport fallback. A mousemove dispatched at
+      // exactly x==width or y==height is handled by the widget layer as an
+      // edge/exit event (not eMouseMove), so the "juggler-mouse-event-hit-
+      // renderer" observer never fires for it. That causes sendEvents() to
+      // await forever, deadlocks activateAndRun's global chain, and every
+      // subsequent Input call queues behind it for the life of the page.
+      if (x < 0 || y < 0 || x >= boundingBox.width || y >= boundingBox.height) {
         if (type !== 'mousemove')
           return;
 
