@@ -416,6 +416,27 @@ def _build_init_script(values: Dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
+def _reconcile_camou_viewport(config: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+    """Return (width, height) Playwright should advertise as the context viewport.
+
+    Policy mirrored in additions/juggler/TargetRegistry.js and
+    patches/browser-init.patch: trust inner when consistent with outer,
+    else derive inner from outer, else default 1280x720.
+    """
+    SCROLLBAR, CHROME, MIN = 15, 85, 600
+    iw = config.get('window.innerWidth')
+    ih = config.get('window.innerHeight')
+    ow = config.get('window.outerWidth')
+    oh = config.get('window.outerHeight')
+    if not (iw or ih or ow or oh):
+        return None, None
+    if iw and ih and ow and oh and ow >= iw and ow - iw <= 40 and oh >= ih and oh - ih <= 200:
+        return iw, ih
+    if ow and oh and ow >= MIN and oh >= MIN:
+        return ow - SCROLLBAR, oh - CHROME
+    return 1280, 720
+
+
 def generate_context_fingerprint(
     preset: Optional[Dict] = None,
     os: Optional[str] = None,
@@ -562,13 +583,9 @@ def generate_context_fingerprint(
     ua = config.get('navigator.userAgent')
     if ua:
         context_options['user_agent'] = ua
-    sw = screen.get('width')
-    sh = screen.get('height')
-    if sw and sh:
-        context_options['viewport'] = {
-            'width': sw,
-            'height': max(sh - 28, 600),
-        }
+    vw, vh = _reconcile_camou_viewport(config)
+    if vw and vh:
+        context_options['viewport'] = {'width': vw, 'height': vh}
     dpr = screen.get('devicePixelRatio')
     if dpr:
         context_options['device_scale_factor'] = dpr

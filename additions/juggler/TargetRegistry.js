@@ -104,6 +104,27 @@ class DownloadInterceptor {
 
 const screencastService = Cc['@mozilla.org/juggler/screencast;1'].getService(Ci.nsIScreencastService);
 
+// Returns the fingerprint-derived viewport, or null when no fingerprint is set.
+// Trusts inner when consistent with outer (chrome within plausible range);
+// otherwise derives inner from outer. Falls back to 1280x720 when outer is
+// also nonsense. Kept in sync with the same logic in browser-init.js and
+// pythonlib/camoufox/fingerprints.py.
+function _reconcileCamouViewport() {
+  const SCROLLBAR = 15, CHROME = 85, MIN = 600;
+  const iw = ChromeUtils.camouGetInt?.("window.innerWidth");
+  const ih = ChromeUtils.camouGetInt?.("window.innerHeight");
+  const ow = ChromeUtils.camouGetInt?.("window.outerWidth");
+  const oh = ChromeUtils.camouGetInt?.("window.outerHeight");
+  if (!(iw || ih || ow || oh)) return null;
+  if (iw && ih && ow && oh &&
+      ow >= iw && ow - iw <= 40 &&
+      oh >= ih && oh - ih <= 200) {
+    return { width: iw, height: ih };
+  }
+  if (ow >= MIN && oh >= MIN) return { width: ow - SCROLLBAR, height: oh - CHROME };
+  return { width: 1280, height: 720 };
+}
+
 export class TargetRegistry {
   static instance() {
     return TargetRegistry._instance || null;
@@ -581,6 +602,12 @@ export class PageTarget {
     }
   }
 
+  _effectiveViewportSize() {
+    const reconciled = _reconcileCamouViewport();
+    if (reconciled) return reconciled;
+    return this._viewportSize || this._browserContext.defaultViewportSize;
+  }
+
   async updateViewportSize() {
     await waitForWindowReady(this._window);
     this.updateDPPXOverride();
@@ -593,8 +620,9 @@ export class PageTarget {
     //
     // The "default size" (1) is only respected when the page is opened.
     // Otherwise, explicitly set page viewport prevales over browser context
-    // default viewport.
-    const viewportSize = this._viewportSize || this._browserContext.defaultViewportSize;
+    // default viewport. When a fingerprint is active its inner dims win,
+    // making page.setViewportSize() a no-op — fingerprints are static.
+    const viewportSize = this._effectiveViewportSize();
     if (viewportSize) {
       const {width, height} = viewportSize;
       this._linkedBrowser.style.setProperty('width', width + 'px');
@@ -776,7 +804,7 @@ export class PageTarget {
         registry.emit(TargetRegistry.Events.ScreencastStopped, sessionId);
       },
     };
-    const viewport = this._viewportSize || this._browserContext.defaultViewportSize || { width: 0, height: 0 };
+    const viewport = this._effectiveViewportSize() || { width: 0, height: 0 };
     sessionId = screencastService.startVideoRecording(screencastClient, docShell, true, file, width, height, 0, viewport.width, viewport.height, devicePixelRatio * rect.top);
     this._videoRecordingInfo = { sessionId, file };
     this.emit(PageTarget.Events.ScreencastStarted);
@@ -817,7 +845,7 @@ export class PageTarget {
       screencastStopped() {
       },
     };
-    const viewport = this._viewportSize || this._browserContext.defaultViewportSize || { width: 0, height: 0 };
+    const viewport = this._effectiveViewportSize() || { width: 0, height: 0 };
     const screencastId = screencastService.startVideoRecording(screencastClient, docShell, false, '', width, height, quality || 90, viewport.width, viewport.height, devicePixelRatio * rect.top);
     this._screencastRecordingInfo = { screencastId };
     return { screencastId };

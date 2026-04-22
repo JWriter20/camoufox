@@ -1,5 +1,5 @@
 diff --git a/browser/base/content/browser-init.js b/browser/base/content/browser-init.js
-index 1cfa4b8497..bdf8d7202e 100644
+index 02f601d859..7153b6d8cd 100644
 --- a/browser/base/content/browser-init.js
 +++ b/browser/base/content/browser-init.js
 @@ -3,6 +3,16 @@
@@ -28,7 +28,7 @@ index 1cfa4b8497..bdf8d7202e 100644
        // When the fingerprinting resistance is enabled, making sure that we don't
        // have a maximum window to interfere with generating rounded window dimensions.
        document.documentElement.setAttribute("sizemode", "normal");
-@@ -310,6 +320,22 @@ var gBrowserInit = {
+@@ -272,6 +282,22 @@ var gBrowserInit = {
      // Update UI if browser is under remote control.
      gRemoteControl.updateVisualCue();
  
@@ -51,7 +51,7 @@ index 1cfa4b8497..bdf8d7202e 100644
      // If we are given a tab to swap in, take care of it before first paint to
      // avoid an about:blank flash.
      let tabToAdopt = this.getTabToAdopt();
-@@ -345,6 +371,31 @@ var gBrowserInit = {
+@@ -321,6 +347,31 @@ var gBrowserInit = {
        }
      }
  
@@ -83,51 +83,60 @@ index 1cfa4b8497..bdf8d7202e 100644
      // Wait until chrome is painted before executing code not critical to making the window visible
      this._boundDelayedStartup = this._delayedStartup.bind(this);
      window.addEventListener("MozAfterPaint", this._boundDelayedStartup);
-@@ -366,9 +417,152 @@ var gBrowserInit = {
+@@ -342,9 +393,161 @@ var gBrowserInit = {
        )?.removeAttribute("key");
      }
  
-+    // Set default size
-+    window.resizeTo(1280, 1040);
-+
-+    // Hijack the outer window size
-+    let outerWidth, outerHeight;
-+    if ((outerWidth = ChromeUtils.camouGetInt("window.outerWidth"))) {
-+      document.documentElement.style.setProperty('width', outerWidth + 'px');
-+      browser.style.setProperty('width', outerWidth + 'px');
-+      window.resizeTo(outerWidth, window.outerHeight);
-+    }
-+    if ((outerHeight = ChromeUtils.camouGetInt("window.outerHeight"))) {
-+      document.documentElement.style.setProperty('height', outerHeight + 'px');
-+      browser.style.setProperty('height', outerHeight + 'px');
-+      window.resizeTo(window.outerWidth, outerHeight);
-+    }
-+    browser.style.setProperty('box-sizing', 'content-box');
-+
-+    // Hijack the inner window size
++    // Reconcile fingerprint window dims. browserforge presets sometimes carry
++    // outer from a small capture that contradicts the inner viewport; pinning
++    // .browserStack to inner while resizing the window to outer then leaves
++    // unpainted voids. Policy: trust inner when outer ≈ inner + plausible
++    // chrome; else derive inner from outer; else default 1280x720. Mirrored
++    // in additions/juggler/TargetRegistry.js and pythonlib/camoufox/fingerprints.py.
++    const _SCROLLBAR = 15, _CHROME = 85, _MIN = 600;
 +    let innerWidth = ChromeUtils.camouGetInt("window.innerWidth") || ChromeUtils.camouGetInt("document.body.clientWidth");
 +    let innerHeight = ChromeUtils.camouGetInt("window.innerHeight") || ChromeUtils.camouGetInt("document.body.clientHeight");
-+
-+    if (innerWidth || innerHeight) {
-+      let win_inner_style = document.createElement('style');
-+      win_inner_style.innerHTML = `
++    let outerWidth = ChromeUtils.camouGetInt("window.outerWidth");
++    let outerHeight = ChromeUtils.camouGetInt("window.outerHeight");
++    let physicalW = 1280, physicalH = 1040;
++    if (innerWidth || innerHeight || outerWidth || outerHeight) {
++      const consistent = innerWidth && innerHeight && outerWidth && outerHeight &&
++          outerWidth >= innerWidth && outerWidth - innerWidth <= 40 &&
++          outerHeight >= innerHeight && outerHeight - innerHeight <= 200;
++      if (!consistent) {
++        if (outerWidth >= _MIN && outerHeight >= _MIN) {
++          innerWidth = outerWidth - _SCROLLBAR;
++          innerHeight = outerHeight - _CHROME;
++        } else {
++          innerWidth = 1280; innerHeight = 720;
++          outerWidth = innerWidth + _SCROLLBAR; outerHeight = innerHeight + _CHROME;
++        }
++      }
++      physicalW = outerWidth; physicalH = outerHeight;
++      document.documentElement.style.setProperty('width', outerWidth + 'px');
++      document.documentElement.style.setProperty('height', outerHeight + 'px');
++      browser.style.setProperty('width', outerWidth + 'px');
++      browser.style.setProperty('height', outerHeight + 'px');
++      browser.style.setProperty('box-sizing', 'content-box');
++      let innerStyle = document.createElement('style');
++      innerStyle.innerHTML = `
 +        .browserStack {
-+          ${innerWidth ? `width: ${innerWidth}px !important;` : ''}
-+          ${innerHeight ? `height: ${innerHeight}px !important;` : ''}
-+          ${innerHeight ? `flex: unset !important;` : ''}
++          width: ${innerWidth}px !important;
++          height: ${innerHeight}px !important;
++          flex: unset !important;
 +          overflow: auto;
 +          contain: size;
 +          scrollbar-width: none;
 +        }
 +      `;
-+      document.head.appendChild(win_inner_style);
++      document.head.appendChild(innerStyle);
++      // Grow native window if .browserStack doesn't fit in the content region.
++      let stack = document.querySelector('.browserStack');
++      let toolbarTop = stack ? stack.getBoundingClientRect().y : 0;
++      if (physicalW < innerWidth) physicalW = innerWidth;
++      if (physicalH < innerHeight + toolbarTop) physicalH = innerHeight + toolbarTop;
 +    }
-+
-+    if (innerWidth && innerHeight && !(outerWidth || outerHeight)) {
-+      let stackRect = __browserStack.getBoundingClientRect();
-+      let toolbarTop = stackRect.y;
-+      window.resizeBy(width - innerWidth, height + toolbarTop - innerHeight);
-+    }
++    window.resizeTo(physicalW, physicalH);
 +
 +    // Install addons if specified
 +    let addonPaths = ChromeUtils.camouGetStringList("addons");
