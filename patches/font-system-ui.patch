@@ -1,0 +1,60 @@
+Camoufox: spoof system-ui generic font family to match navigator.platform.
+
+Upstream Firefox's gfxPlatformFontList::GetSystemUIFontFamilies() resolves
+the `system-ui` generic via LookAndFeel::GetFont(StyleSystemFont::Menu, ...).
+On Linux that returns the real GTK system font (e.g. "Cantarell", "Ubuntu",
+"Noto Sans") regardless of how navigator.platform / userAgent is spoofed.
+
+CreepJS picks this up under `headless.systemFonts` -> system-ui resolves
+to a Linux font even when we claim to be macOS / Windows. This patch
+intercepts before LookAndFeel::GetFont() and returns:
+
+  - "Helvetica"     when navigator.platform starts with "Mac"
+  - "Segoe UI"      when navigator.platform starts with "Win"
+  - (falls through) otherwise
+
+navigator.platform is plumbed through the existing camoucfg /
+MaskConfig::GetString("navigator.platform") channel that the rest of
+Camoufox's spoofing already uses. MaskConfig.hpp is already included
+into gfxPlatformFontList.cpp by font-hijacker.patch (which sorts before
+this patch alphabetically), and gfx/thebes/moz.build already has
+LOCAL_INCLUDES += ["/camoucfg"], so we only need to insert the spoof
+check.
+
+Bug: daijro/camoufox#598
+
+--- a/gfx/thebes/gfxPlatformFontList.cpp
++++ b/gfx/thebes/gfxPlatformFontList.cpp
+@@ -2115,6 +2115,32 @@
+   nsFont systemFont;
+   gfxFontStyle fontStyle;
+   nsAutoString systemFontName;
++
++  // Camoufox: spoof system-ui based on navigator.platform so we don't leak
++  // the real OS's GTK/Win/Mac system font through CSS `font: system-ui`
++  // resolution. See daijro/camoufox#598.
++  if (auto platform = MaskConfig::GetString("navigator.platform")) {
++    const std::string& p = platform.value();
++    auto starts_with = [&](const char* prefix) {
++      size_t n = std::strlen(prefix);
++      return p.size() >= n &&
++             std::equal(prefix, prefix + n, p.begin(),
++                        [](char a, char b) {
++                          return std::tolower(static_cast<unsigned char>(a)) ==
++                                 std::tolower(static_cast<unsigned char>(b));
++                        });
++    };
++    if (starts_with("mac")) {
++      *aFamilies.AppendElement() = "Helvetica"_ns;
++      return;
++    }
++    if (starts_with("win")) {
++      *aFamilies.AppendElement() = "Segoe UI"_ns;
++      return;
++    }
++    // Linux / iPhone / unknown: fall through to upstream behavior.
++  }
++
+   if (aFontVisibilityProvider
+           ? aFontVisibilityProvider->ShouldResistFingerprinting(
+                 RFPTarget::FontVisibilityRestrictGenerics)
