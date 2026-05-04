@@ -450,7 +450,24 @@ export class PageHandler {
 
   async ['Page.reload']() {
     await this._pageTarget.activateAndRun(() => {
-      const doc = this._pageTarget._tab.linkedBrowser.ownerDocument;
+      const browser = this._pageTarget._tab.linkedBrowser;
+      // Camoufox: Firefox 146's Browser:Reload command is a no-op on about:blank
+      // (no history entry to reload). Fall back to a forced reloadWithFlags via
+      // browsingContext so the load event still fires and init scripts run.
+      try {
+        const uri = browser.currentURI?.spec;
+        if (uri === 'about:blank' || !uri) {
+          const bc = browser.browsingContext;
+          if (bc && typeof bc.reload === 'function') {
+            const Ci = Components.interfaces;
+            bc.reload(Ci.nsIWebNavigation.LOAD_FLAGS_NONE);
+            return;
+          }
+        }
+      } catch (e) {
+        dump(`juggler: reload-fallback failed: ${e}\n`);
+      }
+      const doc = browser.ownerDocument;
       doc.getElementById('Browser:Reload').doCommand();
     });
   }
@@ -537,7 +554,8 @@ export class PageHandler {
       this._pageTarget.ensureContextMenuClosed();
       // If someone asks us to dispatch mouse event outside of viewport, then we normally would drop it.
       const boundingBox = this._pageTarget._linkedBrowser.getBoundingClientRect();
-      if (x < 0 || y < 0 || x > boundingBox.width || y > boundingBox.height) {
+      // Treat exact-edge coordinates as out-of-viewport: a mousemove at x==width or y==height fires as an exit event instead of eMouseMove, so the hit-renderer signal never arrives and every later input event hangs behind it forever.
+      if (x < 0 || y < 0 || x >= boundingBox.width || y >= boundingBox.height) {
         if (type !== 'mousemove')
           return;
 
