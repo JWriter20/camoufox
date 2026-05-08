@@ -22,6 +22,8 @@ scripts/test*
 .idea
 /tests/*.disabled
 k8s/
+# Generated pytest harness (venv, pycache, upstream snapshot — all reproducible).
+tests-camoufox/
 
 # Old data
 _old/
