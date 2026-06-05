@@ -102,6 +102,12 @@ class Patcher:
                     print('='*70)
                     sys.exit(1)
 
+                # Semantic verification: a clean apply (no .rej) does NOT mean
+                # hunks landed where intended. Fuzzy context matching can apply
+                # a hunk to the wrong function and still exit 0. These assertions
+                # catch that. See scripts/patch-assertions.txt for the why.
+                self._verify_assertions()
+
             print('Complete!')
 
     def _apply_and_check(self, patch_file):
@@ -146,6 +152,137 @@ class Patcher:
             os.remove(rej)
 
         return rejects
+
+    def _verify_assertions(self):
+        """
+        Run scripts/patch-assertions.txt against the patched source tree.
+
+        A patch that applies with no .rej can still have landed in the wrong
+        place (fuzzy context match), or be a silent no-op. These assertions
+        verify the *semantic* result — required strings present, in the right
+        function, forbidden strings absent — and abort the build if any fail.
+        """
+        manifest = os.path.join('..', 'scripts', 'patch-assertions.txt')
+        if not os.path.exists(manifest):
+            print('WARNING: scripts/patch-assertions.txt missing — skipping '
+                  'post-patch verification')
+            return
+
+        print('\n' + '=' * 70)
+        print('Verifying post-patch assertions...')
+        print('=' * 70)
+
+        # Match a top-level function-opening line like:
+        #   nsresult HTMLInputElement::InitFilePicker(FilePickerType aType) {
+        # Used to bound an in_fn / absent_in_fn region to a single function.
+        fn_open = re.compile(r'^\s*[\w:<>,&*\s]+::\w+\s*\(')
+
+        def read_file(rel):
+            path = rel
+            if not os.path.exists(path):
+                return None
+            with open(path, 'r', encoding='utf-8', errors='replace') as fh:
+                return fh.read()
+
+        def function_body(text, sig_substr):
+            """Return the slice of `text` from the line containing sig_substr up
+            to (but not including) the next top-level function-opening line."""
+            lines = text.split('\n')
+            start = None
+            for i, ln in enumerate(lines):
+                if sig_substr in ln:
+                    start = i
+                    break
+            if start is None:
+                return None
+            end = len(lines)
+            for j in range(start + 1, len(lines)):
+                if fn_open.match(lines[j]) and sig_substr not in lines[j]:
+                    end = j
+                    break
+            return '\n'.join(lines[start:end])
+
+        failures = []
+        checked = 0
+        with open(manifest, 'r', encoding='utf-8') as fh:
+            for lineno, raw in enumerate(fh, 1):
+                line = raw.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = [p.strip() for p in line.split('|||')]
+                if len(parts) < 3:
+                    failures.append(f'{manifest}:{lineno}: malformed assertion '
+                                    f'(need at least: directive ||| file ||| '
+                                    f'arg): {line}')
+                    continue
+                directive = parts[0]
+                rel = parts[1]
+                # Shift so parts[1]/parts[2] below mean arg1/arg2 as before.
+                parts = [directive] + parts[2:]
+                checked += 1
+
+                text = read_file(rel)
+                if text is None:
+                    failures.append(f'[{directive}] {rel}: FILE NOT FOUND')
+                    continue
+
+                if directive == 'contains':
+                    needle = parts[1]
+                    if needle not in text:
+                        failures.append(
+                            f'[contains] {rel}: missing expected string:\n'
+                            f'           {needle!r}')
+                elif directive == 'absent':
+                    needle = parts[1]
+                    if needle in text:
+                        failures.append(
+                            f'[absent] {rel}: forbidden string present:\n'
+                            f'           {needle!r}')
+                elif directive in ('in_fn', 'absent_in_fn') and len(parts) < 3:
+                    failures.append(
+                        f'{manifest}:{lineno}: {directive} needs '
+                        f'4 fields (directive ||| file ||| fn ||| substring)')
+                elif directive == 'in_fn':
+                    sig, needle = parts[1], parts[2]
+                    body = function_body(text, sig)
+                    if body is None:
+                        failures.append(
+                            f'[in_fn] {rel}: function matching {sig!r} not found')
+                    elif needle not in body:
+                        failures.append(
+                            f'[in_fn] {rel}: {needle!r}\n'
+                            f'        NOT found inside function {sig!r} '
+                            f'(landed elsewhere or missing)')
+                elif directive == 'absent_in_fn':
+                    sig, needle = parts[1], parts[2]
+                    body = function_body(text, sig)
+                    if body is None:
+                        # Function gone entirely — can't violate; warn only.
+                        print(f'  note: [absent_in_fn] function {sig!r} not '
+                              f'found in {rel}; skipping')
+                    elif needle in body:
+                        failures.append(
+                            f'[absent_in_fn] {rel}: {needle!r}\n'
+                            f'        WRONGLY present inside function {sig!r}')
+                else:
+                    failures.append(
+                        f'{manifest}:{lineno}: unknown directive {directive!r}')
+
+        if failures:
+            print('\n' + '=' * 70)
+            print(f'ERROR: {len(failures)} post-patch assertion(s) FAILED '
+                  f'({checked} checked):')
+            print('=' * 70)
+            for f in failures:
+                print(f'  - {f}')
+            print('=' * 70)
+            print('A patch applied without a .rej but produced the wrong '
+                  'result. Fix the patch (often: add unique context lines so '
+                  'the hunk cannot fuzzy-match the wrong location), then '
+                  're-run.')
+            sys.exit(1)
+
+        print(f'All {checked} post-patch assertion(s) passed.')
 
     def _update_mozconfig(self):
         """
