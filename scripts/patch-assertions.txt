@@ -1,0 +1,56 @@
+# Post-patch semantic assertions.
+#
+# WHY THIS EXISTS
+# ---------------
+# `patch` reports success when a hunk's *context* matches — it does NOT verify
+# the hunk landed in the function/region you intended. With fuzz (GNU patch
+# defaults to fuzz=2) a hunk can silently apply to the WRONG place and still
+# exit 0 with no .rej file. This bit us on the FF150 upgrade: the file-picker
+# interception block in patches/playwright/0-playwright.patch applied to
+# InitColorPicker() instead of InitFilePicker() because v150 gave both
+# functions identical surrounding context. It compiled fine, shipped, and
+# silently broke every resume upload (filechooser never fired -> fallback to
+# setInputFiles -> FlashCollection deterministic-fill tests failed).
+#
+# These assertions run AFTER all patches apply and BEFORE the build. Any
+# unmet assertion aborts patch.py with a non-zero exit, so a misapplied or
+# no-op patch fails loudly instead of producing a quietly-broken browser.
+#
+# FORMAT (one assertion per line; '#' and blank lines ignored)
+# Fields are separated by ' ||| ' (space-pipe-pipe-pipe-space) so C++ tokens
+# like '::' and '||' can appear freely inside a field.
+#
+#   contains ||| <file> ||| <substring>
+#       <substring> must appear somewhere in <file>.
+#
+#   absent ||| <file> ||| <substring>
+#       <substring> must NOT appear anywhere in <file>.
+#
+#   in_fn ||| <file> ||| <fn_signature_substring> ||| <substring>
+#       <substring> must appear AFTER the line containing <fn_signature_substring>
+#       and BEFORE the next top-level function-opening line. Pins a hunk to a
+#       specific function — this is the check that catches wrong-function apply.
+#
+#   absent_in_fn ||| <file> ||| <fn_signature_substring> ||| <substring>
+#       <substring> must NOT appear inside the named function's body.
+#
+# Paths are relative to the Firefox source root (the dir patch.py cd's into),
+# AFTER copy-additions.sh has run — so juggler additions live at juggler/...,
+# not additions/juggler/...
+
+# --- file-picker interception (patches/playwright/0-playwright.patch) ---
+# The interception call MUST live in InitFilePicker, NOT InitColorPicker.
+in_fn ||| dom/html/HTMLInputElement.cpp ||| ::InitFilePicker(FilePickerType ||| docShell->FilePickerShown(this)
+absent_in_fn ||| dom/html/HTMLInputElement.cpp ||| ::InitColorPicker() ||| IsFileInputInterceptionEnabled
+contains ||| dom/html/HTMLInputElement.cpp ||| #include "nsDocShell.h"
+
+# The docshell machinery the call above depends on must exist.
+contains ||| docshell/base/nsDocShell.h ||| bool IsFileInputInterceptionEnabled();
+contains ||| docshell/base/nsDocShell.h ||| void FilePickerShown(
+contains ||| docshell/base/nsDocShell.cpp ||| nsDocShell::IsFileInputInterceptionEnabled()
+contains ||| docshell/base/nsDocShell.cpp ||| nsDocShell::FilePickerShown(
+
+# --- mousemove page-edge fix (additions/juggler/protocol/PageHandler.js) ---
+# Edge coordinates must be treated as out-of-viewport (>=, not >), else input
+# events hang forever behind a never-delivered hit-renderer signal.
+contains ||| juggler/protocol/PageHandler.js ||| x >= boundingBox.width || y >= boundingBox.height
