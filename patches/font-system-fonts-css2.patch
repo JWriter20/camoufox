@@ -197,20 +197,21 @@ Bug: daijro/camoufox#598 (sibling of font-system-ui.patch)
  #if defined(XP_MACOSX) || defined(MOZ_WIDGET_UIKIT)
    aName = u"-apple-system"_ns;
    // Values taken from a macOS 10.15 system.
+diff --git a/gfx/thebes/gfxMacPlatformFontList.mm b/gfx/thebes/gfxMacPlatformFontList.mm
 --- a/gfx/thebes/gfxMacPlatformFontList.mm
 +++ b/gfx/thebes/gfxMacPlatformFontList.mm
-@@ -19,6 +19,7 @@
+@@ -17,6 +17,7 @@
  #include "SharedFontList-impl.h"
-
+ 
  #include "harfbuzz/hb.h"
 +#include "MaskConfig.hpp"
-
+ 
  #include "AppleUtils.h"
  #include "MainThreadUtils.h"
-@@ -395,7 +396,42 @@
+@@ -394,7 +395,48 @@ void gfxMacPlatformFontList::LookupSystemFont(LookAndFeel::FontID aSystemFontID,
    }
    NS_ASSERTION(font, "system font not set");
-
+ 
 -  aSystemFontName.AssignASCII("-apple-system");
 +  // Camoufox: spoof the CSS2 system-font keyword family resolution
 +  // (caption / icon / menu / message-box / small-caption / status-bar)
@@ -254,9 +255,10 @@ Bug: daijro/camoufox#598 (sibling of font-system-ui.patch)
 +  } else {
 +    aSystemFontName.AssignASCII("-apple-system");
 +  }
-
+ 
    NSFontSymbolicTraits traits = font.fontDescriptor.symbolicTraits;
    aFontStyle.style = (traits & NSFontItalicTrait) ? FontSlantStyle::ITALIC
+
 --- a/gfx/thebes/moz.build
 +++ b/gfx/thebes/moz.build
 @@ -302,3 +302,9 @@

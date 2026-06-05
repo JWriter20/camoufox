@@ -73,7 +73,7 @@ contains ||| gfx/thebes/gfxPlatformFontList.cpp ||| *aFamilies.AppendElement() =
 # misapply can't pass silently.
 contains ||| widget/gtk/nsLookAndFeel.cpp ||| MaskConfig::GetString("navigator.platform")
 contains ||| layout/base/nsLayoutUtils.cpp ||| MaskConfig::GetString("navigator.platform")
-contains ||| gfx/thebes/gfxMacPlatformFontList.mm ||| aFontName.AssignLiteral(u"Segoe UI")
+contains ||| gfx/thebes/gfxMacPlatformFontList.mm ||| aSystemFontName.AssignASCII("Segoe UI")
 
 # --- screen / device dimension single-source (patches/screen-spoofing.patch) ---
 # MaskConfig must be the source for screen.availLeft (and siblings); a misapply
