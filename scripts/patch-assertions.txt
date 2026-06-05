@@ -54,3 +54,40 @@ contains ||| docshell/base/nsDocShell.cpp ||| nsDocShell::FilePickerShown(
 # Edge coordinates must be treated as out-of-viewport (>=, not >), else input
 # events hang forever behind a never-delivered hit-renderer signal.
 contains ||| juggler/protocol/PageHandler.js ||| x >= boundingBox.width || y >= boundingBox.height
+
+# --- system-ui generic font spoof (patches/system-ui-font-spoofing.patch) ---
+# Upstream daijro b7f6c8d (#599) spoofs the `system-ui` generic inside
+# GetSystemUIFontFamilies(). We dropped our redundant font-system-ui.patch
+# (it was dead code — upstream's block returns first), but still guard
+# upstream's so a future rebase can't silently drop it. The in_fn body-bounder
+# can't reliably close a *free* function (statement lines containing
+# `Class::method(` trip the fn_open regex), so pin location with the needle
+# that lands above the first such line, and assert the Win-branch literal
+# with a plain contains (unique to this spoof in this file).
+in_fn ||| gfx/thebes/gfxPlatformFontList.cpp ||| GetSystemUIFontFamilies( ||| MaskConfig::GetString("navigator.platform")
+contains ||| gfx/thebes/gfxPlatformFontList.cpp ||| *aFamilies.AppendElement() = "Segoe UI"_ns
+
+# --- CSS2 system-font keyword spoof (patches/font-system-fonts-css2.patch) ---
+# Three independent resolution paths (gtk LookAndFeel, mac cocoa, RFP-on
+# nsLayoutUtils) all need the spoof; assert one anchor per file so a partial
+# misapply can't pass silently.
+contains ||| widget/gtk/nsLookAndFeel.cpp ||| MaskConfig::GetString("navigator.platform")
+contains ||| layout/base/nsLayoutUtils.cpp ||| MaskConfig::GetString("navigator.platform")
+contains ||| gfx/thebes/gfxMacPlatformFontList.mm ||| aFontName.AssignLiteral(u"Segoe UI")
+
+# --- screen / device dimension single-source (patches/screen-spoofing.patch) ---
+# MaskConfig must be the source for screen.availLeft (and siblings); a misapply
+# reintroduces the matchMedia device-width mismatch regression (v150).
+contains ||| dom/base/nsScreen.cpp ||| MaskConfig::GetRect("screen.availLeft"
+contains ||| layout/style/nsMediaFeatures.cpp ||| MaskConfig::
+
+# --- WebRTC IP-leak prefs (settings/camoufox.cfg) ---
+contains ||| ../settings/camoufox.cfg ||| media.peerconnection.ice.proxy_only_if_behind_proxy
+
+# --- proxy https-first disable (settings/camoufox.cfg) ---
+contains ||| ../settings/camoufox.cfg ||| dom.security.https_first
+
+# --- skip mouse-move coalescing for juggler events (patches/playwright/0-playwright.patch) ---
+# The coalescing-skip guard must check mJugglerEventId in HandleRealMouseMoveEvent,
+# else juggler input dispatch can stall many seconds under parallel load.
+contains ||| dom/ipc/BrowserChild.cpp ||| !aEvent.mJugglerEventId
