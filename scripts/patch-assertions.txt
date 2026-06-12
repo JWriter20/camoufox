@@ -84,6 +84,23 @@ contains ||| layout/style/nsMediaFeatures.cpp ||| MaskConfig::
 # --- WebRTC IP-leak prefs (settings/camoufox.cfg) ---
 contains ||| ../settings/camoufox.cfg ||| media.peerconnection.ice.proxy_only_if_behind_proxy
 
+# --- WebRTC IP spoof must read the spoof IP from config (patches/webrtc-ip-spoofing.patch) ---
+# The spoof gate (ShouldSpoofCandidateIP) and the mask source (getMaskForIP)
+# and the stats sanitizer MUST read config["webrtc:ipv4"/"ipv6"] via MaskConfig.
+# An earlier build wired these to WebRTCIPManager storage that was only ever
+# filled by a window.setWebRTCIPv4() JS call that nothing ever made -> the gate
+# always returned false, the spoof never ran, and the real public IP leaked in
+# every srflx ICE candidate. We assert presence with plain `contains` (the
+# in_fn body-bounder can't close these tiny functions: their body lines contain
+# `::GetString(`, which trips the fn_open regex). The whole-file `absent` is the
+# real regression guard: if the dead WebRTCIPManager read path ever comes back,
+# this fails loudly. The three GetString("webrtc:ipv4") sites are gate +
+# getMaskForIP + stats sanitizer.
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| MaskConfig::GetString("webrtc:ipv4")
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| MaskConfig::GetString("webrtc:ipv6")
+absent ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| WebRTCIPManager::GetIPv4
+absent ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| WebRTCIPManager::GetIPv6
+
 # --- proxy https-first disable (settings/camoufox.cfg) ---
 contains ||| ../settings/camoufox.cfg ||| dom.security.https_first
 
