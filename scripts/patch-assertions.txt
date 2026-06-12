@@ -91,3 +91,11 @@ contains ||| ../settings/camoufox.cfg ||| dom.security.https_first
 # The coalescing-skip guard must check mJugglerEventId in HandleRealMouseMoveEvent,
 # else juggler input dispatch can stall many seconds under parallel load.
 contains ||| dom/ipc/BrowserChild.cpp ||| !aEvent.mJugglerEventId
+
+# --- roverfox.s. cross-process pref sync (patches/cross-process-storage.patch) ---
+# The roverfox.s. entry in sDynamicPrefOverrideList is what lets per-context
+# fingerprint storage prefs sync across content processes. The original hunk
+# had hand-edited @@ counts that git apply rejects outright and GNU patch only
+# tolerates by luck (same failure class that silently dropped the css2 .mm
+# hunk). If the hunk is ever silently skipped, fail the build here.
+contains ||| modules/libpref/Preferences.cpp ||| PREF_LIST_ENTRY("roverfox.s.")
