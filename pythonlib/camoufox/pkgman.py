@@ -116,17 +116,40 @@ def _get_library_version() -> str:
 
 def _find_version_constraints(versions: List[Dict], library_version: str) -> Optional[Dict]:
     """
-    Find browser build constraints for the current library version.
-    Each entry has python_library {min, max} and browser {min, max}.
+    Find the browser build constraint for the current library version.
+
+    If the version matches no entry (such as '0.0.0' from a source checkout),
+    fall back to the newest entry instead of None, so filtering stays on.
     """
     lib_parts = _parse_semver(library_version)
+    newest: Optional[Dict] = None
+    newest_min: Optional[Tuple[int, ...]] = None
     for entry in versions:
         py_lib = entry.get('python_library', {})
         lib_min = _parse_semver(py_lib.get('min', '0'))
         lib_max = _parse_semver(py_lib.get('max', '999'))
         if lib_min <= lib_parts < lib_max:
             return entry.get('browser')
-    return None
+        if newest_min is None or lib_min > newest_min:
+            newest_min, newest = lib_min, entry.get('browser')
+    return newest
+
+
+def _channel_bounds(
+    browser: Optional[Dict], channel: str
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Get the (min, max) build bounds for a channel ('stable' or 'prerelease').
+
+    Supports a per-channel form ({stable: {...}, prerelease: {...}}) and a flat
+    {min, max} form applied to both. A missing bound means no limit.
+    """
+    if not browser:
+        return None, None
+    if 'stable' in browser or 'prerelease' in browser:
+        section = browser.get(channel) or {}
+        return section.get('min'), section.get('max')
+    return browser.get('min'), browser.get('max')
 
 
 @dataclass
@@ -140,8 +163,10 @@ class RepoConfig:
     pattern: str
     os_map: Dict[str, str]
     arch_map: Dict[str, str]
-    build_min: Optional[str] = None
-    build_max: Optional[str] = None
+    stable_min: Optional[str] = None
+    stable_max: Optional[str] = None
+    prerelease_min: Optional[str] = None
+    prerelease_max: Optional[str] = None
 
     @property
     def repo(self) -> str:
@@ -178,14 +203,12 @@ class RepoConfig:
         if 'pattern' not in d:
             raise ValueError(f"Repo '{d.get('name', 'unknown')}' missing required pattern")
 
-        build_min: Optional[str] = None
-        build_max: Optional[str] = None
+        browser: Optional[Dict] = None
         if d.get('versions'):
             library_version = spoof_library_version or _get_library_version()
             browser = _find_version_constraints(d['versions'], library_version)
-            if browser:
-                build_min = browser.get('min')
-                build_max = browser.get('max')
+        stable_min, stable_max = _channel_bounds(browser, 'stable')
+        prerelease_min, prerelease_max = _channel_bounds(browser, 'prerelease')
 
         # Parse comma separated repos list (primary + fallbacks)
         raw_repo = d['repo']
@@ -197,8 +220,10 @@ class RepoConfig:
             pattern=d['pattern'],
             os_map=OS_MAP,
             arch_map=ARCH_MAP,
-            build_min=build_min,
-            build_max=build_max,
+            stable_min=stable_min,
+            stable_max=stable_max,
+            prerelease_min=prerelease_min,
+            prerelease_max=prerelease_max,
         )
 
     @staticmethod
@@ -263,15 +288,20 @@ class RepoConfig:
         regex = re.sub(r'\{(\w+)\}', lambda m: replacements.get(m[1], m[0]), pattern)
         return re.compile(regex)
 
-    def is_version_supported(self, version: 'Version') -> bool:
+    def is_version_supported(self, version: 'Version', is_prerelease: bool = False) -> bool:
         """
-        Check if a version is within the repo's supported build range
+        Check if a build is within the supported range for its channel.
+
+        Stable and prerelease have independent ranges (set in repos.yml). A
+        missing bound means that channel is unconstrained.
         """
-        if self.build_min is None or self.build_max is None:
+        if is_prerelease:
+            build_min, build_max = self.prerelease_min, self.prerelease_max
+        else:
+            build_min, build_max = self.stable_min, self.stable_max
+        if build_min is None or build_max is None:
             return True
-        build_min = Version(build=self.build_min)
-        build_max = Version(build=self.build_max)
-        return build_min <= version <= build_max
+        return Version(build=build_min) <= version <= Version(build=build_max)
 
 
 @total_ordering
@@ -295,6 +325,14 @@ class Version:
     @property
     def full_string(self) -> str:
         return f"{self.version}-{self.build}"
+
+    @property
+    def is_alpha(self) -> bool:
+        """
+        Whether the build channel is alpha (like 'alpha.26'). Alpha builds are
+        always treated as prereleases, regardless of the GitHub release flag
+        """
+        return self.build.split('.')[0].lower() == 'alpha'
 
     def __eq__(self, other) -> bool:
         return self.sorted_rel == other.sorted_rel
@@ -472,7 +510,8 @@ class CamoufoxFetcher(GitHubDownloader):
             return None
 
         version = Version(build=match['build'], version=match['version'])
-        if not self.repo_config.is_version_supported(version):
+        is_prerelease = bool(release and release.get('prerelease')) or version.is_alpha
+        if not self.repo_config.is_version_supported(version, is_prerelease):
             return None
 
         return version, asset['browser_download_url']
@@ -617,7 +656,10 @@ def list_available_versions(
                 continue
 
             version = Version(build=match['build'], version=match['version'])
-            if not config.is_version_supported(version):
+            asset_prerelease = is_prerelease or version.is_alpha
+            if asset_prerelease and not include_prerelease:
+                continue
+            if not config.is_version_supported(version, asset_prerelease):
                 continue
 
             if version.build in seen_builds:
@@ -628,7 +670,7 @@ def list_available_versions(
                 AvailableVersion(
                     version=version,
                     url=asset['browser_download_url'],
-                    is_prerelease=is_prerelease,
+                    is_prerelease=asset_prerelease,
                     asset_id=asset.get('id'),
                     asset_size=asset.get('size'),
                     asset_updated_at=asset.get('updated_at'),

@@ -14,8 +14,11 @@ browsers:
           min: "0.5.0"
           max: "1"
         browser:
-          min: "beta.19"
-          max: "1"
+          # Stable channel
+          stable:
+            min: "beta.19"
+            max: "1"
+          # Prerelease channel (including "alpha.*" builds) matches all versions
 
   - repo: coryking/camoufox
     name: CoryKing
@@ -24,7 +27,7 @@ browsers:
       - python_library:
           min: "0.5.0"
           max: "1"
-        # assume all browsers
+        # Assume all browsers
 
 # GeoIP database repositories
 geoip:

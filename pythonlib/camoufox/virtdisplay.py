@@ -116,6 +116,13 @@ class VirtualDisplay:
             if self.debug:
                 print("Terminating virtual display:", self._display)
             self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                if self.debug:
+                    print("Xvfb did not exit in time, killing forcefully")
+                self.proc.kill()
+                self.proc.wait()
 
     @staticmethod
     def _assert_linux() -> None:
