@@ -109,6 +109,21 @@ contains ||| ../settings/camoufox.cfg ||| dom.security.https_first
 # else juggler input dispatch can stall many seconds under parallel load.
 contains ||| dom/ipc/BrowserChild.cpp ||| !aEvent.mJugglerEventId
 
+# --- juggler MUST be built + packaged into omni.ja (patches/playwright/0-playwright.patch) ---
+# These two hunks are what actually puts the juggler chrome JS into the
+# browser. Without them the C++ observer hooks above still compile, the build
+# succeeds, and Playwright/camoufox-js silently CANNOT drive the browser
+# (no `content juggler` in chrome.manifest -> 0 juggler files in omni.ja).
+# This is the "retarget trap": building after `make set-target`
+# (patch.py --mozconfig-only) on a tree patched for a DIFFERENT target leaves
+# these registration hunks unapplied. Always full-patch per target; these
+# assertions fail the build loudly if juggler would be dropped from omni.ja.
+# 1) DIRS registration — juggler is added under the ENABLE_WEBDRIVER block.
+contains ||| toolkit/toolkit.mozbuild ||| "/juggler"
+# 2) Packaging — the juggler jar + manifest must be listed in the installer
+#    manifest so they land in omni.ja.
+contains ||| browser/installer/package-manifest.in ||| chrome/juggler.manifest
+
 # --- roverfox.s. cross-process pref sync (patches/cross-process-storage.patch) ---
 # The roverfox.s. entry in sDynamicPrefOverrideList is what lets per-context
 # fingerprint storage prefs sync across content processes. The original hunk
