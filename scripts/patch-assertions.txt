@@ -72,8 +72,17 @@ contains ||| gfx/thebes/gfxPlatformFontList.cpp ||| *aFamilies.AppendElement() =
 # nsLayoutUtils) all need the spoof; assert one anchor per file so a partial
 # misapply can't pass silently.
 contains ||| widget/gtk/nsLookAndFeel.cpp ||| MaskConfig::GetString("navigator.platform")
-contains ||| layout/base/nsLayoutUtils.cpp ||| MaskConfig::GetString("navigator.platform")
 contains ||| gfx/thebes/gfxMacPlatformFontList.mm ||| aSystemFontName.AssignASCII("Segoe UI")
+# nsLayoutUtils: the spoof helper GetSpoofedSystemFontForRFP is UPSTREAM Mozilla
+# code; our patch (a) injects the navigator.platform switch into it AND (b) makes
+# ComputeSystemFont actually CALL it. The original guard only ran the helper
+# under RFPTarget::FontVisibilityRestrictGenerics, which is NOT default-enabled
+# and Camoufox never turns on -> the spoof was dead and the real "sans-serif"
+# leaked (CreepJS "platform hints: sans-serif:Linux"). A plain `contains` for
+# the helper passed even while dead, so pin the CALL-SITE guard inside
+# ComputeSystemFont specifically: it must take the spoof path on a spoofed
+# navigator.platform, not only the RFP target.
+in_fn ||| layout/base/nsLayoutUtils.cpp ||| void nsLayoutUtils::ComputeSystemFont( ||| MaskConfig::GetString("navigator.platform").has_value()
 
 # --- screen / device dimension single-source (patches/screen-spoofing.patch) ---
 # MaskConfig must be the source for screen.availLeft (and siblings); a misapply
