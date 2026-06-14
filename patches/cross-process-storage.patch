@@ -80,13 +80,15 @@ index abcdef1234..1234abcdef 100644
  [PRemoteQuotaObject::MaybeUpdateSize]
  description = This must be synchronous until quota file streams become non-blocking. The synchronous message is never used on the main thread or the PBackground thread or a DOM worker threed.
 diff --git a/modules/libpref/Preferences.cpp b/modules/libpref/Preferences.cpp
-index aaaaaa0000..bbbbbb0000 100644
+index c307035819..4402775905 100644
 --- a/modules/libpref/Preferences.cpp
 +++ b/modules/libpref/Preferences.cpp
-@@ -6364,6 +6364,8 @@ static const PrefListEntry sDynamicPrefOverrideList[]{
+@@ -6519,6 +6519,8 @@ static const PrefListEntry sDynamicPrefOverrideList[]{
      PREF_LIST_ENTRY("toolkit.mozprotocol.url"),
      PREF_LIST_ENTRY("toolkit.telemetry.log.level"),
      PREF_LIST_ENTRY("ui."),
 +    // Roverfox: allow cross-process sync of per-context fingerprint storage
 +    PREF_LIST_ENTRY("roverfox.s."),
  };
+ 
+ #undef PREF_LIST_ENTRY

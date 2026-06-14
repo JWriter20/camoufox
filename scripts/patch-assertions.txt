@@ -1,0 +1,186 @@
+# Post-patch semantic assertions.
+#
+# WHY THIS EXISTS
+# ---------------
+# `patch` reports success when a hunk's *context* matches — it does NOT verify
+# the hunk landed in the function/region you intended. With fuzz (GNU patch
+# defaults to fuzz=2) a hunk can silently apply to the WRONG place and still
+# exit 0 with no .rej file. This bit us on the FF150 upgrade: the file-picker
+# interception block in patches/playwright/0-playwright.patch applied to
+# InitColorPicker() instead of InitFilePicker() because v150 gave both
+# functions identical surrounding context. It compiled fine, shipped, and
+# silently broke every resume upload (filechooser never fired -> fallback to
+# setInputFiles -> FlashCollection deterministic-fill tests failed).
+#
+# These assertions run AFTER all patches apply and BEFORE the build. Any
+# unmet assertion aborts patch.py with a non-zero exit, so a misapplied or
+# no-op patch fails loudly instead of producing a quietly-broken browser.
+#
+# FORMAT (one assertion per line; '#' and blank lines ignored)
+# Fields are separated by ' ||| ' (space-pipe-pipe-pipe-space) so C++ tokens
+# like '::' and '||' can appear freely inside a field.
+#
+#   contains ||| <file> ||| <substring>
+#       <substring> must appear somewhere in <file>.
+#
+#   absent ||| <file> ||| <substring>
+#       <substring> must NOT appear anywhere in <file>.
+#
+#   in_fn ||| <file> ||| <fn_signature_substring> ||| <substring>
+#       <substring> must appear AFTER the line containing <fn_signature_substring>
+#       and BEFORE the next top-level function-opening line. Pins a hunk to a
+#       specific function — this is the check that catches wrong-function apply.
+#
+#   absent_in_fn ||| <file> ||| <fn_signature_substring> ||| <substring>
+#       <substring> must NOT appear inside the named function's body.
+#
+# Paths are relative to the Firefox source root (the dir patch.py cd's into),
+# AFTER copy-additions.sh has run — so juggler additions live at juggler/...,
+# not additions/juggler/...
+
+# --- file-picker interception (patches/playwright/0-playwright.patch) ---
+# The interception call MUST live in InitFilePicker, NOT InitColorPicker.
+in_fn ||| dom/html/HTMLInputElement.cpp ||| ::InitFilePicker(FilePickerType ||| docShell->FilePickerShown(this)
+absent_in_fn ||| dom/html/HTMLInputElement.cpp ||| ::InitColorPicker() ||| IsFileInputInterceptionEnabled
+contains ||| dom/html/HTMLInputElement.cpp ||| #include "nsDocShell.h"
+
+# The docshell machinery the call above depends on must exist.
+contains ||| docshell/base/nsDocShell.h ||| bool IsFileInputInterceptionEnabled();
+contains ||| docshell/base/nsDocShell.h ||| void FilePickerShown(
+contains ||| docshell/base/nsDocShell.cpp ||| nsDocShell::IsFileInputInterceptionEnabled()
+contains ||| docshell/base/nsDocShell.cpp ||| nsDocShell::FilePickerShown(
+
+# --- mousemove page-edge fix (additions/juggler/protocol/PageHandler.js) ---
+# Edge coordinates must be treated as out-of-viewport (>=, not >), else input
+# events hang forever behind a never-delivered hit-renderer signal.
+contains ||| juggler/protocol/PageHandler.js ||| x >= boundingBox.width || y >= boundingBox.height
+
+# --- system-ui generic font spoof (patches/system-ui-font-spoofing.patch) ---
+# Upstream daijro b7f6c8d (#599) spoofs the `system-ui` generic inside
+# GetSystemUIFontFamilies(). We dropped our redundant font-system-ui.patch
+# (it was dead code — upstream's block returns first), but still guard
+# upstream's so a future rebase can't silently drop it. The in_fn body-bounder
+# can't reliably close a *free* function (statement lines containing
+# `Class::method(` trip the fn_open regex), so pin location with the needle
+# that lands above the first such line, and assert the Win-branch literal
+# with a plain contains (unique to this spoof in this file).
+in_fn ||| gfx/thebes/gfxPlatformFontList.cpp ||| GetSystemUIFontFamilies( ||| MaskConfig::GetString("navigator.platform")
+contains ||| gfx/thebes/gfxPlatformFontList.cpp ||| *aFamilies.AppendElement() = "Segoe UI"_ns
+
+# --- CSS2 system-font keyword spoof (patches/font-system-fonts-css2.patch) ---
+# Three independent resolution paths (gtk LookAndFeel, mac cocoa, RFP-on
+# nsLayoutUtils) all need the spoof; assert one anchor per file so a partial
+# misapply can't pass silently.
+contains ||| widget/gtk/nsLookAndFeel.cpp ||| MaskConfig::GetString("navigator.platform")
+contains ||| gfx/thebes/gfxMacPlatformFontList.mm ||| aSystemFontName.AssignASCII("Segoe UI")
+# nsLayoutUtils: the spoof helper GetSpoofedSystemFontForRFP is UPSTREAM Mozilla
+# code; our patch (a) injects the navigator.platform switch into it AND (b) makes
+# ComputeSystemFont actually CALL it. The original guard only ran the helper
+# under RFPTarget::FontVisibilityRestrictGenerics, which is NOT default-enabled
+# and Camoufox never turns on -> the spoof was dead and the real "sans-serif"
+# leaked (CreepJS "platform hints: sans-serif:Linux"). A plain `contains` for
+# the helper passed even while dead, so pin the CALL-SITE guard inside
+# ComputeSystemFont specifically: it must take the spoof path on a spoofed
+# navigator.platform, not only the RFP target.
+in_fn ||| layout/base/nsLayoutUtils.cpp ||| void nsLayoutUtils::ComputeSystemFont( ||| MaskConfig::GetString("navigator.platform").has_value()
+
+# --- screen / device dimension single-source (patches/screen-spoofing.patch) ---
+# MaskConfig must be the source for screen.availLeft (and siblings); a misapply
+# reintroduces the matchMedia device-width mismatch regression (v150).
+contains ||| dom/base/nsScreen.cpp ||| MaskConfig::GetRect("screen.availLeft"
+contains ||| layout/style/nsMediaFeatures.cpp ||| MaskConfig::
+
+# --- WebRTC IP-leak prefs (settings/camoufox.cfg) ---
+contains ||| ../settings/camoufox.cfg ||| media.peerconnection.ice.proxy_only_if_behind_proxy
+
+# --- WebRTC IP spoof must read the spoof IP from config (patches/webrtc-ip-spoofing.patch) ---
+# The spoof gate (ShouldSpoofCandidateIP) and the mask source (getMaskForIP)
+# and the stats sanitizer MUST read config["webrtc:ipv4"/"ipv6"] via MaskConfig.
+# An earlier build wired these to WebRTCIPManager storage that was only ever
+# filled by a window.setWebRTCIPv4() JS call that nothing ever made -> the gate
+# always returned false, the spoof never ran, and the real public IP leaked in
+# every srflx ICE candidate. We assert presence with plain `contains` (the
+# in_fn body-bounder can't close these tiny functions: their body lines contain
+# `::GetString(`, which trips the fn_open regex). The whole-file `absent` is the
+# real regression guard: if the dead WebRTCIPManager read path ever comes back,
+# this fails loudly. The three GetString("webrtc:ipv4") sites are gate +
+# getMaskForIP + stats sanitizer.
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| MaskConfig::GetString("webrtc:ipv4")
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| MaskConfig::GetString("webrtc:ipv6")
+absent ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| WebRTCIPManager::GetIPv4
+absent ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| WebRTCIPManager::GetIPv6
+
+# --- WebRTC synthetic-srflx fabrication (TCP-proxy n/a fix) ---
+# Behind a TCP-only proxy STUN (UDP) can't form a srflx, so the rewrite-only
+# spoof has nothing to operate on -> WebRTC reports n/a (anti-bot tell). We
+# fabricate a synthetic srflx carrying the spoof/proxy IP into the candidate
+# stream, the local SDP, AND getStats() (all three must agree or the mismatch
+# itself leaks). These assertions fail loudly if any of the three injection
+# sites or the gathering-complete trigger is dropped on a future regen.
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| MaybeFabricateSrflxCandidate
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| typ srflx raddr 0.0.0.0 rport 0
+# Trigger must live in IceGatheringStateChange (fires the synthetic candidate
+# before the null-candidate "done" event at gathering-complete).
+in_fn ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| void PeerConnectionImpl::IceGatheringStateChange( ||| MaybeFabricateSrflxCandidate
+# getStats() must synthesize a matching srflx local-candidate when the SDP has
+# one but the real stats don't (self-consistency across surfaces).
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| RTCIceCandidateType::Srflx
+# The fabrication must emit a typ-host candidate (foundation 0) AND a TCP host
+# (foundation 2) before the srflx, matching real Firefox's two-candidate shape.
+# Without these CreepJS shows the srflx in the host box / foundation 1 (a tell).
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| typ host tcptype active
+# The srflx must be DELAYED (realistic STUN round-trip) not emitted simultaneously
+# with the host -- a zero-delay srflx is an unnatural timing signature.
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| RandomSrflxDelayMs
+# Priorities must be the exact real-Firefox constants (varying them is a tell).
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| 2122252543
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| 1686052863
+
+# --- WebRTC: keep host candidates so the stock two-candidate shape shows ---
+# no_host MUST be false (real mDNS .local host candidate present). no_host=true
+# left a single-srflx shape that doesn't match a real browser. obfuscate_host
+# keeps it leak-free; proxy_only_if_behind_proxy still prevents the real-IP leak.
+contains ||| ../settings/camoufox.cfg ||| media.peerconnection.ice.no_host", false
+absent ||| ../settings/camoufox.cfg ||| media.peerconnection.ice.no_host", true
+
+# --- proxy https-first disable (settings/camoufox.cfg) ---
+contains ||| ../settings/camoufox.cfg ||| dom.security.https_first
+
+# --- skip mouse-move coalescing for juggler events (patches/playwright/0-playwright.patch) ---
+# The coalescing-skip guard must check mJugglerEventId in HandleRealMouseMoveEvent,
+# else juggler input dispatch can stall many seconds under parallel load.
+contains ||| dom/ipc/BrowserChild.cpp ||| !aEvent.mJugglerEventId
+
+# --- juggler MUST be built + packaged into omni.ja (patches/playwright/0-playwright.patch) ---
+# These two hunks are what actually puts the juggler chrome JS into the
+# browser. Without them the C++ observer hooks above still compile, the build
+# succeeds, and Playwright/camoufox-js silently CANNOT drive the browser
+# (no `content juggler` in chrome.manifest -> 0 juggler files in omni.ja).
+# This is the "retarget trap": building after `make set-target`
+# (patch.py --mozconfig-only) on a tree patched for a DIFFERENT target leaves
+# these registration hunks unapplied. Always full-patch per target; these
+# assertions fail the build loudly if juggler would be dropped from omni.ja.
+# 1) DIRS registration — juggler is added under the ENABLE_WEBDRIVER block.
+contains ||| toolkit/toolkit.mozbuild ||| "/juggler"
+# 2) Packaging — the juggler jar + manifest must be listed in the installer
+#    manifest so they land in omni.ja.
+contains ||| browser/installer/package-manifest.in ||| chrome/juggler.manifest
+
+# --- roverfox.s. cross-process pref sync (patches/cross-process-storage.patch) ---
+# The roverfox.s. entry in sDynamicPrefOverrideList is what lets per-context
+# fingerprint storage prefs sync across content processes. The original hunk
+# had hand-edited @@ counts that git apply rejects outright and GNU patch only
+# tolerates by luck (same failure class that silently dropped the css2 .mm
+# hunk). If the hunk is ever silently skipped, fail the build here.
+contains ||| modules/libpref/Preferences.cpp ||| PREF_LIST_ENTRY("roverfox.s.")
+
+# --- speech voice spoofing (patches/voice-spoofing.patch) ---
+# The voice override (and the block of native registration) must land in the
+# synth registry, or Firefox falls back to the HOST machine's speech-dispatcher
+# / SAPI / NSSpeech voices and leaks the underlying OS in every spoofed context.
+contains ||| dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp ||| MaskConfig::MVoices()
+contains ||| dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp ||| MaskConfig::GetBool("voices:blockIfNotDefined")
+# MVoices() must reject non-object entries loudly. The pythonlib historically
+# fed bare "Name:lang:type" strings, which registered nothing silently -- guard
+# against that contract regressing.
+contains ||| camoucfg/MaskConfig.hpp ||| 'voices' entry is not a complete object

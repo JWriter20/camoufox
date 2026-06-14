@@ -37,4 +37,13 @@ mk_add_options MOZ_TELEMETRY_REPORTING=0
 mk_add_options MOZ_INSTALLER=0
 mk_add_options MOZ_AUTOMATION_INSTALLER=0
 
+# Cap build parallelism. This box is 32c/64t; an uncapped mach build defaults
+# to -j<nproc> (=64), which has deadlocked the jobserver on this machine before
+# (see memory: v150 build gotchas / mach job-count knob). mach reads
+# MOZ_MAKE_FLAGS ONLY from the mozconfig — NOT the environment (verified in
+# mozbuild/mozconfig.py) — so an `export MOZ_MAKE_FLAGS=...` is silently
+# ignored; it must live here. -j32 = physical core count, the safe ceiling.
+# Temporarily capped to -j16 per request (slower, lower contention).
+mk_add_options MOZ_MAKE_FLAGS="-j16"
+
 # ac_add_options --enable-lto=cross
