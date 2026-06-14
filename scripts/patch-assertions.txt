@@ -173,3 +173,14 @@ contains ||| browser/installer/package-manifest.in ||| chrome/juggler.manifest
 # tolerates by luck (same failure class that silently dropped the css2 .mm
 # hunk). If the hunk is ever silently skipped, fail the build here.
 contains ||| modules/libpref/Preferences.cpp ||| PREF_LIST_ENTRY("roverfox.s.")
+
+# --- speech voice spoofing (patches/voice-spoofing.patch) ---
+# The voice override (and the block of native registration) must land in the
+# synth registry, or Firefox falls back to the HOST machine's speech-dispatcher
+# / SAPI / NSSpeech voices and leaks the underlying OS in every spoofed context.
+contains ||| dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp ||| MaskConfig::MVoices()
+contains ||| dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp ||| MaskConfig::GetBool("voices:blockIfNotDefined")
+# MVoices() must reject non-object entries loudly. The pythonlib historically
+# fed bare "Name:lang:type" strings, which registered nothing silently -- guard
+# against that contract regressing.
+contains ||| camoucfg/MaskConfig.hpp ||| 'voices' entry is not a complete object
