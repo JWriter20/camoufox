@@ -101,6 +101,39 @@ contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| MaskConfig::GetSt
 absent ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| WebRTCIPManager::GetIPv4
 absent ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| WebRTCIPManager::GetIPv6
 
+# --- WebRTC synthetic-srflx fabrication (TCP-proxy n/a fix) ---
+# Behind a TCP-only proxy STUN (UDP) can't form a srflx, so the rewrite-only
+# spoof has nothing to operate on -> WebRTC reports n/a (anti-bot tell). We
+# fabricate a synthetic srflx carrying the spoof/proxy IP into the candidate
+# stream, the local SDP, AND getStats() (all three must agree or the mismatch
+# itself leaks). These assertions fail loudly if any of the three injection
+# sites or the gathering-complete trigger is dropped on a future regen.
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| MaybeFabricateSrflxCandidate
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| typ srflx raddr 0.0.0.0 rport 0
+# Trigger must live in IceGatheringStateChange (fires the synthetic candidate
+# before the null-candidate "done" event at gathering-complete).
+in_fn ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| void PeerConnectionImpl::IceGatheringStateChange( ||| MaybeFabricateSrflxCandidate
+# getStats() must synthesize a matching srflx local-candidate when the SDP has
+# one but the real stats don't (self-consistency across surfaces).
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| RTCIceCandidateType::Srflx
+# The fabrication must emit a typ-host candidate (foundation 0) AND a TCP host
+# (foundation 2) before the srflx, matching real Firefox's two-candidate shape.
+# Without these CreepJS shows the srflx in the host box / foundation 1 (a tell).
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| typ host tcptype active
+# The srflx must be DELAYED (realistic STUN round-trip) not emitted simultaneously
+# with the host -- a zero-delay srflx is an unnatural timing signature.
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| RandomSrflxDelayMs
+# Priorities must be the exact real-Firefox constants (varying them is a tell).
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| 2122252543
+contains ||| dom/media/webrtc/jsapi/PeerConnectionImpl.cpp ||| 1686052863
+
+# --- WebRTC: keep host candidates so the stock two-candidate shape shows ---
+# no_host MUST be false (real mDNS .local host candidate present). no_host=true
+# left a single-srflx shape that doesn't match a real browser. obfuscate_host
+# keeps it leak-free; proxy_only_if_behind_proxy still prevents the real-IP leak.
+contains ||| ../settings/camoufox.cfg ||| media.peerconnection.ice.no_host", false
+absent ||| ../settings/camoufox.cfg ||| media.peerconnection.ice.no_host", true
+
 # --- proxy https-first disable (settings/camoufox.cfg) ---
 contains ||| ../settings/camoufox.cfg ||| dom.security.https_first
 
