@@ -25,6 +25,8 @@ ApplicationWindow {
     readonly property int textSm: Math.round(12 * scale)
     readonly property int textMd: Math.round(14 * scale)
     readonly property int colW: Math.round(100 * scale)
+    readonly property int verColW: Math.round(70 * scale)
+    readonly property int dateColW: Math.round(90 * scale)
     readonly property string fontMain: segoe.name
     readonly property string fontIcon: mdl2.name
 
@@ -661,13 +663,19 @@ ApplicationWindow {
 
                                 Header {
                                     text: "VERSION"
-                                    width: colW
+                                    width: verColW
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
 
                                 Header {
                                     text: "BUILD"
-                                    width: colW
+                                    width: verColW
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                Header {
+                                    text: "DATE"
+                                    width: dateColW
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
 
@@ -748,20 +756,27 @@ ApplicationWindow {
                                         on: model.isPinned
                                         MouseArea {
                                             anchors.fill: parent
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: showDlg("setActive", index, model.display, model.build)
+                                            cursorShape: model.note === "" ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                            onClicked: if (model.note === "") showDlg("setActive", index, model.display, model.build)
                                         }
                                     }
 
                                     T {
                                         text: model.display
                                         color: model.isInstalled ? c.text : c.dim
-                                        Layout.preferredWidth: colW
+                                        Layout.preferredWidth: verColW
                                     }
 
-                                    Muted {
+                                    T {
                                         text: model.build
-                                        Layout.preferredWidth: colW
+                                        color: model.isInstalled ? c.text : c.dim
+                                        Layout.preferredWidth: verColW
+                                    }
+
+                                    T {
+                                        text: model.date
+                                        color: model.isInstalled ? c.text : c.dim
+                                        Layout.preferredWidth: dateColW
                                     }
 
                                     Row {
@@ -777,6 +792,11 @@ ApplicationWindow {
                                             visible: model.isActive
                                             text: "active"
                                             accent: c.accent
+                                        }
+
+                                        Tag {
+                                            visible: model.note !== ""
+                                            text: model.note
                                         }
                                     }
 

@@ -6,9 +6,10 @@ import os
 import shlex
 import shutil
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from .pkgman import AvailableVersion
@@ -96,11 +97,30 @@ def get_cached_versions(repo_name: Optional[str] = None) -> List['AvailableVersi
                     asset_id=v.get('asset_id'),
                     asset_size=v.get('asset_size'),
                     asset_updated_at=v.get('asset_updated_at'),
+                    sha256=v.get('sha256'),
+                    asset_created_at=v.get('created_at'),
                 )
             )
 
     versions.sort(key=lambda x: x.version, reverse=True)
     return versions
+
+
+def latest_per_build(versions: List[Dict]) -> List[Dict]:
+    """
+    Keep one cache dict per version-build, the newest by created_at
+    """
+    best: Dict[str, Dict] = {}
+    for v in versions:
+        key = f"{v['version']}-{v['build']}"
+        cur = best.get(key)
+        if cur is None or (v.get('created_at') or "") > (cur.get('created_at') or ""):
+            best[key] = v
+    return sorted(
+        best.values(),
+        key=lambda v: (v['version'], v.get('created_at') or ""),
+        reverse=True,
+    )
 
 
 def get_cached_repo_names() -> List[str]:
@@ -137,13 +157,15 @@ class InstalledVersion:
     asset_id: Optional[int] = None
     asset_size: Optional[int] = None
     asset_updated_at: Optional[str] = None
+    sha256: Optional[str] = None
+    created_at: Optional[str] = None
 
     @property
     def relative_path(self) -> str:
         """
-        Path relative to INSTALL_DIR (like browsers/official/134.0.2-beta.20)
+        Path relative to INSTALL_DIR like browsers/jwriter20/150.0.2-beta.25-8020db3b
         """
-        return f"browsers/{self.repo_name}/{self.version.full_string}"
+        return f"browsers/{self.repo_name}/{self.path.name}"
 
     @property
     def channel_path(self) -> str:
@@ -171,6 +193,73 @@ class InstalledVersion:
                 changes.append("asset updated")
 
         return changes
+
+
+def version_folder_name(version: str, build: str, sha8: str = "") -> str:
+    """
+    Install folder name with an optional sha8 suffix
+    """
+    base = f"{version}-{build}"
+    return f"{base}-{sha8}" if sha8 else base
+
+
+def _match_install(
+    full: str, sha256: Optional[str], by_folder: Dict[str, 'InstalledVersion'], count: int
+) -> Optional['InstalledVersion']:
+    """
+    Get the installed folder for a catalog item
+    Falls back to version-build/ (without the sha8) for backwards compatibility
+    """
+    sha8 = (sha256 or "")[:8]
+    if sha8:
+        exact = by_folder.get(f"{full}-{sha8}")
+        if exact is not None:
+            return exact
+    legacy = by_folder.get(full)
+    if legacy is None:
+        return None
+    if legacy.sha256:
+        return legacy if legacy.sha256 == sha256 else None
+    return legacy if count <= 1 else None
+
+
+def classify_installs(
+    versions: List['AvailableVersion'], installed: List['InstalledVersion']
+) -> Tuple[List[Optional['InstalledVersion']], List[Tuple['InstalledVersion', str]]]:
+    """
+    Match each catalog item to an install folder.
+    Returns matches and any orphaned leftovers
+    """
+    counts = Counter(v.version.full_string for v in versions)
+    by_folder = {iv.path.name: iv for iv in installed}
+
+    row_inst: List[Optional['InstalledVersion']] = []
+    matched: set = set()
+    for v in versions:
+        full = v.version.full_string
+        inst = _match_install(full, v.sha256, by_folder, counts[full])
+        row_inst.append(inst)
+        if inst is not None:
+            matched.add(inst.path.name)
+
+    extras: List[Tuple['InstalledVersion', str]] = []
+    for iv in installed:
+        if iv.path.name in matched:
+            continue
+        in_catalog = counts[iv.version.full_string] > 0
+        note = "date unknown" if in_catalog and not iv.sha256 else "unavailable"
+        extras.append((iv, note))
+
+    return row_inst, extras
+
+
+def find_install(
+    version_build: str, sha256: Optional[str], installed: List['InstalledVersion'], count: int = 1
+) -> Optional['InstalledVersion']:
+    """
+    Installed version for a single version-build and sha, legacy folder allowed
+    """
+    return _match_install(version_build, sha256, {iv.path.name: iv for iv in installed}, count)
 
 
 def find_installed_by_build(
@@ -213,7 +302,7 @@ def list_installed() -> List[InstalledVersion]:
                 ver = Version.from_path(version_dir)
                 with open(version_json, 'rb') as f:
                     version_data = orjson.loads(f.read())
-                rel_path = f"browsers/{repo_dir.name}/{ver.full_string}"
+                rel_path = f"browsers/{repo_dir.name}/{version_dir.name}"
                 installed.append(
                     InstalledVersion(
                         repo_name=repo_dir.name,
@@ -224,6 +313,8 @@ def list_installed() -> List[InstalledVersion]:
                         asset_id=version_data.get('asset_id'),
                         asset_size=version_data.get('asset_size'),
                         asset_updated_at=version_data.get('asset_updated_at'),
+                        sha256=version_data.get('sha256'),
+                        created_at=version_data.get('created_at'),
                     )
                 )
             except (FileNotFoundError, orjson.JSONDecodeError):
@@ -235,8 +326,7 @@ def list_installed() -> List[InstalledVersion]:
 
 def get_active_path() -> Optional[Path]:
     """
-    Get path to active version. Returns None if no version is active.
-    Only auto-selects if no channel/pin was been set
+    Get path to active version, or None if no version is active
     """
     config = load_config()
     active = config.get('active_version')
@@ -295,10 +385,14 @@ def find_installed_version(specifier: str) -> Optional[Path]:
 
 def install_versioned(fetcher, replace: bool = False) -> bool:
     """
-    Install to browsers/{repo_name}/{version}-{build}/
+    Install to browsers/{repo_name}/{version}-{build}-{sha8}, suffix omitted when no sha
     """
     repo_name = get_repo_name(fetcher.github_repo)
-    version_folder = f"{fetcher.version}-{fetcher.build}"
+    if fetcher._selected_version and fetcher._selected_version.sha256:
+        sha8 = fetcher._selected_version.sha8
+    else:
+        sha8 = getattr(fetcher, "installed_sha8", "")
+    version_folder = version_folder_name(fetcher.version, fetcher.build, sha8)
     install_path = BROWSERS_DIR / repo_name / version_folder
 
     if install_path.exists() and (install_path / 'version.json').exists():
@@ -336,6 +430,8 @@ def install_versioned(fetcher, replace: bool = False) -> bool:
                     'version': fetcher.version,
                     'build': fetcher.build,
                     'prerelease': fetcher.is_prerelease,
+                    'sha256': getattr(fetcher, "installed_sha256", None),
+                    'created_at': getattr(fetcher, "installed_created_at", None),
                 }
             with open(install_path / 'version.json', 'wb') as f:
                 f.write(orjson.dumps(metadata))
@@ -388,6 +484,20 @@ def remove_version(path: Path) -> bool:
     return True
 
 
+def installed_label(iv: 'InstalledVersion') -> str:
+    """
+    Short tag to tell coexisting installs apart, date or sha8
+    """
+    from .pkgman import format_asset_date
+
+    if iv.created_at:
+        date = format_asset_date(iv.created_at)
+        if date:
+            return date
+    sha8 = (iv.sha256 or "")[:8]
+    return sha8 or ""
+
+
 def print_tree(show_header: bool = True, show_paths: bool = False) -> None:
     """
     Print installed versions as a tree
@@ -423,6 +533,9 @@ def print_tree(show_header: bool = True, show_paths: bool = False) -> None:
             click.secho(" (prerelease)", fg="yellow", nl=False)
         else:
             click.secho(" (stable)", fg="blue", nl=False)
+        tag = installed_label(v)
+        if tag:
+            click.secho(f" ({tag})", fg="bright_black", nl=False)
         if v.is_active:
             click.secho(" (active)", fg="green", bold=True, nl=False)
         click.echo()

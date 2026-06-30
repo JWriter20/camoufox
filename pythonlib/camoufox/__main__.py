@@ -2,6 +2,7 @@
 CLI package manager for Camoufox
 """
 
+from collections import Counter
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from os import environ
@@ -25,7 +26,9 @@ from .multiversion import (
     CONFIG_FILE,
     REPO_CACHE_FILE,
     InstalledVersion,
+    find_install,
     get_default_channel,
+    latest_per_build,
     list_installed,
     load_config,
     load_repo_cache,
@@ -40,6 +43,8 @@ from .pkgman import (
     AvailableVersion,
     CamoufoxFetcher,
     RepoConfig,
+    Version,
+    format_asset_date,
     installed_verstr,
     list_available_versions,
     rprint,
@@ -142,6 +147,8 @@ def _do_sync(spoof_os=None, spoof_arch=None) -> bool:
                         "asset_id": v.asset_id,
                         "asset_size": v.asset_size,
                         "asset_updated_at": v.asset_updated_at,
+                        "sha256": v.sha256,
+                        "created_at": v.asset_created_at,
                     }
                     for v in versions
                 ],
@@ -258,82 +265,65 @@ def fetch(version):
     cache = load_repo_cache()
     config = load_config()
 
+    repo_name = None
+    repo_data = None
+    ver_data = None
     if version:
-        parts = version.split("/")
-        if len(parts) == 3:
-            # official/stable/135.0.1-beta.24
-            repo_name = parts[0]
-            ver_str = parts[2].lstrip("v")
-        elif len(parts) == 2:
-            # official/135.0.1-beta.24
-            repo_name = parts[0]
-            ver_str = parts[1].lstrip("v")
+        parts = version.lower().split("/")
+        if len(parts) == 1:
+            repo_name, spec = RepoConfig.get_default_name(), parts[0]
+        elif len(parts) in (2, 3):
+            repo_name, spec = parts[0], parts[-1]
         else:
-            rprint(
-                "Format: <repo>/<version> or <repo>/<channel>/<version>",
-                fg="red",
-            )
+            rprint("Format: version-build, repo/version-build, or repo/channel/version-build", fg="red")
             return
+        repo_data = _repo_data(cache, repo_name)
+        if repo_data is not None:
+            ver_data, _ = _resolve_spec(repo_data, spec.lstrip("v"))
     elif config.get("pinned"):
         channel = config.get("channel", "")
         repo_name = channel.split("/")[0] if "/" in channel else channel
-        ver_str = config["pinned"]
+        repo_data = _repo_data(cache, repo_name)
+        if repo_data is not None:
+            ver_data = _pin_target(repo_data, config["pinned"], config.get("pinned_sha"))
     else:
         channel = config.get("channel") or get_default_channel()
-        if "/" in channel:
-            repo_name, ctype = channel.split("/", 1)
+        repo_name, ctype = (channel.split("/", 1) + ["stable"])[:2]
+        repo_data = _repo_data(cache, repo_name)
+        if repo_data is not None:
+            is_pre = ctype == "prerelease"
+            latest = [
+                v
+                for v in latest_per_build(repo_data.get("versions", []))
+                if v.get("is_prerelease", False) == is_pre
+            ]
+            ver_data = latest[0] if latest else None
+
+    if ver_data is None:
+        rprint(f"Version '{version or repo_name}' not found in cache. Run 'camoufox sync'.", fg="red")
+        return
+
+    selected = AvailableVersion(
+        version=Version(ver_data["build"], ver_data["version"]),
+        url=ver_data["url"],
+        is_prerelease=ver_data.get("is_prerelease", False),
+        sha256=ver_data.get("sha256"),
+        asset_created_at=ver_data.get("created_at"),
+    )
+    repo_config = RepoConfig.find_by_name(repo_data["name"])
+    try:
+        CamoufoxUpdate(repo_config=repo_config, selected_version=selected).update()
+    except Exception as e:
+        msg = str(e)
+        if "404" in msg or "Not Found" in msg:
+            rprint("Release not found (404). Asset may have been removed.", fg="red")
+            rprint("Run 'camoufox sync' to refresh available versions.", fg="yellow")
         else:
-            repo_name, ctype = channel, "stable"
-        for repo_data in cache.get("repos", []):
-            if repo_data["name"].lower() != repo_name.lower():
-                continue
-            versions = repo_data.get("versions", [])
-            if ctype == "prerelease":
-                candidates = [v for v in versions if v.get("is_prerelease")]
-            else:
-                candidates = [v for v in versions if not v.get("is_prerelease")]
-            if candidates:
-                ver_str = f"{candidates[0]['version']}-{candidates[0]['build']}"
-                break
-        else:
-            rprint(f"No versions found for channel '{channel}'.", fg="red")
-            return
-
-    for repo_data in cache.get("repos", []):
-        if repo_data["name"].lower() != repo_name.lower():
-            continue
-        for v in repo_data["versions"]:
-            if f"{v['version']}-{v['build']}" == ver_str:
-                from .pkgman import Version
-
-                selected = AvailableVersion(
-                    version=Version(v["build"], v["version"]),
-                    url=v["url"],
-                    is_prerelease=v.get("is_prerelease", False),
-                )
-                repo_config = RepoConfig.find_by_name(repo_data["name"])
-                try:
-                    CamoufoxUpdate(repo_config=repo_config, selected_version=selected).update()
-                except Exception as e:
-                    msg = str(e)
-                    if "404" in msg or "Not Found" in msg:
-                        rprint(
-                            "Release not found (404). Asset may have been removed.",
-                            fg="red",
-                        )
-                        rprint(
-                            "Run 'camoufox sync' to refresh available versions.",
-                            fg="yellow",
-                        )
-                    else:
-                        rprint(f"Error: {msg}", fg="red")
-                    return
-                if ALLOW_GEOIP:
-                    download_mmdb()
-                maybe_download_addons(list(DefaultAddons))
-                return
-
-    rprint(f"Version '{version or ver_str}' not found in cache.", fg="red")
+            rprint(f"Error: {msg}", fg="red")
+        return
+    if ALLOW_GEOIP:
+        download_mmdb()
+    maybe_download_addons(list(DefaultAddons))
 
 
 def _set_channel(repo_name: str, channel_type: str):
@@ -343,6 +333,7 @@ def _set_channel(repo_name: str, channel_type: str):
     config = load_config()
     config["channel"] = f"{repo_name}/{channel_type}"
     config.pop("pinned", None)
+    config.pop("pinned_sha", None)
 
     # Check if latest for this channel is already installed
     is_pre = channel_type == "prerelease"
@@ -371,15 +362,55 @@ def _set_channel(repo_name: str, channel_type: str):
     click.secho("Run 'camoufox fetch' to install latest.", fg="yellow")
 
 
-def _set_pinned(repo_name: str, channel_type: str, ver_data: dict, inst):
+def _repo_data(cache: dict, repo_name: str) -> Optional[dict]:
     """
-    Pin to a specific version
+    Cache block for a repo by name
+    """
+    return next((r for r in cache.get("repos", []) if r["name"].lower() == repo_name.lower()), None)
+
+
+def _resolve_spec(repo_data: dict, spec: str) -> Tuple[Optional[dict], Optional[str]]:
+    """
+    Resolve a version-build or version-build-sha8 spec against cache entries.
+    Returns (asset, sha) for a specific date, (latest, None) to follow the latest,
+    or (None, None) when the spec is unknown.
+    """
+    versions = repo_data.get("versions", [])
+    for v in versions:
+        sha = v.get("sha256") or ""
+        if sha and spec == f"{v['version']}-{v['build']}-{sha[:8]}":
+            return v, sha
+    for v in latest_per_build(versions):
+        if spec == f"{v['version']}-{v['build']}":
+            return v, None
+    return None, None
+
+
+def _pin_target(repo_data: dict, pinned: str, pinned_sha: Optional[str]) -> Optional[dict]:
+    """
+    Cache entry a pin resolves to, the specific sha asset or the latest of the build
+    """
+    versions = repo_data.get("versions", [])
+    if pinned_sha:
+        return next((v for v in versions if v.get("sha256") == pinned_sha), None)
+    return next(
+        (v for v in latest_per_build(versions) if f"{v['version']}-{v['build']}" == pinned), None
+    )
+
+
+def _set_pinned(repo_name: str, channel_type: str, ver_data: dict, inst, sha: Optional[str] = None):
+    """
+    Pin a version-build, optionally to a specific dated asset by sha
     """
     config = load_config()
-    config["channel"] = f"{repo_name}/{channel_type}"
+    config["channel"] = f"{repo_name.lower()}/{channel_type}"
     config["pinned"] = f"{ver_data['version']}-{ver_data['build']}"
-    ver_str = f"{ver_data['version']}-{ver_data['build']}"
-    display = f"{repo_name.lower()}/{channel_type}/{ver_str}"
+    if sha:
+        config["pinned_sha"] = sha
+    else:
+        config.pop("pinned_sha", None)
+    tag = f" ({sha[:8]})" if sha else ""
+    display = f"{repo_name.lower()}/{channel_type}/{ver_data['version']}-{ver_data['build']}{tag}"
     if inst:
         config["active_version"] = inst.relative_path
         save_config(config)
@@ -412,44 +443,43 @@ def set_cmd(specifier, geoip):
     if specifier:
         parts = specifier.lower().split("/")
 
-        # 2-part: set channel (e.g. official/stable)
+        # 2-part sets a channel like official/stable
         if len(parts) == 2:
             repo_name, ctype = parts
             if ctype not in ("stable", "prerelease"):
-                rprint(
-                    f"Unknown channel type '{ctype}'. Use 'stable' or 'prerelease'.",
-                    fg="red",
-                )
+                rprint(f"Unknown channel type '{ctype}'. Use 'stable' or 'prerelease'.", fg="red")
                 return
             _set_channel(repo_name, ctype)
             return
 
-        # 3-part: pin version (e.g. official/stable/146.0.1-beta.25)
-        if len(parts) == 3:
-            repo_name, ctype, ver_str = parts
+        # 1-part pins in the default repo, 3-part names the repo and channel
+        if len(parts) == 1:
+            repo_name, spec = RepoConfig.get_default_name(), parts[0]
+        elif len(parts) == 3:
+            repo_name, ctype, spec = parts
             if ctype not in ("stable", "prerelease"):
-                rprint(
-                    f"Unknown channel type '{ctype}'. Use 'stable' or 'prerelease'.",
-                    fg="red",
-                )
+                rprint(f"Unknown channel type '{ctype}'. Use 'stable' or 'prerelease'.", fg="red")
                 return
-            # Activate if already installed
-            target = _find_installed(specifier)
-            if target:
-                set_active(target.relative_path)
-                rprint(f"Pinned: {target.channel_path} (installed)", fg="green")
-            else:
-                click.secho(f"Pinned: {repo_name}/{ctype}/{ver_str}", fg="cyan", bold=True)
-                rprint("Run 'camoufox fetch' to install.", fg="yellow")
-            # Save pin config either way
-            config = load_config()
-            config["channel"] = f"{repo_name}/{ctype}"
-            config["pinned"] = ver_str
-            save_config(config)
+        else:
+            rprint(f"Invalid specifier '{specifier}'.", fg="red")
+            rprint("Use: version-build, repo/channel, or repo/channel/version-build", fg="yellow")
             return
 
-        rprint(f"Invalid specifier '{specifier}'.", fg="red")
-        rprint("Use: repo/channel or repo/channel/version", fg="yellow")
+        if not _ensure_synced():
+            return
+        repo_data = _repo_data(load_repo_cache(), repo_name)
+        if repo_data is None:
+            rprint(f"Repo '{repo_name.lower()}' not in cache. Run 'camoufox sync'.", fg="red")
+            return
+        ver_data, sha = _resolve_spec(repo_data, spec.lstrip("v"))
+        if ver_data is None:
+            rprint(f"Version '{spec}' not found in {repo_name.lower()}.", fg="red")
+            return
+        ctype = "prerelease" if ver_data.get("is_prerelease") else "stable"
+        vb = f"{ver_data['version']}-{ver_data['build']}"
+        count = sum(1 for x in repo_data.get("versions", []) if f"{x['version']}-{x['build']}" == vb)
+        inst = find_install(vb, ver_data.get("sha256"), list_installed(), count)
+        _set_pinned(repo_data["name"], ctype, ver_data, inst, sha=sha)
         return
 
     if not _ensure_synced():
@@ -459,7 +489,7 @@ def set_cmd(specifier, geoip):
     from inquirer.themes import GreenPassion
 
     cache = load_repo_cache()
-    installed = {v.version.build: v for v in list_installed()}
+    installed_list = list_installed()
 
     if not cache.get("repos"):
         rprint("No versions in cache. Run 'camoufox sync' first.", fg="red")
@@ -469,8 +499,8 @@ def set_cmd(specifier, geoip):
     for repo_data in cache["repos"]:
         name = repo_data["name"]
         versions = repo_data.get("versions", [])
-        stable = [v for v in versions if not v.get("is_prerelease")]
-        prereleases = [v for v in versions if v.get("is_prerelease")]
+        stable = latest_per_build([v for v in versions if not v.get("is_prerelease")])
+        prereleases = latest_per_build([v for v in versions if v.get("is_prerelease")])
         if stable:
             channels.append((name, "stable", stable[0]))
         if prereleases:
@@ -479,6 +509,7 @@ def set_cmd(specifier, geoip):
     config = load_config()
     channel = config.get("channel") or get_default_channel()
     pinned = config.get("pinned")
+    pinned_sha = config.get("pinned_sha")
 
     if pinned:
         click.secho(f"Pinned: {channel.lower()}/{pinned}", fg="cyan")
@@ -486,6 +517,7 @@ def set_cmd(specifier, geoip):
         click.secho(f"Channel: {channel.lower()}", fg="cyan")
     click.echo()
 
+    # full dated lists so the pin picker can show every date, not just the latest
     channel_versions = {}
     for repo_data in cache["repos"]:
         name = repo_data["name"]
@@ -547,47 +579,34 @@ def set_cmd(specifier, geoip):
 
         elif isinstance(action, tuple) and action[0] == "pin":
             _, rname, ctype, versions = action
+            vb_counts = Counter(f"{x['version']}-{x['build']}" for x in versions)
 
             v_choices = []
-            for i, v in enumerate(versions):
-                build = v["build"]
-                full_ver = f"{v['version']}-{build}"
-                inst = installed.get(build)
-                is_last = i == len(versions) - 1
-
-                prefix = "└── " if is_last else "├── "
-
-                is_pinned = pinned == full_ver
-                if is_pinned and inst:
-                    color = "green"
-                    bold = True
-                    suffix = " (pinned)"
-                elif is_pinned:
-                    color = "cyan"
-                    bold = True
-                    suffix = " (pinned, not installed)"
+            for v in versions:
+                vb = f"{v['version']}-{v['build']}"
+                sha = v.get("sha256") or ""
+                date = format_asset_date(v.get("created_at"))
+                inst = find_install(vb, v.get("sha256"), installed_list, vb_counts[vb])
+                is_pinned = pinned == vb and pinned_sha == (sha or None)
+                if is_pinned:
+                    color, bold, status = "green", True, "(pinned)"
                 elif inst:
-                    color = None  # white
-                    bold = False
-                    suffix = " (installed)"
+                    color, bold, status = None, False, "(installed)"
                 else:
-                    color = "bright_black"  # grayed out
-                    bold = False
-                    suffix = ""
-
-                ver_str = click.style(f"v{full_ver}", fg=color, bold=bold)
-                v_choices.append((f"{prefix}{ver_str}{suffix}", v))
+                    color, bold, status = "bright_black", False, ""
+                cells = [c for c in (date, f"({sha[:8]})" if sha else "", status) if c]
+                meta = ("  " + "  ".join(cells)) if cells else ""
+                v_choices.append((click.style(f"v{vb}", fg=color, bold=bold) + meta, v))
 
             v_choices.append((click.style("Back", fg="bright_black"), None))
 
-            default_val = versions[0] if versions else None
             v_answer = inquirer.prompt(
                 [
                     inquirer.List(
                         "version",
                         message=f"Pin version ({rname.lower()}/{ctype})",
                         choices=v_choices,
-                        default=default_val,
+                        carousel=True,
                     )
                 ],
                 theme=GreenPassion(),
@@ -596,8 +615,9 @@ def set_cmd(specifier, geoip):
                 continue
 
             ver_data = v_answer["version"]
-            inst = installed.get(ver_data["build"])
-            _set_pinned(rname, ctype, ver_data, inst)
+            vb = f"{ver_data['version']}-{ver_data['build']}"
+            inst = find_install(vb, ver_data.get("sha256"), installed_list, vb_counts[vb])
+            _set_pinned(rname, ctype, ver_data, inst, sha=ver_data.get("sha256"))
             return
 
 
@@ -675,7 +695,7 @@ def _list_all(_show_paths: bool):
 
     for repo_data in cache.get("repos", []):
         rname = repo_data["name"]
-        versions = repo_data.get("versions", [])
+        versions = latest_per_build(repo_data.get("versions", []))
 
         click.secho(f"{rname}/", fg="cyan", bold=True)
 
@@ -725,7 +745,13 @@ def remove(version_path, select, yes):
         if not installed:
             rprint("No browser versions installed.", fg="yellow")
             return
-        choices = [(v.channel_path + (" [active]" if v.is_active else ""), v) for v in installed]
+        from .multiversion import installed_label
+
+        choices = []
+        for v in installed:
+            tag = installed_label(v)
+            suffix = f" ({tag})" if tag else ""
+            choices.append((v.channel_path + suffix + (" [active]" if v.is_active else ""), v))
         target = _inquirer_select(choices, "Select version to remove")
         if not target:
             rprint("Cancelled.", fg="yellow")
@@ -835,7 +861,7 @@ class VersionInfo:
 
     def packages(self):
         """
-        Gets installed package versions
+        Add installed package version rows to the table
         """
         self._header("Python Packages")
         self._pkg("Camoufox", "camoufox")
@@ -845,7 +871,7 @@ class VersionInfo:
 
     def browser(self):
         """
-        Gets active browser, installed version, and sync status
+        Add active browser, installed version, and sync status rows to the table
         """
         from datetime import datetime, timezone
 
@@ -873,6 +899,13 @@ class VersionInfo:
             self._row("Current browser", f"v{active_v.version.full_string}")
         else:
             self._row("Current browser", "Not installed", style="dim")
+
+        if active_v and active_v.created_at:
+            from .pkgman import format_asset_date
+
+            self._row("Build date", format_asset_date(active_v.created_at), style="dim")
+        if active_v and active_v.sha256:
+            self._row("SHA256", active_v.sha256[:12], style="dim")
 
         # Is installed?
         if active_v:
@@ -913,7 +946,7 @@ class VersionInfo:
 
     def geoip(self):
         """
-        Get info about the geoip db and check if its there
+        Add GeoIP database info rows to the table
         """
         from datetime import datetime, timezone
 
@@ -979,22 +1012,27 @@ def active_cmd():
     config = load_config()
     pinned = config.get("pinned")
     channel = config.get("channel") or get_default_channel()
+    installed = list_installed()
+
+    def _label(v):
+        sha8 = (v.sha256 or "")[:8]
+        return f"{v.channel_path} ({sha8})" if sha8 else v.channel_path
 
     if pinned:
-        # Check if the pinned version is installed
-        display = f"{channel.lower()}/{pinned}"
-        target = _find_installed(display)
-        if target:
-            click.echo(target.channel_path)
+        pinned_sha = config.get("pinned_sha")
+        if pinned_sha:
+            target = next((v for v in installed if v.sha256 == pinned_sha), None)
         else:
-            click.echo(f"{display} ", nl=False)
+            target = _find_installed(f"{channel.lower()}/{pinned}")
+        if target:
+            click.echo(_label(target))
+        else:
+            click.echo(f"{channel.lower()}/{pinned} ", nl=False)
             rprint("(not fetched)", fg="yellow")
     else:
-        # Using channel, so find active installed version
-        installed = list_installed()
         for v in installed:
             if v.is_active:
-                click.echo(v.channel_path)
+                click.echo(_label(v))
                 return
         click.echo(f"{channel.lower()} ", nl=False)
         rprint("(not fetched)", fg="yellow")

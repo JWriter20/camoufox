@@ -116,10 +116,7 @@ def _get_library_version() -> str:
 
 def _find_version_constraints(versions: List[Dict], library_version: str) -> Optional[Dict]:
     """
-    Find the browser build constraint for the current library version.
-
-    If the version matches no entry (such as '0.0.0' from a source checkout),
-    fall back to the newest entry instead of None, so filtering stays on.
+    Find the browser build constraint for the current library version
     """
     lib_parts = _parse_semver(library_version)
     newest: Optional[Dict] = None
@@ -139,10 +136,7 @@ def _channel_bounds(
     browser: Optional[Dict], channel: str
 ) -> Tuple[Optional[str], Optional[str]]:
     """
-    Get the (min, max) build bounds for a channel ('stable' or 'prerelease').
-
-    Supports a per-channel form ({stable: {...}, prerelease: {...}}) and a flat
-    {min, max} form applied to both. A missing bound means no limit.
+    Get the min and max build bounds for a channel
     """
     if not browser:
         return None, None
@@ -290,10 +284,7 @@ class RepoConfig:
 
     def is_version_supported(self, version: 'Version', is_prerelease: bool = False) -> bool:
         """
-        Check if a build is within the supported range for its channel.
-
-        Stable and prerelease have independent ranges (set in repos.yml). A
-        missing bound means that channel is unconstrained.
+        Check if a build is within the supported range for its channel
         """
         if is_prerelease:
             build_min, build_max = self.prerelease_min, self.prerelease_max
@@ -329,8 +320,7 @@ class Version:
     @property
     def is_alpha(self) -> bool:
         """
-        Whether the build channel is alpha (like 'alpha.26'). Alpha builds are
-        always treated as prereleases, regardless of the GitHub release flag
+        Whether the build channel is alpha (like 'alpha.26')
         """
         return self.build.split('.')[0].lower() == 'alpha'
 
@@ -450,6 +440,15 @@ class AvailableVersion:
     asset_id: Optional[int] = None
     asset_size: Optional[int] = None
     asset_updated_at: Optional[str] = None
+    sha256: Optional[str] = None
+    asset_created_at: Optional[str] = None
+
+    @property
+    def sha8(self) -> str:
+        """
+        First 8 hex chars of the sha256, or empty when unknown
+        """
+        return (self.sha256 or "")[:8]
 
     @property
     def display(self) -> str:
@@ -470,6 +469,8 @@ class AvailableVersion:
             'asset_id': self.asset_id,
             'asset_size': self.asset_size,
             'asset_updated_at': self.asset_updated_at,
+            'sha256': self.sha256,
+            'created_at': self.asset_created_at,
         }
 
 
@@ -490,14 +491,25 @@ class CamoufoxFetcher(GitHubDownloader):
         self._version_obj: Optional[Version] = None
         self._selected_version: Optional[AvailableVersion] = None
         self.pattern: re.Pattern = self.repo_config.build_pattern()
+        self.installed_sha256: Optional[str] = None
+        self.installed_created_at: Optional[str] = None
 
         if selected_version:
             self._selected_version = selected_version
             self._version_obj = selected_version.version
             self._url = selected_version.url
             self.is_prerelease = selected_version.is_prerelease
+            self.installed_sha256 = selected_version.sha256
+            self.installed_created_at = selected_version.asset_created_at
         else:
             self.fetch_latest()
+
+    @property
+    def installed_sha8(self) -> str:
+        """
+        First 8 hex chars of the installed asset sha, or empty
+        """
+        return (self.installed_sha256 or "")[:8]
 
     def check_asset(
         self, asset: Dict, release: Optional[Dict] = None
@@ -513,6 +525,11 @@ class CamoufoxFetcher(GitHubDownloader):
         is_prerelease = bool(release and release.get('prerelease')) or version.is_alpha
         if not self.repo_config.is_version_supported(version, is_prerelease):
             return None
+
+        digest = asset.get('digest') or ''
+        if digest.startswith('sha256:'):
+            self.installed_sha256 = digest.split(':', 1)[1]
+        self.installed_created_at = asset.get('created_at')
 
         return version, asset['browser_download_url']
 
@@ -642,7 +659,6 @@ def list_available_versions(
         raise last_error
 
     versions: List[AvailableVersion] = []
-    seen_builds: set = set()
 
     for release in releases:
         is_prerelease = release.get('prerelease', False)
@@ -662,9 +678,8 @@ def list_available_versions(
             if not config.is_version_supported(version, asset_prerelease):
                 continue
 
-            if version.build in seen_builds:
-                continue
-            seen_builds.add(version.build)
+            digest = asset.get('digest') or ''
+            sha256 = digest.split(':', 1)[1] if digest.startswith('sha256:') else None
 
             versions.append(
                 AvailableVersion(
@@ -674,10 +689,12 @@ def list_available_versions(
                     asset_id=asset.get('id'),
                     asset_size=asset.get('size'),
                     asset_updated_at=asset.get('updated_at'),
+                    sha256=sha256,
+                    asset_created_at=asset.get('created_at'),
                 )
             )
 
-    versions.sort(key=lambda x: x.version, reverse=True)
+    versions.sort(key=lambda x: (x.version, x.asset_created_at or ""), reverse=True)
     return versions
 
 
@@ -874,3 +891,22 @@ def load_yaml(file: str) -> Dict[str, Any]:
     """
     with open(LOCAL_DATA / file, 'r') as f:
         return load(f, Loader=CLoader)
+
+
+def format_asset_date(iso: Optional[str], now: Optional[Any] = None) -> str:
+    """
+    Format an asset timestamp as Mon D, or Mon D, YYYY when the year differs
+    """
+    if not iso:
+        return ""
+    from datetime import datetime
+
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return ""
+    current_year = (now or datetime.now()).year
+    month = dt.strftime("%b")
+    if dt.year == current_year:
+        return f"{month} {dt.day}"
+    return f"{month} {dt.day}, {dt.year}"

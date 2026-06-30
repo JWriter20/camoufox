@@ -59,9 +59,14 @@ class DownloadWorker(Worker):
 
             import orjson
 
+            from ..multiversion import version_folder_name
+
             self.status.emit("Downloading...")
             repo_name = get_repo_name(self.repo_config.repo)
-            folder = f"{self.version.version.version}-{self.version.version.build}"
+            sha8 = self.version.sha8 if self.version.sha256 else ""
+            folder = version_folder_name(
+                self.version.version.version, self.version.version.build, sha8
+            )
             path = BROWSERS_DIR / repo_name / folder
             path.mkdir(parents=True, exist_ok=True)
 
@@ -123,6 +128,8 @@ class SyncWorker(Worker):
                                 'asset_id': v.asset_id,
                                 'asset_size': v.asset_size,
                                 'asset_updated_at': v.asset_updated_at,
+                                'sha256': v.sha256,
+                                'created_at': v.asset_created_at,
                             }
                             for v in versions
                         ],
@@ -169,6 +176,8 @@ class Roles(IntEnum):
     Section = Qt.ItemDataRole.UserRole + 7
     Expanded = Qt.ItemDataRole.UserRole + 8
     IsPinned = Qt.ItemDataRole.UserRole + 9
+    Date = Qt.ItemDataRole.UserRole + 10
+    Note = Qt.ItemDataRole.UserRole + 11
 
 
 _ROLE_ATTRS = {
@@ -181,6 +190,8 @@ _ROLE_ATTRS = {
     Roles.Section: 'section',
     Roles.Expanded: 'expanded',
     Roles.IsPinned: 'is_pinned',
+    Roles.Date: 'date',
+    Roles.Note: 'note',
 }
 
 _BOOL_ROLES = {
@@ -202,6 +213,8 @@ _ROLE_NAMES = {
     Roles.Section: b"section",
     Roles.Expanded: b"expanded",
     Roles.IsPinned: b"isPinned",
+    Roles.Date: b"date",
+    Roles.Note: b"note",
 }
 
 
@@ -218,6 +231,8 @@ class VersionItem:
         'expanded',
         'version_data',
         'installed_data',
+        'date',
+        'note',
     )
 
     def __init__(
@@ -233,6 +248,8 @@ class VersionItem:
         expanded=True,
         version_data=None,
         installed_data=None,
+        date="",
+        note="",
     ):
         self.display = display
         self.build = build
@@ -245,6 +262,8 @@ class VersionItem:
         self.expanded = expanded
         self.version_data = version_data
         self.installed_data = installed_data
+        self.date = date
+        self.note = note
 
 
 class VersionModel(QAbstractListModel):
@@ -608,12 +627,14 @@ class Backend(QObject):
     @Slot(int)
     def setActive(self, index):
         item = self._version_model.get(index)
-        if not item or item.is_header:
+        if not item or item.is_header or item.version_data is None:
             return
 
         cfg = load_config()
-        cfg.pop('channel', None)
+        ctype = "prerelease" if item.is_prerelease else "stable"
+        cfg['channel'] = f"{get_repo_name(self._current_repo.repo)}/{ctype}"
         cfg['pinned'] = f"{item.version_data.version.version}-{item.version_data.version.build}"
+        cfg['pinned_sha'] = item.version_data.sha256
         cfg.update(
             {
                 'active_repo': self._current_repo.name,
@@ -639,6 +660,7 @@ class Backend(QObject):
         cfg = load_config()
         cfg['channel'] = key
         cfg.pop('pinned', None)
+        cfg.pop('pinned_sha', None)
 
         repo_name, ctype = (key.split('/', 1) + ['stable'])[:2]
         is_pre = ctype == 'prerelease'
@@ -918,15 +940,34 @@ class Backend(QObject):
             self._version_model.set_items(items)
             return
 
-        installed = {v.version.build: v for v in list_installed()}
+        from ..multiversion import classify_installs, get_repo_name
+        from ..pkgman import format_asset_date
+
         cfg = load_config()
-        active = cfg.get('active_build')
         pinned = cfg.get('pinned')
+        pinned_sha = cfg.get('pinned_sha')
         versions = get_cached_versions(self._current_repo.name)
 
         if not versions:
             self._version_model.set_items(items)
             return
+
+        # newest sha per version-build, used when a pin has no specific sha
+        latest_sha = {}
+        for v in versions:
+            latest_sha.setdefault(v.version.full_string, v.sha256)
+
+        def _is_pinned(v):
+            if not pinned or pinned != v.version.full_string:
+                return False
+            if pinned_sha:
+                return v.sha256 == pinned_sha
+            return v.sha256 == latest_sha.get(v.version.full_string)
+
+        repo_key = get_repo_name(self._current_repo.repo)
+        installed_list = [iv for iv in list_installed() if iv.repo_name == repo_key]
+        row_inst, extras = classify_installs(versions, installed_list)
+        inst_by_id = {id(v): inst for v, inst in zip(versions, row_inst)}
 
         for section, is_prerelease in [("stable", False), ("prerelease", True)]:
             version_list = [v for v in versions if v.is_prerelease == is_prerelease]
@@ -946,7 +987,7 @@ class Backend(QObject):
 
             if expanded:
                 for v in version_list:
-                    inst = installed.get(v.version.build)
+                    inst = inst_by_id.get(id(v))
                     if self._installed_only and not inst:
                         continue
                     items.append(
@@ -954,11 +995,38 @@ class Backend(QObject):
                             f"v{v.version.version}",
                             v.version.build,
                             is_prerelease=is_prerelease,
-                            is_active=(active == v.version.build),
-                            is_pinned=(pinned == v.version.full_string if pinned else False),
+                            is_active=bool(inst and inst.is_active),
+                            is_pinned=_is_pinned(v),
                             is_installed=bool(inst),
                             version_data=v,
                             installed_data=inst,
+                            date=format_asset_date(v.asset_created_at),
+                        )
+                    )
+
+        if extras:
+            expanded = self._sections.get("other", True)
+            items.append(
+                VersionItem(
+                    "Other Installed",
+                    is_header=True,
+                    section="other",
+                    expanded=expanded,
+                )
+            )
+            if expanded:
+                for iv, note in extras:
+                    items.append(
+                        VersionItem(
+                            f"v{iv.version.version}",
+                            iv.version.build,
+                            is_prerelease=iv.is_prerelease,
+                            is_active=iv.is_active,
+                            is_installed=True,
+                            version_data=None,
+                            installed_data=iv,
+                            date=format_asset_date(iv.created_at),
+                            note=note,
                         )
                     )
 
