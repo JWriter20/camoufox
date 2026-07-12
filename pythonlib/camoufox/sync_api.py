@@ -13,7 +13,6 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from .exceptions import InvalidProxy
 from .fingerprints import generate_context_fingerprint
 from .utils import launch_options, sync_attach_vd
 
@@ -33,15 +32,26 @@ class Camoufox(PlaywrightContextManager):
         super().__enter__()
         try:
             self.browser = NewBrowser(self._playwright, **self.launch_options)
-        except InvalidProxy as e:
-            super().__exit__(InvalidProxy, e, None)
+        except BaseException as e:
+            # Any launch failure (InvalidProxy, missing browser, bad options, ...)
+            # must tear down the playwright session started above. Leaking it leaves
+            # the sync API's event loop in a "running" state, so every later sync
+            # Camoufox/Playwright start in this thread fails with "Sync API inside
+            # the asyncio loop" until the process restarts (#82).
+            super().__exit__(type(e), e, e.__traceback__)
             raise
         return self.browser
 
     def __exit__(self, *args: Any):
-        if self.browser:
-            self.browser.close()
-        super().__exit__(*args)
+        # Run the base teardown even if browser.close() raises (e.g. the browser
+        # process already crashed). Skipping it leaks the sync API's event loop in a
+        # "running" state, so every later sync Camoufox/Playwright start in the same
+        # thread fails with "Sync API inside the asyncio loop" until process restart.
+        try:
+            if self.browser:
+                self.browser.close()
+        finally:
+            super().__exit__(*args)
 
 
 @overload

@@ -241,7 +241,7 @@ class nsScreencastService::Session : public rtc::VideoSinkInterface<webrtc::Vide
     info.image_width = screenshotWidth;
     info.image_height = screenshotHeight;
 
-#if MOZ_LITTLE_ENDIAN()
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     if (frameInfo.videoType == webrtc::VideoType::kARGB)
       info.in_color_space = JCS_EXT_BGRA;
     if (frameInfo.videoType == webrtc::VideoType::kBGRA)

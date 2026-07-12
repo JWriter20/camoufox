@@ -240,10 +240,13 @@ export class FrameTree {
   }
 
   onWindowEvent(event) {
-    if (event.type !== 'DOMDocElementInserted' || !event.target.ownerGlobal)
+    // Firefox 152: the document's `ownerGlobal` is not yet set when
+    // DOMDocElementInserted fires; fall back to `defaultView`.
+    const win = event.target.ownerGlobal || event.target.defaultView;
+    if (event.type !== 'DOMDocElementInserted' || !win)
       return;
 
-    const docShell = event.target.ownerGlobal.docShell;
+    const docShell = win.docShell;
     const frame = this.frameForDocShell(docShell);
     if (!frame) {
       dump(`WARNING: ${event.type} for unknown frame ${helper.browsingContextToFrameId(docShell.browsingContext)}\n`);

@@ -32,13 +32,24 @@ class AsyncCamoufox(PlaywrightContextManager):
 
     async def __aenter__(self) -> Union[Browser, BrowserContext]:
         _playwright = await super().__aenter__()
-        self.browser = await AsyncNewBrowser(_playwright, **self.launch_options)
+        try:
+            self.browser = await AsyncNewBrowser(_playwright, **self.launch_options)
+        except BaseException as e:
+            # Any launch failure (InvalidProxy, missing browser, bad options, ...)
+            # must tear down the playwright session started above so the driver
+            # process/connection is not leaked.
+            await super().__aexit__(type(e), e, e.__traceback__)
+            raise
         return self.browser
 
     async def __aexit__(self, *args: Any):
-        if self.browser:
-            await self.browser.close()
-        await super().__aexit__(*args)
+        # Run the base teardown even if browser.close() raises (e.g. the browser
+        # process already crashed), so the playwright driver/connection is not leaked.
+        try:
+            if self.browser:
+                await self.browser.close()
+        finally:
+            await super().__aexit__(*args)
 
 
 @overload

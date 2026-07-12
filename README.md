@@ -87,6 +87,16 @@ Use coupon code <strong>CAMOUFOX</strong> for <strong>10% OFF</strong> Residenti
 <strong>Get 15% off your first 3 months with code CAMOUFOX</strong> → <a href="https://crawlbase.com/?utm_source=github&utm_medium=sponsorship&utm_campaign=camoufox">crawlbase.com</a>
     </td>
   </tr>
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://scrappey.com/?utm_source=camoufox&utm_medium=sponsorship&utm_campaign=camoufox_sponsorship" target="_blank">
+        <img width="380" alt="scrappey" src="https://github.com/user-attachments/assets/11b51db9-29c2-4ae9-a568-7466a5941c96"/>
+      </a>
+    </td>
+    <td valign="middle">
+      <a href="https://scrappey.com/?utm_source=camoufox&utm_medium=sponsorship&utm_campaign=camoufox_sponsorship">Scrappey</a> is a Web Scraping API that only charges successful scrapes with pay as you go - no subscriptions. Scrape complex sites. Residential proxies included, no hidden proxy fees, or expiring balances. One API for direct HTTP, full-browser rendering, JavaScript-heavy pages, screenshots, sessions, 30+ browser actions and 200+ concurrent sessions at a time - trusted by 1000+ developers and AI agents. Get 10% off with code CAMOUFOX.
+    </td>
+  </tr>
 </table>
 
 ## Proxy providers
@@ -94,21 +104,6 @@ Use coupon code <strong>CAMOUFOX</strong> for <strong>10% OFF</strong> Residenti
 Camoufox is intended to be used with rotating proxies (preferably residential IPs). Check out these providers:
 
 <table>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://www.thordata.com/?ls=github&lk=camoufox" target="_blank">
-        <img alt="thordata" src="https://github.com/user-attachments/assets/fa79fe26-633b-44a4-a2a8-bce570f180ca" width="350"/>
-      </a>
-    </td>
-    <td valign="middle">
-      <a href="https://www.thordata.com/?ls=github&lk=camoufox">Thordata</a> - Your First Plan is on Us! 💰 Get 100% of your first residential proxy purchase back as wallet balance, up to $900.<br><br>
-      <b>⚡ Why Thordata?</b><br>
-      • 🌍 190+ real residential & ISP IP locations<br>
-      • 🔐 Fully encrypted, ultra-secure connections<br>
-      • 🚀 Optimized for web scraping, ad verification & automation workflows<br>
-      🔥 Don't wait - this is your <b>best time to start</b> with <a href="https://www.thordata.com/?ls=github&lk=camoufox">Thordata</a> and experience the safest, fastest proxy network.
-    </td>
-  </tr>
   <tr>
     <td width="25%" align="center" valign="middle">
       <a href="https://proxyempire.io/?ref=camoufox&utm_source=camoufox" target="_blank">
@@ -140,27 +135,6 @@ Camoufox is intended to be used with rotating proxies (preferably residential IP
       Hey, we built BirdProxies because proxies shouldn't be complicated or overpriced. Fast residential and ISP proxies in 195+ locations, fair pricing, and real support.<br>
       Try our FlappyBird game on the landing page for free data!<br>
       <a href="https://birdproxies.com/t/camoufox">Try Now</a> | <a href="https://discord.com/invite/birdproxies">Discord</a>
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://proxy-seller.com/?partner=1W5MMSYEXKKTUK" target="_blank">
-        <img width="380" alt="birdproxies" src="https://github.com/user-attachments/assets/d2771913-e2c1-453f-a258-4789139a841c"/>
-      </a>
-    </td>
-    <td valign="middle">
-      <a href="https://proxy-seller.com/?partner=1W5MMSYEXKKTUK">
-        <a href="https://proxy-seller.com/?partner=1W5MMSYEXKKTUK">Proxy-Seller</a> - Premium Proxies for AI Agents, Scraping & Automation 🎁 Use code <strong>CAMOUFOX for 15% OFF</strong> IPv4, IPv6, ISP & Residential proxies + 10% OFF Mobile<br>
-        <strong>Why Choose Proxy-Seller?</strong><br>
-        • 🌍 40M+ IPs across 220+ countries with city/ISP-level targeting<br>
-        • 📶 Residential, ISP, Datacenter (IPv4/IPv6) & 4G/5G Mobile proxies<br>
-        • ⚡ Up to 1 Gbps speed with 99% uptime<br>
-        • 🔄 Flexible rotation — time-based, request-based, or sticky sessions<br>
-        • 🛠️ Ready-made API for Python, Node.js, PHP, Java & Golang<br>
-        • 🔒 SOCKS5 & HTTP(S) with login/pass or IP whitelisting<br>
-        • 🎭 Perfect pairing with Camoufox for stealth automation<br>
-        • 🕐 24/7 support + 24-hour refund & replacement policy<br>
-        Trusted by 500,000+ clients since 2014. Built for scraping, AI agents, ad verification, and SEO automation.
     </td>
   </tr>
   <tr>
@@ -592,6 +566,19 @@ Next, build the Camoufox source code with the following command:
 ```bash
 make dir
 ```
+
+Before bootstrapping, install the system build dependencies with the helper
+script. It detects your platform and installs everything the build needs
+(Python ≥ 3.11, Rust, `aria2`, `p7zip`, `go`, `msitools`, `wget`, `sqlite`, and
+the core build tools) using the appropriate package manager — Homebrew on macOS,
+or `apt`/`dnf`/`pacman` on Linux:
+
+```bash
+bash scripts/install-deps.sh
+```
+
+> [!NOTE]
+> The dependency installer has so far only been tested on macOS.
 
 After that, you have to bootstrap your system to be able to build Camoufox. You only have to do this one time. It is done by running the following command:
 

@@ -1,4 +1,5 @@
 import os
+import signal
 import select
 import subprocess  # nosec
 import time
@@ -115,14 +116,20 @@ class VirtualDisplay:
         if self.proc and self.proc.poll() is None:
             if self.debug:
                 print("Terminating virtual display:", self._display)
-            self.proc.terminate()
             try:
+                self.proc.send_signal(signal.SIGKILL)
                 self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                if self.debug:
-                    print("Xvfb did not exit in time, killing forcefully")
-                self.proc.kill()
-                self.proc.wait()
+            except Exception:
+                pass
+            try:
+                os.remove(f"/tmp/.X{self._display}-lock")
+            except FileNotFoundError:
+                pass
+            try:
+                os.remove(f"/tmp/.X11-unix/X{self._display}")
+            except FileNotFoundError:
+                pass
+            self.proc = None
 
     @staticmethod
     def _assert_linux() -> None:

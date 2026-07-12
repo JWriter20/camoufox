@@ -1,8 +1,8 @@
 diff --git a/browser/components/preferences/main.js b/browser/components/preferences/main.js
-index 8f8da3c4ca..83e9ccce59 100644
+index c86e54bb6f..bdfcc7bb9f 100644
 --- a/browser/components/preferences/main.js
 +++ b/browser/components/preferences/main.js
-@@ -1660,65 +1660,6 @@ const DefaultBrowserHelper = {
+@@ -494,65 +494,6 @@ const DefaultBrowserHelper = {
    },
  };
  
@@ -65,12 +65,12 @@ index 8f8da3c4ca..83e9ccce59 100644
 -  },
 -});
 -
- // Firefox support settings
+ // AI Control pref settings
  Preferences.addSetting({
-   id: "supportLinksGroup",
-@@ -2688,10 +2629,6 @@ function createStartupConfig(hidden = false) {
-         control: "moz-message-bar",
-         l10nId: "startup-windows-launch-on-login-profile-disabled",
+   id: "aiControlDefault",
+@@ -679,16 +620,11 @@ function createStartupConfig(hidden = false) {
+           role: "status",
+         },
        },
 -      {
 -        id: "alwaysCheckDefault",
@@ -79,23 +79,17 @@ index 8f8da3c4ca..83e9ccce59 100644
      ],
    };
  }
-@@ -2753,7 +2690,6 @@ SettingGroupManager.registerGroups({
-       },
-     ],
-   },
+ 
+ SettingGroupManager.registerGroups({
 -  defaultBrowser: createDefaultBrowserConfig(),
    startup: createStartupConfig(
-     Services.prefs.getBoolPref("browser.settings-redesign.enabled", false)
+     Services.prefs.getBoolPref("browser-settings-redesign.enabled", false)
    ),
-@@ -4639,11 +4575,6 @@ SettingGroupManager.registerGroups({
-       },
-     ],
-   },
--  defaultBrowserSync: createDefaultBrowserConfig({
--    includeIsDefaultPane: false,
--    inProgress: true,
--    hiddenFromSearch: true,
--  }),
-   sync: {
-     inProgress: true,
-     l10nId: "sync-group-label",
+@@ -797,7 +733,6 @@ var gMainPane = {
+     initSettingGroup("translations");
+     initSettingGroup("spellCheck");
+     initSettingGroup("performance");
+-    initSettingGroup("defaultBrowser");
+     initSettingGroup("startup");
+     initSettingGroup("importBrowserData");
+     initSettingGroup("tabs");

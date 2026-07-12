@@ -1,5 +1,5 @@
 diff --git a/dom/base/nsScreen.cpp b/dom/base/nsScreen.cpp
-index 8ebb3e575a..2dc4dc6b21 100644
+index 78849001c5..dc329c8424 100644
 --- a/dom/base/nsScreen.cpp
 +++ b/dom/base/nsScreen.cpp
 @@ -73,6 +73,12 @@ nsDeviceContext* nsScreen::GetDeviceContext() const {
@@ -24,16 +24,19 @@ index 8ebb3e575a..2dc4dc6b21 100644
                                    "screen.availWidth", "screen.availHeight");
    if (rect.has_value()) {
 diff --git a/gfx/src/moz.build b/gfx/src/moz.build
-index d1e1cdf387..54fbb8ad08 100644
+index 91fd96a691..03adf5d674 100644
 --- a/gfx/src/moz.build
 +++ b/gfx/src/moz.build
-@@ -93,3 +93,6 @@ FINAL_LIBRARY = "xul"
- if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+@@ -95,6 +95,9 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
      CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
      CXXFLAGS += CONFIG["MOZ_PANGO_CFLAGS"]
-+
+ 
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
++
+ if CONFIG["TARGET_CPU"] == "aarch64":
+     DEFINES["USE_NEON"] = True
+     LOCAL_INCLUDES += ["/third_party/xsimd/include"]
 diff --git a/gfx/src/nsDeviceContext.cpp b/gfx/src/nsDeviceContext.cpp
 index 06b86c6c75..9641c8457c 100644
 --- a/gfx/src/nsDeviceContext.cpp
@@ -61,12 +64,12 @@ index 06b86c6c75..9641c8457c 100644
  }
  
 diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
-index 07564ab15b..a9015c6982 100644
+index 5e39014539..fac13c27a7 100644
 --- a/layout/style/nsMediaFeatures.cpp
 +++ b/layout/style/nsMediaFeatures.cpp
 @@ -22,6 +22,7 @@
+ #include "nsContentUtils.h"
  #include "nsDeviceContext.h"
- #include "nsGkAtoms.h"
  #include "nsGlobalWindowOuter.h"
 +#include "MaskConfig.hpp"
  #include "nsIBaseWindow.h"

@@ -252,9 +252,11 @@ export class PageAgent {
   onWindowEvent(event) {
     if (event.type !== 'DOMContentLoaded' && event.type !== 'load')
       return;
-    if (!event.target.ownerGlobal)
+    // Firefox 152: `ownerGlobal` may be null here; fall back to `defaultView`.
+    const win = event.target.ownerGlobal || event.target.defaultView;
+    if (!win)
       return;
-    const docShell = event.target.ownerGlobal.docShell;
+    const docShell = win.docShell;
     const frame = this._frameTree.frameForDocShell(docShell);
     if (!frame)
       return;
@@ -274,7 +276,11 @@ export class PageAgent {
   }
 
   _onDocumentOpenLoad(document) {
-    const docShell = document.ownerGlobal.docShell;
+    // Firefox 152: `ownerGlobal` may be null; fall back to `defaultView`.
+    const win = document.ownerGlobal || document.defaultView;
+    if (!win)
+      return;
+    const docShell = win.docShell;
     const frame = this._frameTree.frameForDocShell(docShell);
     if (!frame)
       return;

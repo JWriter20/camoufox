@@ -1,6 +1,6 @@
 diff --git a/dom/base/WebRTCIPManager.cpp b/dom/base/WebRTCIPManager.cpp
 new file mode 100644
-index 0000000000..94575f2631
+index 0000000000..8834c93e4b
 --- /dev/null
 +++ b/dom/base/WebRTCIPManager.cpp
 @@ -0,0 +1,146 @@
@@ -152,7 +152,7 @@ index 0000000000..94575f2631
 +} // namespace mozilla
 diff --git a/dom/base/WebRTCIPManager.h b/dom/base/WebRTCIPManager.h
 new file mode 100644
-index 0000000000..c20cb032f6
+index 0000000000..c9810a06d2
 --- /dev/null
 +++ b/dom/base/WebRTCIPManager.h
 @@ -0,0 +1,105 @@
@@ -262,10 +262,10 @@ index 0000000000..c20cb032f6
 +
 +#endif // mozilla_dom_WebRTCIPManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index cd9090cda3..93cea20206 100644
+index 23e33db4da..eab9fdc3e8 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -289,6 +289,7 @@ EXPORTS.mozilla.dom += [
+@@ -297,10 +297,15 @@ EXPORTS.mozilla.dom += [
      "VideoFrameProvider.h",
      "ViewportMetaData.h",
      "VisualViewport.h",
@@ -273,20 +273,19 @@ index cd9090cda3..93cea20206 100644
      "WindowFeatures.h",
      "WindowProxyHolder.h",
  ]
-@@ -326,4 +327,8 @@ SOURCES += [
-     "nsWindowSizes.cpp",
- ]
-
+ 
 +# WebRTCIPManager compiled separately to avoid unified build errors
 +# (it includes RoverfoxStorageManager.h which causes template issues)
 +SOURCES += ["WebRTCIPManager.cpp"]
 +
- UNIFIED_SOURCES += [
+ # AudioFingerprintManager compiled separately to avoid namespace pollution
+ # in unified builds (it includes RoverfoxStorageManager.h which can affect
+ # alphabetically-later files like BarProps.cpp)
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 330a707789..4f87317dbb 100644
+index d4a967ce53..ff932f8528 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -323,6 +323,10 @@
+@@ -335,6 +335,10 @@
  #include "xpcprivate.h"
  #include "xpcpublic.h"
  
@@ -297,8 +296,8 @@ index 330a707789..4f87317dbb 100644
  #ifdef NS_PRINTING
  #  include "nsIPrintSettings.h"
  #endif
-@@ -7463,6 +7467,42 @@ IntlUtils* nsGlobalWindowInner::GetIntlUtils(ErrorResult& aError) {
-   return mIntlUtils;
+@@ -7872,6 +7876,42 @@ void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aR
+   }
  }
  
 +void nsGlobalWindowInner::SetWebRTCIPv4(const nsAString& ipv4, ErrorResult& aRv) {
@@ -341,12 +340,12 @@ index 330a707789..4f87317dbb 100644
    MOZ_ASSERT(aSharedWorker);
    MOZ_ASSERT(!mSharedWorkers.Contains(aSharedWorker));
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 648bcda859..c562b95f87 100644
+index 063843934e..11736cc985 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -681,6 +681,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
- 
-   mozilla::dom::IntlUtils* GetIntlUtils(mozilla::ErrorResult& aRv);
+@@ -691,6 +691,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+   void SetFontSpacingSeed(uint32_t seed, mozilla::ErrorResult& aRv);
+   void SetTimezone(const nsAString& timezone, mozilla::ErrorResult& aRv);
  
 +  // WebRTC IP addresses for privacy-preserving IP spoofing
 +  void SetWebRTCIPv4(const nsAString& ipv4, mozilla::ErrorResult& aRv);
@@ -1014,7 +1013,7 @@ index b2b657a046..8d98809d17 100644
  
    // The JSEP negotiation session.
 diff --git a/dom/media/webrtc/jsapi/moz.build b/dom/media/webrtc/jsapi/moz.build
-index 62bb6eecff..da26fe05ee 100644
+index d32e08c2b0..40a750196a 100644
 --- a/dom/media/webrtc/jsapi/moz.build
 +++ b/dom/media/webrtc/jsapi/moz.build
 @@ -68,3 +68,6 @@ EXPORTS.mozilla.dom += [
@@ -1025,13 +1024,13 @@ index 62bb6eecff..da26fe05ee 100644
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index 7c509eb87e..0a9010c2d1 100644
+index d630148361..a5b0995e4d 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
-@@ -892,6 +892,17 @@ partial interface Window {
-   readonly attribute VisualViewport visualViewport;
+@@ -976,6 +976,17 @@ partial interface Window {
+   undefined setTimezone(DOMString timezone);
  };
-
+ 
 +// WebRTC IP interfaces for privacy-preserving IP spoofing
 +partial interface Window {
 +  [Throws, Func="mozilla::dom::WebRTCIPManager::IsIPv4FunctionEnabledForWebIDL"]
