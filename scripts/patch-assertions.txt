@@ -149,7 +149,7 @@ contains ||| ../settings/camoufox.cfg ||| dom.security.https_first
 # --- skip mouse-move coalescing for juggler events (patches/playwright/0-playwright.patch) ---
 # The coalescing-skip guard must check mJugglerEventId in HandleRealMouseMoveEvent,
 # else juggler input dispatch can stall many seconds under parallel load.
-contains ||| dom/ipc/BrowserChild.cpp ||| !aEvent.mJugglerEventId
+contains ||| dom/ipc/BrowserChild.cpp ||| !aMouseEvent.mJugglerEventId
 
 # --- juggler MUST be built + packaged into omni.ja (patches/playwright/0-playwright.patch) ---
 # These two hunks are what actually puts the juggler chrome JS into the

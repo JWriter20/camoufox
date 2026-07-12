@@ -402,83 +402,84 @@ index 91f927902f..b1f3c6980d 100644
  
    SyncToJsep();
  
-@@ -1759,11 +1780,75 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+@@ -1751,11 +1772,75 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+     MOZ_CRASH("Failed to create a promise!");
    }
  
-   if (!IsClosed()) {
-+    // Camoufox: stats sanitization reads the spoof IP from MaskConfig.
-+    bool shouldSanitizeStats = ShouldSpoofCandidateIP();
-+    // The port of the fabricated srflx (if any), so the synthetic getStats
-+    // entry below matches the candidate/SDP exactly. 0 = nothing fabricated.
-+    uint16_t fabricatedSrflxPort = mFabricatedSrflxPort;
++  // Camoufox: stats sanitization reads the spoof IP from MaskConfig.
++  bool shouldSanitizeStats = ShouldSpoofCandidateIP();
++  // The port of the fabricated srflx (if any), so the synthetic getStats
++  // entry below matches the candidate/SDP exactly. 0 = nothing fabricated.
++  uint16_t fabricatedSrflxPort = mFabricatedSrflxPort;
 +
-     GetStats(aSelector, false)
-         ->Then(
-             GetMainThreadSerialEventTarget(), __func__,
--            [promise, window = mWindow](
-+            [promise, window = mWindow, shouldSanitizeStats,
-+             fabricatedSrflxPort](
-                 UniquePtr<dom::RTCStatsReportInternal>&& aReport) {
-+              // Camoufox: Sanitize IP addresses in stats before exposing to JS
-+              if (shouldSanitizeStats && aReport) {
-+                auto ipv4Opt = MaskConfig::GetString("webrtc:ipv4");
-+                auto ipv6Opt = MaskConfig::GetString("webrtc:ipv6");
-+                bool haveSrflx = false;
-+                for (auto& candStat : aReport->mIceCandidateStats) {
-+                  if (candStat.mCandidateType.WasPassed() &&
-+                      candStat.mCandidateType.Value() ==
-+                          dom::RTCIceCandidateType::Srflx) {
-+                    haveSrflx = true;
-+                  }
-+                  if (candStat.mAddress.WasPassed() && !candStat.mAddress.Value().IsEmpty()) {
-+                    nsAutoCString addr;
-+                    addr.Assign(NS_ConvertUTF16toUTF8(candStat.mAddress.Value()));
-+                    // Check for colons AND no periods to avoid IPv4:port false positives
-+                    bool isIPv6 = addr.FindChar(':') != kNotFound && addr.FindChar('.') == kNotFound;
-+                    if (isIPv6 && ipv6Opt) {
-+                      candStat.mAddress.Value() = NS_ConvertUTF8toUTF16(ipv6Opt.value().c_str());
-+                    } else if (!isIPv6 && ipv4Opt) {
-+                      candStat.mAddress.Value() = NS_ConvertUTF8toUTF16(ipv4Opt.value().c_str());
-+                    }
-+                  }
+   GetStats(aSelector, false)
+       ->Then(
+           GetMainThreadSerialEventTarget(), __func__,
+-          [promise,
+-           window = mWindow](UniquePtr<dom::RTCStatsReportInternal>&& aReport) {
++          [promise, window = mWindow, shouldSanitizeStats,
++           fabricatedSrflxPort](
++              UniquePtr<dom::RTCStatsReportInternal>&& aReport) {
++            // Camoufox: Sanitize IP addresses in stats before exposing to JS
++            if (shouldSanitizeStats && aReport) {
++              auto ipv4Opt = MaskConfig::GetString("webrtc:ipv4");
++              auto ipv6Opt = MaskConfig::GetString("webrtc:ipv6");
++              bool haveSrflx = false;
++              for (auto& candStat : aReport->mIceCandidateStats) {
++                if (candStat.mCandidateType.WasPassed() &&
++                    candStat.mCandidateType.Value() ==
++                        dom::RTCIceCandidateType::Srflx) {
++                  haveSrflx = true;
 +                }
-+                // Camoufox: if we fabricated a srflx into the candidate stream /
-+                // SDP (TCP-proxy case) but getStats() carries no srflx local
-+                // candidate, add a matching one so the three surfaces agree.
-+                // A srflx in the SDP with no local-candidate stat is itself a
-+                // detectable inconsistency. Pair / RTT stats are intentionally
-+                // NOT fabricated: they are legitimately absent with no remote
-+                // peer, so leaving them empty matches a real browser.
-+                std::string spoofIp = ipv4Opt ? ipv4Opt.value()
-+                                              : (ipv6Opt ? ipv6Opt.value()
-+                                                         : std::string());
-+                if (!haveSrflx && !spoofIp.empty() && fabricatedSrflxPort != 0) {
-+                  dom::RTCIceCandidateStats cand;
-+                  cand.mType.Construct(dom::RTCStatsType::Local_candidate);
-+                  cand.mTimestamp.Construct(aReport->mTimestamp);
-+                  cand.mCandidateType.Construct(dom::RTCIceCandidateType::Srflx);
-+                  cand.mPriority.Construct(kSrflxPriority);
-+                  cand.mAddress.Construct(NS_ConvertUTF8toUTF16(spoofIp.c_str()));
-+                  cand.mPort.Construct(fabricatedSrflxPort);
-+                  cand.mProtocol.Construct(NS_ConvertASCIItoUTF16("udp"));
-+                  cand.mProxied.Construct(NS_ConvertASCIItoUTF16("proxied"));
-+                  cand.mId.Construct(NS_ConvertASCIItoUTF16("camou-srflx"));
-+                  // Associate with the same transport as the real candidates.
-+                  for (const auto& existing : aReport->mIceCandidateStats) {
-+                    if (existing.mTransportId.WasPassed()) {
-+                      cand.mTransportId.Construct(existing.mTransportId.Value());
-+                      break;
-+                    }
-+                  }
-+                  if (!aReport->mIceCandidateStats.AppendElement(cand,
-+                                                                 fallible)) {
-+                    mozalloc_handle_oom(0);
++                if (candStat.mAddress.WasPassed() && !candStat.mAddress.Value().IsEmpty()) {
++                  nsAutoCString addr;
++                  addr.Assign(NS_ConvertUTF16toUTF8(candStat.mAddress.Value()));
++                  // Check for colons AND no periods to avoid IPv4:port false positives
++                  bool isIPv6 = addr.FindChar(':') != kNotFound && addr.FindChar('.') == kNotFound;
++                  if (isIPv6 && ipv6Opt) {
++                    candStat.mAddress.Value() = NS_ConvertUTF8toUTF16(ipv6Opt.value().c_str());
++                  } else if (!isIPv6 && ipv4Opt) {
++                    candStat.mAddress.Value() = NS_ConvertUTF8toUTF16(ipv4Opt.value().c_str());
 +                  }
 +                }
 +              }
-               RefPtr<RTCStatsReport> report(new RTCStatsReport(window));
-               report->Incorporate(*aReport);
-               promise->MaybeResolve(std::move(report));
++              // Camoufox: if we fabricated a srflx into the candidate stream /
++              // SDP (TCP-proxy case) but getStats() carries no srflx local
++              // candidate, add a matching one so the three surfaces agree.
++              // A srflx in the SDP with no local-candidate stat is itself a
++              // detectable inconsistency. Pair / RTT stats are intentionally
++              // NOT fabricated: they are legitimately absent with no remote
++              // peer, so leaving them empty matches a real browser.
++              std::string spoofIp = ipv4Opt ? ipv4Opt.value()
++                                            : (ipv6Opt ? ipv6Opt.value()
++                                                       : std::string());
++              if (!haveSrflx && !spoofIp.empty() && fabricatedSrflxPort != 0) {
++                dom::RTCIceCandidateStats cand;
++                cand.mType.Construct(dom::RTCStatsType::Local_candidate);
++                cand.mTimestamp.Construct(aReport->mTimestamp);
++                cand.mCandidateType.Construct(dom::RTCIceCandidateType::Srflx);
++                cand.mPriority.Construct(kSrflxPriority);
++                cand.mAddress.Construct(NS_ConvertUTF8toUTF16(spoofIp.c_str()));
++                cand.mPort.Construct(fabricatedSrflxPort);
++                cand.mProtocol.Construct(NS_ConvertASCIItoUTF16("udp"));
++                cand.mProxied.Construct(NS_ConvertASCIItoUTF16("proxied"));
++                cand.mId.Construct(NS_ConvertASCIItoUTF16("camou-srflx"));
++                // Associate with the same transport as the real candidates.
++                for (const auto& existing : aReport->mIceCandidateStats) {
++                  if (existing.mTransportId.WasPassed()) {
++                    cand.mTransportId.Construct(existing.mTransportId.Value());
++                    break;
++                  }
++                }
++                if (!aReport->mIceCandidateStats.AppendElement(cand,
++                                                               fallible)) {
++                  mozalloc_handle_oom(0);
++                }
++              }
++            }
+             RefPtr<RTCStatsReport> report(new RTCStatsReport(window));
+             report->Incorporate(*aReport);
+             promise->MaybeResolve(std::move(report));
 @@ -3260,12 +3345,22 @@ const std::string& PeerConnectionImpl::GetName() {
    return mName;
  }
@@ -998,9 +999,9 @@ index b2b657a046..8d98809d17 100644
    void SendLocalIceCandidateToContent(uint16_t level, const std::string& mid,
                                        const std::string& candidate,
                                        const std::string& ufrag);
-@@ -718,6 +727,13 @@ class PeerConnectionImpl final
+@@ -728,7 +737,14 @@ class PeerConnectionImpl final
    unsigned int mDataChannelsClosed = 0;
- 
+
    bool mForceIceTcp;
 +  // Camoufox: set true once a public (srflx/prflx/relay) candidate has been
 +  // surfaced to content, so MaybeFabricateSrflxCandidate() only fabricates when
@@ -1009,6 +1010,7 @@ index b2b657a046..8d98809d17 100644
 +  // Camoufox: the port of the fabricated srflx, so the getStats() synthetic
 +  // entry reports the SAME port as the candidate string / SDP line. 0 = none.
 +  uint16_t mFabricatedSrflxPort = 0;
+   Maybe<dom::RTCRtcpMuxPolicy> mRtcpMuxPolicy;
    RefPtr<MediaTransportHandler> mTransportHandler;
  
    // The JSEP negotiation session.

@@ -1526,10 +1526,12 @@ diff --git a/dom/ipc/BrowserChild.cpp b/dom/ipc/BrowserChild.cpp
 index c6d774103c..9389fb3742 100644
 --- a/dom/ipc/BrowserChild.cpp
 +++ b/dom/ipc/BrowserChild.cpp
-@@ -1594,7 +1594,17 @@ mozilla::ipc::IPCResult BrowserChild::RecvNormalPriorityRealMouseMoveEvent(
+@@ -1609,9 +1609,19 @@ mozilla::ipc::IPCResult BrowserChild::RecvNormalPriorityRealMouseMoveEvent(
  mozilla::ipc::IPCResult BrowserChild::RecvRealMouseMoveEvent(
-     const WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
+     const WidgetMouseEvent& aMouseEvent, const ScrollableLayerGuid& aGuid,
      const uint64_t& aInputBlockId) {
+   MOZ_ASSERT(!aMouseEvent.AsPointerEvent());
+   MOZ_ASSERT(!aMouseEvent.AsDragEvent());
 -  if (mCoalesceMouseMoveEvents && mCoalescedMouseEventFlusher) {
 +  // Playwright/juggler: synthesized mouse events (mJugglerEventId != 0) await a
 +  // per-event "juggler-mouse-event-hit-renderer" observer notification that is
@@ -1541,9 +1543,9 @@ index c6d774103c..9389fb3742 100644
 +  // milliseconds; real (non-juggler) events still benefit from the coalescing
 +  // optimization.
 +  if (mCoalesceMouseMoveEvents && mCoalescedMouseEventFlusher &&
-+      !aEvent.mJugglerEventId) {
++      !aMouseEvent.mJugglerEventId) {
      CoalescedMouseData* data =
-         mCoalescedMouseData.GetOrInsertNew(aEvent.pointerId);
+         mCoalescedMouseData.GetOrInsertNew(aMouseEvent.pointerId);
      MOZ_ASSERT(data);
 @@ -1840,6 +1850,21 @@ void BrowserChild::HandleRealMouseButtonEvent(
    if (postLayerization) {
