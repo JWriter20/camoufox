@@ -413,6 +413,10 @@ class Frame {
       parentFrame._children.add(this);
     }
 
+    // Camoufox: see _createIsolatedContext(). Held per frame because the master
+    // sandbox is cached, and reset on every global object change.
+    this._masterSandbox = null;
+
     this._lastCommittedNavigationId = null;
     this._pendingNavigationId = null;
 
@@ -506,18 +510,72 @@ class Frame {
     };
   }
 
-  _createIsolatedContext(name) {
-    const principal = [this.domWindow()]; // extended principal
-    const sandbox = Cu.Sandbox(principal, {
-      sandboxPrototype: this.domWindow(),
-      wantComponents: false,
-      wantExportHelpers: false,
-      wantXrays: true,
+  // Camoufox: a "god mode" sandbox in its own compartment, running with the
+  // system principal so that chrome-gated WebIDL (Element.shadowRootUnl, added
+  // by patches/shadow-root-bypass.patch behind Func="Document::IsCallerChromeOrAddon")
+  // is reachable from evaluated code. Only used when `forceScopeAccess` is set;
+  // evaluated code then runs privileged, which is the point and the risk.
+  //
+  // Cached per document, not per frame: _onGlobalObjectCleared() drops it so a
+  // new document gets a new compartment.
+  _getMasterSandbox() {
+    if (!this._masterSandbox) {
+      this._masterSandbox = Cu.Sandbox(
+        Services.scriptSecurityManager.getSystemPrincipal(),
+        {
+          sandboxPrototype: this.domWindow(),
+          wantComponents: false,
+          wantExportHelpers: false,
+          wantXrays: true,
+          freshCompartment: true,
+        }
+      );
+    }
+    return this._masterSandbox;
+  }
+
+  _createIsolatedContext(name, useMaster = false) {
+    let sandbox;
+    if (useMaster && ChromeUtils.camouGetBool('forceScopeAccess', false)) {
+      sandbox = this._getMasterSandbox();
+    } else {
+      const principal = [this.domWindow()]; // extended principal
+      sandbox = Cu.Sandbox(principal, {
+        sandboxPrototype: this.domWindow(),
+        wantComponents: false,
+        wantExportHelpers: false,
+        wantXrays: true,
+      });
+    }
+    // Camoufox: make `window` inside the world mean the world's own global.
+    //
+    // Without this, `window` resolves through sandboxPrototype to the page's
+    // window, so `window.x = 1` and `globalThis.x = 1` land in different places
+    // and only the latter is readable back. Playwright calls its bindings as
+    // `globalThis[name]` and survives, but anything using `window[name]` --
+    // expose_function() as it is documented, and any page script the automation
+    // evaluates -- silently reads undefined (#628 follow-up).
+    //
+    // Nothing is lost: the sandbox still inherits every real window property
+    // through its prototype, so window.document, window.location and friends
+    // resolve exactly as before. It is also the more faithful shape, since
+    // `window === globalThis` holds in a real page and did not hold here.
+    Object.defineProperty(sandbox, 'window', {
+      value: sandbox,
+      configurable: true,
+      writable: true,
+      enumerable: false,
     });
     const world = this._runtime.createExecutionContext(this.domWindow(), sandbox, {
       frameId: this.id(),
       name,
     });
+    // Camoufox: give the default world a main-world twin for the `mw:` escape
+    // hatch (Runtime.js). Only the default world gets one -- that is where
+    // page.evaluate() lands; Playwright's own utility world has no business
+    // reaching into the page.
+    if (!name && ChromeUtils.camouGetBool('allowMainWorld', false))
+      world.enableMainWorld(this.domWindow());
     this._worldNameToContext.set(name, world);
     return world;
   }
@@ -556,10 +614,24 @@ class Frame {
       this._runtime.destroyExecutionContext(context);
     this._worldNameToContext.clear();
 
-    this._worldNameToContext.set('', this._runtime.createExecutionContext(this.domWindow(), this.domWindow(), {
-      frameId: this._frameId,
-      name: '',
-    }));
+    // Camoufox: scope the default execution context to a sandbox so that
+    // page.evaluate() -- which Playwright routes to the world named '' -- runs
+    // in its own compartment instead of the page's. Nothing the automation
+    // evaluates is then reachable by page script, and page-installed traps
+    // (poisoned prototypes, hooked Function.prototype.toString, window getters)
+    // do not see it. Upstream Playwright puts this context on the page window
+    // itself; that is the leak this fork exists to avoid.
+    //
+    // The cost, and the reason Runtime.js keeps a `mw:` escape hatch: with Xray
+    // vision the page's own JS state is invisible from here, so
+    // page.evaluate('window.pageVar') reads undefined.
+    //
+    // Drop the master sandbox with the document it was created for. It is the
+    // only world that would otherwise outlive a navigation, and a persistent
+    // global means state written by evaluate() on one page is still there on
+    // the next -- every other world starts empty per document.
+    this._masterSandbox = null;
+    this._createIsolatedContext('', true);
     for (const [name, world] of this._frameTree._isolatedWorlds) {
       if (name)
         this._createIsolatedContext(name);
@@ -689,5 +761,6 @@ function channelId(channel) {
   }
   return helper.generateId();
 }
+
 
 
