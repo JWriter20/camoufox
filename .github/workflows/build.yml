@@ -9,6 +9,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    # The build system lives in browser/; python/ and typescript/ are the
+    # launcher packages and are not part of this job.
+    defaults:
+      run:
+        working-directory: browser
     strategy:
       matrix:
         target: [linux, windows, macos]
@@ -120,7 +125,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CamoufoxBuilds-${{ matrix.target }}-${{ matrix.arch }}
-          path: dist/*
+          path: browser/dist/*
 
   release:
     needs: build

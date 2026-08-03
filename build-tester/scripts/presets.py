@@ -56,7 +56,7 @@ def generate_presets() -> dict:
         print(
             "ERROR: camoufox Python package not installed.\n"
             "  Use the wrapper: ./run_tests.sh <binary_path>\n"
-            "  Or install manually: pip install -e ../pythonlib",
+            "  Or install manually: pip install -e ../python",
             file=sys.stderr,
         )
         sys.exit(1)

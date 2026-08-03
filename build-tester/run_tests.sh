@@ -58,7 +58,7 @@ PIP=".venv/bin/pip"
 
 echo "==> Installing camoufox from local source + playwright..."
 $PIP uninstall -y cloverlabs-camoufox >/dev/null 2>&1 || true
-$PIP install -q -e ../pythonlib playwright
+$PIP install -q -e ../python playwright
 
 echo "==> Running build tester..."
 $PYTHON scripts/run_tests.py "$BINARY" "${EXTRA_ARGS[@]}"

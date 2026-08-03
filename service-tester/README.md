@@ -19,18 +19,18 @@ End-to-end antibot-detection tests that verify a pip-installed camoufox release 
 `run_tests.sh` will:
 1. Install npm deps in `../build-tester/` (for `esbuild`, first run only)
 2. Create a `.venv` virtualenv (first run only)
-3. Build a wheel from `../pythonlib` and install it (tests the actual packaged artifact)
+3. Build a wheel from `../python` and install it (tests the actual packaged artifact)
 4. **Phase 1** — run the suite against the locally compiled binary, auto-detected from:
    - macOS: `../camoufox-*/obj-*-apple-darwin/dist/Camoufox.app/Contents/MacOS/camoufox`
    - Linux: `../camoufox-*/obj-*-linux-*/dist/bin/camoufox-bin`
 
-   Skipped (with a notice) if no local build is found. On macOS, the script also copies `properties.json` from `Camoufox.app/Contents/Resources/` into `MacOS/` so pythonlib can locate it next to the binary.
+   Skipped (with a notice) if no local build is found. On macOS, the script also copies `properties.json` from `Camoufox.app/Contents/Resources/` into `MacOS/` so python package can locate it next to the binary.
 5. **Phase 2** — download the official binary (`--browser-version`, default `official/stable`) and run the suite against it
 6. Exit `0` only if both phases pass
 
 Use `--binary local` or `--binary fetched` to run only one phase.
 
-> **Heads-up on Phase 2:** if the latest `official/stable` is much older than the local pythonlib (e.g. v135 binary vs pythonlib targeting v149+), the binary may not understand newer fingerprint patches and the test page can fail to produce results. Pin a newer binary with `--browser-version` to avoid this.
+> **Heads-up on Phase 2:** if the latest `official/stable` is much older than the local python package (e.g. v135 binary vs python package targeting v149+), the binary may not understand newer fingerprint patches and the test page can fail to produce results. Pin a newer binary with `--browser-version` to avoid this.
 
 ## Proxies
 
@@ -68,8 +68,8 @@ source .venv/bin/activate
 
 # Build wheel from local source and install it
 pip install build
-(cd ../pythonlib && rm -rf dist && python -m build --wheel -o dist)
-pip install --force-reinstall ../pythonlib/dist/*.whl
+(cd ../python && rm -rf dist && python -m build --wheel -o dist)
+pip install --force-reinstall ../python/dist/*.whl
 
 # Download the browser binary
 python -m camoufox fetch
@@ -141,4 +141,4 @@ The cross-profile uniqueness section confirms each context has distinct audio, c
 
 ## Failure Triage
 
-If a check fails, **fix it in the Python package** (`../pythonlib/camoufox/`), not in the test. The test is intentionally a black-box validator — it only uses the public `AsyncNewContext` API and trusts camoufox to produce correct fingerprints.
+If a check fails, **fix it in the Python package** (`../python/src/`), not in the test. The test is intentionally a black-box validator — it only uses the public `AsyncNewContext` API and trusts camoufox to produce correct fingerprints.

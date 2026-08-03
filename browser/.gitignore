@@ -1,0 +1,84 @@
+# Local builds
+/camoufox-*
+/firefox-*
+/mozilla-unified
+dist/
+bin/
+launch
+launch.exe
+
+
+# Internal testing
+# (the launcher packages moved out to ../python and ../typescript; their
+# ignores live in the monorepo .gitignore at the repo root)
+/extra-docs
+jsonvv/test*
+/.vscode
+/bundle/fonts/extra
+scripts/*.png
+scripts/test*
+.vscode
+.idea
+/tests/*.disabled
+k8s/
+camoufox-*.*.*/
+
+# Old data
+_old/
+_old_*/
+*.old
+
+# Logs
+wget-log
+*.kate-swp
+*.log
+
+# Python interface
+venv/
+venv[0-9]*/
+__pycache__/
+*.pyc
+*.mmdb
+run-pw-dev.py
+
+# Closed source patches
+private
+.passwd
+closedsrc
+
+.venv
+*.pem
+# ...but tests/ ships tracked client- and server-certificate fixtures. They
+# survived the bare `*.pem` above only because they were already tracked; a
+# rename re-adds them at a new path, where the ignore would silently drop them.
+!tests/**/*.pem
+.DS_store
+
+# Build outputs
+*.so
+/camoufox
+/omni.ja
+/precomplete
+/dependentlibs.list
+/application.ini
+/platform.ini
+/camoufox.cfg
+/camoucfg.jvv
+/chrome.css
+/properties.json
+/removed-files
+/nul
+/browser/
+/defaults/
+/distribution/
+/fontconfigs/
+/fonts/
+/gmp-clearkey/
+/windows-build/
+_bisect_extract/
+node_modules/
+
+node_modules/
+proxies.txt
+checks-bundle.js
+.env

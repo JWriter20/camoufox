@@ -1,0 +1,68 @@
+/**
+ * Leak warnings shown when a caller sets something Camoufox already handles.
+ *
+ * TypeScript twin of python/src/warnings.yml. The text is kept identical
+ * except where it quotes caller syntax: Python's `geoip=True` /
+ * `geoip='1.2.3.4'` are written the way a JS caller would pass them
+ * (`geoip: true`). Those two strings are the only intended divergence.
+ */
+export default {
+	navigator:
+		"Manually setting navigator properties is not recommended." +
+		" Device information is automatically generated within Camoufox" +
+		" based on the provided `os`.",
+
+	locale:
+		"Use the `locale` parameter in Camoufox instead of setting the config manually.",
+
+	geolocation:
+		"Please use the `geoip` parameter in Camoufox instead of setting your geolocation manually." +
+		" This can lead to detection if your target geolocation does not match your IP." +
+		" Pass `geoip: true` or a target IP (ex: geoip: '123.45.67.89') to let Camoufox populate this data for you.",
+
+	"header-ua":
+		"Do not set the header.User-Agent manually. Camoufox will generate a User-Agent for you.",
+
+	viewport:
+		"Manually setting screen & window properties is not recommended." +
+		" Screen dimensions are randomly generated within Camoufox" +
+		" based on the provided screen constraints. See here:" +
+		" https://github.com/daijro/camoufox/tree/main/python#browserforge-integration.",
+
+	custom_fingerprint:
+		"Passing your own fingerprint is not recommended." +
+		" BrowserForge fingerprints are automatically generated within Camoufox" +
+		" based on the provided `os` and `screen` constraints.",
+
+	proxy_without_geoip:
+		"When using a proxy, it is heavily recommended that you pass `geoip: true`.",
+
+	ff_version:
+		"Spoofing the Firefox version will likely lead to detection." +
+		" If rotating the Firefox version is absolutely necessary, it would be more advisable to" +
+		" rotate between older versions of Camoufox instead.",
+
+	no_region:
+		"Because you did not pass in a locale region, Camoufox will generate one for you." +
+		" This can cause suspicion if your IP does not match your locale region.",
+
+	block_webgl:
+		"Disabling WebGL is not recommended. Many WAFs will check if WebGL is enabled.",
+
+	block_images:
+		"Blocking image requests has been reported to cause detection issues on major WAFs.",
+
+	custom_fonts_only:
+		"Disabling OS-specific fonts while spoofing your OS will make your browser fingerprint inconsistent." +
+		" WAFs can detect this mismatch between your claimed OS and available system fonts.",
+
+	disable_coop:
+		"Disabling Cross-Origin-Opener-Policy (COOP) handling can potentially be detected by sophisticated WAFs.",
+
+	preset_webgl_unavailable:
+		"This fingerprint preset names a GPU that the bundled WebGL catalogue has no" +
+		" parameters for, so its vendor/renderer has been replaced with a sampled pair" +
+		" that does. Everything else in the preset is unchanged. Keeping the original" +
+		" name would have paired it with another GPU's extensions and limits, which is" +
+		" detectable.",
+} as Record<string, string>;

@@ -77,14 +77,14 @@ fi
 PYTHON=".venv/bin/python"
 PIP=".venv/bin/pip"
 
-echo "==> Building camoufox wheel from ../pythonlib..."
+echo "==> Building camoufox wheel from ../python..."
 $PIP install -q build
-rm -rf ../pythonlib/dist
-(cd ../pythonlib && "$SCRIPT_DIR/.venv/bin/python" -m build --wheel -o dist >/dev/null)
+rm -rf ../python/dist
+(cd ../python && "$SCRIPT_DIR/.venv/bin/python" -m build --wheel -o dist >/dev/null)
 
 echo "==> Installing camoufox from local wheel..."
 $PIP uninstall -y camoufox cloverlabs-camoufox >/dev/null 2>&1 || true
-$PIP install -q --force-reinstall ../pythonlib/dist/*.whl
+$PIP install -q --force-reinstall ../python/dist/*.whl
 
 # Locate locally compiled binary
 #  - macOS: Camoufox.app/Contents/MacOS/camoufox (bare bin/camoufox-bin can't find dylibs)
@@ -107,7 +107,7 @@ if [[ "$BINARY_MODE" != "fetched" ]]; then
         LOCAL_BIN=""
     else
         LOCAL_BIN=$(cd "$(dirname "$LOCAL_BIN")" && pwd)/$(basename "$LOCAL_BIN")
-        # macOS .app: pythonlib reads properties.json from the executable's parent dir,
+        # macOS .app: the python package reads properties.json from the executable's parent dir,
         # but the bundle stores it in Contents/Resources/. Copy it into MacOS/ if missing.
         if [[ "$(uname -s)" == "Darwin" ]]; then
             MACOS_DIR=$(dirname "$LOCAL_BIN")

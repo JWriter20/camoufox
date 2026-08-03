@@ -1,82 +1,65 @@
-# Local builds
-/camoufox-*
-/firefox-*
-/mozilla-unified
-dist/
-bin/
-launch
-launch.exe
+# ── Camoufox monorepo .gitignore ─────────────────────────────────────────
+# Layout: browser/ (the Firefox fork + build system), python/ (the PyPI
+# launcher), typescript/ (the npm launcher).
+#
+# NOTE: an upstream Firefox tree wants to ignore bare paths like `/browser/`,
+# `/dist/`, `/fonts/` because those are Firefox build-output dirs at ITS repo
+# root. Here `browser/` is OUR source folder, so every Firefox-build ignore
+# stays SCOPED under browser/ (see browser/.gitignore) and is never bare, or
+# it would erase real source.
 
+# ── Node / TS ────────────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+typescript/dist/
+.npmrc
+.yarn
+yarn.lock
 
-# Internal testing
-/extra-docs
-pythonlib/test*
-!pythonlib/tests/
-jsonvv/test*
-/.vscode
-/bundle/fonts/extra
-pythonlib/*.png
-scripts/*.png
-scripts/test*
-.vscode
-.idea
-/tests/*.disabled
-k8s/
-camoufox-*.*.*/
+# ── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+venv[0-9]*/
+.pytest_cache/
+python/test*
+!python/tests/
+python/*.png
 
-# Old data
-_old/
-_old_*/
-*.old
+# ── Browser: regenerable Firefox trees + build artifacts ─────────────────
+# The extracted+patched Firefox trees (~13-20GB each), the upstream tarballs
+# and the packaged zips are all reproduced by the build; never commit them.
+browser/camoufox-*/
+browser/firefox-*/
+browser/camoufox-*.zip
+browser/*.tar.xz
 
-# Logs
+# ── Test harnesses (build-tester/, service-tester/) ──────────────────────
+# These used to be covered by the single root .gitignore that now lives in
+# browser/; the patterns follow the suites out here.
+checks-bundle.js
+proxies.txt
+
+# ── Secrets must never be committed ──────────────────────────────────────
+# Deliberately NOT a bare `*.pem` here: browser/tests ships tracked client- and
+# server-certificate fixtures, and a root-level `*.pem` silently drops them
+# (an ignore only spares a file while its path stays put -- a rename re-adds
+# it). Certificate ignores stay scoped in browser/.gitignore.
+.env
+.passwd
+*.mmdb
+private
+closedsrc
+
+# ── Editors / OS ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+
+# ── Logs ─────────────────────────────────────────────────────────────────
 wget-log
 *.kate-swp
 *.log
-
-# Python interface
-venv/
-venv[0-9]*/
-__pycache__/
-*.pyc
-*.mmdb
-pythonlib-dev/
-run-pw-dev.py
-
-# Closed source patches
-private
-.passwd
-closedsrc
-
-.venv
-*.pem
-.DS_store
-
-# Build outputs
-*.so
-/camoufox
-/omni.ja
-/precomplete
-/dependentlibs.list
-/application.ini
-/platform.ini
-/camoufox.cfg
-/camoucfg.jvv
-/chrome.css
-/properties.json
-/removed-files
-/nul
-/browser/
-/defaults/
-/distribution/
-/fontconfigs/
-/fonts/
-/gmp-clearkey/
-/windows-build/
-_bisect_extract/
-node_modules/
-
-node_modules/
-proxies.txt
-checks-bundle.js
-.env

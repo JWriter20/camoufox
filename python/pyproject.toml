@@ -1,0 +1,63 @@
+[build-system]
+# `to` in [tool.poetry.packages] needs poetry-core >= 1.8.
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "camoufox"
+version = "0.5.4"
+description = "Wrapper around Playwright to help launch Camoufox"
+authors = ["daijro <daijro.dev@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/daijro/camoufox"
+homepage = "https://camoufox.com/python"
+readme = "README.md"
+keywords = [
+    "client",
+    "fingerprint",
+    "browser",
+    "scraping",
+    "injector",
+    "firefox",
+    "playwright",
+]
+classifiers = [
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+# The sources live in `src/` (mirroring `typescript/src/`), but the import
+# name users get is `camoufox` -- so map the directory at build time rather
+# than nesting a second `camoufox/` inside it. `include = "*"` picks up the
+# modules, the `webgl/` and `gui/` subpackages, and the data files
+# (fonts.json, repos.yml, territoryInfo.xml, webgl_data.db, ...) alike.
+# In-repo (uninstalled) imports are wired up by python/conftest.py.
+packages = [{ include = "*", from = "src", to = "camoufox" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+rich-click = "*"
+rich = "*"
+requests = "*"
+orjson = "*"
+browserforge = "^1.2.4"
+playwright = "<1.61"
+pyyaml = "*"
+platformdirs = "*"
+numpy = "*"
+ua_parser = "*"
+typing_extensions = "*"
+screeninfo = "*"
+lxml = "*"
+language-tags = "*"
+pysocks = "*"
+inquirer = "*"
+geoip2 = {version = "*", optional = true}
+PySide6 = {version = "*", optional = true}
+
+[tool.poetry.extras]
+geoip = ["geoip2"]
+gui = ["PySide6"]
+
+[tool.poetry.scripts]
+camoufox = "camoufox.__main__:cli"
