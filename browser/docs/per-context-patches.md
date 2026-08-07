@@ -9,7 +9,6 @@ Camoufox spoofs fingerprints globally via `CAMOU_CONFIG` — every browser conte
 - `timezone-spoofing.patch` — true per-realm timezone isolation via SpiderMonkey DateTimeInfo
 - `navigator-spoofing.patch` — per-context platform, oscpu, hardwareConcurrency, userAgent
 - `webgl-spoofing.patch` — per-context UNMASKED_VENDOR/RENDERER_WEBGL
-- `canvas-spoofing.patch` — per-context canvas 2D fingerprint noise
 - `font-list-spoofing.patch` — per-context installed font list filtering via thread-local propagation
 - `speech-voices-spoofing.patch` — per-context `speechSynthesis.getVoices()` filtering
 - `cross-process-storage.patch` — IPDL message for content-to-parent pref writes, enabling cross-process fingerprint storage
@@ -38,11 +37,16 @@ Camoufox spoofs fingerprints globally via `CAMOU_CONFIG` — every browser conte
 | `window.setWebRTCIPv6(ip)` | `webrtc-ip-spoofing.patch` | WebRTC IPv6 addresses |
 | `window.setWebGLVendor(vendor)` | `webgl-spoofing.patch` | `UNMASKED_VENDOR_WEBGL` parameter |
 | `window.setWebGLRenderer(renderer)` | `webgl-spoofing.patch` | `UNMASKED_RENDERER_WEBGL` parameter |
-| `window.setCanvasSeed(seed)` | `canvas-spoofing.patch` | Canvas 2D `toDataURL()`/`getImageData()` hash |
 | `window.setFontList(fonts)` | `font-list-spoofing.patch` | Which fonts appear "installed" to fingerprinters |
 | `window.setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` filtering |
 
-All 16 functions **self-destruct after the first call** — page JavaScript cannot detect them via `typeof window.setTimezone`.
+All 15 functions **self-destruct after the first call** — page JavaScript cannot detect them via `typeof window.setTimezone`.
+
+### Canvas noise is Firefox's, not ours
+
+`canvas-spoofing.patch` (and with it `window.setCanvasSeed()`) was removed. 2D canvas is rendered by Skia in software, so it is already identical across operating systems on the same CPU arch — the only OS-dependent 2D surface is text rasterization, which the font patches cover. What remains is Firefox's own `EfficientCanvasRandomization` RFP target, which appends a `deBG` chunk to PNG output instead of perturbing pixels.
+
+`webgl-efficient-randomize.patch` extends that same target to WebGL readback (`readPixels()` and the framebuffer snapshot path in `ClientWebGLContext.cpp`), which upstream only honours for `Randomize` and not `EfficientRandomize` — so a GPU-backed context would otherwise return un-noised pixels. There is no per-context setter; the noise key is derived from the origin attribute suffix, so separate `userContextId`s still diverge, deterministically.
 
 ---
 
@@ -101,9 +105,6 @@ await context.addInitScript((values) => {
   if (typeof w.setWebGLRenderer === 'function') {
     w.setWebGLRenderer(values.webglRenderer);
   }
-  if (typeof w.setCanvasSeed === 'function') {
-    w.setCanvasSeed(values.canvasSeed);
-  }
   if (values.fontList && values.fontList.length > 0 && typeof w.setFontList === 'function') {
     w.setFontList(values.fontList.join(','));
   }
@@ -124,7 +125,6 @@ await context.addInitScript((values) => {
   userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:146.0) Gecko/20100101 Firefox/146.0',
   webglVendor: 'Intel Inc.',
   webglRenderer: 'Intel Iris OpenGL Engine',
-  canvasSeed: 55555555,
   fontList: ['Arial', 'Helvetica', 'Georgia', 'Courier New', 'Verdana', 'Times New Roman'],
   speechVoices: 'Microsoft David,Microsoft Zira,Google US English',
 });
