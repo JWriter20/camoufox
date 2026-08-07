@@ -37,6 +37,10 @@ jobs:
 
       - name: Remove unwanted tools
         # Originally from here: https://github.com/AdityaGarg8/remove-unwanted-software/blob/master/action.yml
+        # Runs before actions/checkout, so the job-level `working-directory:
+        # browser` default does not exist yet -- override it to the workspace
+        # root or the step fails with "No such file or directory".
+        working-directory: ${{ github.workspace }}
         run: |
           sudo apt-get remove -y '^aspnetcore-.*' > /dev/null
           sudo apt-get remove -y '^dotnet-.*' > /dev/null
