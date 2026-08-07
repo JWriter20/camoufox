@@ -16,11 +16,14 @@ jobs:
         working-directory: browser
     strategy:
       matrix:
-        # Linux x86_64 only. Windows/macOS cross-compiles and linux/arm64 are
-        # intentionally not built for these releases; re-add them here when a
-        # release needs them.
-        target: [linux]
-        arch: [x86_64]
+        # Linux x86_64 plus both macOS arches. Windows cross-compiles and
+        # linux/arm64 are intentionally not built for these releases; re-add
+        # them here when a release needs them.
+        target: [linux, macos]
+        arch: [x86_64, arm64]
+        exclude:
+          - target: linux
+            arch: arm64
 
     steps:
       - name: Maximize build space
