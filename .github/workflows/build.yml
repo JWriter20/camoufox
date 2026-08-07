@@ -16,13 +16,13 @@ jobs:
         working-directory: browser
     strategy:
       matrix:
-        # Linux x86_64 plus both macOS arches. Windows cross-compiles and
-        # linux/arm64 are intentionally not built for these releases; re-add
-        # them here when a release needs them.
-        target: [linux, macos]
-        arch: [x86_64, arm64]
-        exclude:
+        # Exactly two builds. Listed explicitly rather than as a cross product
+        # with exclusions, so adding an arch to one target cannot silently add
+        # it to the other. Windows is not built for these releases.
+        include:
           - target: linux
+            arch: x86_64
+          - target: macos
             arch: arm64
 
     steps:
