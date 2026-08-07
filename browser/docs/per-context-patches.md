@@ -46,7 +46,11 @@ All 15 functions **self-destruct after the first call** — page JavaScript cann
 
 `canvas-spoofing.patch` (and with it `window.setCanvasSeed()`) was removed. 2D canvas is rendered by Skia in software, so it is already identical across operating systems on the same CPU arch — the only OS-dependent 2D surface is text rasterization, which the font patches cover. What remains is Firefox's own `EfficientCanvasRandomization` RFP target, which appends a `deBG` chunk to PNG output instead of perturbing pixels.
 
-`webgl-efficient-randomize.patch` extends that same target to WebGL readback (`readPixels()` and the framebuffer snapshot path in `ClientWebGLContext.cpp`), which upstream only honours for `Randomize` and not `EfficientRandomize` — so a GPU-backed context would otherwise return un-noised pixels. There is no per-context setter; the noise key is derived from the origin attribute suffix, so separate `userContextId`s still diverge, deterministically.
+`webgl-efficient-randomize.patch` extends that same target to WebGL readback (`readPixels()` and the framebuffer snapshot path in `ClientWebGLContext.cpp`), which upstream only honours for `Randomize` and not `EfficientRandomize` — so a GPU-backed context would otherwise return un-noised pixels.
+
+`canvas-seed.patch` is what makes that noise *ours*. Firefox mints the randomization key as a UUID once per browser session, so the fingerprint drifts on every launch even with a reused profile. The patch derives it from `canvas:seed` instead, in `nsRFPService::GetBrowsingSessionKey()` — the single root that feeds `CookieJarSettings::mFingerprintingRandomKey`, and from there the SipHash keys in `GenerateCanvasKeyFromImageData()` used by every `nsRFPService::RandomizeElements()` caller. Because both WebGL readback sites go through that same call, seeding the root covers 2D canvas and WebGL together; `canvas:seed = 0` disables the noise outright, matching how `audio:seed` and `fonts:spacing_seed` treat zero.
+
+There is no per-context setter for any of this. The key is derived from the seed *plus* the origin attribute suffix, so separate `userContextId`s still diverge — deterministically.
 
 ---
 

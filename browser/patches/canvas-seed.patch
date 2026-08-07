@@ -1,0 +1,96 @@
+diff --git a/toolkit/components/resistfingerprinting/moz.build b/toolkit/components/resistfingerprinting/moz.build
+index e8639285de..67a8659041 100644
+--- a/toolkit/components/resistfingerprinting/moz.build
++++ b/toolkit/components/resistfingerprinting/moz.build
+@@ -23,6 +23,7 @@ SOURCES += [
+ ]
+ 
+ LOCAL_INCLUDES += [
++    "/camoucfg",
+     "/gfx/thebes",
+ ]
+ 
+diff --git a/toolkit/components/resistfingerprinting/nsRFPService.cpp b/toolkit/components/resistfingerprinting/nsRFPService.cpp
+index 8d3088fbd9..e724173733 100644
+--- a/toolkit/components/resistfingerprinting/nsRFPService.cpp
++++ b/toolkit/components/resistfingerprinting/nsRFPService.cpp
+@@ -99,6 +99,8 @@
+ 
+ #include "js/Date.h"
+ 
++#include "MaskConfig.hpp"
++
+ using namespace mozilla;
+ 
+ static mozilla::LazyLogModule gResistFingerprintingLog(
+@@ -1320,6 +1322,41 @@ bool nsRFPService::GetSpoofedKeyCode(const dom::Document* aDoc,
+ // ============================================================================
+ // ============================================================================
+ // Randomization Stuff
++
++// Firefox seeds the canvas randomization with a UUID minted once per browser
++// session, so the canvas fingerprint changes on every launch even when the
++// profile is reused. Deriving the same key from `canvas:seed` instead keeps the
++// fingerprint stable for as long as the caller passes the same seed, while
++// leaving the per-site HMAC in GenerateKey() untouched.
++static uint64_t CamouSplitMix64(uint64_t& aState) {
++  aState += 0x9E3779B97F4A7C15ull;
++  uint64_t z = aState;
++  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
++  z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
++  return z ^ (z >> 31);
++}
++
++// The origin attribute suffix carries the userContextId, so separate browser
++// contexts still get separate canvas keys -- just deterministic ones.
++static nsID CamouDeriveBrowsingSessionKey(uint32_t aSeed,
++                                          const nsACString& aOASuffix) {
++  uint64_t state = (static_cast<uint64_t>(aSeed) << 32) ^
++                   static_cast<uint64_t>(HashString(
++                       PromiseFlatCString(aOASuffix).get(), aOASuffix.Length()));
++
++  uint64_t lo = CamouSplitMix64(state);
++  uint64_t hi = CamouSplitMix64(state);
++
++  nsID id{};
++  id.m0 = static_cast<uint32_t>(lo >> 32);
++  id.m1 = static_cast<uint16_t>(lo >> 16);
++  id.m2 = static_cast<uint16_t>(lo);
++  for (size_t i = 0; i < sizeof(id.m3); ++i) {
++    id.m3[i] = static_cast<uint8_t>(hi >> (8 * i));
++  }
++  return id;
++}
++
+ nsresult nsRFPService::GetBrowsingSessionKey(
+     const OriginAttributes& aOriginAttributes, nsID& aBrowsingSessionKey) {
+   MOZ_ASSERT(XRE_IsParentProcess());
+@@ -1346,6 +1383,15 @@ nsresult nsRFPService::GetBrowsingSessionKey(
+     return NS_ERROR_NOT_AVAILABLE;
+   }
+ 
++  std::optional<uint32_t> camouSeed = MaskConfig::GetUint32("canvas:seed");
++
++  // A zero seed turns the noise off entirely, matching how `audio:seed` and
++  // `fonts:spacing_seed` treat zero. Without a key the encoder skips the deBG
++  // chunk, so canvas output becomes fully deterministic.
++  if (camouSeed && camouSeed.value() == 0) {
++    return NS_ERROR_NOT_AVAILABLE;
++  }
++
+   Maybe<nsID> sessionKey = mBrowsingSessionKeys.MaybeGet(oaSuffix);
+ 
+   // The key has been generated, bail out earlier.
+@@ -1357,8 +1403,10 @@ nsresult nsRFPService::GetBrowsingSessionKey(
+     return NS_OK;
+   }
+ 
+-  nsID& newKey =
+-      mBrowsingSessionKeys.InsertOrUpdate(oaSuffix, nsID::GenerateUUID());
++  nsID& newKey = mBrowsingSessionKeys.InsertOrUpdate(
++      oaSuffix, camouSeed ? CamouDeriveBrowsingSessionKey(camouSeed.value(),
++                                                          oaSuffix)
++                          : nsID::GenerateUUID());
+ 
+   MOZ_LOG(gResistFingerprintingLog, LogLevel::Debug,
+           ("Generated browsing session key: %s\n", newKey.ToString().get()));
