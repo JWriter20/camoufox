@@ -54,10 +54,17 @@ pysocks = "*"
 inquirer = "*"
 geoip2 = {version = "*", optional = true}
 PySide6 = {version = "*", optional = true}
+# Optional CAPTCHA solving (camoufox.captcha). Source-available, self-hostable
+# on your own GPU; see https://github.com/JWriter20/CaptchaKraken. Kept optional
+# because it pulls opencv + pillow, which most camoufox users do not need.
+# Floor is 2.3.0: that is the release that added the Python page driver this
+# integration calls — earlier versions cannot drive a browser at all.
+captchakraken = {version = ">=2.3.0", optional = true}
 
 [tool.poetry.extras]
 geoip = ["geoip2"]
 gui = ["PySide6"]
+captcha = ["captchakraken"]
 
 [tool.poetry.scripts]
 camoufox = "camoufox.__main__:cli"

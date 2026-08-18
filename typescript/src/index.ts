@@ -1,5 +1,20 @@
 export type { DefaultAddon } from "./addons.js";
 export { DefaultAddons } from "./addons.js";
+// Safe to export eagerly: `captcha` resolves CaptchaKraken lazily, inside the
+// call, so importing camoufox never requires the optional package to be present.
+export {
+	type CaptchaConfig,
+	CaptchaCredentialsError,
+	type CaptchaOption,
+	CaptchaSolverUnavailable,
+	clientTag,
+	HOSTED_BASE_URL,
+	resolveConfig,
+	type SolveResult,
+	solveCaptcha,
+	watchCaptcha,
+	verifyCredentials,
+} from "./captcha.js";
 export {
 	generateContextFingerprint,
 	getRandomPreset,
