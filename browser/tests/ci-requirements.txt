@@ -1,0 +1,32 @@
+# What it takes to *run* the suite, on any of the three OSes CI verifies.
+#
+# local-requirements.txt is the developer set: it also carries black, flake8,
+# mypy, pre-commit, pytest-cov/-repeat/-xdist, objgraph and auditwheel, none of
+# which this suite imports. auditwheel in particular is manylinux tooling that
+# has no business on a macOS or Windows runner. Versions match
+# local-requirements.txt so the two cannot drift into testing different things.
+#
+# Keep in step with the imports in conftest.py, server.py and async/.
+
+# Mirrors python/pyproject.toml. 1.61+ sends Juggler params this browser's
+# protocol schema rejects (viewport.isMobile).
+playwright<1.61
+
+pytest==8.3.2
+# asyncio_mode = "auto" in pyproject.toml; the suite is entirely async.
+pytest-asyncio==0.21.2
+# The runner passes --timeout so one wedged case cannot eat the job budget.
+pytest-timeout==2.3.1
+flaky==3.8.1
+
+# Screenshot comparison (assert_to_be_golden).
+Pillow==10.4.0
+pixelmatch==0.3.0
+
+# tests/server.py: the local HTTP/HTTPS/WebSocket fixture server.
+twisted==24.7.0
+autobahn==23.1.2
+pyOpenSSL==24.2.1
+service_identity==24.1.0
+
+requests==2.32.3

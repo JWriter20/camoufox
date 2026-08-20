@@ -37,11 +37,14 @@ browser/firefox-*/
 browser/camoufox-*.zip
 browser/*.tar.xz
 
-# ── Test harnesses (build-tester/, service-tester/) ──────────────────────
+# ── Test harnesses (build-tester/, service-tester/, release-tester/) ─────
 # These used to be covered by the single root .gitignore that now lives in
 # browser/; the patterns follow the suites out here.
 checks-bundle.js
 proxies.txt
+# release-tester writes its reports here; they are published as CI artifacts
+# and release assets, never committed.
+release-tester/results/
 
 # ── Secrets must never be committed ──────────────────────────────────────
 # Deliberately NOT a bare `*.pem` here: browser/tests ships tracked client- and

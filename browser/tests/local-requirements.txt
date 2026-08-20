@@ -1,4 +1,7 @@
-playwright
+# Mirrors python/pyproject.toml. 1.61+ sends Juggler params this browser's
+# protocol schema rejects (viewport.isMobile), so every test would error at
+# launch.
+playwright<1.61
 auditwheel==6.1.0
 autobahn==23.1.2
 black==24.8.0

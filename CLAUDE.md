@@ -18,7 +18,7 @@ The two launchers are **twins** — same `properties.json`, same chunked `CAMOU_
 
 Both packages keep their sources under `src/`, but the Python **import** name is still `camoufox` — `pyproject.toml` maps the directory at build time (`packages = [{ include = "*", from = "src", to = "camoufox" }]`) and `python/conftest.py` does the same for an uninstalled working tree. So `from camoufox.utils import ...` is correct everywhere; `from src.utils import ...` is never correct.
 
-Root also holds `build-tester/` and `service-tester/` (cross-cutting QA suites, see Testing) and `.github/` (CI: `build.yml` runs in `browser/`, `publish-pypi.yml` in `python/`).
+Root also holds `build-tester/`, `service-tester/` and `release-tester/` (cross-cutting QA suites, see Testing) and `.github/` (CI: `build.yml` builds, verifies and releases; `publish-pypi.yml` runs in `python/`).
 
 ### Inside `browser/`
 
@@ -88,6 +88,18 @@ Two suites, **both required for PRs** (they cover different layers):
   python scripts/run_tests.py /path/to/camoufox-binary
   ```
 - **`service-tester/`** — tests the Python package / service layer.
+- **`release-tester/`** — verifies a *packaged* build on the OS it targets, and is what CI
+  runs between `build` and `release` so every release ships measured results. Two suites:
+  the upstream Playwright suite from `browser/tests` (functionality) and sundial's
+  `/automated` scan (leaks, per category, one scan per emulated OS).
+  ```bash
+  cd release-tester && python run.py --package-dir ./unpacked \
+      --target linux --arch x86_64 --version 152.0.4 --release beta.29 --out ./results
+  ```
+  sundial's `/automated` route authenticates on a `key` query parameter, **not** a
+  username/password — it is matched before the cookie session check. Pass sundial's
+  `AUTOMATION_PRIVATE_KEY` as `SUNDIAL_AUTOMATION_KEY`; the guest key silently serves fewer
+  detection vectors. Unset, the scan is skipped rather than failing the build.
 - **`browser/tests/`** — Playwright tests, run via `cd browser && make tests` (add `headful=true` for headful): points at `camoufox-*/obj-*/dist/bin/camoufox-bin`.
 - **`typescript/tests/`** — vitest unit tests for the TS launcher (no browser needed). Run when changing `typescript/`:
   ```bash

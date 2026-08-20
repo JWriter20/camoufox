@@ -1,0 +1,5 @@
+# Driving the built binary for the sundial scan. The launcher itself is
+# installed from ../python (`pip install -e ../python`), which pins
+# playwright<1.61; 1.61+ sends Juggler params this browser's protocol
+# schema rejects.
+playwright<1.61

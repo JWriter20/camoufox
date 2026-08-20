@@ -197,6 +197,13 @@ report nothing to anyone.
 | [`browser/tests/`](browser/tests) | Playwright tests against a local build | `cd browser && make tests` |
 | [`typescript/tests/`](typescript/tests) | The TS launcher (no browser needed) | `cd typescript && pnpm test` |
 | [`python/tests/`](python/tests) | The Python launcher (no browser needed) | `cd python && python -m pytest tests` |
+| [`release-tester/`](release-tester) | A packaged build, on the OS it targets | `cd release-tester && python run.py --package-dir ./unpacked --target linux --arch x86_64 --out ./results` |
+
+`release-tester/` is the one CI runs on every build: it drives the upstream
+Playwright suite for functionality and [sundial](https://sundial.daijro.dev)'s
+`/automated` scan for leaks, then publishes per-category results to the job
+summary and onto the release. Each released binary therefore carries its own
+scores. See its [README](release-tester/README.md) for the sundial key setup.
 
 ## Contributing
 

@@ -2,6 +2,11 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      fail_on_leaks:
+        description: "Fail the verify job when a suite comes back dirty"
+        type: boolean
+        default: false
   push:
     tags:
       - "*"
@@ -16,14 +21,19 @@ jobs:
         working-directory: browser
     strategy:
       matrix:
-        # Exactly two builds. Listed explicitly rather than as a cross product
-        # with exclusions, so adding an arch to one target cannot silently add
-        # it to the other. Windows is not built for these releases.
+        # Listed explicitly rather than as a cross product with exclusions, so
+        # adding an arch to one target cannot silently add it to the other.
+        # Each arch is picked to match a GitHub-hosted runner, because the
+        # `verify` job below has to *run* what this job cross-compiles:
+        # ubuntu-24.04 is x86_64, macos-latest is arm64, windows-latest is
+        # x86_64.
         include:
           - target: linux
             arch: x86_64
           - target: macos
             arch: arm64
+          - target: windows
+            arch: x86_64
 
     steps:
       - name: Maximize build space
@@ -128,23 +138,178 @@ jobs:
           name: CamoufoxBuilds-${{ matrix.target }}-${{ matrix.arch }}
           path: browser/dist/*
 
-  release:
+  # Runs what `build` cross-compiled, on the OS it was compiled for. Every
+  # build therefore ships measured results rather than an assertion that it
+  # probably still works.
+  verify:
     needs: build
+    # `always()`: `build` sets fail-fast: false so one target failing to
+    # compile does not stop the others, and the same has to hold here -- a
+    # broken Windows build must not cost us the Linux and macOS results. A leg
+    # whose artifact never got uploaded fails at the download step, which
+    # fail-fast: false below keeps contained to that leg.
+    if: always() && !cancelled()
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux
+            arch: x86_64
+            runner: ubuntu-24.04
+          - target: macos
+            arch: arm64
+            runner: macos-latest
+          - target: windows
+            arch: x86_64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Read version and release
+        run: |
+          . browser/upstream.sh
+          echo "CAMOUFOX_VERSION=$version" >> "$GITHUB_ENV"
+          echo "CAMOUFOX_RELEASE=$release" >> "$GITHUB_ENV"
+
+      - name: Download the build
+        uses: actions/download-artifact@v4
+        with:
+          name: CamoufoxBuilds-${{ matrix.target }}-${{ matrix.arch }}
+          path: build-artifact
+
+      - name: Unpack the package
+        # zipfile rather than unzip/7z/Expand-Archive: it is the one extractor
+        # present and identical on all three runners.
+        run: |
+          python -c "
+          import glob, pathlib, sys, zipfile
+          zips = sorted(glob.glob('build-artifact/**/*.zip', recursive=True))
+          if not zips:
+              sys.exit('no package zip in build-artifact')
+          print('extracting', zips[0])
+          pathlib.Path('package').mkdir(exist_ok=True)
+          zipfile.ZipFile(zips[0]).extractall('package')
+          "
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # The Playwright suite's own pins, and the launcher (for the sundial
+          # scan) from this checkout rather than PyPI -- the point is to test
+          # what this commit produces.
+          # ci-requirements, not local-requirements: the developer set pulls
+          # auditwheel, which is manylinux tooling with nothing to do on a
+          # macOS or Windows runner.
+          pip install -r browser/tests/ci-requirements.txt
+          # NOT -e: poetry-core cannot express this project's
+          # `packages = [{include = "*", from = "src", to = "camoufox"}]`
+          # remap in an editable install -- it just drops python/src on
+          # sys.path, which makes `import utils` work and `import camoufox`
+          # fail. A real build applies the mapping. (python/conftest.py is
+          # the equivalent shim for an uninstalled working tree.)
+          pip install "./python[geoip]"
+          pip install -r release-tester/requirements.txt
+          # playwright-python refuses to start when its own Firefox is absent,
+          # even though every launch here overrides the executable path.
+          python -m playwright install firefox
+
+      - name: Install Linux browser dependencies
+        if: matrix.target == 'linux'
+        run: python -m playwright install-deps firefox
+
+      - name: Verify the build
+        env:
+          # NOT a username/password: sundial's /automated route is matched
+          # before its cookie session check and authenticates on this key
+          # alone. Use AUTOMATION_PRIVATE_KEY -- the guest key silently serves
+          # fewer detection vectors. Absent (forks, PRs) the scan is skipped
+          # and the Playwright half still reports.
+          SUNDIAL_AUTOMATION_KEY: ${{ secrets.SUNDIAL_AUTOMATION_KEY }}
+        run: |
+          python release-tester/run.py \
+            --package-dir package \
+            --target ${{ matrix.target }} \
+            --arch ${{ matrix.arch }} \
+            --version "$CAMOUFOX_VERSION" \
+            --release "$CAMOUFOX_RELEASE" \
+            --out "results/${{ matrix.target }}-${{ matrix.arch }}" \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.fail_on_leaks) && '--fail-on-leaks' || '' }}
+
+      - name: Publish to the job summary
+        # `always()`: a dirty build is exactly when the numbers are worth
+        # reading, and --fail-on-leaks would otherwise skip this step.
+        if: always()
+        run: |
+          summary="results/${{ matrix.target }}-${{ matrix.arch }}/summary.md"
+          if [ -f "$summary" ]; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ${{ matrix.target }}/${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "Verification produced no summary; see the job log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CamoufoxResults-${{ matrix.target }}-${{ matrix.arch }}
+          path: results/**
+
+  release:
+    # `always()` so a build whose verification came back dirty is still
+    # published -- as a draft prerelease carrying the report that says so,
+    # which is more useful than no artifacts at all. `build` must still have
+    # succeeded; there is nothing to release otherwise.
+    needs: [build, verify]
+    if: always() && needs.build.result == 'success'
     permissions:
       contents: write
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      - name: Build the combined report
+        run: |
+          python release-tester/combine.py \
+            --results-root artifacts \
+            --out RESULTS.md \
+            --assets-dir release-assets
+          cat RESULTS.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: artifacts/**/*
+          # The binaries, plus one report per build. Release assets are a flat
+          # namespace, so the reports come from release-assets/ where
+          # combine.py has already renamed them per build -- uploading
+          # artifacts/**/* directly would have three results.json collide.
+          files: |
+            artifacts/**/*.zip
+            release-assets/*
+          body_path: RESULTS.md
           generate_release_notes: true
           draft: true
           prerelease: true
