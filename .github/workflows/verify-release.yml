@@ -1,0 +1,150 @@
+name: Verify a released build
+
+# Runs release-tester against a binary that already exists, so the stealth and
+# functionality suites can be exercised -- or a leak re-checked -- without
+# spending an hour per target rebuilding Firefox. build.yml does the same
+# verification on freshly compiled artifacts.
+#
+# Note: GitHub only offers `workflow_dispatch` for workflows present on the
+# DEFAULT branch, so this is dispatchable once it lands on main.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release to pull the binary from (blank = latest)"
+        type: string
+        default: ""
+      target:
+        description: "Which build to verify"
+        type: choice
+        options: [linux, macos, windows]
+        default: linux
+      suite:
+        description: "Which suite to run"
+        type: choice
+        options: [sundial, playwright, all]
+        default: sundial
+      profiles:
+        description: "OSes to emulate for the sundial scan"
+        type: string
+        default: "windows,macos,linux"
+
+jobs:
+  verify:
+    # A choice input cannot carry its own runner, so map it here. Same pairing
+    # as build.yml: linux is x86_64, macos is arm64, windows is x86_64.
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-24.04","macos":"macos-latest","windows":"windows-latest"}')[inputs.target] }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download the released build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Asset names are camoufox-<version>-<release>-<os3>.<arch>.zip
+          # (scripts/package.py), so match on the three-letter os and let the
+          # version float -- this workflow is pointed at a tag, not a version.
+          case "${{ inputs.target }}" in
+            linux)   pattern='*-lin.*.zip' ;;
+            macos)   pattern='*-mac.*.zip' ;;
+            windows) pattern='*-win.*.zip' ;;
+          esac
+
+          tag="${{ inputs.release_tag }}"
+          if [ -z "$tag" ]; then
+            tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName')
+            echo "no tag given; using the latest release: $tag"
+          fi
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+
+          mkdir -p downloaded
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$pattern" --dir downloaded
+          ls -la downloaded
+
+      - name: Unpack the package
+        run: |
+          python -c "
+          import glob, pathlib, sys, zipfile
+          zips = sorted(glob.glob('downloaded/*.zip'))
+          if not zips:
+              sys.exit('the release carries no package for this target')
+          print('extracting', zips[0])
+          pathlib.Path('package').mkdir(exist_ok=True)
+          zipfile.ZipFile(zips[0]).extractall('package')
+          "
+          # Version, release and arch as the asset itself reports them, not as
+          # browser/upstream.sh says on this branch -- the point of this
+          # workflow is to test a build that already shipped.
+          python -c "
+          import glob, os, re
+          name = os.path.basename(sorted(glob.glob('downloaded/*.zip'))[0])
+          match = re.match(r'camoufox-(.+?)-(.+?)-(?:lin|mac|win)\.(\w+)\.zip', name)
+          if not match:
+              raise SystemExit(f'cannot read version/release/arch out of {name}')
+          version, release, arch = match.groups()
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'CAMOUFOX_VERSION={version}\n')
+              env.write(f'CAMOUFOX_RELEASE={release}\n')
+              env.write(f'CAMOUFOX_ARCH={arch}\n')
+          print('package is', version, release, arch)
+          "
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Not -e: poetry-core cannot express python/'s src/ -> camoufox remap
+          # in an editable install. See build.yml.
+          pip install "./python[geoip]"
+          pip install -r release-tester/requirements.txt
+          if [ "${{ inputs.suite }}" != "sundial" ]; then
+            pip install -r browser/tests/ci-requirements.txt
+            python -m playwright install firefox
+          fi
+
+      - name: Install Linux browser dependencies
+        if: inputs.target == 'linux' && inputs.suite != 'sundial'
+        run: python -m playwright install-deps firefox
+
+      - name: Verify
+        env:
+          SUNDIAL_AUTOMATION_KEY: ${{ secrets.SUNDIAL_AUTOMATION_KEY }}
+        run: |
+          python release-tester/run.py \
+            --package-dir package \
+            --target ${{ inputs.target }} \
+            --arch "$CAMOUFOX_ARCH" \
+            --version "$CAMOUFOX_VERSION" \
+            --release "$CAMOUFOX_RELEASE" \
+            --suite ${{ inputs.suite }} \
+            --profiles "${{ inputs.profiles }}" \
+            --out results
+
+      - name: Publish to the job summary
+        if: always()
+        run: |
+          echo "Verified \`$RELEASE_TAG\` (${{ inputs.target }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f results/summary.md ]; then
+            cat results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Verification produced no summary; see the job log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VerifyRelease-${{ inputs.target }}-${{ github.run_id }}
+          path: results/**
