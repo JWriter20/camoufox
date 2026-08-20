@@ -12,8 +12,8 @@ export {
 	resolveConfig,
 	type SolveResult,
 	solveCaptcha,
-	watchCaptcha,
 	verifyCredentials,
+	watchCaptcha,
 } from "./captcha.js";
 export {
 	generateContextFingerprint,
