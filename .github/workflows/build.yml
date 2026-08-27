@@ -20,6 +20,12 @@ jobs:
       run:
         working-directory: browser
     strategy:
+      # One target failing to cross-compile must not cancel the others: these
+      # are multi-hour builds, and the `verify` job below already documents
+      # this as the contract it relies on. Without it the matrix default
+      # (fail-fast: true) throws away two nearly-finished builds to report a
+      # failure that is already reported.
+      fail-fast: false
       matrix:
         # Listed explicitly rather than as a cross product with exclusions, so
         # adding an arch to one target cannot silently add it to the other.
