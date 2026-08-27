@@ -11,6 +11,9 @@ importers:
       adm-zip:
         specifier: ^0.5.16
         version: 0.5.18
+      captchakraken:
+        specifier: '>=2.6.0'
+        version: 2.6.0
       cli-progress:
         specifier: ^3.12.0
         version: 3.12.0
@@ -351,6 +354,9 @@ packages:
 
   caniuse-lite@1.0.30001806:
     resolution: {integrity: sha512-72Cuvd95zbSYPKq6Fhg8eDJRlzgWDf7/mtoZv6Qe/DYNCEBdNxoA3+rZAU2ZhGCpZlns3EssFavaZomckT5Uuw==}
+
+  captchakraken@2.6.0:
+    resolution: {integrity: sha512-f7yitgmqnxGFL2lLcAtQMgov8K3FqDfSeUfnEBrhJiu78QBFhBx7eSKgrQM+2mir7mH0qIn+yY6p4mZVyoot7g==}
 
   chai@6.2.2:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
@@ -1047,6 +1053,8 @@ snapshots:
   callsites@3.1.0: {}
 
   caniuse-lite@1.0.30001806: {}
+
+  captchakraken@2.6.0: {}
 
   chai@6.2.2: {}
 

@@ -247,7 +247,10 @@ interface CaptchaKrakenModule {
 		solve(page: unknown): Promise<SolveResult | undefined>;
 		detectCaptcha(page: unknown): Promise<unknown | null>;
 	};
-	watchPage: (
+	// Optional because it genuinely can be: `watchPage` arrived in
+	// captchakraken 2.6.0, and this is a peer dependency, so an older copy
+	// already in the tree resolves the import and leaves this undefined.
+	watchPage?: (
 		solver: {
 			detectCaptcha(page: unknown): Promise<unknown | null>;
 			solve(page: unknown): Promise<SolveResult | undefined>;
@@ -458,6 +461,18 @@ export async function watchCaptcha(
 	config?: Record<string, unknown>,
 ): Promise<CaptchaWatcherHandle> {
 	const { CaptchaKrakenSolver, watchPage } = await loadSolver();
+	// `captchakraken` is a PEER dependency, so raising the floor to 2.6.0 asks
+	// for the upgrade but cannot perform it: a tree already carrying 2.4.0
+	// resolves the import and leaves `watchPage` undefined. Without this the
+	// call below is a bare "watchPage is not a function", naming neither the
+	// package nor the version that fixes it. `solveCaptcha` is unaffected.
+	if (typeof watchPage !== "function") {
+		throw new CaptchaSolverUnavailable(
+			"The installed captchakraken has no watcher: watchPage() arrived in 2.6.0.\n" +
+				"  npm install captchakraken@^2.6.0\n" +
+				"solveCaptcha() still works on the version you have.",
+		);
+	}
 	return watchPage(tagged(new CaptchaKrakenSolver(config)), page, options);
 }
 

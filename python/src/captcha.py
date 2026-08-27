@@ -432,12 +432,24 @@ def watch_captcha(page: Any, config: Any = None, **options: Any) -> Any:
     """
     try:
         from captchakraken.page_solver import PageSolver
-        from captchakraken.watcher import CaptchaWatcher
     except ModuleNotFoundError as exc:  # pragma: no cover - trivial branch
         raise CaptchaSolverUnavailable(
             "CAPTCHA solving needs the optional CaptchaKraken dependency.\n"
             '  pip install "camoufox[captcha]"\n'
             "Docs: https://github.com/JWriter20/CaptchaKraken"
+        ) from exc
+
+    # Reported apart from the one above: `captchakraken.watcher` did not exist
+    # until 2.6.0, so an older install answers the import above and fails only
+    # here. Telling that user to install a package they already have would send
+    # them looking in the wrong place.
+    try:
+        from captchakraken.watcher import CaptchaWatcher
+    except ModuleNotFoundError as exc:
+        raise CaptchaSolverUnavailable(
+            "The installed CaptchaKraken has no watcher: it arrived in 2.6.0.\n"
+            '  pip install --upgrade "camoufox[captcha]"\n'
+            "solve_captcha() still works on the version you have."
         ) from exc
 
     solver = PageSolver(config) if config is not None else PageSolver()

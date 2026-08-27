@@ -69,9 +69,9 @@
     "typescript": "^5.8.3",
     "vitest": "^4.0.0"
   },
-  "//captchakraken": "Optional CAPTCHA solving (src/captcha.ts), mirroring the `captcha` extra in python/pyproject.toml. Floor 2.3.0 is the release that added the page driver this calls. Optional because it pulls a Python CLI + opencv that most users do not need.",
+  "//captchakraken": "Optional CAPTCHA solving (src/captcha.ts), mirroring the `captcha` extra in python/pyproject.toml. Floor 2.6.0: 2.3.0 added the page driver solveCaptcha() calls, but watchPage() -- the whole of what watchCaptcha() returns -- landed in 2.6.0, and an older install resolves the import and then fails at that one call site. Optional because it pulls a Python CLI + opencv that most users do not need.",
   "peerDependencies": {
-    "captchakraken": ">=2.3.0",
+    "captchakraken": ">=2.6.0",
     "playwright-core": ">=1.53.1 <1.61"
   },
   "peerDependenciesMeta": {

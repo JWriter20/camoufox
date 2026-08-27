@@ -361,3 +361,89 @@ def test_watch_captcha_raises_a_helpful_error_without_the_optional_dependency(cl
     with pytest.raises(CaptchaSolverUnavailable) as excinfo:
         watch_captcha(object())
     assert "camoufox[captcha]" in str(excinfo.value)
+
+
+def test_watch_captcha_installs_a_tagged_solver(monkeypatch, clean_env):
+    """
+    The end-to-end version of the `_TaggedSolver` cases above: it is not enough
+    that the wrapper works, the watcher has to be holding it. A watcher built
+    around the bare `PageSolver` would solve untagged every time, and -- for a
+    hosted user, whose key is registered the same way -- unauthenticated.
+    """
+    seen = []
+
+    class _FakePageSolver:
+        def __init__(self, config=None):
+            self.config = config
+
+        def solve(self, page):
+            seen.append(os.environ.get(_CLIENT_ENV))
+            return _SENTINEL
+
+        def detect_captcha(self, page):
+            return None
+
+    class _FakeWatcher:
+        def __init__(self, solver, page, **options):
+            self.solver = solver
+            self.page = page
+            self.options = options
+
+    pkg = types.ModuleType("captchakraken")
+    page_solver = types.ModuleType("captchakraken.page_solver")
+    page_solver.PageSolver = _FakePageSolver
+    watcher_mod = types.ModuleType("captchakraken.watcher")
+    watcher_mod.CaptchaWatcher = _FakeWatcher
+    pkg.page_solver = page_solver
+    pkg.watcher = watcher_mod
+    monkeypatch.setitem(sys.modules, "captchakraken", pkg)
+    monkeypatch.setitem(sys.modules, "captchakraken.page_solver", page_solver)
+    monkeypatch.setitem(sys.modules, "captchakraken.watcher", watcher_mod)
+
+    configure("ck_live_abc")
+    page = object()
+    watcher = watch_captcha(page, interval_ms=10_000)
+
+    assert watcher.page is page
+    assert watcher.options == {"interval_ms": 10_000}
+    # Installing is not solving: nothing applied, nothing billed.
+    assert seen == []
+    assert os.environ.get(_CLIENT_ENV) is None
+
+    # Now drive it the way the real poll loop would.
+    watcher.solver.solve(page)
+    assert seen == [client_tag()]
+    # And back out again once that solve unwound.
+    assert os.environ.get(_CLIENT_ENV) is None
+
+
+def test_watch_captcha_says_so_when_the_installed_captchakraken_is_too_old(monkeypatch, clean_env):
+    """
+    2.3.0 through 2.4.0 carry the page driver but no `captchakraken.watcher`:
+    installed, importable, and still unable to watch. Sending that user to
+    `pip install "camoufox[captcha]"` would have them hunting for a package
+    they already have, so the message names the upgrade instead -- and says
+    which half still works, because `solve_captcha` is unaffected.
+    """
+
+    def solve_captcha_on_page(page, **kwargs):
+        return _SENTINEL
+
+    pkg = types.ModuleType("captchakraken")
+    page_solver = types.ModuleType("captchakraken.page_solver")
+    page_solver.PageSolver = object
+    page_solver.solve_captcha_on_page = solve_captcha_on_page
+    pkg.page_solver = page_solver
+    monkeypatch.setitem(sys.modules, "captchakraken", pkg)
+    monkeypatch.setitem(sys.modules, "captchakraken.page_solver", page_solver)
+    # captchakraken.watcher deliberately absent, as in every release before 2.6.0.
+
+    with pytest.raises(CaptchaSolverUnavailable) as excinfo:
+        watch_captcha(object())
+
+    message = str(excinfo.value)
+    assert "2.6.0" in message
+    assert "--upgrade" in message
+    # The claim the message makes about the other half has to be true.
+    assert solve_captcha(object()) is _SENTINEL
+
