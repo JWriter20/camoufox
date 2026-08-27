@@ -110,28 +110,6 @@ jobs:
           # longer ships it, so configure fails with "Cannot find ccache".
           sudo apt-get install -y msitools p7zip-full aria2 ccache
 
-      - name: Pin the Rust toolchain
-        # Firefox 152.0.4's build/moz.configure/rust.configure cannot translate
-        # the host triplet under rustc 1.98 -- configure dies with "Don't know
-        # how to translate x86_64-pc-linux-gnu for rustc" before compiling a
-        # single file, on every target, since all three cross-compile from this
-        # Linux runner.
-        #
-        # The runner image moving from 1.97.1 to 1.98.0 in late August 2026 is
-        # the whole of what changed: upstream built this exact tree green on
-        # 1.97.1 (daijro/camoufox run 32399399820, tag v152.0.4-beta.29,
-        # 2026-08-20) and it broke here on 2026-08-27 with no source change.
-        #
-        # Deliberately BEFORE `make mozbootstrap`: bootstrap runs `rustup target
-        # add` for the cross targets, and those have to land on the toolchain the
-        # build will actually use. Revisit when the Firefox base is next bumped;
-        # a newer rust.configure is the real fix and this pin should come off.
-        run: |
-          rustup toolchain install 1.97.1 --profile minimal
-          rustup default 1.97.1
-          rustc --version
-          cargo --version
-
       - name: Fetch source
         env:
           CAMOUFOX_PASSWD: ${{ secrets.CAMOUFOX_PASSWD }}
