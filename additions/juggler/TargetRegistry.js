@@ -11,6 +11,23 @@ const {AppConstants} = ChromeUtils.importESModule("resource://gre/modules/AppCon
 // scripts), so the screencast tick has to import them explicitly.
 const {setTimeout, clearTimeout} = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
 
+// Last-resort bound on how long one callback may occupy the process-global
+// activation chain below. The chain must always advance: a callback that never
+// returns wedges every later input event in every tab, permanently.
+//
+// The per-ack deadline in MouseDispatch.js covers the await that has actually
+// caused all four shipped deadlocks, but it is one of several unbounded waits
+// reachable from a single slot -- apz-repaints-flushed, TabSwitchDone below,
+// the drag path's juggler-drag-finalized and dragover waits, and the
+// cross-process dispatchDragEvent sends all have the same shape. None of them
+// has failed yet. Bounding only the wait that has already bitten us is the
+// posture that produced those four fixes, so bound the slot itself too.
+//
+// Sized as a backstop, not a tuning knob: with a 5s ack deadline a legitimate
+// worst-case input slot approaches 10s, so this must sit well clear of that.
+const kActivationSlotBudgetMs = 30000;
+const kSlotExpired = Symbol('activation-slot-expired');
+
 const Cr = Components.results;
 
 const helper = new Helper();
@@ -512,7 +529,18 @@ export class PageTarget {
       const notificationsPopup = muteNotificationsPopup ? this._linkedBrowser?.ownerDocument.getElementById('notification-popup') : null;
       notificationsPopup?.style.setProperty('pointer-events', 'none');
       try {
-        await callback();
+        let timer;
+        const expired = new Promise(resolve => {
+          timer = setTimeout(() => resolve(kSlotExpired), kActivationSlotBudgetMs);
+        });
+        try {
+          if (await Promise.race([callback(), expired]) === kSlotExpired) {
+            dump(`[juggler] WARN activation-chain slot exceeded ` +
+                 `${kActivationSlotBudgetMs}ms; advancing the chain without it\n`);
+          }
+        } finally {
+          clearTimeout(timer);
+        }
       } finally {
         notificationsPopup?.style.removeProperty('pointer-events');
       }

@@ -21,9 +21,8 @@ the coordinate to a whole device row before hit-testing it. When
 an exit event rather than eMouseMove, no ack is produced, and the chain wedges.
 
 That makes it a deterministic property of the chrome height, which Camoufox
-varies with the spoofed OS. Measured on this build (`window.mozInnerScreenY`
-reports the rounded content origin, so it shows which side of the boundary the
-rounding lands on):
+varies with the spoofed OS. Measured on this build by logging `boundingBox` at
+the dispatch site, and pairing each offset with the outcome of a single move:
 
     os          boundingBox.top   rounds to   page.mouse.move(31, 0)
     windows     51.4              51  (above) hangs, 5/5
@@ -93,9 +92,6 @@ TIMEOUT_S = 20
 EXECUTABLE_PATH = os.environ.get("CAMOUFOX_EXECUTABLE_PATH")
 
 RECORDER = "window.__moves=0;addEventListener('mousemove',()=>window.__moves++)"
-# mozInnerScreenY - screenY is the chrome height as the widget rounds it, which
-# is the number that decides whether row 0 hit-tests into content or chrome.
-CHROME_OFFSET = "window.mozInnerScreenY - window.screenY"
 
 
 def _launch_kwargs(humanize, spoofed_os):
@@ -123,8 +119,6 @@ async def _direct_moves() -> bool:
             page = await browser.new_page()
             await page.set_content('<body style="margin:0;height:1200px"></body>')
             await page.evaluate(RECORDER)
-            offset = await page.evaluate(CHROME_OFFSET)
-            print(f"  [{spoofed_os}] content starts at screen row {offset}")
             # Start from an interior point so the move under test is a real
             # displacement, not a no-op skipped before dispatch.
             await asyncio.wait_for(page.mouse.move(*INTERIOR), timeout=TIMEOUT_S)

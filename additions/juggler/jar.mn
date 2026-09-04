@@ -8,6 +8,7 @@ juggler.jar:
   content/components/Juggler.js (components/Juggler.js)
 
   content/Helper.js (Helper.js)
+  content/input/MouseDispatch.js (input/MouseDispatch.js)
   content/NetworkObserver.js (NetworkObserver.js)
   content/ChannelEventSink.sys.mjs (ChannelEventSink.sys.mjs)
   content/TargetRegistry.js (TargetRegistry.js)

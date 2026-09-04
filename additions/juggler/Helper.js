@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const uuidGen = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
+const {setTimeout, clearTimeout} = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
 
 export class Helper {
   decorateAsEventEmitter(objectToDecorate) {
@@ -172,6 +173,8 @@ export class Helper {
 
 const helper = new Helper();
 
+const kEventTimedOut = Symbol('event-timed-out');
+
 export class EventWatcher {
   constructor(receiver, eventNames, pendingEventWatchers = new Set()) {
     this._pendingEventWatchers = pendingEventWatchers;
@@ -199,6 +202,35 @@ export class EventWatcher {
       if (result)
         return result;
       await new Promise((resolve, reject) => this._pendingPromises.push({resolve, reject}));
+    }
+  }
+
+  /**
+   * Like ensureEvent, but gives up after timeoutMs and resolves null instead of
+   * waiting forever.
+   *
+   * Callers awaiting an ack for synthesized input must use this. Input dispatch
+   * is serialized on activateAndRun()'s process-global promise chain, so an ack
+   * that never arrives does not merely lose one event -- it wedges every later
+   * input event in the process, in every tab, permanently, at 0% CPU with no
+   * diagnostic. Four shipped deadlocks (#225, #677, #751, #752) were all that
+   * failure. Bounding the wait is what makes the fifth one a log line.
+   */
+  async ensureEventWithin(aEventName, timeoutMs, predicate) {
+    const pending = this.ensureEvent(aEventName, predicate);
+    // Whichever promise loses the race stays pending until dispose() rejects
+    // it; swallow that so a timed-out wait never surfaces as an unhandled
+    // rejection in chrome JS.
+    pending.catch(() => {});
+    let timer;
+    const timedOut = new Promise(resolve => {
+      timer = setTimeout(() => resolve(kEventTimedOut), timeoutMs);
+    });
+    try {
+      const result = await Promise.race([pending, timedOut]);
+      return result === kEventTimedOut ? null : result;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
