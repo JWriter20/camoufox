@@ -527,14 +527,37 @@ export class PageHandler {
         await helper.awaitTopic('apz-repaints-flushed');
 
       const watcher = new EventWatcher(this._pageEventSink, types, this._pendingEventWatchers);
+      // The browser element's origin is not pixel-aligned: the chrome above the
+      // content is a fractional number of CSS pixels tall, and how many depends
+      // on the spoofed OS (measured: windows 51.4, macos 53.1, linux 56.5). So a
+      // relative coordinate of 0 dispatches at absolute y == boundingBox.top
+      // exactly -- the content area's first, only partly covered row. The widget
+      // rounds that to a whole device row before hit-testing it, and wherever
+      // round(top) < top the rounded row still belongs to chrome: the event fires
+      // as an exit event rather than eMouseMove, no
+      // juggler-mouse-event-hit-renderer ack is produced, and because dispatch is
+      // serialized on activateAndRun()'s process-global chain (TargetRegistry.js)
+      // that one missing ack wedges every later input event in the process
+      // forever. windows and macos land on the wrong side of that rounding, so
+      // page.mouse.move(x, 0) deadlocks on them every time; linux never does.
+      // This is the near edge's version of the x==width / y==height deadlock the
+      // bounds checks below guard against, but it cannot be fixed the same way:
+      // unlike the far edges, 0 is a legitimate in-viewport coordinate a caller
+      // may ask for, and the out-of-viewport branch drops mousedown/mouseup
+      // silently -- which is what makes a click look like it simply did nothing.
+      // Snapping to the first whole pixel inside the element stays within content
+      // pixel 0 while landing clear of the boundary. boundingBox.left is normally
+      // a whole 0 and so needs no rounding, but the same snap covers it.
+      const originX = Math.ceil(boundingBox.left);
+      const originY = Math.ceil(boundingBox.top);
       // Dispatch a single synthesized mouse event to the renderer and return a
       // promise that resolves once the renderer acks it.
       const sendOne = (eventType, eventX, eventY) => {
         // This dispatches to the renderer synchronously.
         const jugglerEventId = win.windowUtils.jugglerSendMouseEvent(
           eventType,
-          eventX + boundingBox.left,
-          eventY + boundingBox.top,
+          Math.max(eventX + boundingBox.left, originX),
+          Math.max(eventY + boundingBox.top, originY),
           button,
           clickCount,
           modifiers,
