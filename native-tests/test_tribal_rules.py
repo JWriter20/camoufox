@@ -217,6 +217,63 @@ def test_kill_sigkills_reaps_and_unlinks():
 
 
 # ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+
+
+def _dependency_files():
+    """Every file that can cause a pip install, except pythonlib's own metadata."""
+    out = []
+    for pattern in ("**/requirements*.txt", "**/pyproject.toml", "**/setup.cfg"):
+        for path in REPO_ROOT.glob(pattern):
+            parts = set(path.parts)
+            if "node_modules" in parts or ".venv" in parts or "venv" in parts:
+                continue
+            # Skip the generated Firefox tree and any fetched upstream checkout.
+            if any(p.startswith("camoufox-1") or p.startswith("playwright-python-") for p in path.parts):
+                continue
+            if path.relative_to(REPO_ROOT).as_posix() == "pythonlib/pyproject.toml":
+                continue
+            out.append(path)
+    return out
+
+
+def test_no_third_party_camoufox_distribution_is_installed():
+    """The only `camoufox` this repository installs is its own pythonlib.
+
+    build-tester generates the fingerprints it grades with, so whichever
+    distribution provides `camoufox` *is* the thing under test. This caught a
+    real one: build-tester/requirements.txt pinned `cloverlabs-camoufox` from
+    #521 until it was replaced with `-e ../pythonlib`.
+    """
+    allowed = {"-e ../pythonlib", "-e ./pythonlib", "-e pythonlib", "-e .", "camoufox"}
+    offenders = []
+    for path in _dependency_files():
+        for lineno, raw in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            line = raw.split("#", 1)[0].strip()
+            if not line or "camoufox" not in line.lower():
+                continue
+            if line in allowed:
+                continue
+            # A requirement line naming camoufox that is not a local path is a
+            # redistribution by definition.
+            if line.startswith("-e ") and "pythonlib" in line:
+                continue
+            # pyproject metadata (name/urls) is not a dependency.
+            if any(line.startswith(k) for k in ("name", "repository", "homepage", "documentation", "#")):
+                continue
+            if "=" in line and "camoufox" not in line.split("=")[0].lower():
+                continue
+            offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line}")
+
+    assert not offenders, (
+        "a third-party camoufox distribution is being installed:\n  "
+        + "\n  ".join(offenders)
+        + explain("no-third-party-camoufox-distribution")
+    )
+
+
+# ---------------------------------------------------------------------------
 # teardown
 # ---------------------------------------------------------------------------
 

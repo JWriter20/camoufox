@@ -116,6 +116,30 @@ rules:
       nothing is reaped later, then unlink both files.
 
   # -------------------------------------------------------------------------
+  # Dependencies
+  # -------------------------------------------------------------------------
+
+  - id: no-third-party-camoufox-distribution
+    title: Nothing here depends on someone else's camoufox package
+    check: automated
+    evidence:
+      - "PR #521 (2026-03-15) added `cloverlabs-camoufox` to build-tester/requirements.txt"
+      - "the commit's author is the PyPI author of that package"
+      - "build-tester/scripts/presets.py already prints the correct answer in its ImportError handler"
+    rationale: >-
+      build-tester generates its fingerprints with camoufox.fingerprints, so
+      whichever distribution provides `camoufox` decides what is actually being
+      tested. Pointing that at a third-party redistribution means the binary is
+      graded against someone else's fingerprint generation, a divergence between
+      the two reads as a browser bug, and every CI run pulls an outside package
+      into a job holding repository credentials. The only `camoufox` this
+      repository may install is pythonlib/ from this tree.
+    expect:
+      no_dependency_matching: "camoufox"
+      except_paths: ["pythonlib/pyproject.toml"]
+      allowed_forms: ["-e ../pythonlib", "-e ./pythonlib", "-e pythonlib"]
+
+  # -------------------------------------------------------------------------
   # Teardown
   # -------------------------------------------------------------------------
 
