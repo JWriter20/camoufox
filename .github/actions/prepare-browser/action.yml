@@ -6,10 +6,6 @@ description: >-
   runtime dependency list drifts.
 
 inputs:
-  ref:
-    description: Commit to check out
-    required: false
-    default: ""
   python-version:
     required: false
     default: "3.12"
@@ -22,10 +18,9 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: ${{ inputs.ref }}
-
+    # No checkout here on purpose. A local composite action (`uses: ./...`) can
+    # only be resolved once the repository is already in the workspace, so every
+    # caller must run actions/checkout itself before reaching this.
     - uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
@@ -58,6 +53,10 @@ runs:
         zstd -d -c camoufox-dist.tar.zst | tar -C .ci-browser -xf -
         binary="$(realpath .ci-browser/bin/camoufox-bin)"
         test -x "$binary" || { echo "::error::camoufox-bin missing from the artifact"; exit 1; }
+        # The Python API resolves properties.json next to the binary; without it
+        # every AsyncCamoufox launch dies with FileNotFoundError.
+        test -f .ci-browser/bin/properties.json || {
+          echo "::error::properties.json missing beside the binary -- the build job should have staged it"; exit 1; }
         echo "binary=$binary" >> "$GITHUB_OUTPUT"
         # Consumed by every runner via ci/_pytest.py::built_binary().
         echo "CAMOUFOX_BINARY=$binary" >> "$GITHUB_ENV"

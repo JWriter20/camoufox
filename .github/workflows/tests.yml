@@ -238,6 +238,15 @@ jobs:
     timeout-minutes: 330
     permissions:
       contents: read
+    env:
+      # scripts/patch.py writes the mozconfig from BUILD_TARGET and defaults to
+      # macos,arm64 when it is unset -- sensible for a developer on a Mac,
+      # wrong here. Without this, configure goes looking for the macOS SDK and
+      # dies with "No such file or directory: MacOSX26.5.sdk/SDKSettings.plist"
+      # three minutes in, which reads like a missing dependency rather than a
+      # cross-compile nobody asked for. multibuild.py sets this itself; `make
+      # dir` + `make build` do not.
+      BUILD_TARGET: linux,x86_64
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef # v4.1
@@ -325,8 +334,31 @@ jobs:
 
       - name: Package the binary for the test jobs
         run: |
+          set -euo pipefail
           src="camoufox-${{ needs.resolve.outputs.browser_version }}-${{ needs.resolve.outputs.browser_release }}/obj-x86_64-pc-linux-gnu/dist/bin"
           test -x "$src/camoufox-bin" || { echo "::error::no camoufox-bin at $src"; exit 1; }
+
+          # `mach build` produces an *unpackaged* tree. Two things scripts/package.py
+          # would add are load-bearing for the test jobs and are missing here:
+          #
+          #   fonts/ + fontconfig/  -- without them every glyph in page content
+          #                            renders as tofu, silently, because the
+          #                            browser chrome still has system fonts.
+          #   properties.json       -- the Python API resolves it next to the
+          #                            binary, so AsyncCamoufox dies with
+          #                            FileNotFoundError without it. That breaks
+          #                            patch-guards, the leak suite and sundial.
+          make stage-fonts
+          for f in properties.json chrome.css camoucfg.jvv; do
+            [ -f "$src/$f" ] || cp -v "settings/$f" "$src/$f"
+          done
+
+          # Fail here, once, rather than in five browser jobs with five
+          # different confusing errors.
+          for required in camoufox-bin properties.json fonts/linux fontconfig/linux; do
+            [ -e "$src/$required" ] || { echo "::error::artifact is missing $required"; exit 1; }
+          done
+
           # The browser needs its whole dist/bin, not just the executable.
           tar -C "$(dirname "$src")" -cf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst
           ls -lh camoufox-dist.tar.zst
@@ -357,9 +389,11 @@ jobs:
       matrix:
         shard: ${{ fromJson(needs.resolve.outputs.shard_matrix) }}
     steps:
-      - uses: ./.github/actions/prepare-browser
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - uses: ./.github/actions/prepare-browser
+        with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Run
         env:
@@ -387,9 +421,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: ./.github/actions/prepare-browser
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - uses: ./.github/actions/prepare-browser
+        with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: xvfb-run -a python3 -m ci.run_playwright --suite vendored --binary "$CAMOUFOX_BINARY"
       - uses: actions/upload-artifact@v4
@@ -408,12 +444,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: ./.github/actions/prepare-browser
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - uses: ./.github/actions/prepare-browser
+        with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install -e pythonlib
-      - run: make stage-fonts || echo "::warning::stage-fonts failed; font assertions may be unreliable"
+      # Fonts and properties.json are staged into the artifact by the build job;
+      # `make stage-fonts` here would find no source tree and do nothing.
       - run: xvfb-run -a python3 -m ci.run_patch_guards --binary "$CAMOUFOX_BINARY"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -431,9 +470,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: ./.github/actions/prepare-browser
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - uses: ./.github/actions/prepare-browser
+        with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: |
           cd build-tester && npm install && pip install -r requirements.txt
@@ -454,9 +495,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: ./.github/actions/prepare-browser
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - uses: ./.github/actions/prepare-browser
+        with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install -e pythonlib
       - name: Run
@@ -486,9 +529,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: ./.github/actions/prepare-browser
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - uses: ./.github/actions/prepare-browser
+        with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install -e pythonlib
       - name: Run

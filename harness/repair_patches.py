@@ -28,6 +28,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -178,6 +179,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--skip-fetch", action="store_true")
     parser.add_argument("--no-bump", action="store_true", help="assume upstream.sh is already set")
     args = parser.parse_args(argv)
+
+    # scripts/patch.py resolves the mozconfig target from BUILD_TARGET and falls
+    # back to macos,arm64 -- sensible for a developer on a Mac, wrong for a
+    # Linux runner, where configure then dies looking for the macOS SDK. Set for
+    # the whole process so `make setup`, `make dir` and the authoritative
+    # scripts/patch.py run all agree on the target CI actually builds.
+    os.environ.setdefault("BUILD_TARGET", "linux,x86_64")
+    log(f"build target: {os.environ['BUILD_TARGET']}")
 
     import yaml
 

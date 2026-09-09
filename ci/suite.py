@@ -89,6 +89,10 @@ def make_venv(checkout: Path, tag: str, *, reuse: bool = True) -> Path:
         "pytest-repeat==0.9.3", "flaky==3.8.1", "Pillow==10.4.0", "pixelmatch==0.3.0",
         "pyOpenSSL==24.2.1", "service_identity==24.1.0", "twisted==24.7.0",
         "autobahn==23.1.2", "requests==2.32.3", "objgraph==3.6.1",
+        # ci/pw_camoufox_plugin.py reads ci/skiplist.yml from inside this
+        # interpreter, so PyYAML has to be here and not just in the outer
+        # environment. Without it every shard dies in pytest_configure.
+        "PyYAML>=6.0",
     ]
     run([str(python), "-m", "pip", "install", "--quiet", "--upgrade", "pip"], check=True)
     run([str(python), "-m", "pip", "install", "--quiet", *deps], check=True)

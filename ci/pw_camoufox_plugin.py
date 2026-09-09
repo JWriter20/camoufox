@@ -55,10 +55,17 @@ def load_skiplist(path: Optional[Path] = None) -> List[Dict[str, str]]:
         override = os.environ.get(_SKIPLIST_ENV, "").strip()
         path = Path(override) if override else Path(__file__).resolve().parent / "skiplist.yml"
     if not path.is_file():
-        log_missing = f"skiplist not found at {path}; running with no skips"
-        print(f"camoufox: {log_missing}")
+        print(f"camoufox: skiplist not found at {path}; running with no skips")
         return []
-    import yaml
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover -- environment problem
+        raise RuntimeError(
+            "PyYAML is missing from the interpreter running this suite, so "
+            f"{path} cannot be read. Refusing to continue: without the skiplist "
+            "roughly 200 tests Camoufox cannot pass by design would run and fail, "
+            "which looks like a broken browser rather than a broken environment."
+        ) from exc
 
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     entries = []
