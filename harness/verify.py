@@ -358,7 +358,14 @@ def verify(
 ) -> Tuple[Verdict, Dict[str, Any]]:
     policy = policy or load_policy()
     baseline = baseline if baseline is not None else load_baseline()
-    records = evidence.load_all(evidence_dir or EVIDENCE_DIR)
+
+    # The upstream Playwright suite is sharded across runners, arriving as
+    # playwright_upstream-3of6 and siblings. Fold them back into one record
+    # using the same code the pull-request summary uses, so the harness and CI
+    # never disagree about what a suite's result was.
+    from ci.summarize import merge_shards
+
+    records = merge_shards(evidence.load_all(evidence_dir or EVIDENCE_DIR))
     verdict = Verdict()
 
     current_run = evidence.run_id()

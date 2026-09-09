@@ -135,31 +135,27 @@ gates:
     description: pythonlib's own pytest suite.
     max_new_failures: 0
 
+  native_rules:
+    required: true
+    description: >-
+      native-tests/test_tribal_rules.py -- the decisions in ci/tribal-rules.yml
+      are still in force. Needs no browser, so it fails a bad change in seconds.
+    allow_failures: 0
+
+  native_browser:
+    required: true
+    description: >-
+      native-tests/ -- launch browsers, kill them, prove nothing survived, and
+      check that a context and a browser mean what we say they mean.
+    allow_failures: 0
+
   sundial:
     required: true
     description: >-
-      Stealth report from the private sundial suite. Only aggregate numbers ever
-      leave this gate -- vector names, values and sources are stripped before
-      anything is written to disk. See TRIBAL-KNOWLEDGE.md, "Sundial is private".
-    url: https://sundial.daijro.dev
-
-    # Only gate on categories Camoufox actually claims to implement. A vector
-    # outside this list is still counted and reported, but cannot fail the run.
-    # Cross-OS rendering parity is deliberately absent: Camoufox does not claim
-    # byte-identical emulation of another OS's rasterizer.
-    gated_categories:
-      - Identity
-      - Security
-      - JS Engine
-      - Display
-      - Locale
-      - Network
-
-    # Counted and shown, never gated.
-    ungated_categories:
-      - Graphics
-      - Audio
-      - CPU
+      Stealth report from the private sundial suite. Scope and thresholds live in
+      ci/sundial.yml, because the stealth check runs on every pull request and
+      the harness is only one of its callers. Only a grade and a count ever leave
+      the gate -- see TRIBAL-KNOWLEDGE.md, "Sundial is private".
 
     # Individual vectors excused from the gate. Identified by opaque_id() --
     # never by name, because this file is public. Add one with:
@@ -171,8 +167,9 @@ gates:
       #   reason: why Camoufox does not claim this, in a full sentence
       #   expires: 2027-01-01
 
-    # A run that scores below this is a failure even with zero regressions.
-    min_pass_rate: 0.90
+    # The absolute floor lives in ci/sundial.yml (min_pass_rate); the gate
+    # records a breach as a policy_violation, which stays fatal here even when
+    # the baseline scored just as badly.
 
 # ---------------------------------------------------------------------------
 # How "no regression" is decided, for every per-test gate above.

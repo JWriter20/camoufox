@@ -1,4 +1,8 @@
-# The harness itself. Gates install their own suites' dependencies separately:
+# The CI pipeline itself. Individual suites install their own dependencies:
 # tests/local-requirements.txt for the vendored Playwright suite, a generated
 # venv for the upstream one, build-tester/requirements.txt for the binary tests.
 PyYAML>=6.0
+pytest>=8.0
+pytest-timeout>=2.3
+pytest-asyncio>=0.21
+psutil>=5.9

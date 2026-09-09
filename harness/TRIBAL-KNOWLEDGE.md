@@ -1,7 +1,13 @@
 # Tribal knowledge
 
 The things that are true about this repository but are not written in the code,
-and that cost someone a wasted build to find out. Read this before touching
+and that cost someone a wasted build to find out.
+
+> The subset that can be *checked* lives in [`ci/tribal-rules.yml`](../ci/tribal-rules.yml)
+> and is asserted by `native-tests/test_tribal_rules.py` on every pull request.
+> A rule there carries the issue or PR that settled it, so a failure tells you
+> not just what changed but who already argued about it. This file is the prose
+> version, plus everything not mechanically checkable. Read this before touching
 patches, tests, or the harness — whether you are a person or an agent.
 
 Kept short on purpose. If an entry stops being true, delete it; a stale warning

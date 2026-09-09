@@ -6,7 +6,7 @@ version constraint or a fingerprint preset shape. Runs early so an obvious
 mistake does not cost a 40-minute build.
 
 Run:
-    python3 -m harness.gates.pythonlib
+    python3 -m ci.run_pythonlib
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from .. import evidence
-from .._util import EVIDENCE_DIR, REPO_ROOT, WORK_DIR
-from . import parse_junit, run_pytest
+from . import results as evidence
+from ._util import EVIDENCE_DIR, REPO_ROOT, WORK_DIR
+from ._pytest import parse_junit, run_pytest
 
 PYTHONLIB = REPO_ROOT / "pythonlib"
 

@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .._util import REPO_ROOT, Result, read_upstream_sh, run
+from ._util import REPO_ROOT, Result, read_upstream_sh, run
 
 
 def source_dir(version: Optional[str] = None, release: Optional[str] = None) -> Path:
@@ -87,6 +87,10 @@ def parse_junit(path: Path) -> Dict[str, str]:
     return outcomes
 
 
+def _has_plugin(python: Path, module: str) -> bool:
+    return run([str(python), "-c", f"import {module}"]).ok
+
+
 def run_pytest(
     *,
     cwd: Path,
@@ -95,13 +99,19 @@ def run_pytest(
     junit: Path,
     env: Optional[Dict[str, str]] = None,
     timeout: int = 7200,
+    per_test_timeout: Optional[int] = 180,
 ) -> Result:
+    """Run pytest and write junit XML.
+
+    `per_test_timeout` guards against a hung browser wedging the whole job, but
+    it needs pytest-timeout. Passing the flag without the plugin makes pytest
+    exit 4 on an unrecognised argument -- which looks exactly like "the suite
+    did not run", because it did not. So the flag is only added when the plugin
+    is actually importable in that interpreter.
+    """
     junit.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        str(python), "-m", "pytest",
-        f"--junitxml={junit}",
-        "-p", "no:randomly",
-        "--timeout=180",
-        *args,
-    ]
+    cmd = [str(python), "-m", "pytest", f"--junitxml={junit}", "-p", "no:randomly"]
+    if per_test_timeout and _has_plugin(python, "pytest_timeout"):
+        cmd.append(f"--timeout={per_test_timeout}")
+    cmd.extend(args)
     return run(cmd, cwd=cwd, env=env, timeout=timeout, tee=True, capture=False)

@@ -8,7 +8,7 @@ precondition -- otherwise a build failure looks like "the test gates did not
 run" and reads as a skip.
 
 Run:
-    python3 -m harness.gates.build
+    python3 -m ci.run_build
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from .. import evidence
-from .._util import EVIDENCE_DIR, REPO_ROOT, read_upstream_sh, run
-from . import built_binary
+from . import results as evidence
+from ._util import EVIDENCE_DIR, REPO_ROOT, read_upstream_sh, run
+from ._pytest import built_binary
 
 # mach prints errors in a few shapes; catch the common ones for the summary.
 _ERROR_RE = re.compile(

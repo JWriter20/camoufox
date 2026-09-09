@@ -10,7 +10,7 @@ cannot catch.
 Each guard is a standalone script exiting 0 or 1. Policy allows zero failures.
 
 Run:
-    python3 -m harness.gates.patch_guards --binary /path/to/camoufox-bin
+    python3 -m ci.run_patch_guards --binary /path/to/camoufox-bin
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from .. import evidence
-from .._util import EVIDENCE_DIR, REPO_ROOT, log, run
+from . import results as evidence
+from ._util import EVIDENCE_DIR, REPO_ROOT, log, run
 
 GUARD_DIR = REPO_ROOT / "tests" / "patches"
 
@@ -40,7 +40,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--only", nargs="*", help="run only these guard names")
     args = parser.parse_args(argv)
 
-    from . import built_binary
+    from ._pytest import built_binary
 
     result = evidence.GateResult(gate="patch_guards")
     binary = args.binary or built_binary()

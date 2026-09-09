@@ -8,7 +8,10 @@ would let a broken build through:
   * a test that disappeared must count as a regression;
   * stale evidence must not satisfy a gate;
   * an expired or unreasoned waiver must fail;
-  * and nothing that identifies a sundial vector may survive redaction.
+  * and a gate-level policy rule stays fatal even when the baseline was as bad.
+
+Redaction, sharding, skiplists and version resolution belong to the repo-wide
+pipeline and are tested in `ci/tests/`.
 
 Run:  python3 -m pytest harness/tests -q
 """
@@ -22,8 +25,6 @@ import pytest
 
 from harness import evidence, verify
 from harness._util import bump_release, opaque_id, parse_version, read_upstream_sh, write_upstream_sh
-from harness.gates import junit_test_id
-from harness.gates.sundial import _iter_entries, redact
 
 
 # ---------------------------------------------------------------------------
@@ -217,180 +218,6 @@ def test_unreasoned_waiver_fails(policy, baseline, green):
 
 
 # ---------------------------------------------------------------------------
-# sundial redaction -- the one that must never regress
-# ---------------------------------------------------------------------------
-
-
-SECRETS = [
-    "canvas.rasterizer.subpixel-drift",
-    "A private vector name nobody may publish",
-    "checks whether the FMA3 path is present",
-    "return Math.fround(x) !== y",
-    "3.14159265358979",
-]
-
-FULL_REPORT = {
-    "schemaVersion": 1,
-    "sundialVersion": "0.3.1",
-    "identity": {"name": "Firefox", "os": "linux", "engine": "SpiderMonkey", "tz": "UTC"},
-    "summary": {"total": 3, "pass": 1, "fail": 2},
-    "failures": {
-        "Graphics": [{
-            "key": SECRETS[0], "id": "gfx-1", "name": SECRETS[1], "brief": SECRETS[2],
-            "src": SECRETS[3], "source": SECRETS[3], "value": SECRETS[4],
-            "expect": SECRETS[4], "category": "Graphics", "status": "fail",
-        }],
-        "Identity": [{
-            "key": "identity.nav.oscpu", "id": "id-9", "name": SECRETS[1],
-            "value": SECRETS[4], "category": "Identity", "status": "fail",
-        }],
-    },
-    "succeeded": {
-        "Identity": [{
-            "key": "identity.nav.platform", "id": "id-3", "name": SECRETS[1],
-            "value": SECRETS[4], "category": "Identity", "status": "pass",
-        }],
-    },
-    "private": {
-        "failures": {
-            "Locale": [{
-                "key": "pv-secret-vector", "id": "pv-1", "name": SECRETS[1],
-                "src": SECRETS[3], "category": "Locale", "status": "fail",
-            }],
-        },
-    },
-}
-
-GATED = ["Identity", "Security", "JS Engine", "Display", "Locale", "Network"]
-UNGATED = ["Graphics", "Audio", "CPU"]
-
-
-def test_redaction_leaks_nothing_identifying():
-    blob = json.dumps(redact(FULL_REPORT, GATED, UNGATED))
-    for secret in SECRETS:
-        assert secret not in blob, f"redaction leaked: {secret!r}"
-    # Raw vector keys must not survive either.
-    for key in ("canvas.rasterizer.subpixel-drift", "identity.nav.oscpu", "pv-secret-vector"):
-        assert key not in blob, f"redaction leaked the vector key {key!r}"
-
-
-def test_redaction_drops_every_forbidden_field():
-    """No per-vector field survives.
-
-    `metrics.identity` is deliberately exempt and checked separately: it
-    describes the browser under test -- our own claimed platform, engine and
-    timezone -- not a sundial vector, so keeping it leaks nothing and makes a
-    failed run diagnosable.
-    """
-    from harness.gates.sundial import _FORBIDDEN_FIELDS
-
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    identity = out["metrics"].pop("identity")
-    serialised = json.dumps(out)
-    for field in _FORBIDDEN_FIELDS:
-        assert f'"{field}"' not in serialised, f"redacted output still carries a {field!r} field"
-
-    # And the exemption is a closed whitelist, not an open door.
-    assert set(identity) <= {
-        "name", "os", "osDetected", "engine", "platform", "lang", "tz",
-        "uaMismatch", "engineMismatch", "osConsistent",
-    }
-
-
-def test_redaction_output_is_only_ids_counts_and_our_own_identity():
-    """Structural check: every leaf under `tests` is an opaque id -> outcome."""
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    for tid, outcome in out["tests"].items():
-        assert len(tid) == 20 and all(c in "0123456789abcdef" for c in tid), tid
-        assert outcome in {"pass", "fail", "error", "skip"}
-    for tid in out["metrics"]["ungated_tests"]:
-        assert len(tid) == 20 and all(c in "0123456789abcdef" for c in tid), tid
-
-
-def test_only_gated_categories_can_fail_the_run():
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    # Graphics is measured...
-    assert out["metrics"]["by_category"]["Graphics"]["fail"] == 1
-    assert out["metrics"]["ungated_failed"] == 1
-    # ...but is not among the identities verify.py gates on.
-    assert opaque_id("canvas.rasterizer.subpixel-drift") not in out["tests"]
-    assert opaque_id("identity.nav.oscpu") in out["tests"]
-
-
-def test_private_vectors_are_gated_but_still_opaque():
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    assert out["tests"][opaque_id("pv-secret-vector")] == "fail"
-
-
-def test_opaque_ids_are_stable_and_not_the_input():
-    assert opaque_id("x") == opaque_id("x")
-    assert opaque_id("x") != opaque_id("y")
-    assert "x" not in opaque_id("x")
-
-
-def test_pass_rate_counts_only_gated_scored_vectors():
-    out = redact(FULL_REPORT, GATED, UNGATED)["metrics"]
-    # Identity: one pass, one fail. Locale (private): one fail. -> 1/3
-    assert out["gated_scored"] == 3
-    assert out["gated_passed"] == 1
-    assert out["pass_rate"] == pytest.approx(1 / 3, abs=1e-4)
-
-
-def test_iter_entries_finds_public_and_private():
-    keys = {k for k, _, _ in _iter_entries(FULL_REPORT)}
-    assert "pv-secret-vector" in keys
-    assert "identity.nav.platform" in keys
-
-
-# ---------------------------------------------------------------------------
-# small pieces
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "classname,name,expected",
-    [
-        ("tests.async.test_page", "test_foo", "async/test_page.py::test_foo"),
-        ("async.test_page", "test_foo", "async/test_page.py::test_foo"),
-    ],
-)
-def test_junit_ids_match_across_vendored_and_upstream_layouts(classname, name, expected):
-    """The two suites report different dotted paths for the same test file."""
-    assert junit_test_id(classname, name) == expected
-
-
-@pytest.mark.parametrize(
-    "given,expected",
-    [("beta.31", "beta.32"), ("beta.9", "beta.10"), ("alpha", "alpha.1")],
-)
-def test_release_bump(given, expected):
-    assert bump_release(given) == expected
-
-
-def test_version_parsing():
-    assert parse_version("153.0.4") == (153, 0, 4)
-    assert parse_version("155.0") == (155, 0, 0)
-
-
-def test_upstream_sh_roundtrip_preserves_comments(tmp_path):
-    path = tmp_path / "upstream.sh"
-    path.write_text("# a comment\nversion=152.0.4\nrelease=beta.31\nclosedsrc_rev=1.0.0\n")
-    write_upstream_sh({"version": "153.0.4", "release": "beta.32"}, path)
-    text = path.read_text()
-    assert "# a comment" in text
-    assert "closedsrc_rev=1.0.0" in text
-    assert read_upstream_sh(path)["version"] == "153.0.4"
-
-
-def test_gate_result_keeps_the_best_outcome_across_retries():
-    result = evidence.GateResult(gate="x")
-    result.record("t", "fail")
-    result.record("t", "pass")
-    result.record("t", "fail")
-    assert result.tests["t"] == "pass"
-
-
-# ---------------------------------------------------------------------------
 # path confinement -- the agent must not be able to edit its own examiner
 # ---------------------------------------------------------------------------
 
@@ -544,17 +371,3 @@ def test_policy_violations_fail_even_with_a_matching_baseline(policy, green):
     assert any(p.kind == "policy violation" for p in verdict.problems)
 
 
-def test_build_tester_flags_a_dirty_required_category():
-    from harness.gates.build_tester import category_failures, flatten, uniqueness_collisions
-
-    full = {
-        "profiles": [{
-            "profile": {"os": "linux", "mode": "per-context", "index": 0},
-            "results": {"core": {"Automation Detection": {"webdriver": {"passed": False}}}},
-            "matchResults": [],
-        }],
-        "crossProfile": {"macPerContext": {"total": 3, "uniqueCanvas": 2, "uniqueAudio": 3}},
-    }
-    assert category_failures(full, ["Automation Detection"]) == {"Automation Detection": 1}
-    assert flatten(full)["linux-per-context-0/core/Automation Detection/webdriver"] == "fail"
-    assert uniqueness_collisions(full) == ["macPerContext.uniqueCanvas (2/3 distinct)"]

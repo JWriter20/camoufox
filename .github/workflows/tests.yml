@@ -1,0 +1,579 @@
+name: Tests
+
+# The repository's test pipeline. Runs on every pull request, on pushes to main,
+# on demand, and -- via workflow_call -- from the Firefox auto-update harness,
+# so a contributor's pull request and an automated Firefox bump are judged by
+# exactly the same checks.
+#
+# The browser version comes from upstream.sh unless a caller passes one in,
+# which is what lets the harness test a Firefox it is moving to. ci/versions.py
+# then picks the newest released Playwright suite that is not ahead of that
+# browser, and ci/run_playwright.py runs it with main-world execution and
+# ci/skiplist.yml applied.
+#
+# The stealth check reports a letter grade and a count. Its per-vector detail
+# never leaves ci/run_sundial.py, because this repository is public.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      browser_version:
+        description: "Firefox version to test (default: whatever upstream.sh pins)"
+        required: false
+        type: string
+      playwright_tag:
+        description: "Pin the Playwright suite (default: resolved from the browser)"
+        required: false
+        type: string
+      shards:
+        description: "How many runners to split the upstream suite across"
+        required: false
+        default: "6"
+        type: string
+  workflow_call:
+    inputs:
+      browser_version:
+        required: false
+        type: string
+      playwright_tag:
+        required: false
+        type: string
+      shards:
+        required: false
+        default: "6"
+        type: string
+      ref:
+        description: "Commit to test; defaults to the calling workflow's ref"
+        required: false
+        type: string
+    secrets:
+      SUNDIAL_USERNAME:
+        required: false
+      SUNDIAL_AUTOMATION_KEY:
+        required: false
+    outputs:
+      verdict:
+        description: "pass or fail"
+        value: ${{ jobs.summary.outputs.verdict }}
+      browser_version:
+        value: ${{ jobs.resolve.outputs.browser_version }}
+      playwright_tag:
+        value: ${{ jobs.resolve.outputs.playwright_tag }}
+
+permissions: {}
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  CI_WORK_DIR: ${{ github.workspace }}/.ci-work
+  CI_RESULTS_DIR: ${{ github.workspace }}/.ci-work/results
+
+jobs:
+  # ---------------------------------------------------------------------------
+  resolve:
+    name: Resolve versions
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      browser_version: ${{ steps.versions.outputs.browser_version }}
+      browser_release: ${{ steps.versions.outputs.browser_release }}
+      playwright_tag: ${{ steps.versions.outputs.playwright_tag }}
+      playwright_firefox: ${{ steps.versions.outputs.playwright_firefox }}
+      needs_browser: ${{ steps.scope.outputs.needs_browser }}
+      has_sundial: ${{ steps.sundial.outputs.has_sundial }}
+      shard_matrix: ${{ steps.shards.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r ci/requirements.txt
+
+      - id: versions
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m ci.versions \
+            ${{ inputs.browser_version && format('--browser-version {0}', inputs.browser_version) || '' }} \
+            ${{ inputs.playwright_tag && format('--playwright-tag {0}', inputs.playwright_tag) || '' }}
+
+      - name: Decide whether a browser build is needed
+        id: scope
+        # A docs-only pull request should not spend 40 minutes compiling
+        # Firefox. Anything that can change the binary or how it is tested does.
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "needs_browser=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          changed=$(git diff --name-only "$base"...HEAD || echo "")
+          echo "changed files:"; echo "$changed" | sed 's/^/  /'
+          if echo "$changed" | grep -qE '^(patches/|additions/|settings/|assets/|scripts/|upstream.sh|Makefile|ci/|tests/|build-tester/|\.github/workflows/)'; then
+            echo "needs_browser=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_browser=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No browser-affecting paths changed; skipping the build and the browser suites."
+          fi
+
+      - name: Is the stealth credential available?
+        id: sundial
+        # Secrets are absent for pull requests from forks. Resolve it here once
+        # rather than referencing the secret from a job-level `if`, which the
+        # secrets context is not available in.
+        env:
+          KEY: ${{ secrets.SUNDIAL_AUTOMATION_KEY }}
+          USER: ${{ secrets.SUNDIAL_USERNAME }}
+        run: |
+          if [ -n "$KEY" ] && [ -n "$USER" ]; then
+            echo "has_sundial=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_sundial=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Stealth check skipped: no sundial credential on this run (normal for a fork PR)."
+          fi
+
+      - name: Build the shard matrix
+        id: shards
+        run: |
+          python3 -c "
+          import json, os
+          n = max(1, int('${{ inputs.shards || '6' }}'))
+          print('matrix=' + json.dumps([f'{i}/{n}' for i in range(1, n + 1)]))
+          " >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  static:
+    name: Static checks
+    needs: resolve
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r ci/requirements.txt pytest
+
+      - name: Synthesized input goes through one chokepoint
+        run: python3 scripts/check-input-dispatch.py
+
+      - name: CI pipeline self-tests
+        # These assert that the pipeline reports honestly: skips carry reasons,
+        # shards partition exactly, and nothing identifying a sundial vector
+        # survives redaction.
+        run: python3 -m pytest ci/tests -q
+
+      - name: Auto-update harness self-tests
+        run: python3 -m pytest harness/tests -q
+
+      - name: Settled decisions are still in force
+        # No browser needed: these read the source. They fail a pull request in
+        # seconds rather than after a 40-minute build, which matters because the
+        # thing they catch is usually a well-meaning change that looks obviously
+        # correct until you read the closed PR that rejected it.
+        run: python3 -m ci.run_native --subset rules
+
+      - name: Skiplist is valid
+        run: |
+          python3 -c "
+          from ci.summarize import validate_skiplist
+          from ci.pw_camoufox_plugin import load_skiplist
+          problems = validate_skiplist()
+          if problems:
+              raise SystemExit('\n'.join(problems))
+          print(f'skiplist OK: {len(load_skiplist())} entries, every one with a reason')
+          "
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-static
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  pythonlib:
+    name: pythonlib
+    needs: resolve
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r ci/requirements.txt pytest -e pythonlib
+      - run: python3 -m ci.run_pythonlib
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-pythonlib
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build (linux x86_64)
+    needs: resolve
+    if: needs.resolve.outputs.needs_browser == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    permissions:
+      contents: read
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef # v4.1
+        with:
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+          remove-cached-tools: "true"
+          remove-swapfile: "true"
+
+      - name: Remove unwanted tools
+        run: |
+          sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' \
+            '^mongodb-.*' '^mysql-.*' > /dev/null 2>&1 || true
+          sudo apt-get remove -y azure-cli google-chrome-stable firefox mono-devel \
+            libgl1-mesa-dri --fix-missing > /dev/null 2>&1 || true
+          sudo apt-get autoremove -y > /dev/null 2>&1 || true
+          sudo apt-get clean > /dev/null 2>&1 || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Install build dependencies
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 18
+          sudo apt-get install -y lld-18 clang-18
+          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-18 100
+          sudo apt-get update
+          # The mozconfig sets --with-ccache; configure fails hard without it
+          # rather than degrading.
+          sudo apt-get install -y msitools p7zip-full aria2 ccache libsqlite3-dev
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          # Keyed on the browser version and the patch set, so a pull request
+          # that does not touch patches/ starts from a fully warm cache.
+          key: ccache-${{ needs.resolve.outputs.browser_version }}-${{ hashFiles('patches/**', 'additions/**', 'assets/*.mozconfig') }}
+          restore-keys: |
+            ccache-${{ needs.resolve.outputs.browser_version }}-
+            ccache-
+
+      - name: Create swap
+        run: |
+          # The link step is OOM-killed on a standard runner without this, and
+          # reports as a bare SIGTERM that looks nothing like out-of-memory.
+          sudo fallocate -l 24G /swapfile && sudo chmod 600 /swapfile
+          sudo mkswap /swapfile && sudo swapon /swapfile
+          free -h
+
+      - run: pip install -r ci/requirements.txt
+
+      - name: Prepare the source tree
+        env:
+          CAMOUFOX_PASSWD: ${{ secrets.CAMOUFOX_PASSWD }}
+        run: |
+          ccache -M 8G && ccache -z
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          make dir
+          make mozbootstrap
+
+      - name: Build
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: python3 -m ci.run_build
+
+      - run: ccache -s
+
+      - name: Package the binary for the test jobs
+        run: |
+          src="camoufox-${{ needs.resolve.outputs.browser_version }}-${{ needs.resolve.outputs.browser_release }}/obj-x86_64-pc-linux-gnu/dist/bin"
+          test -x "$src/camoufox-bin" || { echo "::error::no camoufox-bin at $src"; exit 1; }
+          # The browser needs its whole dist/bin, not just the executable.
+          tar -C "$(dirname "$src")" -cf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst
+          ls -lh camoufox-dist.tar.zst
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: camoufox-dist
+          path: camoufox-dist.tar.zst
+          retention-days: 3
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-build
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  playwright-upstream:
+    name: Playwright upstream ${{ matrix.shard }}
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.resolve.outputs.shard_matrix) }}
+    steps:
+      - uses: ./.github/actions/prepare-browser
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          xvfb-run -a python3 -m ci.run_playwright \
+            --suite upstream \
+            --shard "${{ matrix.shard }}" \
+            --binary "$CAMOUFOX_BINARY" \
+            --browser-version "${{ needs.resolve.outputs.browser_version }}" \
+            --playwright-tag "${{ needs.resolve.outputs.playwright_tag }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-playwright-upstream-${{ strategy.job-index }}
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  playwright-vendored:
+    name: Playwright regression suite
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: ./.github/actions/prepare-browser
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: xvfb-run -a python3 -m ci.run_playwright --suite vendored --binary "$CAMOUFOX_BINARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-playwright-vendored
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  patch-guards:
+    name: Patch guards
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: ./.github/actions/prepare-browser
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -e pythonlib
+      - run: make stage-fonts || echo "::warning::stage-fonts failed; font assertions may be unreliable"
+      - run: xvfb-run -a python3 -m ci.run_patch_guards --binary "$CAMOUFOX_BINARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-patch-guards
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  build-tester:
+    name: build-tester
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: ./.github/actions/prepare-browser
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: |
+          cd build-tester && npm install && pip install -r requirements.txt
+      - run: xvfb-run -a python3 -m ci.run_build_tester --binary "$CAMOUFOX_BINARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-build-tester
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  native:
+    name: Leaks and context semantics
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: ./.github/actions/prepare-browser
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -e pythonlib
+      - name: Run
+        # Launches browsers, kills them, and proves nothing survived -- the
+        # failure a long-running scraper hits after six hours and no Playwright
+        # test can see. Also checks that a context and a browser mean what the
+        # project says they mean.
+        run: |
+          xvfb-run -a python3 -m ci.run_native \
+            --subset browser \
+            --binary "$CAMOUFOX_BINARY" \
+            --rounds 4 --browsers 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-native
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  sundial:
+    name: Stealth check
+    needs: [resolve, build]
+    if: needs.resolve.outputs.has_sundial == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: ./.github/actions/prepare-browser
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -e pythonlib
+      - name: Run
+        # The only step in this workflow that sees the sundial credential.
+        # ci/run_sundial.py reduces the report to a grade and a set of HMACs
+        # before anything reaches disk, so the artifact below is publishable.
+        env:
+          SUNDIAL_USERNAME: ${{ secrets.SUNDIAL_USERNAME }}
+          SUNDIAL_AUTOMATION_KEY: ${{ secrets.SUNDIAL_AUTOMATION_KEY }}
+        run: xvfb-run -a python3 -m ci.run_sundial --binary "$CAMOUFOX_BINARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-sundial
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  summary:
+    name: Summary
+    needs: [resolve, static, pythonlib, build, playwright-upstream, playwright-vendored,
+            patch-guards, build-tester, native, sundial]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      verdict: ${{ steps.summarize.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r ci/requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          merge-multiple: true
+          path: .ci-work/results
+        continue-on-error: true
+
+      - name: Summarize
+        id: summarize
+        run: |
+          set +e
+          required="static pythonlib native_rules"
+          if [ "${{ needs.resolve.outputs.needs_browser }}" = "true" ]; then
+            required="$required build patch_guards build_tester playwright_vendored playwright_upstream native_browser"
+          fi
+          if [ "${{ needs.resolve.outputs.has_sundial }}" = "true" ]; then
+            required="$required sundial"
+          fi
+          python3 -m ci.summarize \
+            --results-dir .ci-work/results \
+            --require $required \
+            --markdown summary.md \
+            --out summary.json \
+            --browser-version "${{ needs.resolve.outputs.browser_version }}" \
+            --browser-release "${{ needs.resolve.outputs.browser_release }}" \
+            --playwright-tag "${{ needs.resolve.outputs.playwright_tag }}" \
+            --playwright-firefox "${{ needs.resolve.outputs.playwright_firefox }}"
+          code=$?
+          echo "verdict=$([ $code -eq 0 ] && echo pass || echo fail)" >> "$GITHUB_OUTPUT"
+          exit $code
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-summary
+          path: |
+            summary.md
+            summary.json
+            .ci-work/results/
+
+      - name: Comment on the pull request
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          # One rolling comment rather than a new one per push.
+          marker="<!-- camoufox-tests -->"
+          { echo "$marker"; cat summary.md; } > body.md
+          existing=$(gh pr view "${{ github.event.pull_request.number }}" \
+            --json comments --jq "[.comments[] | select(.body | startswith(\"$marker\"))][0].id" 2>/dev/null || true)
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing#*_}" \
+              -f body="$(cat body.md)" >/dev/null 2>&1 \
+              || gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md
+          else
+            gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md
+          fi

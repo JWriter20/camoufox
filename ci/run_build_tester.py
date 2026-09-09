@@ -6,7 +6,7 @@ Grades per individual check rather than per profile, so the evidence carries
 the last release and does not now" instead of "the grade dropped from A to B".
 
 Run:
-    python3 -m harness.gates.build_tester --binary /path/to/camoufox-bin
+    python3 -m ci.run_build_tester --binary /path/to/camoufox-bin
 """
 
 from __future__ import annotations
@@ -16,10 +16,11 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .. import evidence
-from .._util import EVIDENCE_DIR, POLICY_PATH, REPO_ROOT, WORK_DIR, read_json, run
+from . import results as evidence
+from ._util import CI_DIR, RESULTS_DIR, REPO_ROOT, WORK_DIR, read_json, run
 
 BUILD_TESTER = REPO_ROOT / "build-tester"
+CONFIG_PATH = CI_DIR / "build-tester.yml"
 
 # Cross-profile uniqueness slots. Each is "did N profiles produce N distinct
 # values". They draw random fingerprints, so an occasional collision is the
@@ -102,16 +103,16 @@ def uniqueness_collisions(full: dict) -> List[str]:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path)
-    parser.add_argument("--evidence-dir", type=Path, default=EVIDENCE_DIR)
+    parser.add_argument("--evidence-dir", type=Path, default=RESULTS_DIR)
     parser.add_argument("--timeout", type=int, default=3600)
     args = parser.parse_args(argv)
 
     import yaml
 
-    with open(POLICY_PATH, encoding="utf-8") as fh:
-        cfg = (yaml.safe_load(fh).get("gates") or {}).get("build_tester") or {}
+    with open(CONFIG_PATH, encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh) or {}
 
-    from . import require_binary
+    from ._pytest import require_binary
 
     result = evidence.GateResult(gate="build_tester")
     out_json = WORK_DIR / "build-tester-result.json"

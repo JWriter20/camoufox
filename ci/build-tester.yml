@@ -1,0 +1,29 @@
+# Scope and thresholds for the build-tester suite.
+#
+# Here rather than in harness/policy.yml for the same reason ci/sundial.yml is:
+# this runs on every pull request, and the auto-update harness is only one of
+# its callers.
+
+schema: 1
+
+# 6 per-context profiles + 2 global (CAMOU_CONFIG) profiles.
+profile_count: 8
+
+# These must come back with zero failing checks. A failure here is a leak, not
+# a flake.
+required_categories:
+  - Automation Detection
+  - JS Engine
+  - Lie Detection
+  - Firefox APIs
+  - Cross-Signal
+  - CSS Fingerprint
+  - Canvas Noise
+  - WebGL Render
+
+# Cross-profile uniqueness draws random fingerprints, so one collision across
+# the eight slots is the birthday paradox rather than a leak. Two in one run is
+# a real signal. The colliding slot historically moves between runs (macOS
+# Screen, then Linux Screen, then macOS Canvas); a slot that collides
+# *repeatedly* is the thing to investigate.
+allow_uniqueness_collisions: 1

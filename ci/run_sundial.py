@@ -24,8 +24,8 @@ How it runs:
   4. Redact, score, write evidence.
 
 Run:
-    python3 -m harness.gates.sundial --binary /path/to/camoufox-bin
-    python3 -m harness.gates.sundial waive --key '<vector key>' --reason '...'
+    python3 -m ci.run_sundial --binary /path/to/camoufox-bin
+    python3 -m ci.run_sundial waive --key '<vector key>' --reason '...'
 """
 
 from __future__ import annotations
@@ -43,9 +43,10 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .. import evidence
-from .._util import EVIDENCE_DIR, POLICY_PATH, WORK_DIR, log, opaque_id, run
+from . import results as evidence
+from ._util import CI_DIR, RESULTS_DIR, WORK_DIR, log, opaque_id, run
 
+CONFIG_PATH = CI_DIR / "sundial.yml"
 COOKIE_NAME = "sundial_session"
 DEFAULT_URL = "https://sundial.daijro.dev"
 
@@ -196,35 +197,50 @@ _STATUS_MAP = {
 }
 
 
-def redact(report: dict, gated: List[str], ungated: List[str]) -> Dict[str, Any]:
-    """Turn a full sundial report into counts and opaque ids.
+def grade(pass_rate: float) -> str:
+    """A single letter, which is the only stealth number that goes public."""
+    for floor, letter in ((0.99, "A+"), (0.97, "A"), (0.94, "B"), (0.90, "C"), (0.80, "D")):
+        if pass_rate >= floor:
+            return letter
+    return "F"
 
-    This is the trust boundary. Nothing that names or describes a vector
-    survives it, so callers cannot leak one by accident.
+
+def redact(report: dict, gated: List[str], ungated: List[str]) -> Dict[str, Any]:
+    """Turn a full sundial report into a grade and a set of opaque ids.
+
+    This is the trust boundary, and it is deliberately lossy.
+
+    What survives: a letter grade, a pass count, and one HMAC per vector so a
+    later run can notice "the vector that passed last time is failing now".
+
+    What does not survive: names, descriptions, measured values, expectations,
+    source, and -- since the second pass over this file -- the per-category
+    breakdown. A table reading "Graphics 3/17" tells a reader which part of the
+    fingerprint is weakest, which is the most useful single fact an adversary
+    could take from a public CI log. Categories still decide what is gated;
+    that decision happens in here and the answer stays in here.
     """
     entries = _iter_entries(report)
     gated_set = {c.lower() for c in gated}
 
     gated_tests: Dict[str, str] = {}
     ungated_tests: Dict[str, str] = {}
-    by_category: Dict[str, Dict[str, int]] = {}
 
     for key, category, status in entries:
         outcome = _STATUS_MAP.get(status, evidence.SKIP)
-        bucket = by_category.setdefault(category, {"pass": 0, "fail": 0, "error": 0, "skip": 0})
-        bucket[outcome] = bucket.get(outcome, 0) + 1
         target = gated_tests if category.lower() in gated_set else ungated_tests
         target[opaque_id(key)] = outcome
 
     scored = [o for o in gated_tests.values() if o in (evidence.PASS, evidence.FAIL, evidence.ERROR)]
     passed = sum(1 for o in scored if o == evidence.PASS)
+    pass_rate = round(passed / len(scored), 4) if scored else 0.0
 
     identity = report.get("identity") or {}
     return {
         "tests": gated_tests,
         "metrics": {
-            # Our own browser's claimed identity -- this describes Camoufox, not
-            # a sundial vector, so it is safe and useful to keep.
+            # Our own browser's claimed identity. This describes Camoufox, not a
+            # sundial vector, so it leaks nothing and makes a bad run diagnosable.
             "identity": {
                 k: identity.get(k)
                 for k in ("name", "os", "osDetected", "engine", "platform", "lang", "tz",
@@ -233,13 +249,11 @@ def redact(report: dict, gated: List[str], ungated: List[str]) -> Dict[str, Any]
             },
             "sundial_version": report.get("sundialVersion"),
             "schema_version": report.get("schemaVersion"),
-            "gated_categories": sorted(gated),
-            "ungated_categories": sorted(ungated),
-            "by_category": {c: v for c, v in sorted(by_category.items())},
+            "grade": grade(pass_rate),
             "gated_total": len(gated_tests),
             "gated_scored": len(scored),
             "gated_passed": passed,
-            "pass_rate": round(passed / len(scored), 4) if scored else 0.0,
+            "pass_rate": pass_rate,
             "ungated_total": len(ungated_tests),
             "ungated_failed": sum(
                 1 for o in ungated_tests.values() if o in (evidence.FAIL, evidence.ERROR)
@@ -343,11 +357,12 @@ def seal(report: dict, out: Path) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 
-def _policy() -> dict:
+def _config() -> dict:
+    """Scope and thresholds, from ci/sundial.yml."""
     import yaml
 
-    with open(POLICY_PATH, encoding="utf-8") as fh:
-        return (yaml.safe_load(fh).get("gates") or {}).get("sundial") or {}
+    with open(CONFIG_PATH, encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
 
 
 def gate(argv: Optional[List[str]] = None) -> int:
@@ -356,10 +371,10 @@ def gate(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--os", dest="os_name", default="linux", choices=["linux", "macos", "windows"])
     parser.add_argument("--headful", action="store_true")
     parser.add_argument("--timeout", type=float, default=300.0)
-    parser.add_argument("--evidence-dir", type=Path, default=EVIDENCE_DIR)
+    parser.add_argument("--evidence-dir", type=Path, default=RESULTS_DIR)
     args = parser.parse_args(argv)
 
-    cfg = _policy()
+    cfg = _config()
     base_url = os.environ.get("SUNDIAL_URL") or cfg.get("url") or DEFAULT_URL
     result = evidence.GateResult(gate="sundial")
 
@@ -373,7 +388,7 @@ def gate(argv: Optional[List[str]] = None) -> int:
         result.finish(evidence.ERROR).save(args.evidence_dir)
         return 1
 
-    from . import require_binary
+    from ._pytest import require_binary
 
     try:
         binary = args.binary or require_binary()
@@ -404,10 +419,13 @@ def gate(argv: Optional[List[str]] = None) -> int:
         result.artifacts.append(sealed.name)
 
     metrics = result.metrics
+    # This string reaches the job summary and the pull request. Grade and counts
+    # only -- no category, no vector, no value.
     result.note(
-        f"gated {metrics['gated_passed']}/{metrics['gated_scored']} "
-        f"({metrics['pass_rate'] * 100:.1f}%) across {len(metrics['gated_categories'])} categories; "
-        f"{metrics['ungated_failed']} failure(s) in ungated categories (reported, not gated)"
+        f"grade {metrics['grade']} -- {metrics['gated_passed']}/{metrics['gated_scored']} "
+        f"in-scope checks passed ({metrics['pass_rate'] * 100:.1f}%). "
+        f"{metrics['ungated_failed']} out-of-scope check(s) failed; those are measured but "
+        "not gated, because Camoufox does not claim them."
     )
 
     floor = float(cfg.get("min_pass_rate", 0) or 0)

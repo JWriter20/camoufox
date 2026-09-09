@@ -15,7 +15,7 @@ what "pull the latest suite for that specific run" has to mean if the result is
 going to be trustworthy.
 
 Run:
-    python3 -m harness.sync_playwright_suite --tag v1.62.0
+    python3 -m ci.suite --tag v1.62.0
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import urllib.request
 from pathlib import Path
 from typing import List, Optional
 
-from ._util import HARNESS_DIR, WORK_DIR, die, log, run, write_json
+from ._util import CI_DIR, WORK_DIR, die, log, run, write_json
 
 TARBALL = "https://github.com/microsoft/playwright-python/archive/refs/tags/{tag}.tar.gz"
 
@@ -131,7 +131,7 @@ def prepare(tag: str, *, work: Optional[Path] = None, reuse: bool = True) -> dic
     unshadow(checkout)
 
     # The plugin travels with the checkout so the suite can be re-run by hand.
-    shutil.copy2(HARNESS_DIR / "pw_camoufox_plugin.py", checkout / "pw_camoufox_plugin.py")
+    shutil.copy2(CI_DIR / "pw_camoufox_plugin.py", checkout / "pw_camoufox_plugin.py")
 
     manifest = {
         "tag": tag,
