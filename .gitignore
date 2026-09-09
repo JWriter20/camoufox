@@ -80,3 +80,6 @@ node_modules/
 proxies.txt
 checks-bundle.js
 .env
+
+# Auto-update harness scratch space (evidence, fetched suites, build logs)
+.harness-work/

@@ -1,0 +1,4 @@
+# The harness itself. Gates install their own suites' dependencies separately:
+# tests/local-requirements.txt for the vendored Playwright suite, a generated
+# venv for the upstream one, build-tester/requirements.txt for the binary tests.
+PyYAML>=6.0

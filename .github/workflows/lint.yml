@@ -19,3 +19,29 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 scripts/check-input-dispatch.py
+
+  harness-selftests:
+    name: Auto-update harness self-tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r harness/requirements.txt pytest
+      # The harness exists to refuse regressions. These assert that the refusal
+      # actually works -- that a deleted gate fails, a vanished test counts as a
+      # regression, and nothing identifying a sundial vector survives redaction.
+      - run: python3 -m pytest harness/tests -q
+      # policy.yml is the single source of truth for every gate; a syntax error
+      # in it would otherwise surface halfway through a 40-minute build.
+      - run: |
+          python3 -c "
+          import yaml, sys
+          policy = yaml.safe_load(open('harness/policy.yml'))
+          gates = policy['gates']
+          missing = [g for g in gates if not (g == 'patches_apply' or __import__('pathlib').Path(f'harness/gates/{g}.py').exists())]
+          if missing:
+              sys.exit(f'policy.yml declares gates with no runner: {missing}')
+          print(f'policy.yml OK: {len(gates)} gates declared')
+          "

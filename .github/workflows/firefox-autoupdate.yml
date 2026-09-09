@@ -1,0 +1,463 @@
+name: Firefox auto-update
+
+# Chases new Firefox releases on its own: detect -> rebase the patch stack ->
+# build -> gate -> open a pull request with the evidence.
+#
+# Security shape, which is the reason this is three jobs rather than one:
+#
+#   detect   read-only, no secrets.
+#   update   runs the coding agent and every gate. Has `contents: read` only,
+#            so the agent physically cannot push, comment or tag. The model
+#            credential is scoped to the single step that invokes the agent;
+#            the sundial credential is scoped to the single step that needs it
+#            and is introduced only after the agent has finished. Results leave
+#            as artifacts.
+#   propose  has write access but runs no agent and no model credential. It
+#            re-runs verify.py against the downloaded evidence, so the decision
+#            to open a pull request is made from evidence rather than inherited
+#            from whether an earlier job happened to succeed.
+#
+# Nothing here merges anything. The output is a pull request for a human.
+
+on:
+  schedule:
+    # Twice a day. Firefox ships roughly monthly; this is about not sitting on
+    # a release for a week, not about winning a race.
+    - cron: "17 4,16 * * *"
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: "Target this Firefox version instead of detecting one"
+        required: false
+        type: string
+      agent:
+        description: "Patch-repair agent"
+        required: false
+        default: codex
+        type: choice
+        options: [codex, claude, none]
+      mode:
+        description: "Detection mode"
+        required: false
+        default: paired
+        type: choice
+        options: [paired, latest]
+      seed_expectations:
+        description: "Seed the upstream-Playwright expectations file from this run"
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: firefox-autoupdate
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  detect:
+    name: Detect release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      should_update: ${{ steps.detect.outputs.should_update }}
+      target_version: ${{ steps.detect.outputs.target_version }}
+      current_version: ${{ steps.detect.outputs.current_version }}
+      current_release: ${{ steps.detect.outputs.current_release }}
+      playwright_tag: ${{ steps.detect.outputs.playwright_tag }}
+      playwright_firefox: ${{ steps.detect.outputs.playwright_firefox }}
+      reason: ${{ steps.detect.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r harness/requirements.txt
+
+      - id: detect
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m harness.detect_release \
+            --mode "${{ inputs.mode || 'paired' }}" \
+            ${{ inputs.force_version && format('--force-version {0}', inputs.force_version) || '' }} \
+            --json
+
+      - name: Summarise
+        run: |
+          {
+            echo "### Firefox auto-update — detection"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Currently pinned | \`${{ steps.detect.outputs.current_version }}\` (\`${{ steps.detect.outputs.current_release }}\`) |"
+            echo "| Target | \`${{ steps.detect.outputs.target_version || '—' }}\` |"
+            echo "| Playwright suite | \`${{ steps.detect.outputs.playwright_tag || '—' }}\` (pins Firefox \`${{ steps.detect.outputs.playwright_firefox || '—' }}\`) |"
+            echo "| Proceeding | ${{ steps.detect.outputs.should_update }} |"
+            echo
+            echo "> ${{ steps.detect.outputs.reason }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  update:
+    name: Rebase, build and gate
+    needs: detect
+    if: needs.detect.outputs.should_update == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: read
+    env:
+      TARGET_VERSION: ${{ needs.detect.outputs.target_version }}
+      PLAYWRIGHT_TAG: ${{ needs.detect.outputs.playwright_tag }}
+      HARNESS_WORK_DIR: ${{ github.workspace }}/.harness-work
+      HARNESS_EVIDENCE_DIR: ${{ github.workspace }}/.harness-work/evidence
+    steps:
+      # --- runner preparation ------------------------------------------------
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef # v4.1
+        with:
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+          remove-cached-tools: "true"
+          remove-swapfile: "true"
+
+      - name: Remove unwanted tools
+        run: |
+          sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' \
+            '^mongodb-.*' '^mysql-.*' > /dev/null 2>&1 || true
+          sudo apt-get remove -y azure-cli google-chrome-stable firefox mono-devel \
+            libgl1-mesa-dri --fix-missing > /dev/null 2>&1 || true
+          sudo apt-get autoremove -y > /dev/null 2>&1 || true
+          sudo apt-get clean > /dev/null 2>&1 || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Set up LLVM and build dependencies
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18
+          sudo apt-get install -y lld-18 clang-18
+          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-18 100
+          sudo apt-get update
+          # ccache: the mozconfig sets --with-ccache, and configure fails hard
+          # rather than degrading if it is missing.
+          sudo apt-get install -y msitools p7zip-full aria2 ccache age \
+            libsqlite3-dev libgtk-3-0 libasound2t64 libdbus-glib-1-2 xvfb
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          # A cold Firefox build is ~40 minutes; a warm one is ~5. The key
+          # carries the Firefox version so a bump starts from the previous
+          # version's cache rather than from nothing.
+          key: ccache-ff${{ env.TARGET_VERSION }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-ff${{ env.TARGET_VERSION }}-
+            ccache-ff${{ needs.detect.outputs.current_version }}-
+            ccache-
+
+      - name: Configure ccache
+        run: |
+          ccache -M 8G
+          ccache -z
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+
+      - name: Create swap
+        run: |
+          # The link step is OOM-killed without this, and reports as a bare
+          # SIGTERM that looks nothing like out-of-memory.
+          sudo fallocate -l 24G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - run: pip install -r harness/requirements.txt
+
+      # --- cheap gates first, before spending 40 minutes on a build ---------
+      - name: Gate — pythonlib
+        continue-on-error: true
+        run: |
+          pip install -e pythonlib pytest
+          python3 -m harness.gates.pythonlib
+
+      # --- patch rebase ------------------------------------------------------
+      - name: Install the patch-repair agent
+        if: inputs.agent != 'none'
+        run: |
+          case "${{ inputs.agent || 'codex' }}" in
+            codex)  npm install -g @openai/codex ;;
+            claude) npm install -g @anthropic-ai/claude-code ;;
+          esac
+
+      - name: Rebase the patch stack
+        id: repair
+        # This is the only step the model credential is visible to. It is also
+        # in a job with `contents: read`, so the agent cannot push anything it
+        # writes -- the tree leaves as an artifact and is applied by a job that
+        # runs no agent.
+        env:
+          HARNESS_AGENT: ${{ inputs.agent || 'codex' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CAMOUFOX_PASSWD: ${{ secrets.CAMOUFOX_PASSWD }}
+        run: python3 -m harness.repair_patches --target-version "$TARGET_VERSION"
+
+      - name: Confirm the agent left the gates alone
+        # Belt and braces: repair_patches.py enforces this after every turn, but
+        # the check is cheap and the property is load-bearing enough to assert
+        # twice, from outside the process that could have been influenced.
+        run: |
+          changed=$(git status --porcelain=v1 --untracked-files=all \
+            | awk '{ $1=""; sub(/^ /,""); print }' \
+            | grep -E '^(harness/|tests/|build-tester/|service-tester/|\.github/)' || true)
+          if [ -n "$changed" ]; then
+            echo "::error::the repair step modified gate-owning paths:"
+            echo "$changed"
+            exit 1
+          fi
+          echo "gate-owning paths are untouched"
+
+      # --- build -------------------------------------------------------------
+      - name: Gate — build
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: |
+          make mozbootstrap
+          python3 -m harness.gates.build
+
+      - run: ccache -s
+
+      # --- gates that need the binary ---------------------------------------
+      - name: Stage fonts for the guards
+        continue-on-error: true
+        run: make stage-fonts
+
+      - name: Gate — patch guards
+        continue-on-error: true
+        run: xvfb-run -a python3 -m harness.gates.patch_guards
+
+      - name: Gate — build-tester
+        continue-on-error: true
+        run: |
+          cd build-tester && npm install && pip install -r requirements.txt && cd ..
+          xvfb-run -a python3 -m harness.gates.build_tester
+
+      - name: Gate — Playwright (vendored regression suite)
+        continue-on-error: true
+        run: xvfb-run -a python3 -m harness.gates.playwright_vendored
+
+      - name: Gate — Playwright (upstream conformance suite)
+        continue-on-error: true
+        run: |
+          xvfb-run -a python3 -m harness.gates.playwright_upstream \
+            --tag "$PLAYWRIGHT_TAG" \
+            ${{ inputs.seed_expectations && '--seed-expectations' || '' }}
+
+      - name: Gate — sundial stealth report
+        continue-on-error: true
+        # Introduced only here, and only after the agent step is long finished,
+        # so the credential is never in the environment of a model-driven step.
+        env:
+          SUNDIAL_USERNAME: ${{ secrets.SUNDIAL_USERNAME }}
+          SUNDIAL_AUTOMATION_KEY: ${{ secrets.SUNDIAL_AUTOMATION_KEY }}
+          SUNDIAL_REPORT_AGE_RECIPIENT: ${{ vars.SUNDIAL_REPORT_AGE_RECIPIENT }}
+        run: xvfb-run -a python3 -m harness.gates.sundial
+
+      # --- verdict -----------------------------------------------------------
+      - name: Verify
+        id: verify
+        # Reports here so the failure is visible on this job too; `propose`
+        # recomputes it independently from the artifact.
+        continue-on-error: true
+        run: |
+          python3 -m harness.verify \
+            --report-only \
+            --out "$HARNESS_EVIDENCE_DIR/../verify-report.json" \
+            --markdown "$HARNESS_EVIDENCE_DIR/../verify-report.md"
+
+      - name: Bundle the proposed change
+        run: |
+          mkdir -p .harness-work/out
+          # Only the paths the agent is allowed to write. The generated Firefox
+          # tree is scratch and must never reach the pull request.
+          git add -A -- patches additions settings upstream.sh docs 2>/dev/null || true
+          git diff --cached --binary > .harness-work/out/proposed.patch || true
+          git reset -q
+          wc -c .harness-work/out/proposed.patch
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-${{ env.TARGET_VERSION }}
+          # Redacted by construction: the sundial gate strips vector detail
+          # before anything reaches disk. The only encrypted item is the sealed
+          # full report, readable solely by the age key holder.
+          path: |
+            .harness-work/evidence/
+            .harness-work/verify-report.json
+            .harness-work/verify-report.md
+            .harness-work/junit-*.xml
+            .harness-work/build-tester-result.json
+            .harness-work/sundial-full-report.age
+            .harness-work/out/proposed.patch
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  propose:
+    name: Open a pull request
+    needs: [detect, update]
+    if: always() && needs.detect.outputs.should_update == 'true' && needs.update.result != 'cancelled'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      TARGET_VERSION: ${{ needs.detect.outputs.target_version }}
+      PLAYWRIGHT_TAG: ${{ needs.detect.outputs.playwright_tag }}
+      HARNESS_EVIDENCE_DIR: ${{ github.workspace }}/incoming/evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r harness/requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-${{ env.TARGET_VERSION }}
+          path: incoming
+        continue-on-error: true
+
+      - name: Re-verify from the evidence bundle
+        id: verify
+        # Deliberately recomputed here rather than trusted from `update`. The
+        # pull request's claims come from this run of verify.py, against files
+        # produced by the gates, in a job that never ran an agent.
+        run: |
+          if [ ! -d incoming/evidence ]; then
+            echo "verdict=no-evidence" >> "$GITHUB_OUTPUT"
+            echo "The update job produced no evidence bundle." > report.md
+            exit 0
+          fi
+          if python3 -m harness.verify \
+                --evidence-dir incoming/evidence \
+                --markdown report.md \
+                --out report.json; then
+            echo "verdict=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=fail" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply the proposed change
+        if: steps.verify.outputs.verdict == 'pass'
+        run: |
+          test -s incoming/out/proposed.patch || { echo "::error::empty patch bundle"; exit 1; }
+          git apply --binary --index incoming/out/proposed.patch
+          git status --short
+
+      - name: Open the pull request
+        if: steps.verify.outputs.verdict == 'pass'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BRANCH="autoupdate/firefox-${TARGET_VERSION}"
+          git config user.name  "camoufox-autoupdate[bot]"
+          git config user.email "camoufox-autoupdate@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          git commit -q -F - <<EOF
+          chore(firefox): update to ${TARGET_VERSION}
+
+          Rebased the patch stack from ${{ needs.detect.outputs.current_version }} onto
+          Firefox ${TARGET_VERSION}, paired with Playwright ${PLAYWRIGHT_TAG}.
+
+          Every gate in harness/policy.yml passed with zero regressions against the
+          recorded baseline. The evidence bundle is attached to run ${{ github.run_id }};
+          the table in the pull request body is generated by harness/verify.py from
+          that bundle, not written by the agent that produced the change.
+          EOF
+
+          git push -f origin "$BRANCH"
+
+          {
+            echo "Automated Firefox update produced by \`.github/workflows/firefox-autoupdate.yml\`."
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Firefox | \`${{ needs.detect.outputs.current_version }}\` → \`${TARGET_VERSION}\` |"
+            echo "| Playwright suite | \`${PLAYWRIGHT_TAG}\` |"
+            echo "| Workflow run | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+            echo
+            cat report.md
+            echo
+            echo "---"
+            echo
+            echo "**Before merging**, per \`CONTRIBUTING.md\`: link an issue, and note that"
+            echo "the harness builds and gates linux x86_64 only — Windows and macOS are"
+            echo "cross-compiled by the release workflow and are not covered here."
+          } > pr-body.md
+
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --title "chore(firefox): update to ${TARGET_VERSION}" --body-file pr-body.md
+          else
+            gh pr create \
+              --base "${{ github.event.repository.default_branch }}" \
+              --head "$BRANCH" \
+              --title "chore(firefox): update to ${TARGET_VERSION}" \
+              --body-file pr-body.md
+          fi
+
+      - name: Report the failure as an issue
+        if: steps.verify.outputs.verdict != 'pass'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE="Firefox ${TARGET_VERSION} auto-update did not pass its gates"
+          {
+            echo "The auto-update harness attempted Firefox \`${TARGET_VERSION}\` and stopped."
+            echo
+            echo "- Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo "- Playwright suite: \`${PLAYWRIGHT_TAG}\`"
+            echo
+            cat report.md 2>/dev/null || echo "_No report was produced._"
+            echo
+            echo "Start with \`harness/TRIBAL-KNOWLEDGE.md\`, then \`docs/patch-upgrading-guide.md\`."
+          } > issue-body.md
+
+          existing=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number' || true)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue-body.md
+          else
+            gh issue create --title "$TITLE" --body-file issue-body.md --label automated || \
+              gh issue create --title "$TITLE" --body-file issue-body.md
+          fi
