@@ -156,10 +156,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     still_failing = tally.get("fail", 0) + tally.get("error", 0)
-    result.finish(results.PASS if still_failing == 0 else results.FAIL).save(args.results_dir)
-    # Always exit 0. The run's verdict is ci/summarize.py's job, and a shard
-    # exiting non-zero would cancel its siblings before they reported.
-    return 0
+    status = results.PASS if still_failing == 0 else results.FAIL
+    result.finish(status).save(args.results_dir)
+    # Exit non-zero so the step goes red in the UI. ci/summarize.py still owns
+    # the run's verdict -- it is the only thing that knows what was required --
+    # but a green step hiding a failed suite is how a broken pipeline goes
+    # unnoticed for a week. Shards are separate jobs with fail-fast disabled, so
+    # one going red does not cancel its siblings.
+    return 0 if status == results.PASS else 1
 
 
 if __name__ == "__main__":

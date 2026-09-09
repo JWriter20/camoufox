@@ -57,8 +57,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"{tally.get('error', 0)} errored ({tally.get('total', 0)} collected)"
     )
     failing = tally.get("fail", 0) + tally.get("error", 0)
-    result.finish(evidence.PASS if failing == 0 else evidence.FAIL).save(args.evidence_dir)
-    return 0
+    status = evidence.PASS if failing == 0 else evidence.FAIL
+    result.finish(status).save(args.evidence_dir)
+    return 0 if status == evidence.PASS else 1
 
 
 if __name__ == "__main__":

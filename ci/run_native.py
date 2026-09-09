@@ -116,8 +116,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     failing = tally.get("fail", 0) + tally.get("error", 0)
-    result.finish(results.PASS if failing == 0 else results.FAIL).save(args.results_dir)
-    return 0
+    status = results.PASS if failing == 0 else results.FAIL
+    result.finish(status).save(args.results_dir)
+    return 0 if status == results.PASS else 1
 
 
 if __name__ == "__main__":
