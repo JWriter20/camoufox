@@ -307,6 +307,12 @@ jobs:
         run: |
           ccache -M 8G && ccache -z
           echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          # setup-minimal, not `make dir` alone: `dir` falls through to `make
+          # setup`, which git-inits the source tree and commits -- and a bare
+          # runner has no git identity, so that dies with "empty ident name".
+          # The local dev repo is only needed by the patch-repair loop, which
+          # sets an identity of its own.
+          make setup-minimal
           make dir
           make mozbootstrap
 

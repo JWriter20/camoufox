@@ -115,13 +115,26 @@ def enforce_paths(cfg: dict, *, source_dir_name: str) -> Dict[str, List[str]]:
 # ---------------------------------------------------------------------------
 
 
+# `make setup` git-inits the extracted tree and commits, to give the repair loop
+# an `unpatched` tag to reset to. A CI runner has no git identity, so that
+# commit fails with "fatal: empty ident name". Supplying it through the
+# environment sets it for that one commit without writing to global git config.
+_GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "camoufox-harness",
+    "GIT_AUTHOR_EMAIL": "harness@camoufox.invalid",
+    "GIT_COMMITTER_NAME": "camoufox-harness",
+    "GIT_COMMITTER_EMAIL": "harness@camoufox.invalid",
+}
+
+
 def prepare_tree(version: str, release: str, *, skip_fetch: bool = False) -> Path:
     """Fetch and extract Firefox `version` into a fresh camoufox source tree."""
     tree = REPO_ROOT / f"camoufox-{version}-{release}"
     if not skip_fetch:
         run(["make", "fetch"], cwd=REPO_ROOT, check=True, timeout=3600, tee=True, capture=False)
     if not (tree / "configure.py").exists():
-        run(["make", "setup"], cwd=REPO_ROOT, check=True, timeout=3600, tee=True, capture=False)
+        run(["make", "setup"], cwd=REPO_ROOT, env=_GIT_IDENTITY, check=True,
+            timeout=3600, tee=True, capture=False)
     if not (tree / "configure.py").exists():
         die(f"{tree} does not look like a Firefox tree after setup")
     return tree
