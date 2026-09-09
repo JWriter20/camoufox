@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .. import evidence
-from .._util import EVIDENCE_DIR, POLICY_PATH, REPO_ROOT, WORK_DIR, log, read_json, run
+from .._util import EVIDENCE_DIR, POLICY_PATH, REPO_ROOT, WORK_DIR, read_json, run
 
 BUILD_TESTER = REPO_ROOT / "build-tester"
 

@@ -17,7 +17,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, NoReturn, Optional, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HARNESS_DIR = REPO_ROOT / "harness"
@@ -53,7 +53,7 @@ def log(msg: str, *, level: str = "INFO") -> None:
     print(f"[{elapsed:7.1f}s] {level:<5} {msg}", file=sys.stderr, flush=True)
 
 
-def die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[valid-type]
+def die(msg: str, code: int = 1) -> NoReturn:
     log(msg, level="FATAL")
     sys.exit(code)
 

@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .._util import REPO_ROOT, Result, log, read_upstream_sh, run
+from .._util import REPO_ROOT, Result, read_upstream_sh, run
 
 
 def source_dir(version: Optional[str] = None, release: Optional[str] = None) -> Path:

@@ -26,7 +26,6 @@ Run:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -38,6 +37,7 @@ from ._util import (
     BASELINE_DIR,
     EVIDENCE_DIR,
     POLICY_PATH,
+    REPO_ROOT,
     log,
     read_json,
     summary,
@@ -138,7 +138,8 @@ def _expectations(cfg: dict, verdict: Verdict, gate: str) -> Dict[str, dict]:
         return {}
     import yaml
 
-    path = (BASELINE_DIR.parent.parent / rel).resolve()
+    # policy.yml states the path relative to the repository root.
+    path = (REPO_ROOT / rel).resolve()
     if not path.exists():
         verdict.warn(f"[{gate}] expectations file {rel} does not exist yet")
         return {}

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .. import evidence
-from .._util import EVIDENCE_DIR, REPO_ROOT, WORK_DIR, run
+from .._util import EVIDENCE_DIR, REPO_ROOT, WORK_DIR
 from . import parse_junit, run_pytest
 
 PYTHONLIB = REPO_ROOT / "pythonlib"

@@ -35,8 +35,6 @@ import asyncio
 import http.server
 import json
 import os
-import socket
-import ssl
 import sys
 import threading
 import urllib.parse
@@ -46,7 +44,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .. import evidence
-from .._util import EVIDENCE_DIR, POLICY_PATH, WORK_DIR, log, opaque_id, run, write_json
+from .._util import EVIDENCE_DIR, POLICY_PATH, WORK_DIR, log, opaque_id, run
 
 COOKIE_NAME = "sundial_session"
 DEFAULT_URL = "https://sundial.daijro.dev"

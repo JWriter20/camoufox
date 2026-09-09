@@ -28,7 +28,6 @@ Run:
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -267,6 +266,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         log("re-applying with scripts/patch.py for the authoritative check")
         authoritative = patchset.verify_with_repo_patcher(args.target_version, release)
         if authoritative:
+            # `make build` re-runs `make dir` -- a full reset and re-patch --
+            # unless this marker exists. scripts/patch.py leaves it to the
+            # Makefile to create, so create it here or the build pays for the
+            # whole patch cycle a second time.
+            (tree / "_READY").touch()
             result.note(
                 f"all {len(report.applied)} patches apply cleanly to Firefox {args.target_version}"
                 + (f" after {turn} agent turn(s)" if turn else " with no repair needed")

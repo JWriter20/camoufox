@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .. import evidence
-from .._util import EVIDENCE_DIR, REPO_ROOT, log, read_upstream_sh, run
+from .._util import EVIDENCE_DIR, REPO_ROOT, read_upstream_sh, run
 from . import built_binary
 
 # mach prints errors in a few shapes; catch the common ones for the summary.

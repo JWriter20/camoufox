@@ -25,12 +25,11 @@ import argparse
 import json
 import sys
 import urllib.error
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from ._util import (
     REPO_ROOT,
-    die,
     endgroup,
     group,
     http_json,
