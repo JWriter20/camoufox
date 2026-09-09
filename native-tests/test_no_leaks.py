@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 import resource
+import signal
 from pathlib import Path
 
 import pytest
@@ -268,3 +269,51 @@ async def test_many_virtual_displays_are_unique_and_all_release(psutil_mod):
 
     leftovers = [n for n in numbers if Path(f"/tmp/.X{n.lstrip(':')}-lock").exists()]
     assert not leftovers, f"lock files survived for {leftovers}"
+
+
+async def test_cleanup_runs_even_when_xvfb_already_died(psutil_mod):
+    """The crash path is the one where cleanup matters most.
+
+    kill() used to gate its whole body on `self.proc.poll() is None` -- "is Xvfb
+    still running". So a display whose Xvfb had already died was never cleaned
+    up: /tmp/.X11-unix/X<n> was left behind, and self.proc stayed set.
+
+    That is exactly backwards. A SIGKILLed Xvfb never gets the chance to remove
+    its own socket, so the only time the socket survives is the time kill() was
+    declining to do anything about it. Stranded sockets accumulate, and since
+    -displayfd scans upward for a free number, each one pushes the next display
+    higher until the host cannot allocate at all.
+    """
+    if os.environ.get("CI_SKIP_VIRTUAL_DISPLAY"):
+        pytest.skip("virtual display tests disabled for this run")
+    from camoufox.virtdisplay import VirtualDisplay
+
+    try:
+        display = VirtualDisplay()
+        number = display.get().lstrip(":")
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"Xvfb unavailable: {exc}")
+
+    # Kill it out from under the object, the way a crash or the OOM killer does.
+    os.kill(display.proc.pid, signal.SIGKILL)
+    await asyncio.sleep(1.5)
+    display.proc.poll()  # reap, so poll() reports an exit status
+    assert display.proc.poll() is not None, "Xvfb did not actually die"
+
+    display.kill()
+
+    survivors = [
+        path for path in (f"/tmp/.X{number}-lock", f"/tmp/.X11-unix/X{number}")
+        if Path(path).exists()
+    ]
+    for path in survivors:  # do not leave the machine worse than we found it
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+    assert not survivors, (
+        f"kill() left {survivors} behind after Xvfb had already died. Every crashed "
+        f"browser strands display :{number} for the rest of the machine's life."
+    )
+    assert display.proc is None, "kill() did not mark the display as cleaned up"

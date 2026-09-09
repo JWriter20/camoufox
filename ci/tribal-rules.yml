@@ -103,6 +103,22 @@ rules:
       attribute: DISPLAYFD_READ_TIMEOUT_S
       is_positive_number: true
 
+  - id: xvfb-cleanup-runs-even-if-it-already-died
+    title: The display's lock and socket are removed whether or not we killed it
+    check: automated
+    evidence:
+      - "found by native-tests/test_crash_recovery.py::test_xvfb_sigkill_under_a_virtual_display"
+      - "isolated: Xvfb alive -> socket removed; Xvfb already dead -> socket leaked"
+    rationale: >-
+      kill() used to gate its entire body on `self.proc.poll() is None`, so a
+      display whose Xvfb had already died -- crashed, OOM-killed, reaped with
+      the browser's process group -- was never cleaned up. That is backwards: a
+      SIGKILLed Xvfb never removes its own socket, so the crash path is the only
+      one where /tmp/.X11-unix/X<n> survives, and it was the one path kill()
+      skipped. Stranded sockets accumulate, and -displayfd scans upward for a
+      free number, so each one pushes the next display higher until a
+      long-running host stops being able to allocate one at all.
+
   - id: xvfb-sigkill-and-socket-cleanup
     title: Xvfb is SIGKILLed, reaped, and its X11 lock and socket removed
     check: automated

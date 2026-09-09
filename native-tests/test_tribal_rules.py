@@ -193,6 +193,42 @@ def test_the_displayfd_read_is_bounded():
     assert isinstance(timeout, (int, float)) and timeout > 0, explain("displayfd-read-timeout")
 
 
+def test_cleanup_is_not_gated_on_the_process_still_running():
+    """The unlink must not sit behind a `poll() is None` check.
+
+    Asserted structurally so it runs without Xvfb installed; the behavioural
+    half is native-tests/test_no_leaks.py::test_cleanup_runs_even_when_xvfb_already_died.
+    """
+    import ast as _ast
+
+    from camoufox import virtdisplay
+
+    tree = _ast.parse(inspect.getsource(virtdisplay.VirtualDisplay.kill).lstrip())
+    parents = {}
+    for node in _ast.walk(tree):
+        for child in _ast.iter_child_nodes(node):
+            parents[child] = node
+
+    removes = [
+        n for n in _ast.walk(tree)
+        if isinstance(n, _ast.Call)
+        and isinstance(n.func, _ast.Attribute)
+        and n.func.attr == "remove"
+    ]
+    assert removes, "kill() no longer removes the X11 lock or socket at all"
+
+    for call in removes:
+        node = call
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, _ast.If) and "poll" in _ast.dump(node.test):
+                raise AssertionError(
+                    "the X11 cleanup is gated on the Xvfb process still running, so a "
+                    "display whose Xvfb already died is never cleaned up."
+                    + explain("xvfb-cleanup-runs-even-if-it-already-died")
+                )
+
+
 def test_kill_sigkills_reaps_and_unlinks():
     """All three halves of PR #652 and #618, read off the source.
 

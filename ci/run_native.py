@@ -34,7 +34,11 @@ SUITE_DIR = REPO_ROOT / "native-tests"
 
 FILES = {
     "rules": ["test_tribal_rules.py"],
-    "browser": ["test_no_leaks.py", "test_contexts_vs_browsers.py"],
+    "browser": [
+        "test_no_leaks.py",
+        "test_contexts_vs_browsers.py",
+        "test_crash_recovery.py",
+    ],
 }
 
 
@@ -94,7 +98,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         timeout=args.timeout,
         # A leak round launches several browsers and waits for them to settle;
         # the default 180s per test is too tight for that.
-        per_test_timeout=600,
+        per_test_timeout=900,
     )
 
     outcomes = parse_junit(junit)

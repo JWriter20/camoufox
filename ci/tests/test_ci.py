@@ -407,3 +407,21 @@ def test_an_errored_shard_beats_a_failed_one():
         "s-2of2": {"gate": "s-2of2", "status": "error", "tests": {}, "metrics": {}, "notes": []},
     }
     assert merge_shards(records)["s"]["status"] == "error"
+
+
+def test_every_native_test_file_is_actually_run():
+    """A suite that exists but is not in the runner's list is invisible.
+
+    test_crash_recovery.py was written, passing, and unwired for a while -- the
+    kind of gap that looks like coverage on the filesystem and is nothing in CI.
+    """
+    from pathlib import Path
+
+    from ci._util import REPO_ROOT
+    from ci.run_native import FILES
+
+    on_disk = {p.name for p in (REPO_ROOT / "native-tests").glob("test_*.py")}
+    wired = set(FILES["rules"]) | set(FILES["browser"])
+    missing = on_disk - wired
+    assert not missing, f"native-tests files that no subset runs: {sorted(missing)}"
+    assert not wired - on_disk, f"runner lists files that do not exist: {sorted(wired - on_disk)}"
