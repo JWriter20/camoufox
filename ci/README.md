@@ -104,6 +104,75 @@ Camoufox actually claims are gated.
 Needs `SUNDIAL_USERNAME` and `SUNDIAL_AUTOMATION_KEY`. Absent — a pull request
 from a fork — the job is skipped and the summary says so.
 
+## Blocking a merge
+
+Branch protection on `main` requires exactly one check: **`All tests passed`**,
+the `gate` job. Pointing at one job instead of a dozen means the required-check
+list does not need editing every time a suite is added, renamed, or resharded.
+
+The gate allows exactly three skips, each for a stated reason:
+
+| Skipped | Because |
+| --- | --- |
+| `build` | the browser was fetched, not compiled |
+| `fetch-browser` | the browser was compiled, not fetched |
+| `sundial` | a fork pull request has no stealth credentials |
+
+Anything else that is not `success` fails it — **including `skipped`**. A suite
+that did not run has not passed, and quietly skipping one is the cheapest route
+to a green tick.
+
+The settings live in [`ci/branch-protection.json`](branch-protection.json) so
+they are reviewable rather than lore. To apply them (needs admin):
+
+```bash
+gh api -X PUT repos/<owner>/<repo>/branches/main/protection \
+  --input ci/branch-protection.json
+```
+
+Two choices worth knowing about:
+
+- **`enforce_admins: false`** — you can still merge when CI itself is broken.
+  Protection should stop mistakes, not lock you out of your own repository.
+- **`strict: false`** — a pull request does not have to be rebased onto the
+  latest `main` before merging. With `true`, every push to `main` would
+  invalidate every open pull request and force another build, and a build here
+  is over an hour cold.
+
+Reviews are deliberately not required: a solo maintainer cannot approve their
+own pull request, so requiring one would block every merge.
+
+## Cost control
+
+Each tier gates the next, so a two-second lint failure never reaches the build:
+
+```
+0  static    lint, self-tests, settled decisions        seconds
+1  unit      pythonlib                                  ~1 min
+2  browser   build  (patches/additions/settings/assets/upstream.sh/Makefile/scripts changed)
+             fetch  (anything else -- driver changes test against the published release)
+3a smoke     patch guards, build-tester                 ~15 min
+3b full      Playwright x2, leaks, stealth              ~40 min
+4  gate      the required check
+```
+
+**Driver-only pull requests never build.** There is nothing new to compile, so
+`fetch-browser` downloads the published release and the browser suites run
+against the build users are actually on — a minute instead of seventy.
+
+**The ccache is kept warm from `main`.** Pushes to `main` populate it and a
+twice-weekly schedule keeps it from being evicted (GitHub drops a cache after
+seven days unused). Pull requests restore it through `restore-keys`, so a build
+in a pull request starts warm even though its own key is new.
+
+A prebuilt image in `ghcr.io` with the object cache baked in would be warmer
+still and would not need the eviction guard. It also needs registry credentials
+and a rebuild pipeline of its own; this is the version that works with no setup.
+
+> One consequence of `cancel-in-progress`: pushing to a branch cancels its
+> running build. That is right while iterating, but a 70-minute build will not
+> survive a push made 20 minutes in.
+
 ## Running a piece by hand
 
 ```bash
