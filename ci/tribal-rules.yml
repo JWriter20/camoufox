@@ -225,6 +225,28 @@ rules:
       semantics -- that flag must never become the default here.
 
   # -------------------------------------------------------------------------
+  # Juggler frame lifecycle
+  # -------------------------------------------------------------------------
+
+  - id: per-frame-state-released-on-dispose
+    title: Anything reset when the document changes is also released when the frame dies
+    check: automated
+    evidence:
+      - "additions/juggler/content/FrameTree.js: _masterSandbox was cleared in _onGlobalObjectCleared() but not in Frame.dispose()"
+      - "upstream Playwright's FrameTree.js has no _masterSandbox, and dispose() was inherited from it verbatim"
+    rationale: >-
+      Frame.dispose() came from upstream, which has no Camoufox-specific
+      per-frame fields. So when one is added, only the navigation path tends to
+      learn about it, and a frame that is *destroyed* rather than navigated
+      keeps it -- which is the common case on any page that creates and removes
+      iframes. _masterSandbox made that concrete: built over the page window
+      with a system principal, it holds the window's global and with it the
+      whole document, so a retained one keeps a dead document alive. The
+      invariant is simply that the two teardown paths agree: a field worth
+      resetting when the document changes is worth releasing when the frame goes
+      away, and a sandbox needs nuking rather than just dropping.
+
+  # -------------------------------------------------------------------------
   # Input
   # -------------------------------------------------------------------------
 

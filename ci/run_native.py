@@ -39,12 +39,18 @@ FILES = {
         "test_contexts_vs_browsers.py",
         "test_crash_recovery.py",
     ],
+    # Slow by construction: each mechanism is churned twice, at n and 4n, to
+    # measure whether growth scales with the count. Kept out of "browser" so a
+    # pull request is not waiting on it, and run on its own schedule.
+    "growth": ["test_memory_growth.py"],
 }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--subset", choices=["rules", "browser", "all"], default="all")
+    parser.add_argument(
+        "--subset", choices=["rules", "browser", "growth", "all"], default="all"
+    )
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR)
     parser.add_argument("--rounds", type=int, default=3, help="launch/close rounds for leak tests")
@@ -56,7 +62,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     result = results.GateResult(gate=name)
     result.metrics["subset"] = args.subset
 
-    files = FILES["rules"] + FILES["browser"] if args.subset == "all" else FILES[args.subset]
+    files = (
+        [f for group in FILES.values() for f in group]
+        if args.subset == "all"
+        else FILES[args.subset]
+    )
 
     env = {
         # native-tests/conftest.py puts pythonlib on sys.path itself; this is

@@ -456,3 +456,86 @@ def test_evaluate_is_isolated_by_default():
         "exists; only the conformance suite may turn it off."
         + explain("evaluate-is-isolated-by-default")
     )
+
+
+# ---------------------------------------------------------------------------
+# juggler frame lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_per_frame_state_reset_on_navigation_is_also_released_on_dispose():
+    """The two teardown paths must agree about Camoufox's own per-frame fields.
+
+    Frame.dispose() is inherited from upstream, which has no Camoufox-specific
+    per-frame state, so a newly added field tends to get wired into the
+    navigation path (_onGlobalObjectCleared) and nowhere else. A frame that is
+    destroyed rather than navigated then keeps it -- and an iframe-heavy page
+    destroys frames constantly.
+
+    Compares the `this._x = null` assignments in the two methods rather than
+    naming fields, so this keeps working for the next one somebody adds.
+    """
+    import ast as _ast
+    import re as _re
+
+    source = (REPO_ROOT / "additions" / "juggler" / "content" / "FrameTree.js").read_text(
+        encoding="utf-8"
+    )
+
+    def bodies_of(method: str):
+        """Every method of this name, since FrameTree.js defines three classes."""
+        return [
+            m.group(1)
+            for m in _re.finditer(
+                rf"\n  {_re.escape(method)}\(\) \{{(.*?)\n  \}}", source, _re.S
+            )
+        ]
+
+    def body_of(method: str, *, containing: str) -> str:
+        """The one belonging to the class we mean.
+
+        FrameTree, Frame and Worker each define dispose(). Picking the first
+        match compared Frame's _onGlobalObjectCleared against FrameTree's
+        dispose() -- two different classes -- and reported a field as missing
+        that had just been released. Anchor on a member only the intended class
+        has instead.
+        """
+        found = [b for b in bodies_of(method) if containing in b]
+        assert found, f"could not find a {method}() containing {containing!r} in FrameTree.js"
+        return found[0]
+
+    def nulled_fields(body: str) -> set:
+        return set(_re.findall(r"this\.(_[A-Za-z0-9_]+)\s*=\s*null", body))
+
+    # Both are Frame methods; _worldNameToContext is Frame's alone.
+    on_cleared = nulled_fields(body_of("_onGlobalObjectCleared", containing="this._frameTree"))
+    disposed = body_of("dispose", containing="_worldNameToContext")
+
+    missing = sorted(
+        field for field in on_cleared
+        if field not in disposed
+    )
+    assert not missing, (
+        "these per-frame fields are released when the document changes but not when "
+        f"the frame is destroyed: {missing}. A destroyed frame keeps them, and an "
+        "iframe-heavy page destroys frames continuously."
+        + explain("per-frame-state-released-on-dispose")
+    )
+
+
+def test_a_sandbox_held_over_a_page_window_is_nuked_not_just_dropped():
+    """Dropping the reference leaves the compartment to the cycle collector.
+
+    A Cu.Sandbox built with sandboxPrototype over a page window holds that
+    window's global. Nuking severs the cross-compartment wrappers so the
+    compartment can actually be reclaimed.
+    """
+    source = (REPO_ROOT / "additions" / "juggler" / "content" / "FrameTree.js").read_text(
+        encoding="utf-8"
+    )
+    if "Cu.Sandbox(" not in source or "_masterSandbox" not in source:
+        pytest.skip("no cached sandbox in this version of FrameTree.js")
+    assert "nukeSandbox" in source, (
+        "FrameTree.js caches a Cu.Sandbox over a page window but never nukes it."
+        + explain("per-frame-state-released-on-dispose")
+    )

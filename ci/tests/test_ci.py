@@ -421,7 +421,9 @@ def test_every_native_test_file_is_actually_run():
     from ci.run_native import FILES
 
     on_disk = {p.name for p in (REPO_ROOT / "native-tests").glob("test_*.py")}
-    wired = set(FILES["rules"]) | set(FILES["browser"])
+    # Every group, not a hardcoded pair -- otherwise adding a subset silently
+    # narrows the check, which is the same class of hole it exists to catch.
+    wired = {f for group in FILES.values() for f in group}
     missing = on_disk - wired
     assert not missing, f"native-tests files that no subset runs: {sorted(missing)}"
     assert not wired - on_disk, f"runner lists files that do not exist: {sorted(wired - on_disk)}"
