@@ -13,11 +13,32 @@ name: Tests
 #
 # The stealth check reports a letter grade and a count. Its per-vector detail
 # never leaves ci/run_sundial.py, because this repository is public.
+#
+# Ordering: cheapest first, and every tier gates the next, so a pull request that
+# fails a two-second lint never reaches a seventy-minute build.
+#
+#   0  static      lint, self-tests, settled decisions        seconds
+#   1  unit        pythonlib                                  ~1 min
+#   2  browser     BUILD if patches/additions changed,
+#                  otherwise FETCH the released binary        ~70 min / ~1 min
+#   3a smoke       patch guards, build-tester                 ~15 min
+#   3b full        Playwright x2 suites, leaks, stealth       ~40 min
+#   4  gate        the single required status check
+#
+# A driver-only pull request never builds: there is nothing new to compile, so it
+# is tested against the published browser its users actually run. Tier 3b waits
+# on 3a so a browser that fails its guards does not also burn six Playwright
+# shards proving the same thing.
 
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    # Keeps the ccache alive. GitHub evicts a cache after 7 days unused, and a
+    # cold Firefox build is over an hour; twice a week keeps pull-request builds
+    # restoring a warm one from main.
+    - cron: "0 5 * * 1,4"
   workflow_dispatch:
     inputs:
       browser_version:
@@ -86,7 +107,7 @@ jobs:
       browser_release: ${{ steps.versions.outputs.browser_release }}
       playwright_tag: ${{ steps.versions.outputs.playwright_tag }}
       playwright_firefox: ${{ steps.versions.outputs.playwright_firefox }}
-      needs_browser: ${{ steps.scope.outputs.needs_browser }}
+      browser_changed: ${{ steps.scope.outputs.browser_changed }}
       has_sundial: ${{ steps.sundial.outputs.has_sundial }}
       shard_matrix: ${{ steps.shards.outputs.matrix }}
     steps:
@@ -107,22 +128,27 @@ jobs:
             ${{ inputs.browser_version && format('--browser-version {0}', inputs.browser_version) || '' }} \
             ${{ inputs.playwright_tag && format('--playwright-tag {0}', inputs.playwright_tag) || '' }}
 
-      - name: Decide whether a browser build is needed
+      - name: Does this change the browser?
         id: scope
-        # A docs-only pull request should not spend 40 minutes compiling
-        # Firefox. Anything that can change the binary or how it is tested does.
+        # Only a change that can alter the binary justifies compiling one. A
+        # pull request that touches pythonlib/ or ci/ is a driver change: it
+        # still gets the full browser suite, but against the published build its
+        # users are running, which takes a minute instead of seventy.
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "needs_browser=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "browser_changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not a pull request -- building, which also refreshes the shared ccache."
+            exit 0
           fi
           base="${{ github.event.pull_request.base.sha }}"
           changed=$(git diff --name-only "$base"...HEAD || echo "")
           echo "changed files:"; echo "$changed" | sed 's/^/  /'
-          if echo "$changed" | grep -qE '^(patches/|additions/|settings/|assets/|scripts/|upstream.sh|Makefile|ci/|tests/|build-tester/|\.github/workflows/)'; then
-            echo "needs_browser=true" >> "$GITHUB_OUTPUT"
+          if echo "$changed" | grep -qE '^(patches/|additions/|settings/|assets/|upstream\.sh|Makefile|scripts/)'; then
+            echo "browser_changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Browser sources changed -- rebuilding from source."
           else
-            echo "needs_browser=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No browser-affecting paths changed; skipping the build and the browser suites."
+            echo "browser_changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No browser sources changed -- testing against the published release."
           fi
 
       - name: Is the stealth credential available?
@@ -209,7 +235,8 @@ jobs:
   # ---------------------------------------------------------------------------
   pythonlib:
     name: pythonlib
-    needs: resolve
+    # Tier 1. Waits on the static checks so an obvious mistake costs seconds.
+    needs: [resolve, static]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -232,8 +259,10 @@ jobs:
   # ---------------------------------------------------------------------------
   build:
     name: Build (linux x86_64)
-    needs: resolve
-    if: needs.resolve.outputs.needs_browser == 'true'
+    # Tier 2. Nothing gets compiled until the cheap tiers are green -- this is
+    # over an hour cold, and a lint failure should never cost that.
+    needs: [resolve, static, pythonlib]
+    if: needs.resolve.outputs.browser_changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     permissions:
@@ -376,10 +405,62 @@ jobs:
           path: .ci-work/results/
           if-no-files-found: warn
 
+
+  # ---------------------------------------------------------------------------
+  fetch-browser:
+    name: Fetch the released browser
+    # The other half of tier 2. A driver-only change has nothing new to compile,
+    # so it is tested against the build its users are actually running. Uploads
+    # the same artifact name as `build`, so every downstream job is identical
+    # whichever way the browser arrived.
+    needs: [resolve, static, pythonlib]
+    if: needs.resolve.outputs.browser_changed == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r ci/requirements.txt -e pythonlib
+
+      - name: Download
+        run: |
+          set -euo pipefail
+          python -m camoufox fetch
+          install_dir="$(python -m camoufox path)"
+          echo "install dir: $install_dir"
+          test -x "$install_dir/camoufox-bin" || {
+            echo "::error::no camoufox-bin under $install_dir after fetch"; exit 1; }
+          # The published build is packaged, so properties.json and the font
+          # bundles are already beside the binary -- the two things the Python
+          # API resolves there. Assert rather than assume.
+          for required in properties.json fonts; do
+            [ -e "$install_dir/$required" ] || {
+              echo "::error::the published build has no $required beside the binary"; exit 1; }
+          done
+          mkdir -p pack/bin
+          cp -a "$install_dir/." pack/bin/
+          tar -C pack -cf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst
+          ls -lh camoufox-dist.tar.zst
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: camoufox-dist
+          path: camoufox-dist.tar.zst
+          retention-days: 3
+
   # ---------------------------------------------------------------------------
   playwright-upstream:
     name: Playwright upstream ${{ matrix.shard }}
-    needs: [resolve, build]
+    # Tier 3b. Gated on 3a: a browser that fails its patch guards is broken, and
+    # six shards would take forty minutes to reach the same conclusion.
+    needs: [resolve, build, fetch-browser, patch-guards, build-tester]
+    if: always() && needs.patch-guards.result == 'success' && needs.build-tester.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -415,7 +496,8 @@ jobs:
   # ---------------------------------------------------------------------------
   playwright-vendored:
     name: Playwright regression suite
-    needs: [resolve, build]
+    needs: [resolve, build, fetch-browser, patch-guards, build-tester]
+    if: always() && needs.patch-guards.result == 'success' && needs.build-tester.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
@@ -437,8 +519,11 @@ jobs:
 
   # ---------------------------------------------------------------------------
   patch-guards:
+    # Tier 3a: the cheap checks on a fresh browser. If these fail the browser is
+    # broken in an obvious way and tier 3b would only say so more slowly.
+    if: always() && (needs.build.result == 'success' || needs.fetch-browser.result == 'success')
     name: Patch guards
-    needs: [resolve, build]
+    needs: [resolve, build, fetch-browser]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -463,8 +548,11 @@ jobs:
 
   # ---------------------------------------------------------------------------
   build-tester:
+    # Tier 3a: the cheap checks on a fresh browser. If these fail the browser is
+    # broken in an obvious way and tier 3b would only say so more slowly.
+    if: always() && (needs.build.result == 'success' || needs.fetch-browser.result == 'success')
     name: build-tester
-    needs: [resolve, build]
+    needs: [resolve, build, fetch-browser]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -489,7 +577,8 @@ jobs:
   # ---------------------------------------------------------------------------
   native:
     name: Leaks and context semantics
-    needs: [resolve, build]
+    needs: [resolve, build, fetch-browser, patch-guards, build-tester]
+    if: always() && needs.patch-guards.result == 'success' && needs.build-tester.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -522,8 +611,8 @@ jobs:
   # ---------------------------------------------------------------------------
   sundial:
     name: Stealth check
-    needs: [resolve, build]
-    if: needs.resolve.outputs.has_sundial == 'true'
+    needs: [resolve, build, fetch-browser, patch-guards, build-tester]
+    if: always() && needs.resolve.outputs.has_sundial == 'true' && needs.patch-guards.result == 'success' && needs.build-tester.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -554,8 +643,8 @@ jobs:
   # ---------------------------------------------------------------------------
   summary:
     name: Summary
-    needs: [resolve, static, pythonlib, build, playwright-upstream, playwright-vendored,
-            patch-guards, build-tester, native, sundial]
+    needs: [resolve, static, pythonlib, build, fetch-browser, playwright-upstream,
+            playwright-vendored, patch-guards, build-tester, native, sundial]
     if: always() && needs.resolve.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
@@ -584,7 +673,7 @@ jobs:
         run: |
           set +e
           required="static pythonlib native_rules"
-          if [ "${{ needs.resolve.outputs.needs_browser }}" = "true" ]; then
+          if [ "${{ needs.resolve.outputs.browser_changed }}" != "skip" ]; then
             required="$required build patch_guards build_tester playwright_vendored playwright_upstream native_browser"
           fi
           if [ "${{ needs.resolve.outputs.has_sundial }}" = "true" ]; then
@@ -630,3 +719,65 @@ jobs:
           else
             gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md
           fi
+
+  # ---------------------------------------------------------------------------
+  gate:
+    name: All tests passed
+    # THE required status check. Branch protection points at this one job rather
+    # than at a dozen, so the required-check list does not have to be edited
+    # every time a suite is added, renamed, or sharded differently.
+    #
+    # A job that was legitimately not applicable is allowed to be skipped -- the
+    # build when the browser was fetched instead, the fetch when it was built,
+    # the stealth check on a fork pull request with no credentials. Anything else
+    # that is not `success`, including `skipped`, fails the gate: a suite that
+    # did not run has not passed, and silently skipping one is the cheapest way
+    # to a green tick.
+    needs: [resolve, static, pythonlib, build, fetch-browser, playwright-upstream,
+            playwright-vendored, patch-guards, build-tester, native, sundial, summary]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check every tier
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          BROWSER_CHANGED: ${{ needs.resolve.outputs.browser_changed }}
+          HAS_SUNDIAL: ${{ needs.resolve.outputs.has_sundial }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          results = {name: job["result"] for name, job in json.loads(os.environ["RESULTS"]).items()}
+          built = os.environ.get("BROWSER_CHANGED") == "true"
+
+          # The only jobs allowed to be skipped, and only for these reasons.
+          may_skip = {
+              "build": not built,
+              "fetch-browser": built,
+              "sundial": os.environ.get("HAS_SUNDIAL") != "true",
+          }
+
+          problems = []
+          for name, result in sorted(results.items()):
+              if result == "success":
+                  continue
+              if result == "skipped" and may_skip.get(name):
+                  print(f"  - {name}: skipped (not applicable to this run)")
+                  continue
+              problems.append(f"{name}: {result}")
+
+          width = max(len(n) for n in results)
+          print("\ntier results:")
+          for name, result in sorted(results.items()):
+              mark = "ok  " if result == "success" else "FAIL"
+              print(f"  {mark}  {name:<{width}}  {result}")
+
+          if problems:
+              print("\nnot mergeable:")
+              for problem in problems:
+                  print(f"  - {problem}")
+              sys.exit(1)
+          print("\nevery tier passed; this pull request is mergeable.")
+          PY
