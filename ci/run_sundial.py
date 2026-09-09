@@ -76,6 +76,7 @@ _PUBLISHABLE = frozenset({
     "out_of_scope_failed",  # a single count, no attribution
     "cross_os_total",     # host-OS detectors: measured, never gated
     "cross_os_passed",
+    "score_mode",         # did sundial answer in score mode? a protocol fact
     "os",                 # which profile it was measured under; we chose it
     "sundial_version",
     "schema_version",
@@ -305,7 +306,8 @@ def redact(
     carries a floor and a maximum allowed drop. For the per-vector view set
     SUNDIAL_REPORT_AGE_RECIPIENT and read the sealed report locally.
     """
-    if payload.get("mode") == "score":
+    score_mode = payload.get("mode") == "score"
+    if score_mode:
         counts = _from_buckets(payload, gated)
     else:
         # Legacy path: fold a full report down to the same numbers.
@@ -328,6 +330,7 @@ def redact(
 
     rate = round(counts["passed"] / counts["scored"], 4) if counts["scored"] else 0.0
     return _assert_publishable({
+        "score_mode": score_mode,
         "grade": grade(rate),
         "checks_total": counts["scored"],
         "checks_passed": counts["passed"],

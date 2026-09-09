@@ -98,7 +98,7 @@ def test_only_whitelisted_keys_are_published():
     assert set(out) == {
         "grade", "checks_total", "checks_passed", "pass_rate",
         "out_of_scope_failed", "cross_os_total", "cross_os_passed",
-        "os", "sundial_version", "schema_version",
+        "score_mode", "os", "sundial_version", "schema_version",
     }
 
 
@@ -454,9 +454,20 @@ def test_out_of_scope_failures_are_counted_but_not_scored():
 
 
 def test_the_score_payload_publishes_no_categories_or_classes():
-    blob = json.dumps(redact(SCORE_PAYLOAD, GATED, UNGATED, os_name="linux"))
-    for token in ("Identity", "Network", "Locale", "Graphics", "crossOs", "core", "buckets"):
-        assert token not in blob, f"published output leaked {token!r}"
+    """Checked against keys and values, not the raw JSON text.
+
+    A substring scan flagged "score_mode" for containing "core", which is the
+    kind of false positive that gets an assertion loosened until it stops
+    catching anything.
+    """
+    out = redact(SCORE_PAYLOAD, GATED, UNGATED, os_name="linux")
+    forbidden = {"Identity", "Network", "Locale", "Graphics", "crossOs", "core", "buckets"}
+
+    assert not (set(out) & forbidden), f"a published key names a category or class: {set(out) & forbidden}"
+    leaked = [v for v in out.values() if isinstance(v, str) and v in forbidden]
+    assert not leaked, f"a published value names a category or class: {leaked}"
+    # And no nested structure that could carry one.
+    assert all(not isinstance(v, (dict, list)) for v in out.values())
 
 
 def test_a_full_report_still_folds_to_the_same_shape():
@@ -468,3 +479,16 @@ def test_a_full_report_still_folds_to_the_same_shape():
     assert out["checks_total"] == 3 and out["checks_passed"] == 1
     # A full report carries no class tags, so nothing is attributed to cross-OS.
     assert out["cross_os_total"] == 0
+
+
+def test_a_deployment_without_score_mode_is_flagged_not_silent():
+    """An old sundial ignores ?score=1 and posts the whole report.
+
+    The numbers still come out right, but nothing is classified, so every
+    cross-OS tally reads zero -- which looks like "no host-OS failures" rather
+    than "nobody sorted them". score_mode says which of those it is.
+    """
+    assert redact(SCORE_PAYLOAD, GATED, UNGATED, os_name="linux")["score_mode"] is True
+    legacy = redact(FULL_REPORT, GATED, UNGATED, os_name="linux")
+    assert legacy["score_mode"] is False
+    assert legacy["cross_os_total"] == 0

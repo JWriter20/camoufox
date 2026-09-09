@@ -120,8 +120,27 @@ control. They are reported separately so a drop there reads as "the host shows
 through more than it did", which is a different conversation.
 
 The run asks sundial for `?auto=1&score=1`, so it receives counts and the
-vectors never cross the wire at all. A full report is still accepted and folded
-to the same shape, for an older sundial or a deliberate local run.
+vectors never cross the wire at all.
+
+### Order of operations
+
+`?score=1` needs a sundial that has it. An older deployment ignores the unknown
+parameter and posts the whole report; the numbers still come out right and
+`redact()` still discards everything identifying, but **nothing is classified**,
+so every cross-OS tally reads `0` — which looks like "no host-OS failures"
+rather than "nobody sorted them". `score_mode: false` in the result says which
+it is, and the gate says so in its notes rather than leaving you to notice.
+
+So the dependency runs one way, and setting the GitHub secret is the *last*
+step, not the first:
+
+1. merge sundial's score mode and **deploy** it (`make pages-deploy`)
+2. mint the guest credential (`make pages-guest`, then redeploy)
+3. `gh secret set SUNDIAL_AUTOMATION_KEY -R <repo>`
+4. merge the harness, so a workflow exists that reads it
+
+Doing 3 before 1 is not harmful — the gate degrades safely and says so — it just
+does not give you the cross-OS split you set it up for.
 
 There are deliberately **no per-vector rows**, not even opaque ones. An HMAC
 names nothing, but a map of them publishes how many distinct checks fail and
