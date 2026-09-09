@@ -78,66 +78,70 @@ UNGATED = ["Graphics", "Audio", "CPU"]
 
 
 def test_redaction_leaks_nothing_identifying():
-    blob = json.dumps(redact(FULL_REPORT, GATED, UNGATED))
+    blob = json.dumps(redact(FULL_REPORT, GATED, UNGATED, os_name="linux"))
     for secret in SECRETS:
         assert secret not in blob, f"redaction leaked: {secret!r}"
-    # Raw vector keys must not survive either.
     for key in ("canvas.rasterizer.subpixel-drift", "identity.nav.oscpu", "pv-secret-vector"):
         assert key not in blob, f"redaction leaked the vector key {key!r}"
 
 
-def test_redaction_drops_every_forbidden_field():
-    """No per-vector field survives.
+def test_only_whitelisted_keys_are_published():
+    """A whitelist, not a blacklist.
 
-    `metrics.identity` is deliberately exempt and checked separately: it
-    describes the browser under test -- our own claimed platform, engine and
-    timezone -- not a sundial vector, so keeping it leaks nothing and makes a
-    failed run diagnosable.
+    A blacklist only stops the leaks somebody already thought of: add a field to
+    redact() and forget to consider it, and a blacklist ships it. This fails.
     """
-    from ci.run_sundial import _FORBIDDEN_FIELDS
+    from ci.run_sundial import _PUBLISHABLE
 
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    identity = out["metrics"].pop("identity")
-    serialised = json.dumps(out)
-    for field in _FORBIDDEN_FIELDS:
-        assert f'"{field}"' not in serialised, f"redacted output still carries a {field!r} field"
-
-    # And the exemption is a closed whitelist, not an open door.
-    assert set(identity) <= {
-        "name", "os", "osDetected", "engine", "platform", "lang", "tz",
-        "uaMismatch", "engineMismatch", "osConsistent",
+    out = redact(FULL_REPORT, GATED, UNGATED, os_name="linux")
+    assert set(out) <= _PUBLISHABLE, f"published beyond the whitelist: {set(out) - _PUBLISHABLE}"
+    assert set(out) == {
+        "grade", "checks_total", "checks_passed", "pass_rate",
+        "out_of_scope_failed", "os", "sundial_version", "schema_version",
     }
 
 
-def test_redaction_output_is_only_ids_counts_and_our_own_identity():
-    """Structural check: every leaf under `tests` is an opaque id -> outcome."""
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    for tid, outcome in out["tests"].items():
-        assert len(tid) == 20 and all(c in "0123456789abcdef" for c in tid), tid
-        assert outcome in {"pass", "fail", "error", "skip"}
-    for tid in out["metrics"]["ungated_tests"]:
-        assert len(tid) == 20 and all(c in "0123456789abcdef" for c in tid), tid
+def test_publishing_an_unlisted_key_is_refused():
+    """The whitelist has to actually bite, not just describe intent."""
+    from ci.run_sundial import _assert_publishable
+
+    with pytest.raises(RuntimeError, match="whitelist"):
+        _assert_publishable({"grade": "A", "by_category": {"Graphics": 3}})
 
 
-def test_only_gated_categories_can_fail_the_run():
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    # The out-of-scope failure is measured and counted...
-    assert out["metrics"]["ungated_failed"] == 1
-    # ...but is not among the identities a build can be failed on.
-    assert opaque_id("canvas.rasterizer.subpixel-drift") not in out["tests"]
-    assert opaque_id("identity.nav.oscpu") in out["tests"]
+def test_no_per_vector_rows_survive():
+    """Not even opaque ones.
+
+    An HMAC names nothing, but a map of them says how many distinct checks fail
+    and lets a reader follow the same id across releases. The instruction was a
+    score, so there are no rows at all.
+    """
+    out = redact(FULL_REPORT, GATED, UNGATED, os_name="linux")
+    assert "tests" not in out and "ungated_tests" not in out
+    for value in out.values():
+        assert not isinstance(value, dict), f"a mapping survived redaction: {value!r}"
+    # And nothing that looks like an opaque id.
+    blob = json.dumps(out)
+    for key in ("canvas.rasterizer.subpixel-drift", "identity.nav.oscpu", "pv-secret-vector"):
+        assert opaque_id(key) not in blob
 
 
-def test_no_per_category_breakdown_is_published():
-    """A table reading "Graphics 3/17" is the most useful fact an adversary
-    could take from a public CI log: it says which part of the fingerprint is
-    weakest. Categories decide what is gated; that decision stays inside
-    redact()."""
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    assert "by_category" not in out["metrics"]
-    serialised = json.dumps(out)
+def test_no_category_names_are_published():
+    """A table reading "Graphics 3/17" is the most useful single fact an
+    adversary could take from a public CI log."""
+    blob = json.dumps(redact(FULL_REPORT, GATED, UNGATED, os_name="linux"))
     for category in GATED + UNGATED:
-        assert category not in serialised, f"published output names the category {category!r}"
+        assert category not in blob, f"published output names the category {category!r}"
+
+
+def test_only_in_scope_checks_are_scored():
+    out = redact(FULL_REPORT, GATED, UNGATED, os_name="linux")
+    # Identity: one pass, one fail. Locale (private): one fail. -> 1/3 in scope.
+    assert out["checks_total"] == 3
+    assert out["checks_passed"] == 1
+    assert out["pass_rate"] == pytest.approx(1 / 3, abs=1e-4)
+    # Graphics is out of scope: counted, never scored.
+    assert out["out_of_scope_failed"] == 1
 
 
 @pytest.mark.parametrize(
@@ -146,35 +150,6 @@ def test_no_per_category_breakdown_is_published():
 )
 def test_grade_boundaries(rate, expected):
     assert grade(rate) == expected
-
-
-def test_the_public_note_is_a_grade_not_a_breakdown():
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    metrics = out["metrics"]
-    assert set(metrics) == {
-        "identity", "sundial_version", "schema_version", "grade", "gated_total",
-        "gated_scored", "gated_passed", "pass_rate", "ungated_total",
-        "ungated_failed", "ungated_tests",
-    }
-
-
-def test_private_vectors_are_gated_but_still_opaque():
-    out = redact(FULL_REPORT, GATED, UNGATED)
-    assert out["tests"][opaque_id("pv-secret-vector")] == "fail"
-
-
-def test_opaque_ids_are_stable_and_not_the_input():
-    assert opaque_id("x") == opaque_id("x")
-    assert opaque_id("x") != opaque_id("y")
-    assert "x" not in opaque_id("x")
-
-
-def test_pass_rate_counts_only_gated_scored_vectors():
-    out = redact(FULL_REPORT, GATED, UNGATED)["metrics"]
-    # Identity: one pass, one fail. Locale (private): one fail. -> 1/3
-    assert out["gated_scored"] == 3
-    assert out["gated_passed"] == 1
-    assert out["pass_rate"] == pytest.approx(1 / 3, abs=1e-4)
 
 
 def test_iter_entries_finds_public_and_private():

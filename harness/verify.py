@@ -166,6 +166,7 @@ def check_gate(
     cfg: dict,
     ev: Optional[dict],
     base_tests: Dict[str, str],
+    baseline_metrics: Optional[Dict[str, Any]],
     policy: dict,
     verdict: Verdict,
     *,
@@ -226,8 +227,32 @@ def check_gate(
 
     if not tests:
         # No per-test detail, so the gate's own status is all there is. Correct
-        # for `build` and `patches_apply`, which are pass-or-fail by nature.
+        # for `build` and `patches_apply`, which are pass-or-fail by nature --
+        # and for `sundial`, which publishes a score on purpose.
         row["detail"] = notes or "no per-test detail"
+
+        # A gate that reports a rate instead of identities regresses by getting
+        # worse, so compare the number. This is how the stealth check is judged:
+        # it deliberately publishes no vector rows to compare.
+        max_drop = cfg.get("max_pass_rate_drop")
+        current_rate = (ev.get("metrics") or {}).get("pass_rate")
+        baseline_rate = ((baseline_metrics or {}).get("pass_rate"))
+        if max_drop is not None and current_rate is not None and baseline_rate is not None:
+            drop = float(baseline_rate) - float(current_rate)
+            row["detail"] = (
+                f"{float(current_rate) * 100:.1f}% (baseline {float(baseline_rate) * 100:.1f}%)"
+            )
+            if drop > float(max_drop):
+                verdict.fail(
+                    name,
+                    "score regressed",
+                    f"pass rate fell from {float(baseline_rate) * 100:.1f}% to "
+                    f"{float(current_rate) * 100:.1f}% (a drop of {drop * 100:.1f} points; "
+                    f"policy allows {float(max_drop) * 100:.1f}). This gate publishes a score "
+                    "rather than vector identities, so a drop is all there is to see -- open "
+                    "the sealed report locally to find out which checks moved."
+                )
+
         if required and ev.get("status") != evidence.PASS:
             verdict.fail(name, f"gate reported {ev.get('status')}", notes or "see the gate's log")
         return row
@@ -379,9 +404,10 @@ def verify(
 
     for name, cfg in (policy.get("gates") or {}).items():
         cfg = cfg or {}
-        base_tests = (base_gates.get(name) or {}).get("tests", {})
+        base_gate = base_gates.get(name) or {}
         row = check_gate(
-            name, cfg, records.get(name), base_tests, policy, verdict,
+            name, cfg, records.get(name), base_gate.get("tests", {}),
+            base_gate.get("metrics", {}), policy, verdict,
             current_run=current_run,
         )
         verdict.gate_rows.append(row)

@@ -160,7 +160,9 @@ jobs:
           KEY: ${{ secrets.SUNDIAL_AUTOMATION_KEY }}
           USER: ${{ secrets.SUNDIAL_USERNAME }}
         run: |
-          if [ -n "$KEY" ] && [ -n "$USER" ]; then
+          # Only the password is required. The username names an account, not a
+          # secret, and ci/run_sundial.py defaults it to sundial's guest role.
+          if [ -n "$KEY" ]; then
             echo "has_sundial=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_sundial=false" >> "$GITHUB_OUTPUT"

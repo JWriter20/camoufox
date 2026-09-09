@@ -170,6 +170,14 @@ gates:
     # The absolute floor lives in ci/sundial.yml (min_pass_rate); the gate
     # records a breach as a policy_violation, which stays fatal here even when
     # the baseline scored just as badly.
+    #
+    # This gate publishes a score and no per-vector rows, so regressions are
+    # measured against the score rather than against identities. A drop of more
+    # than this against the recorded baseline fails the run. It is coarser than
+    # naming the vector that broke -- that is the price of not publishing them,
+    # and it is deliberate. For the per-vector view, set
+    # SUNDIAL_REPORT_AGE_RECIPIENT and read the sealed report locally.
+    max_pass_rate_drop: 0.02
 
 # ---------------------------------------------------------------------------
 # How "no regression" is decided, for every per-test gate above.

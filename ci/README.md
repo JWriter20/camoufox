@@ -101,8 +101,31 @@ that passed last release is failing now" and not enough to learn what it was.
 Scope and thresholds live in [`ci/sundial.yml`](sundial.yml); only categories
 Camoufox actually claims are gated.
 
-Needs `SUNDIAL_USERNAME` and `SUNDIAL_AUTOMATION_KEY`. Absent — a pull request
-from a fork — the job is skipped and the summary says so.
+Everything that leaves `redact()` is checked against a **whitelist** at runtime,
+not a blacklist — a blacklist only stops the leaks somebody already thought of.
+Adding a field without adding it to `_PUBLISHABLE` fails the run:
+
+```json
+{ "grade": "A", "checks_total": 412, "checks_passed": 403, "pass_rate": 0.978,
+  "out_of_scope_failed": 6, "os": "linux", "sundial_version": "0.3.1",
+  "schema_version": 1 }
+```
+
+There are deliberately **no per-vector rows**, not even opaque ones. An HMAC
+names nothing, but a map of them publishes how many distinct checks fail and
+lets a reader follow the same id from release to release.
+
+The cost is real: regression detection drops from per-vector ("the check that
+passed last release fails now") to per-score ("we got worse"), covered by
+`min_pass_rate` in `ci/sundial.yml` and `max_pass_rate_drop` in
+`harness/policy.yml`. To get the per-vector view back for your own debugging,
+set `SUNDIAL_REPORT_AGE_RECIPIENT` to an `age` public key — the full report is
+then kept encrypted to you and nobody else can open it.
+
+Needs **`SUNDIAL_AUTOMATION_KEY`** only. `SUNDIAL_USERNAME` is optional and
+defaults to `guest`, sundial's restricted role — a username names an account,
+it is not a secret. Absent the password — a pull request from a fork — the job
+is skipped and the summary says so.
 
 ## Blocking a merge
 

@@ -48,6 +48,9 @@ from ._util import CI_DIR, RESULTS_DIR, WORK_DIR, log, opaque_id, run
 
 CONFIG_PATH = CI_DIR / "sundial.yml"
 COOKIE_NAME = "sundial_session"
+# sundial's restricted role. CI wants the least-privileged account that can run
+# the suite; see the note in login() about what the role changes.
+DEFAULT_USERNAME = "guest"
 DEFAULT_URL = "https://sundial.daijro.dev"
 
 # Report fields that may describe a private vector. Dropped without exception.
@@ -55,6 +58,40 @@ _FORBIDDEN_FIELDS = (
     "name", "brief", "src", "source", "value", "expect", "requires",
     "key", "id", "cat", "elapsedMs", "entropy",
 )
+
+# The complete set of keys allowed to leave this module. A whitelist, checked at
+# runtime, because a blacklist only stops the leaks somebody already thought of:
+# add a field to redact() and forget to think about it, and a blacklist ships it.
+# This fails the run instead.
+#
+# There are deliberately no per-vector rows here, not even opaque ones. An HMAC
+# does not name a vector, but a map of them is still per-vector data: it says how
+# many distinct checks fail and lets a reader follow the same id across releases.
+# The instruction is a score, so this is a score.
+_PUBLISHABLE = frozenset({
+    "grade",              # a letter
+    "checks_total",       # how many in-scope checks were scored
+    "checks_passed",
+    "pass_rate",
+    "out_of_scope_failed",  # a single count, no attribution
+    "os",                 # which profile it was measured under; we chose it
+    "sundial_version",
+    "schema_version",
+    "policy_violations",  # our own strings, not sundial's
+})
+
+
+def _assert_publishable(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    """Refuse to hand back anything not on the whitelist."""
+    extra = set(metrics) - _PUBLISHABLE
+    if extra:
+        raise RuntimeError(
+            f"the stealth gate tried to publish {sorted(extra)}, which is not on the "
+            "whitelist in ci/run_sundial.py. Sundial's vectors are private and this "
+            "repository is public; add the key to _PUBLISHABLE only after deciding it "
+            "is a score and not a metric."
+        )
+    return metrics
 
 
 # ---------------------------------------------------------------------------
@@ -205,62 +242,57 @@ def grade(pass_rate: float) -> str:
     return "F"
 
 
-def redact(report: dict, gated: List[str], ungated: List[str]) -> Dict[str, Any]:
-    """Turn a full sundial report into a grade and a set of opaque ids.
+def redact(
+    report: dict, gated: List[str], ungated: List[str], *, os_name: str = ""
+) -> Dict[str, Any]:
+    """Turn a full sundial report into a score, and nothing else.
 
-    This is the trust boundary, and it is deliberately lossy.
-
-    What survives: a letter grade, a pass count, and one HMAC per vector so a
-    later run can notice "the vector that passed last time is failing now".
+    This is the trust boundary, and it is deliberately lossy. What survives is a
+    letter grade, how many in-scope checks were scored and how many passed, and
+    a single count of out-of-scope failures.
 
     What does not survive: names, descriptions, measured values, expectations,
-    source, and -- since the second pass over this file -- the per-category
-    breakdown. A table reading "Graphics 3/17" tells a reader which part of the
-    fingerprint is weakest, which is the most useful single fact an adversary
-    could take from a public CI log. Categories still decide what is gated;
-    that decision happens in here and the answer stays in here.
+    source, the per-category breakdown, and -- since the third pass over this
+    file -- the per-vector rows themselves. Those were HMACs, which name nothing,
+    but a *map* of them is still per-vector data: it publishes how many distinct
+    checks fail and lets a reader follow the same id from one release to the
+    next. Sundial's worth is that its vectors are not public and this repository
+    is; a score is what was asked for, so a score is what leaves.
+
+    The cost is real and worth stating: regression detection drops from
+    per-vector ("the check that passed last release fails now") to per-score
+    ("we got worse"). policy.yml carries a pass-rate floor and a maximum
+    allowed drop to cover it. If you want the per-vector view back, set
+    SUNDIAL_REPORT_AGE_RECIPIENT -- the full report is then kept encrypted to
+    your key and nobody else can open it.
     """
     entries = _iter_entries(report)
     gated_set = {c.lower() for c in gated}
 
-    gated_tests: Dict[str, str] = {}
-    ungated_tests: Dict[str, str] = {}
-
-    for key, category, status in entries:
+    scored = passed = out_of_scope_failed = 0
+    for _key, category, status in entries:
         outcome = _STATUS_MAP.get(status, evidence.SKIP)
-        target = gated_tests if category.lower() in gated_set else ungated_tests
-        target[opaque_id(key)] = outcome
+        in_scope = category.lower() in gated_set
+        if outcome not in (evidence.PASS, evidence.FAIL, evidence.ERROR):
+            continue
+        if in_scope:
+            scored += 1
+            passed += outcome == evidence.PASS
+        elif outcome != evidence.PASS:
+            out_of_scope_failed += 1
 
-    scored = [o for o in gated_tests.values() if o in (evidence.PASS, evidence.FAIL, evidence.ERROR)]
-    passed = sum(1 for o in scored if o == evidence.PASS)
-    pass_rate = round(passed / len(scored), 4) if scored else 0.0
+    pass_rate = round(passed / scored, 4) if scored else 0.0
 
-    identity = report.get("identity") or {}
-    return {
-        "tests": gated_tests,
-        "metrics": {
-            # Our own browser's claimed identity. This describes Camoufox, not a
-            # sundial vector, so it leaks nothing and makes a bad run diagnosable.
-            "identity": {
-                k: identity.get(k)
-                for k in ("name", "os", "osDetected", "engine", "platform", "lang", "tz",
-                          "uaMismatch", "engineMismatch", "osConsistent")
-                if k in identity
-            },
-            "sundial_version": report.get("sundialVersion"),
-            "schema_version": report.get("schemaVersion"),
-            "grade": grade(pass_rate),
-            "gated_total": len(gated_tests),
-            "gated_scored": len(scored),
-            "gated_passed": passed,
-            "pass_rate": pass_rate,
-            "ungated_total": len(ungated_tests),
-            "ungated_failed": sum(
-                1 for o in ungated_tests.values() if o in (evidence.FAIL, evidence.ERROR)
-            ),
-            "ungated_tests": ungated_tests,
-        },
-    }
+    return _assert_publishable({
+        "grade": grade(pass_rate),
+        "checks_total": scored,
+        "checks_passed": passed,
+        "pass_rate": pass_rate,
+        "out_of_scope_failed": out_of_scope_failed,
+        "os": os_name,
+        "sundial_version": report.get("sundialVersion"),
+        "schema_version": report.get("schemaVersion"),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -378,12 +410,16 @@ def gate(argv: Optional[List[str]] = None) -> int:
     base_url = os.environ.get("SUNDIAL_URL") or cfg.get("url") or DEFAULT_URL
     result = evidence.GateResult(gate="sundial")
 
-    username = os.environ.get("SUNDIAL_USERNAME", "").strip()
+    # The username is not a secret -- it names an account, and sundial's guest
+    # role is what CI should be using anyway. Only the password needs protecting,
+    # so this defaults rather than demanding a second secret be configured.
+    username = (os.environ.get("SUNDIAL_USERNAME") or DEFAULT_USERNAME).strip()
     password = os.environ.get("SUNDIAL_AUTOMATION_KEY", "").strip()
     if not username or not password:
         result.note(
-            "SUNDIAL_USERNAME / SUNDIAL_AUTOMATION_KEY are not both set. The stealth gate is "
-            "required by policy, so a missing credential fails the run rather than skipping it."
+            "SUNDIAL_AUTOMATION_KEY is not set. The stealth gate is required by policy, so a "
+            "missing credential fails the run rather than skipping it. (SUNDIAL_USERNAME is "
+            f"optional and defaults to {DEFAULT_USERNAME!r}.)"
         )
         result.finish(evidence.ERROR).save(args.evidence_dir)
         return 1
@@ -410,11 +446,17 @@ def gate(argv: Optional[List[str]] = None) -> int:
 
     sealed = seal(report, WORK_DIR / "sundial-full-report.age")
     # The plaintext report is dropped here and never referenced again.
-    redacted = redact(report, cfg.get("gated_categories") or [], cfg.get("ungated_categories") or [])
+    metrics = redact(
+        report,
+        cfg.get("gated_categories") or [],
+        cfg.get("ungated_categories") or [],
+        os_name=args.os_name,
+    )
     del report
 
-    result.tests = redacted["tests"]
-    result.metrics = redacted["metrics"]
+    # Deliberately no per-test map. See redact(): a set of opaque ids is still
+    # per-vector data, and verify.py judges this gate on the score instead.
+    result.metrics = metrics
     if sealed:
         result.artifacts.append(sealed.name)
 
@@ -433,7 +475,7 @@ def gate(argv: Optional[List[str]] = None) -> int:
     # Absolute rules, independent of the baseline: a run that scores badly fails
     # even if the previous release scored just as badly.
     violations: List[str] = []
-    if metrics["gated_scored"] == 0:
+    if metrics["checks_total"] == 0:
         result.note("no gated vectors were scored -- treating as a failure, not a pass")
         violations.append(
             "no gated vectors were scored; the scan produced a report with nothing in scope"
@@ -446,6 +488,7 @@ def gate(argv: Optional[List[str]] = None) -> int:
         )
         status = evidence.FAIL
     result.metrics["policy_violations"] = violations
+    _assert_publishable(result.metrics)
 
     result.finish(status).save(args.evidence_dir)
     # Per-test regressions are verify.py's job; this only reports the floor.
