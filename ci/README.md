@@ -107,9 +107,21 @@ Adding a field without adding it to `_PUBLISHABLE` fails the run:
 
 ```json
 { "grade": "A", "checks_total": 412, "checks_passed": 403, "pass_rate": 0.978,
-  "out_of_scope_failed": 6, "os": "linux", "sundial_version": "0.3.1",
-  "schema_version": 1 }
+  "out_of_scope_failed": 6, "cross_os_total": 24, "cross_os_passed": 5,
+  "os": "linux", "sundial_version": "0.3.1", "schema_version": 1 }
 ```
+
+**Cross-OS detectors are counted, never scored.** They read the host machine
+rather than the disguise: a browser claiming macOS while running on Linux fails
+them however good its spoofing is, and Camoufox does not claim byte-identical
+cross-OS emulation. Folding them into one average would mark it down for a
+promise nobody made, and would hide a real regression behind noise it cannot
+control. They are reported separately so a drop there reads as "the host shows
+through more than it did", which is a different conversation.
+
+The run asks sundial for `?auto=1&score=1`, so it receives counts and the
+vectors never cross the wire at all. A full report is still accepted and folded
+to the same shape, for an older sundial or a deliberate local run.
 
 There are deliberately **no per-vector rows**, not even opaque ones. An HMAC
 names nothing, but a map of them publishes how many distinct checks fail and

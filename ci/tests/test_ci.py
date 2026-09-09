@@ -97,7 +97,8 @@ def test_only_whitelisted_keys_are_published():
     assert set(out) <= _PUBLISHABLE, f"published beyond the whitelist: {set(out) - _PUBLISHABLE}"
     assert set(out) == {
         "grade", "checks_total", "checks_passed", "pass_rate",
-        "out_of_scope_failed", "os", "sundial_version", "schema_version",
+        "out_of_scope_failed", "cross_os_total", "cross_os_passed",
+        "os", "sundial_version", "schema_version",
     }
 
 
@@ -402,3 +403,68 @@ def test_every_native_test_file_is_actually_run():
     missing = on_disk - wired
     assert not missing, f"native-tests files that no subset runs: {sorted(missing)}"
     assert not wired - on_disk, f"runner lists files that do not exist: {sorted(wired - on_disk)}"
+
+
+# ---------------------------------------------------------------------------
+# sundial's score-only payload, with cross-OS split out
+# ---------------------------------------------------------------------------
+
+
+SCORE_PAYLOAD = {
+    "schemaVersion": 1,
+    "mode": "score",
+    "sundialVersion": "0.3.1",
+    "identity": {"name": "Firefox", "os": "linux"},
+    "buckets": {
+        # in scope, browser's own behaviour
+        "Identity|core": {"scored": 40, "passed": 39, "failed": 1},
+        "Network|core": {"scored": 12, "passed": 12, "failed": 0},
+        # in scope by category, but reads the host machine
+        "Locale|crossOs": {"scored": 18, "passed": 4, "failed": 14},
+        # out of scope entirely
+        "Graphics|core": {"scored": 9, "passed": 6, "failed": 3},
+        "Graphics|crossOs": {"scored": 6, "passed": 1, "failed": 5},
+    },
+}
+
+
+def test_cross_os_failures_never_count_against_the_score():
+    """A browser claiming macOS on Linux fails the host-OS detectors regardless.
+
+    Those read the machine underneath, not the disguise, and Camoufox does not
+    claim byte-identical cross-OS emulation -- so counting them would mark it
+    down for a promise nobody made.
+    """
+    out = redact(SCORE_PAYLOAD, GATED, UNGATED, os_name="linux")
+    # Identity + Network core only: 52 scored, 51 passed.
+    assert out["checks_total"] == 52
+    assert out["checks_passed"] == 51
+    assert out["pass_rate"] == pytest.approx(51 / 52, abs=1e-4)
+    # The 14 Locale cross-OS failures did not drag it down...
+    assert out["grade"] == "A"
+    # ...but they are still reported, from both categories.
+    assert out["cross_os_total"] == 24
+    assert out["cross_os_passed"] == 5
+
+
+def test_out_of_scope_failures_are_counted_but_not_scored():
+    out = redact(SCORE_PAYLOAD, GATED, UNGATED, os_name="linux")
+    # Graphics is not a gated category: its 3 core failures are counted only.
+    assert out["out_of_scope_failed"] == 3
+
+
+def test_the_score_payload_publishes_no_categories_or_classes():
+    blob = json.dumps(redact(SCORE_PAYLOAD, GATED, UNGATED, os_name="linux"))
+    for token in ("Identity", "Network", "Locale", "Graphics", "crossOs", "core", "buckets"):
+        assert token not in blob, f"published output leaked {token!r}"
+
+
+def test_a_full_report_still_folds_to_the_same_shape():
+    """Older sundial, or a deliberate local run, must not break the gate."""
+    from ci.run_sundial import _PUBLISHABLE
+
+    out = redact(FULL_REPORT, GATED, UNGATED, os_name="linux")
+    assert set(out) <= _PUBLISHABLE
+    assert out["checks_total"] == 3 and out["checks_passed"] == 1
+    # A full report carries no class tags, so nothing is attributed to cross-OS.
+    assert out["cross_os_total"] == 0

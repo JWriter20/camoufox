@@ -74,6 +74,8 @@ _PUBLISHABLE = frozenset({
     "checks_passed",
     "pass_rate",
     "out_of_scope_failed",  # a single count, no attribution
+    "cross_os_total",     # host-OS detectors: measured, never gated
+    "cross_os_passed",
     "os",                 # which profile it was measured under; we chose it
     "sundial_version",
     "schema_version",
@@ -242,56 +244,100 @@ def grade(pass_rate: float) -> str:
     return "F"
 
 
-def redact(
-    report: dict, gated: List[str], ungated: List[str], *, os_name: str = ""
-) -> Dict[str, Any]:
-    """Turn a full sundial report into a score, and nothing else.
+def _from_buckets(payload: dict, gated: List[str]) -> Dict[str, int]:
+    """Fold sundial's score payload into the three numbers we publish.
 
-    This is the trust boundary, and it is deliberately lossy. What survives is a
-    letter grade, how many in-scope checks were scored and how many passed, and
-    a single count of out-of-scope failures.
-
-    What does not survive: names, descriptions, measured values, expectations,
-    source, the per-category breakdown, and -- since the third pass over this
-    file -- the per-vector rows themselves. Those were HMACs, which name nothing,
-    but a *map* of them is still per-vector data: it publishes how many distinct
-    checks fail and lets a reader follow the same id from one release to the
-    next. Sundial's worth is that its vectors are not public and this repository
-    is; a score is what was asked for, so a score is what leaves.
-
-    The cost is real and worth stating: regression detection drops from
-    per-vector ("the check that passed last release fails now") to per-score
-    ("we got worse"). policy.yml carries a pass-rate floor and a maximum
-    allowed drop to cover it. If you want the per-vector view back, set
-    SUNDIAL_REPORT_AGE_RECIPIENT -- the full report is then kept encrypted to
-    your key and nobody else can open it.
+    Buckets arrive keyed "<Category>|<class>". Category decides scope -- whether
+    Camoufox claims that area at all -- and class decides whether a failure is
+    the browser's fault or the machine's.
     """
-    entries = _iter_entries(report)
     gated_set = {c.lower() for c in gated}
+    scored = passed = 0
+    out_of_scope_failed = 0
+    cross_total = cross_passed = 0
 
-    scored = passed = out_of_scope_failed = 0
-    for _key, category, status in entries:
-        outcome = _STATUS_MAP.get(status, evidence.SKIP)
-        in_scope = category.lower() in gated_set
-        if outcome not in (evidence.PASS, evidence.FAIL, evidence.ERROR):
+    for key, bucket in (payload.get("buckets") or {}).items():
+        category, _, cls = str(key).partition("|")
+        n_scored = int(bucket.get("scored", 0))
+        n_passed = int(bucket.get("passed", 0))
+
+        if cls == "crossOs":
+            # Host-OS detectors read the machine underneath, not the disguise.
+            # Camoufox does not claim byte-identical cross-OS emulation, so
+            # these are reported and never gated -- counting them against the
+            # score would be marking it down for a promise nobody made.
+            cross_total += n_scored
+            cross_passed += n_passed
             continue
-        if in_scope:
-            scored += 1
-            passed += outcome == evidence.PASS
-        elif outcome != evidence.PASS:
-            out_of_scope_failed += 1
 
-    pass_rate = round(passed / scored, 4) if scored else 0.0
+        if category.lower() in gated_set:
+            scored += n_scored
+            passed += n_passed
+        else:
+            out_of_scope_failed += n_scored - n_passed
 
-    return _assert_publishable({
-        "grade": grade(pass_rate),
-        "checks_total": scored,
-        "checks_passed": passed,
-        "pass_rate": pass_rate,
+    return {
+        "scored": scored,
+        "passed": passed,
         "out_of_scope_failed": out_of_scope_failed,
+        "cross_os_total": cross_total,
+        "cross_os_passed": cross_passed,
+    }
+
+
+def redact(
+    payload: dict, gated: List[str], ungated: List[str], *, os_name: str = ""
+) -> Dict[str, Any]:
+    """Turn sundial's response into a score, and nothing else.
+
+    Two shapes arrive here. `mode: "score"` is the one to want: sundial has
+    already aggregated, so no vector identity ever crossed the wire. A full
+    report is still accepted -- an older sundial, or a deliberate local run --
+    and is folded down to the same numbers here.
+
+    Either way what leaves is a grade, how many in-scope checks were scored and
+    passed, a count of out-of-scope failures, and the cross-OS tally kept
+    separate. No names, no values, no categories, and no per-vector rows -- not
+    even opaque ones, because a map of HMACs still publishes how many distinct
+    checks fail and lets a reader follow one across releases.
+
+    Regression detection is therefore per-score, not per-vector: policy.yml
+    carries a floor and a maximum allowed drop. For the per-vector view set
+    SUNDIAL_REPORT_AGE_RECIPIENT and read the sealed report locally.
+    """
+    if payload.get("mode") == "score":
+        counts = _from_buckets(payload, gated)
+    else:
+        # Legacy path: fold a full report down to the same numbers.
+        gated_set = {c.lower() for c in gated}
+        scored = passed = out_of_scope_failed = 0
+        for _key, category, status in _iter_entries(payload):
+            outcome = _STATUS_MAP.get(status, evidence.SKIP)
+            if outcome not in (evidence.PASS, evidence.FAIL, evidence.ERROR):
+                continue
+            if category.lower() in gated_set:
+                scored += 1
+                passed += outcome == evidence.PASS
+            elif outcome != evidence.PASS:
+                out_of_scope_failed += 1
+        counts = {
+            "scored": scored, "passed": passed,
+            "out_of_scope_failed": out_of_scope_failed,
+            "cross_os_total": 0, "cross_os_passed": 0,
+        }
+
+    rate = round(counts["passed"] / counts["scored"], 4) if counts["scored"] else 0.0
+    return _assert_publishable({
+        "grade": grade(rate),
+        "checks_total": counts["scored"],
+        "checks_passed": counts["passed"],
+        "pass_rate": rate,
+        "out_of_scope_failed": counts["out_of_scope_failed"],
+        "cross_os_total": counts["cross_os_total"],
+        "cross_os_passed": counts["cross_os_passed"],
         "os": os_name,
-        "sundial_version": report.get("sundialVersion"),
-        "schema_version": report.get("schemaVersion"),
+        "sundial_version": payload.get("sundialVersion"),
+        "schema_version": payload.get("schemaVersion"),
     })
 
 
@@ -315,8 +361,12 @@ async def scan(
     host = urllib.parse.urlparse(base_url).hostname or "sundial.daijro.dev"
 
     with _Collector() as collector:
+        # score=1 makes sundial post counts rather than the report itself, so
+        # the vectors never cross the wire. Without it the full report arrives
+        # here and the only thing keeping it private is redact() being called --
+        # this makes the leak structurally impossible instead of policy-based.
         target = (
-            f"{base_url.rstrip('/')}/?auto=1&post="
+            f"{base_url.rstrip('/')}/?auto=1&score=1&post="
             + urllib.parse.quote(f"http://127.0.0.1:{collector.port}/collect", safe="")
         )
         async with AsyncCamoufox(
