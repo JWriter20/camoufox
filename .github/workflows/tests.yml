@@ -609,6 +609,41 @@ jobs:
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
+  growth:
+    name: Memory growth (scheduled)
+    # Deliberately NOT in the merge gate. It takes ~37 minutes, because every
+    # mechanism is churned twice -- at n and 4n -- to measure whether growth
+    # scales with the count. That is the wrong price to pay on every pull
+    # request for a detector aimed at a slow-moving class of bug, so it runs on
+    # the schedule and on demand, and a failure opens a conversation rather than
+    # blocking a merge.
+    needs: [resolve, build, fetch-browser, patch-guards, build-tester]
+    if: >-
+      always()
+      && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && needs.patch-guards.result == 'success'
+      && needs.build-tester.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: ./.github/actions/prepare-browser
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -e pythonlib
+      - run: xvfb-run -a python3 -m ci.run_native --subset growth --binary "$CAMOUFOX_BINARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-growth
+          path: .ci-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
   sundial:
     name: Stealth check
     needs: [resolve, build, fetch-browser, patch-guards, build-tester]

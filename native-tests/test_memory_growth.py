@@ -19,9 +19,24 @@ no network, no ad rotation, byte-identical every run.
 The theory being tested is that Camoufox adds per-something state stock Firefox
 has no equivalent of -- an isolated world per document, a noise seed per canvas,
 a spoofed list per font family -- and that something churning fast enough
-accumulates it. A pass here is evidence against that for the mechanism tested;
-it is not proof that #762's page is safe, because that page combines all of them
-at once and over a longer horizon.
+accumulates it.
+
+Result at the time of writing: all six mechanisms passed at n=150 vs n=600
+against v152.0.4-beta.30, so none of them leaks per iteration at that scale.
+
+What that does NOT establish, and the reason this file is a detector rather than
+an answer to #762:
+
+  * a leak that only becomes visible past a few thousand iterations;
+  * a leak in the *combination* -- #762's page runs all of these at once, and
+    an isolated world per cross-origin iframe is not the same object as one per
+    same-origin srcdoc frame;
+  * anything that needs real ad content: cross-origin frames, live network,
+    asm.js compilation at scale, video;
+  * the runaway in #762 itself, which needs that page.
+
+A pass here is evidence against a per-iteration leak in the mechanism tested. It
+is not evidence that #762 is fixed, and this file should not be cited as such.
 """
 
 from __future__ import annotations
