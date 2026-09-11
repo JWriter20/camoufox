@@ -82,20 +82,36 @@ def make_venv(checkout: Path, tag: str, *, reuse: bool = True) -> Path:
         return python
 
     run([sys.executable, "-m", "venv", str(venv)], check=True)
-    version = tag.lstrip("v")
-    deps = [
-        f"playwright=={version}",
-        "pytest==8.3.2", "pytest-asyncio==0.21.2", "pytest-timeout==2.3.1",
-        "pytest-repeat==0.9.3", "flaky==3.8.1", "Pillow==10.4.0", "pixelmatch==0.3.0",
-        "pyOpenSSL==24.2.1", "service_identity==24.1.0", "twisted==24.7.0",
-        "autobahn==23.1.2", "requests==2.32.3", "objgraph==3.6.1",
-        # ci/pw_camoufox_plugin.py reads ci/skiplist.yml from inside this
-        # interpreter, so PyYAML has to be here and not just in the outer
-        # environment. Without it every shard dies in pytest_configure.
-        "PyYAML>=6.0",
-    ]
     run([str(python), "-m", "pip", "install", "--quiet", "--upgrade", "pip"], check=True)
-    run([str(python), "-m", "pip", "install", "--quiet", *deps], check=True)
+
+    # Install the suite's OWN pins, not a hand-picked list.
+    #
+    # Guessing them cost a full CI cycle: pytest-asyncio was pinned at 0.21.2
+    # while v1.62.0 needs 1.4.0, and upstream's pyproject sets
+    # asyncio_default_fixture_loop_scope = "session" -- an option 0.21 does not
+    # understand. Its session-scoped browser fixtures then got a function-scoped
+    # event loop and every single test errored at setup with ScopeMismatch,
+    # which reads like the browser is broken and is not.
+    #
+    # The suite knows what it needs, and a future tag that changes its pins just
+    # works instead of failing the same way again.
+    requirements = checkout / "local-requirements.txt"
+    if requirements.exists():
+        run([str(python), "-m", "pip", "install", "--quiet", "-r", str(requirements)], check=True)
+    else:
+        log(f"{requirements} is missing; falling back to a minimal set", level="WARN")
+        run([str(python), "-m", "pip", "install", "--quiet",
+             "pytest", "pytest-asyncio", "pytest-timeout", "Pillow", "pixelmatch"], check=True)
+
+    # The client the suite is written against, which its own requirements file
+    # deliberately does not pin -- it is the package under test upstream.
+    version = tag.lstrip("v")
+    run([str(python), "-m", "pip", "install", "--quiet", f"playwright=={version}"], check=True)
+
+    # ci/pw_camoufox_plugin.py reads ci/skiplist.yml from inside this
+    # interpreter, so PyYAML has to be here and not just in the outer
+    # environment. Without it every shard dies in pytest_configure.
+    run([str(python), "-m", "pip", "install", "--quiet", "PyYAML>=6.0"], check=True)
 
     # Playwright refuses to start if its own browser registry is empty, even
     # when every launch is redirected at our binary.
