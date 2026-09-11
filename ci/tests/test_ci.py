@@ -562,3 +562,37 @@ def test_zero_distinct_is_absence_not_collision():
     out = uniqueness(_cross(uniqueVoices=0))
     assert out["absent"] == ["macPerContext.uniqueVoices (0/3 distinct)"]
     assert not out["leaks"] and not out["noise"]
+
+
+def test_the_vendored_suite_honours_pythonlibs_playwright_ceiling():
+    """Two files decide which Playwright the regression suite runs against.
+
+    pythonlib/pyproject.toml caps it deliberately -- every Playwright minor is
+    free to change Juggler, and 1.61 added params the protocol schema had to
+    learn. tests/local-requirements.txt installs the client the suite actually
+    uses. Unpinned there, the cap means nothing: the suite quietly installs a
+    client the browser cannot speak to, and it reads as a browser failure.
+    """
+    import re
+
+    from ci._util import REPO_ROOT
+
+    pyproject = (REPO_ROOT / "pythonlib" / "pyproject.toml").read_text(encoding="utf-8")
+    cap = re.search(r'^playwright\s*=\s*"([^"]+)"', pyproject, re.M)
+    assert cap, "pythonlib/pyproject.toml no longer pins playwright"
+
+    reqs = (REPO_ROOT / "tests" / "local-requirements.txt").read_text(encoding="utf-8")
+    line = next(
+        (l.strip() for l in reqs.splitlines()
+         if l.strip().lower().startswith("playwright") and not l.strip().startswith("#")),
+        None,
+    )
+    assert line, "tests/local-requirements.txt no longer lists playwright"
+    assert line != "playwright", (
+        "tests/local-requirements.txt installs an unpinned playwright, so "
+        f"pythonlib's {cap.group(1)!r} ceiling does not apply to the suite that "
+        "actually exercises the browser."
+    )
+    assert cap.group(1).replace(" ", "") in line.replace(" ", ""), (
+        f"the suite pins {line!r} but pythonlib caps at {cap.group(1)!r}; they have drifted"
+    )
