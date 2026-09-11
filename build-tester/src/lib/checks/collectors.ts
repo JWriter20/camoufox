@@ -11,29 +11,6 @@ function simpleHash(data: Float32Array | Uint8Array | Uint8ClampedArray): string
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function canvasHash(operations: (ctx: CanvasRenderingContext2D) => void): string {
-  const canvas = document.createElement("canvas");
-  canvas.width = 200;
-  canvas.height = 50;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "no-context";
-  operations(ctx);
-  // Hash the pixels, not the first 100 characters of the data URL.
-  //
-  // That is what this returned, and it barely reached the image: "data:image/
-  // png;base64," is 22 characters, leaving ~78 of base64 -- about 58 bytes, which
-  // is the 8-byte PNG signature, the 25-byte IHDR (width, height, depth), the
-  // IDAT header, and roughly fifteen bytes of deflate stream. Two canvases whose
-  // noise differs everywhere except the top-left corner produced the same value,
-  // so cross-profile uniqueness was decided by whether the perturbation happened
-  // to land early in the first scanline. CI caught exactly that: two contexts
-  // reported an identical "hash" while their canvas noise was genuinely
-  // different.
-  //
-  // getImageData is the right surface anyway -- it is the readback Camoufox
-  // noises, and the one a fingerprinter reads.
-  return simpleHash(ctx.getImageData(0, 0, canvas.width, canvas.height).data);
-}
 
 export async function collectFingerprints(): Promise<FingerprintData> {
   // Navigator
@@ -104,7 +81,20 @@ export async function collectFingerprints(): Promise<FingerprintData> {
       ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
       ctx.fillText("Cwm fjordbank", 4, 17);
       const url = c.toDataURL();
-      return { hash: url.substring(0, 100), dataUrlPrefix: url.substring(0, 30) };
+      // Hash the pixels. `url.substring(0, 100)` was not a hash and barely
+      // reached the image: "data:image/png;base64," takes 22 characters,
+      // leaving ~58 bytes of PNG -- signature, IHDR, the IDAT header and about
+      // fifteen bytes of deflate stream. Cross-profile uniqueness therefore
+      // turned on whether the per-context noise happened to land in the
+      // top-left of the first scanline, and two contexts whose canvas differed
+      // everywhere else compared equal. The same value was used to check
+      // stability between two reads, so that check was comparing PNG headers.
+      // getImageData is the readback Camoufox noises and the one a
+      // fingerprinter reads.
+      return {
+        hash: simpleHash(ctx.getImageData(0, 0, c.width, c.height).data),
+        dataUrlPrefix: url.substring(0, 30),
+      };
     } catch {
       return { hash: "error", dataUrlPrefix: "" };
     }
@@ -243,7 +233,10 @@ export async function collectFingerprints(): Promise<FingerprintData> {
       if (!ctx) return { hash: "no-context" };
       ctx.font = "32px serif";
       ctx.fillText("\uD83D\uDE00\uD83D\uDC4D\uD83C\uDFE0\u2764\uFE0F", 0, 40);
-      return { hash: c.toDataURL().substring(50, 120) };
+      // substring(50, 120) skipped the PNG header but still covered only ~50
+      // bytes of deflate stream, so two different emoji rasterisations could
+      // compare equal. Hash the pixels for the same reason as above.
+      return { hash: simpleHash(ctx.getImageData(0, 0, c.width, c.height).data) };
     } catch {
       return { hash: "error" };
     }

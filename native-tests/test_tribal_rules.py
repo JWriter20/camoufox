@@ -544,25 +544,28 @@ def test_a_sandbox_held_over_a_page_window_is_nuked_not_just_dropped():
 def test_the_canvas_check_hashes_pixels_rather_than_a_data_url_prefix():
     """A truncated data URL is mostly PNG header, not image.
 
-    It made cross-profile uniqueness depend on where the noise landed, and left
-    the stability check comparing headers -- so it could not have caught
-    non-deterministic noise either.
+    Checks the paths that actually run. The first version of this test guarded a
+    helper called canvasHash that nothing called -- the live collector had its
+    own copy of the same truncation, so the rule passed while the defect stayed
+    exactly where it was.
     """
     source = (
         REPO_ROOT / "build-tester" / "src" / "lib" / "checks" / "collectors.ts"
     ).read_text(encoding="utf-8")
-
-    body_start = source.index("function canvasHash(")
-    body = source[body_start : source.index("\n}", body_start)]
     code = "\n".join(
-        line for line in body.splitlines() if not line.strip().startswith("//")
+        line for line in source.splitlines() if not line.strip().startswith("//")
     )
 
-    assert "substring" not in code and "slice" not in code, (
-        "canvasHash truncates its output again."
+    # Every canvas readback in the collector, wherever it lives.
+    offenders = []
+    for marker in ("toDataURL().substring(", "url.substring(0, 100)"):
+        if marker in code:
+            offenders.append(marker)
+    assert not offenders, (
+        f"a canvas fingerprint is built from a truncated data URL: {offenders}"
         + explain("canvas-fingerprint-is-hashed-not-truncated")
     )
-    assert "getImageData" in code, (
-        "canvasHash no longer reads the pixels."
+    assert code.count("simpleHash(ctx.getImageData") >= 2, (
+        "the canvas and emoji-canvas fingerprints should both hash their pixels"
         + explain("canvas-fingerprint-is-hashed-not-truncated")
     )
