@@ -492,3 +492,73 @@ def test_a_deployment_without_score_mode_is_flagged_not_silent():
     legacy = redact(FULL_REPORT, GATED, UNGATED, os_name="linux")
     assert legacy["score_mode"] is False
     assert legacy["cross_os_total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# cross-profile uniqueness, judged by what each slot promises
+# ---------------------------------------------------------------------------
+
+
+def _cross(**kw):
+    base = {"total": 3, "uniqueAudio": 3, "uniqueCanvas": 3, "uniqueFonts": 3,
+            "uniqueTimezones": 3, "uniqueScreens": 3, "uniqueVoices": 3,
+            "uniqueWebGL": 3, "uniquePlatforms": 1}
+    base.update(kw)
+    return {"crossProfile": {"macPerContext": base}}
+
+
+def test_a_shared_per_context_value_is_a_leak():
+    """audio, canvas and timezone are derived per context.
+
+    Two contexts sharing one is the failure this whole suite exists to catch.
+    """
+    from ci.run_build_tester import uniqueness
+
+    for slot in ("uniqueAudio", "uniqueCanvas", "uniqueTimezones"):
+        out = uniqueness(_cross(**{slot: 1}))
+        assert out["leaks"] == [f"macPerContext.{slot} (1/3 distinct)"], slot
+        assert not out["noise"]
+
+
+def test_a_shared_preset_value_is_noise_not_a_leak():
+    """fonts, screens, voices and WebGL come from a pool of real devices.
+
+    Three draws from a dozen collide regularly. Reported, never fatal.
+    """
+    from ci.run_build_tester import uniqueness
+
+    for slot in ("uniqueFonts", "uniqueScreens", "uniqueVoices", "uniqueWebGL"):
+        out = uniqueness(_cross(**{slot: 2}))
+        assert out["noise"] == [f"macPerContext.{slot} (2/3 distinct)"], slot
+        assert not out["leaks"]
+
+
+def test_identical_platforms_are_correct_not_a_collision():
+    """Every macOS context reports MacIntel. That is what macOS reports.
+
+    The flat count that preceded this read three contexts agreeing as three
+    collisions and failed a run that scored 1054/1054.
+    """
+    from ci.run_build_tester import uniqueness
+
+    out = uniqueness(_cross(uniquePlatforms=1))
+    assert not out["leaks"] and not out["not_constant"] and not out["noise"]
+
+
+def test_a_platform_that_varies_within_one_os_is_the_bug():
+    from ci.run_build_tester import uniqueness
+
+    out = uniqueness(_cross(uniquePlatforms=3))
+    assert out["not_constant"] == ["macPerContext.uniquePlatforms (3/3 distinct)"]
+
+
+def test_zero_distinct_is_absence_not_collision():
+    """Nothing collected -- no speech voices headless, say.
+
+    Counting it as a collision reports a leak where there is no data at all.
+    """
+    from ci.run_build_tester import uniqueness
+
+    out = uniqueness(_cross(uniqueVoices=0))
+    assert out["absent"] == ["macPerContext.uniqueVoices (0/3 distinct)"]
+    assert not out["leaks"] and not out["noise"]

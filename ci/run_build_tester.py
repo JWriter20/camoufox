@@ -22,13 +22,26 @@ from ._util import CI_DIR, RESULTS_DIR, REPO_ROOT, WORK_DIR, read_json, run
 BUILD_TESTER = REPO_ROOT / "build-tester"
 CONFIG_PATH = CI_DIR / "build-tester.yml"
 
-# Cross-profile uniqueness slots. Each is "did N profiles produce N distinct
-# values". They draw random fingerprints, so an occasional collision is the
-# birthday paradox rather than a leak -- see TRIBAL-KNOWLEDGE.md.
-_UNIQUENESS_KEYS = (
-    "uniqueAudio", "uniqueCanvas", "uniqueFonts", "uniqueTimezones",
-    "uniqueScreens", "uniqueVoices", "uniqueWebGL", "uniquePlatforms",
-)
+# Cross-profile uniqueness, split by what each slot actually promises. Treating
+# them alike made the gate fail a run that scored 1054/1054: it counted three
+# macOS contexts all reporting "MacIntel" as three collisions, which is the
+# correct answer to a question nobody asked.
+#
+# Values Camoufox derives per context. Two contexts sharing one is the leak
+# this whole suite exists to catch, so a single collision here is fatal.
+_MUST_VARY = ("uniqueAudio", "uniqueCanvas", "uniqueTimezones")
+
+# Values drawn from the preset pool. Three draws from a pool of a dozen collide
+# regularly -- that is the birthday paradox, not a leak, and the pools are
+# deliberately small because they hold real devices. Counted and reported,
+# never fatal on their own.
+_MAY_COLLIDE = ("uniqueFonts", "uniqueScreens", "uniqueVoices", "uniqueWebGL")
+
+# Properties of the operating system. Every macOS context reports MacIntel and
+# every Linux one reports Linux x86_64, because that is what those systems
+# report. Here a collision is the correct outcome and *variation* would be the
+# bug, so it is asserted in the opposite direction.
+_MUST_MATCH = ("uniquePlatforms",)
 
 
 def flatten(full: dict) -> Dict[str, str]:
@@ -86,18 +99,41 @@ def category_failures(full: dict, required: List[str]) -> Dict[str, int]:
     return out
 
 
-def uniqueness_collisions(full: dict) -> List[str]:
-    """Slots where profiles that should have differed did not."""
-    collisions: List[str] = []
+def uniqueness(full: dict) -> Dict[str, List[str]]:
+    """Sort the cross-profile slots into leaks, noise, and things not measured.
+
+    Returns {"leaks": [...], "noise": [...], "absent": [...], "not_constant": [...]}.
+    Only `leaks` and `not_constant` should fail a build.
+    """
+    out: Dict[str, List[str]] = {"leaks": [], "noise": [], "absent": [], "not_constant": []}
+
     for group, stats in (full.get("crossProfile") or {}).items():
         total = stats.get("total") or 0
         if total < 2:
             continue
-        for key in _UNIQUENESS_KEYS:
+
+        def describe(key: str) -> str:
+            return f"{group}.{key} ({stats.get(key)}/{total} distinct)"
+
+        for key in _MUST_VARY + _MAY_COLLIDE:
             value = stats.get(key)
-            if isinstance(value, int) and value < total:
-                collisions.append(f"{group}.{key} ({value}/{total} distinct)")
-    return collisions
+            if not isinstance(value, int):
+                continue
+            if value == 0:
+                # Nothing was gathered -- no speech voices under a headless
+                # session, say. "Zero distinct" is absence, and counting it as a
+                # collision reports a leak where there is no data at all.
+                out["absent"].append(describe(key))
+            elif value < total:
+                bucket = "leaks" if key in _MUST_VARY else "noise"
+                out[bucket].append(describe(key))
+
+        for key in _MUST_MATCH:
+            value = stats.get(key)
+            if isinstance(value, int) and value > 1:
+                out["not_constant"].append(describe(key))
+
+    return out
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -168,20 +204,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         violations.append(f"categories that must be clean have failing checks: {pretty}")
         status = evidence.FAIL
 
-    collisions = uniqueness_collisions(full)
+    slots = uniqueness(full)
     allowed = int(cfg.get("allow_uniqueness_collisions", 0))
-    result.metrics["uniqueness_collisions"] = collisions
-    if collisions:
+    result.metrics["uniqueness"] = slots
+
+    if slots["noise"]:
         result.note(
-            f"{len(collisions)} cross-profile uniqueness collision(s): {', '.join(collisions)} "
-            f"(policy tolerates {allowed}; these draw random fingerprints)"
+            f"{len(slots['noise'])} preset-pool collision(s), not gated: "
+            + ", ".join(slots["noise"])
         )
-        if len(collisions) > allowed:
+    if slots["absent"]:
+        result.note(
+            f"{len(slots['absent'])} slot(s) collected nothing: " + ", ".join(slots["absent"])
+        )
+
+    if slots["leaks"]:
+        result.note(
+            f"{len(slots['leaks'])} per-context value(s) shared between contexts: "
+            + ", ".join(slots["leaks"])
+            + f" (policy tolerates {allowed})"
+        )
+        if len(slots["leaks"]) > allowed:
             violations.append(
-                f"{len(collisions)} cross-profile uniqueness collisions, policy tolerates {allowed}: "
-                + ", ".join(collisions)
+                "per-context values shared between contexts, which is the leak this suite "
+                "exists to catch: " + ", ".join(slots["leaks"])
             )
             status = evidence.FAIL
+
+    if slots["not_constant"]:
+        result.note("OS-constant value varied between contexts: " + ", ".join(slots["not_constant"]))
+        violations.append(
+            "a value that is a property of the operating system differed between contexts of "
+            "the same OS: " + ", ".join(slots["not_constant"])
+        )
+        status = evidence.FAIL
 
     result.metrics["policy_violations"] = violations
 
