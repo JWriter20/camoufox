@@ -40,6 +40,7 @@ from _chaos import (
     SOCKET_PROCESS,
     WEB_CONTENT,
     WEB_EXTENSIONS,
+    driver_process,
     XVFB,
     bounded,
     close_bounded,
@@ -226,10 +227,17 @@ async def test_driver_sigkill_does_not_orphan_the_browser(binary, psutil_mod, le
     """
     manager, browser = await open_browser(binary)
     await a_page(browser)
-    wait_for_process(psutil_mod, BROWSER)
-    sigkill(psutil_mod, DRIVER)
 
-    await teardown(manager, "teardown after the driver was killed")
+    driver = driver_process(psutil_mod)
+    if driver is None:
+        pytest.skip("the browser was launched directly; there is no separate driver to kill")
+    try:
+        driver.kill()
+    except psutil_mod.NoSuchProcess:
+        pass
+    psutil_mod.wait_procs([driver], timeout=15)
+
+    await teardown(manager, f"teardown after killing the driver ({driver.pid})")
     leak_check.assert_clean()
 
 

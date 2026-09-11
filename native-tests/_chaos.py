@@ -44,6 +44,13 @@ XVFB = "Xvfb"
 
 _STDLIB_HELPERS = ("resource_tracker", "semaphore_tracker")
 
+# Short-lived probes Gecko spawns at startup and deliberately does not wait for.
+# glxtest asks the GL stack what it supports; vaapitest does the same for video
+# decode. Both detach, answer, and exit on their own, and on a runner with no GPU
+# glxtest can outlive a browser that has already gone. Counting one as a leaked
+# process is wrong twice over: it is not ours to reap, and it does not stay.
+_GECKO_PROBES = ("glxtest", "vaapitest")
+
 
 @dataclass
 class Victim:
@@ -61,11 +68,35 @@ def descendants(psutil_mod, *, name: Optional[str] = None) -> List:
         try:
             if any(h in " ".join(proc.cmdline()) for h in _STDLIB_HELPERS):
                 continue
+            if proc.name() in _GECKO_PROBES:
+                continue
             if name is None or proc.name() == name:
                 out.append(proc)
         except (psutil_mod.NoSuchProcess, psutil_mod.AccessDenied):
             continue
     return out
+
+
+def driver_process(psutil_mod, *, timeout: float = 30.0):
+    """Playwright's driver, found by position rather than by name.
+
+    It is `node` on a developer machine and something else on a CI runner --
+    an observed tree there had MainThread, camoufox-bin, forkserver and no node
+    at all, so a test keyed on the name failed for a reason that had nothing to
+    do with what it was checking.
+
+    Position is stable where the name is not: the driver is whatever launched
+    the browser, so look for the browser and walk up one.
+    """
+    browser = wait_for_process(psutil_mod, BROWSER, timeout=timeout)[0]
+    me = psutil_mod.Process().pid
+    try:
+        parent = browser.parent()
+    except psutil_mod.Error:
+        parent = None
+    if parent is None or parent.pid == me:
+        return None  # launched directly by us; there is no separate driver
+    return parent
 
 
 def wait_for_process(psutil_mod, name: str, *, timeout: float = 30.0) -> List:
