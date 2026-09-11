@@ -386,12 +386,22 @@ jobs:
 
           # Fail here, once, rather than in five browser jobs with five
           # different confusing errors.
-          for required in camoufox-bin properties.json fonts/linux fontconfig/linux; do
+          for required in camoufox-bin properties.json camoufox.cfg fonts/linux fontconfig/linux; do
             [ -e "$src/$required" ] || { echo "::error::artifact is missing $required"; exit 1; }
           done
 
-          # The browser needs its whole dist/bin, not just the executable.
-          tar -C "$(dirname "$src")" -cf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst
+          # -h (--dereference) is load-bearing, not tidiness. mach builds dist/bin
+          # out of symlinks -- 17 of them here, and properties.json and
+          # camoufox.cfg are ABSOLUTE links into the source tree. Archiving the
+          # links means they resolve on this runner, where the tree exists, and
+          # dangle on every runner that only downloads the artifact. The browser
+          # then starts with no config at all, which is where every spoofing pref
+          # lives, and the failure surfaces as "properties.json missing" three
+          # jobs later.
+          #
+          # It also defeats the check above: `[ -e ]` follows a symlink, so the
+          # file looked present right up until it was unpacked somewhere else.
+          tar -C "$(dirname "$src")" -chf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst
           ls -lh camoufox-dist.tar.zst
 
       - uses: actions/upload-artifact@v4
