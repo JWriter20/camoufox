@@ -159,6 +159,29 @@ rules:
   # Measurement
   # -------------------------------------------------------------------------
 
+  - id: canvas-noise-entropy-is-lower-than-audio
+    title: Two contexts share a canvas fingerprint far more often than they should
+    check: manual   # an open finding, not a settled decision
+    evidence:
+      - "24 profiles across 3 runs on v152.0.4-beta.30, once the canvas was actually hashed"
+      - "audio 24 distinct / 24 samples; canvas 16 / 24, values recurring across independent runs"
+      - "macOS 7 distinct of 12, Linux 9 of 12; one value seen three times"
+      - "matches the rate at which CI flagged cross-profile canvas collisions"
+    rationale: >-
+      Audio and canvas are both noised per context, by the same machinery, and
+      were measured in the same runs with the same hash. Audio came back
+      completely unique; canvas did not, and its values repeat across runs that
+      share nothing. So two contexts in one browser are linkable by canvas
+      roughly a third of the time, which is the property per-context spoofing
+      exists to prevent.
+      This was invisible until the fingerprint stopped being a 100-character
+      prefix of a data URL, which compared equal for almost anything. It is
+      recorded as an open question rather than a decision: it may be that canvas
+      output is deliberately tied to the device preset rather than to
+      canvas:seed, in which case the seed is not doing what its name suggests.
+      Not gated, because failing one run in three helps nobody, and not dropped,
+      because it is real.
+
   - id: canvas-fingerprint-is-hashed-not-truncated
     title: The canvas check hashes pixels, not a prefix of the data URL
     check: automated
