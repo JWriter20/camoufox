@@ -502,7 +502,9 @@ jobs:
         if: always()
         with:
           name: results-playwright-upstream-${{ strategy.job-index }}
-          path: .ci-work/results/
+          path: |
+            .ci-work/results/
+            .ci-work/junit-*.xml
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
@@ -526,7 +528,9 @@ jobs:
         if: always()
         with:
           name: results-playwright-vendored
-          path: .ci-work/results/
+          path: |
+            .ci-work/results/
+            .ci-work/junit-*.xml
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
@@ -583,7 +587,12 @@ jobs:
         if: always()
         with:
           name: results-build-tester
-          path: .ci-work/results/
+          # The graded tree as well as the verdict. When the gate flags a
+          # cross-profile collision, the hashes that collided are the first
+          # thing anyone will want, and re-running to get them costs an hour.
+          path: |
+            .ci-work/results/
+            .ci-work/build-tester-result.json
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
@@ -617,7 +626,9 @@ jobs:
         if: always()
         with:
           name: results-native
-          path: .ci-work/results/
+          path: |
+            .ci-work/results/
+            .ci-work/junit-*.xml
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------

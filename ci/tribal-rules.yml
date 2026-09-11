@@ -156,6 +156,28 @@ rules:
       allowed_forms: ["-e ../pythonlib", "-e ./pythonlib", "-e pythonlib"]
 
   # -------------------------------------------------------------------------
+  # Measurement
+  # -------------------------------------------------------------------------
+
+  - id: canvas-fingerprint-is-hashed-not-truncated
+    title: The canvas check hashes pixels, not a prefix of the data URL
+    check: automated
+    evidence:
+      - "build-tester/src/lib/checks/collectors.ts returned canvas.toDataURL().substring(0, 100)"
+      - "CI reported two contexts sharing a canvas fingerprint; 8 local runs across two rendering paths never did"
+    rationale: >-
+      A hundred characters of a data URL is not the image. "data:image/png;base64,"
+      takes 22 of them, leaving about 58 bytes of PNG: the signature, the IHDR
+      giving width and height, the IDAT header, and roughly fifteen bytes of
+      deflate stream. Cross-profile uniqueness was therefore decided by whether
+      the noise happened to land in the top-left of the first scanline, and two
+      contexts whose canvas differed everywhere else read as identical. Worse,
+      the stability check compared the same prefix between two collections, so
+      it passed on PNG headers and could not have noticed non-deterministic
+      noise. getImageData is the surface Camoufox noises and the one a
+      fingerprinter reads; hash that.
+
+  # -------------------------------------------------------------------------
   # Teardown
   # -------------------------------------------------------------------------
 

@@ -539,3 +539,30 @@ def test_a_sandbox_held_over_a_page_window_is_nuked_not_just_dropped():
         "FrameTree.js caches a Cu.Sandbox over a page window but never nukes it."
         + explain("per-frame-state-released-on-dispose")
     )
+
+
+def test_the_canvas_check_hashes_pixels_rather_than_a_data_url_prefix():
+    """A truncated data URL is mostly PNG header, not image.
+
+    It made cross-profile uniqueness depend on where the noise landed, and left
+    the stability check comparing headers -- so it could not have caught
+    non-deterministic noise either.
+    """
+    source = (
+        REPO_ROOT / "build-tester" / "src" / "lib" / "checks" / "collectors.ts"
+    ).read_text(encoding="utf-8")
+
+    body_start = source.index("function canvasHash(")
+    body = source[body_start : source.index("\n}", body_start)]
+    code = "\n".join(
+        line for line in body.splitlines() if not line.strip().startswith("//")
+    )
+
+    assert "substring" not in code and "slice" not in code, (
+        "canvasHash truncates its output again."
+        + explain("canvas-fingerprint-is-hashed-not-truncated")
+    )
+    assert "getImageData" in code, (
+        "canvasHash no longer reads the pixels."
+        + explain("canvas-fingerprint-is-hashed-not-truncated")
+    )

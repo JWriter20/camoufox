@@ -2,7 +2,7 @@
 
 import type { FingerprintData, WebRTCResult } from "../types";
 
-function simpleHash(data: Float32Array | Uint8Array): string {
+function simpleHash(data: Float32Array | Uint8Array | Uint8ClampedArray): string {
   let hash = 0;
   for (let i = 0; i < data.length; i++) {
     const val = data[i];
@@ -18,7 +18,21 @@ function canvasHash(operations: (ctx: CanvasRenderingContext2D) => void): string
   const ctx = canvas.getContext("2d");
   if (!ctx) return "no-context";
   operations(ctx);
-  return canvas.toDataURL().substring(0, 100);
+  // Hash the pixels, not the first 100 characters of the data URL.
+  //
+  // That is what this returned, and it barely reached the image: "data:image/
+  // png;base64," is 22 characters, leaving ~78 of base64 -- about 58 bytes, which
+  // is the 8-byte PNG signature, the 25-byte IHDR (width, height, depth), the
+  // IDAT header, and roughly fifteen bytes of deflate stream. Two canvases whose
+  // noise differs everywhere except the top-left corner produced the same value,
+  // so cross-profile uniqueness was decided by whether the perturbation happened
+  // to land early in the first scanline. CI caught exactly that: two contexts
+  // reported an identical "hash" while their canvas noise was genuinely
+  // different.
+  //
+  // getImageData is the right surface anyway -- it is the readback Camoufox
+  // noises, and the one a fingerprinter reads.
+  return simpleHash(ctx.getImageData(0, 0, canvas.width, canvas.height).data);
 }
 
 export async function collectFingerprints(): Promise<FingerprintData> {
