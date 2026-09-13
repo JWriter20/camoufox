@@ -2055,21 +2055,43 @@ def test_an_isolated_run_clears_a_stale_main_world_flag(monkeypatch):
     assert json.loads(os.environ["CAMOU_CONFIG"])["disableWorldIsolation"] is True
 
 
-def test_the_runner_hands_each_phase_the_world_it_says_it_does():
-    """Three phases, and the third is the only one with isolation off.
+def test_only_the_first_pass_runs_isolated():
+    """Exactly one isolated pytest run per group, and it is the measurement.
 
-    Read out of the source because the alternative is running the suite: the
-    thing that must not silently change is that phases 1 and 2 are isolated, so
-    a fallback means what it claims.
+    A second isolated pass is what the first real CI run showed to be pure
+    waste: 7m50s a shard, nothing recovered, because these failures are
+    deterministic and slow (a Playwright timeout each) and upstream's own
+    pytest-rerunfailures had already retried every one of them three times.
+    Guarded here because "retry it in the same world first, just to be safe"
+    reads as obviously correct and costs eight minutes a shard.
     """
     source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
-    assert source.count('"CI_WORLD": ISOLATED_WORLD') == 2, (
-        "the first pass and the flake retry must both run isolated, or a flake "
-        "becomes indistinguishable from a world difference"
+    assert source.count('"CI_WORLD": ISOLATED_WORLD') == 1, (
+        "a second isolated pass re-runs deterministic world differences at a "
+        "timeout each and recovers nothing"
     )
-    assert source.count('"CI_WORLD": MAIN_WORLD') == 1, (
-        "exactly one pass may turn isolation off -- the fallback"
-    )
+    # The fallback, and the retry for what failed in both worlds.
+    assert source.count('"CI_WORLD": MAIN_WORLD') == 2
+
+
+def test_no_rerun_pass_can_start_from_an_empty_failure_set():
+    """`--last-failed` with nothing previously failed runs EVERYTHING.
+
+    pytest declines to filter when nothing it collected previously failed, so
+    an unguarded rerun pass would re-run the whole group -- in the other world,
+    silently replacing the result it was meant to refine. Every `--last-failed`
+    invocation must therefore sit behind a check that the set is non-empty.
+    """
+    source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
+    body = source[source.index("# --- 1. isolated world"):source.index('result.metrics["groups"]')]
+    guards = [n for n, line in enumerate(body.splitlines()) if line.strip() == "if not failing:"]
+    reruns = [n for n, line in enumerate(body.splitlines()) if '"--last-failed"' in line]
+    assert len(reruns) == 2, reruns
+    for r in reruns:
+        assert any(g < r for g in guards), (
+            f"the --last-failed at line {r} of the group body is not guarded by a "
+            "non-empty failure set"
+        )
 
 
 def test_every_group_gets_its_own_pytest_cache():

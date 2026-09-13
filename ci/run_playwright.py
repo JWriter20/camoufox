@@ -10,22 +10,23 @@ This is the conformance check -- does Camoufox still honour the automation
 contract its users hold it to -- and, through the overlay, the regression check
 for the behaviours that are ours alone. Shardable.
 
-**Isolated first, main world as a counted fallback.** Each group is run three
-times at most:
+**Isolated first, main world as a counted fallback.** Each group is run up to
+three times, and normally twice:
 
   1. isolated world -- the configuration Camoufox actually ships. `evaluate()`
      runs in its own compartment, so a test that reads a global its page script
-     defined fails here by design.
-  2. the same failures again, still isolated: anything that passes was flaky,
-     and a flake must not be mistaken for a world difference.
-  3. what is still failing, with isolation off. A test that passes now is
-     recorded as a **main-world fallback**: it counts as a pass for the run, and
-     is named and counted in the result so the size of that set is visible and
-     comparable between runs. A change in it means the isolated-world
-     conformance gap moved, which is a fact about the browser worth seeing.
+     defined fails here by design. Upstream's own pytest-rerunfailures has
+     already retried anything that failed, so what arrives at 2 is settled.
+  2. those failures with isolation off. A test that passes now is recorded as a
+     **main-world fallback**: it counts as a pass for the run, and is named and
+     counted in the result so the size of that set is visible and comparable
+     between runs. A change in it means the isolated-world conformance gap
+     moved, which is a fact about the browser worth seeing.
+  3. only what failed in BOTH worlds, retried once. That set is normally empty,
+     so this normally costs nothing.
 
 Running main-world-only (the previous behaviour) hid that number entirely. A
-test failing in *both* worlds is a plain failure.
+test failing in both worlds and on retry is a plain failure.
 
 Run:
     python3 -m ci.run_playwright --binary path/to/camoufox-bin
@@ -247,36 +248,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         ran.append(group)
 
         failing = {t for t, o in part.items() if o in (results.FAIL, results.ERROR)}
-
-        # --- 2. the same world again: sort flakes from real differences ----
-        for attempt in range(args.retries):
-            if not failing:
-                break
-            log(f"  retry {attempt + 1} [{ISOLATED_WORLD} world]: {len(failing)} failing test(s)")
-            retry_junit = WORK_DIR / f"junit{suffix}-{index}-retry{attempt + 1}.xml"
-            run_pytest(
-                cwd=cwd,
-                python=python,
-                args=[*common, "--last-failed", *group.targets],
-                junit=retry_junit,
-                env={**group_env, "CI_WORLD": ISOLATED_WORLD},
-                timeout=args.timeout,
-            )
-            retried = parse_junit(retry_junit)
-            recovered = {t for t in failing if retried.get(t) == results.PASS}
-            for tid in recovered:
-                outcomes[tid] = results.PASS
-            if recovered:
-                result.note(
-                    f"{len(recovered)} test(s) passed on retry in the same world "
-                    "(flaky, not counted as failures or as fallbacks)"
-                )
-            failing -= recovered
-
         if not failing:
+            # Nothing to re-run, and this guard is load-bearing rather than an
+            # optimisation: pytest declines to filter when nothing it collected
+            # previously failed, so a `--last-failed` pass with an empty cache
+            # runs the ENTIRE group again -- in the main world, silently
+            # discarding the isolated result it was meant to refine.
             continue
 
-        # --- 3. main world: what isolation, specifically, costs ------------
+        # --- 2. main world: what isolation, specifically, costs -----------
+        #
+        # Straight to the other world, with no same-world retry in between.
+        # That retry used to sit here on the theory that a flake must not be
+        # mistaken for a world difference, and measured on the first real run it
+        # cost 7m50s a shard and recovered nothing at all:
+        #
+        #   isolated (full)   335s + 331s   35 and 11 failures
+        #   isolated retry    205s + 265s   0 recovered
+        #   main world         19s +  12s   46 recovered
+        #
+        # Two reasons it was never going to earn that. These failures are
+        # deterministic -- a test reading a global its page script defined does
+        # not intermittently see it -- and failing that way is *slow*, because
+        # the read returns undefined and the test sits on a Playwright timeout
+        # rather than throwing. And upstream's suite already ships
+        # pytest-rerunfailures: the "105 rerun" on that first line is every one
+        # of those 35 failures having been retried three times before the run
+        # even reported them. A flake does not survive that.
         isolated_failures.extend(sorted(failing))
         log(f"  fallback [{MAIN_WORLD} world]: {len(failing)} test(s) that isolation failed")
         fallback_junit = WORK_DIR / f"junit{suffix}-{index}-mainworld.xml"
@@ -294,6 +292,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         for tid in recovered:
             outcomes[tid] = results.PASS
         fallbacks.extend(sorted(recovered))
+        failing -= recovered
+
+        # --- 3. failed in BOTH worlds: now a retry is worth paying for -----
+        #
+        # This set is normally empty, which is exactly why the retry belongs
+        # here and not one phase earlier: it costs nothing on a healthy run, and
+        # on an unhealthy one it answers the only question still open about a
+        # test that no world would satisfy -- whether it is broken or merely
+        # flaky. Re-run in the main world, the permissive one, so a pass means
+        # "not reproducible" rather than "needed isolation off", which is
+        # already known by this point.
+        for attempt in range(args.retries):
+            if not failing:
+                break
+            log(f"  retry {attempt + 1} [{MAIN_WORLD} world]: {len(failing)} test(s) that failed in both")
+            retry_junit = WORK_DIR / f"junit{suffix}-{index}-retry{attempt + 1}.xml"
+            run_pytest(
+                cwd=cwd,
+                python=python,
+                args=[*common, "--last-failed", *group.targets],
+                junit=retry_junit,
+                env={**group_env, "CI_WORLD": MAIN_WORLD},
+                timeout=args.timeout,
+            )
+            retried = parse_junit(retry_junit)
+            recovered = {t for t in failing if retried.get(t) == results.PASS}
+            for tid in recovered:
+                outcomes[tid] = results.PASS
+            if recovered:
+                result.note(
+                    f"{len(recovered)} test(s) that failed in both worlds passed on retry "
+                    "(flaky, not counted as failures)"
+                )
+            failing -= recovered
 
     result.metrics["groups"] = len(ran)
 

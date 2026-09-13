@@ -125,20 +125,44 @@ isolation by design. Running the whole suite main-world-only (the previous
 behaviour) made those pass, which is true but uninformative — it measured a mode
 nobody ships and produced no number for what isolation costs.
 
-Each group is therefore run up to three times:
+Each group is therefore run up to three times, and normally twice:
 
 | Pass | `CI_WORLD` | What it establishes |
 | --- | --- | --- |
 | 1 | `isolated` | the browser as users run it |
-| 2 | `isolated` | re-run of the failures: a pass here was a flake, not a world difference |
-| 3 | `main` | what is still failing, with isolation off |
+| 2 | `main` | the failures again with isolation off |
+| 3 | `main` | only what failed in *both*, retried once — normally empty |
 
-A test that passes in pass 3 is recorded as a **main-world fallback**: it counts
+There is deliberately **no second isolated pass**. One sat between 1 and 2 on
+the theory that a flake must not be mistaken for a world difference; measured on
+the first real CI run it cost 7m50s per shard and recovered nothing:
+
+```
+isolated (full)   335s + 331s   35 and 11 failures
+isolated retry    205s + 265s   0 recovered      <- deleted
+main world         19s +  12s   46 recovered
+```
+
+Two reasons it was never going to earn that. These failures are deterministic —
+a test reading a global its page script defined does not intermittently see it —
+and failing that way is *slow*, because the read returns undefined and the test
+sits on a Playwright timeout rather than throwing. And upstream's suite already
+ships `pytest-rerunfailures`: pass 1 reported `105 rerun`, which is each of
+those 35 failures having been retried three times before the run even reported
+them. A flake does not survive that.
+
+A test that passes in pass 2 is recorded as a **main-world fallback**: it counts
 as a pass for the run, and its identity goes into
 `metrics.main_world_fallbacks`, with `metrics.main_world_fallback_count` on the
-summary table (summed across shards). A test failing in *both* worlds is a plain
-failure. The fallback count is the isolated-world conformance gap — watch it
-between runs; a jump means the isolation boundary moved.
+summary table (summed across shards). A test failing in both worlds *and* on
+retry is a plain failure. The fallback count is the isolated-world conformance
+gap — watch it between runs; a jump means the isolation boundary moved.
+
+Both rerun passes are guarded on the failure set being non-empty, which is
+load-bearing rather than tidy: pytest declines to filter when nothing it
+collected previously failed, so an unguarded `--last-failed` runs the *whole*
+group again — in the other world, silently replacing the result it was meant to
+refine.
 
 `tests/patches/isolated-evaluate.py` still owns the direct coverage of isolated
 evaluation, and must keep passing regardless. That file is what to check if
