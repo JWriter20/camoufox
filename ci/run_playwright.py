@@ -28,6 +28,75 @@ from ._util import REPO_ROOT, RESULTS_DIR, WORK_DIR, log
 from .suite import prepare
 from .versions import resolve
 
+# What "the suite" means. Named explicitly rather than pointed at `tests/`,
+# because the one thing deliberately left out has to be visible.
+#
+# This used to be `tests/async/` alone, which excluded 722 tests -- 31% of the
+# suite -- with nothing recorded anywhere to say so. That was not a decision:
+# the vendored fork in tests/ carried `async/` and `async_imp/` and no sync
+# suite, and this runner was pointed at the same shape without checking what
+# upstream had. The sync tests were never incompatible; they had simply never
+# been run.
+TARGETS = (
+    "tests/async/",
+    # The sync API is a greenlet-based wrapper over the same Juggler traffic, so
+    # much of this duplicates tests/async/ at the protocol level. It is here
+    # anyway because pythonlib ships a sync API that users actually drive, and
+    # the wrapper has its own behaviour around timeouts and reentrancy that the
+    # async tests cannot reach.
+    "tests/sync/",
+)
+
+# Same suite, but these cannot share a pytest process with the above.
+#
+# Each of them calls sync_playwright() or async_playwright() inside the test
+# body, which cannot start while the session-scoped fixtures already hold a
+# loop: "RuntimeError: Cannot run the event loop while another loop is running".
+# Run together with tests/sync/ all six fail; run on their own all six pass.
+# That is a harness constraint, not a browser result, and skiplisting them for
+# it would have recorded a browser failure that does not exist.
+#
+# Worth the second pytest invocation (six tests, ~12s) because the leak they
+# detect can be ours: ProtocolCallback objects accumulate when the browser never
+# replies to a protocol message, and this fork patches Juggler heavily.
+ISOLATED_TARGETS = (
+    "tests/common/",
+    "tests/test_reference_count_async.py",
+)
+
+# Left out on purpose, with the reason, so "not run" is never merely implied.
+EXCLUDED = {
+    "tests/test_installation.py": (
+        "pip-installs playwright into a scratch environment to check packaging. "
+        "That exercises Playwright's own release process, not this browser."
+    ),
+}
+
+
+def unclaimed(checkout: Path) -> List[str]:
+    """Test paths upstream ships that TARGETS neither runs nor EXCLUDED names.
+
+    Upstream is free to add a directory, and the failure mode is silence: the
+    suite quietly gets narrower and the total still looks healthy. This is the
+    same hole the skiplist had one level down, so it gets the same treatment --
+    a new subtree fails the run until somebody decides about it.
+    """
+    claimed = {t.rstrip("/") for t in (*TARGETS, *ISOLATED_TARGETS)} | set(EXCLUDED)
+    root = checkout / "tests"
+    missed: List[str] = []
+    for child in sorted(root.iterdir()):
+        rel = f"tests/{child.name}"
+        if rel in claimed:
+            continue
+        if child.is_dir():
+            # Only directories that actually hold tests; assets/ and golden-*/
+            # are fixtures.
+            if any(child.glob("test_*.py")):
+                missed.append(rel + "/")
+        elif child.name.startswith("test_") and child.suffix == ".py":
+            missed.append(rel)
+    return missed
+
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -71,11 +140,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     python = Path(manifest["python"])
     result.metrics["camoufox_tests"] = len(manifest.get("camoufox_tests", []))
 
-    target = "tests/async/"
-    pytest_args = ["-p", "pw_camoufox_plugin", "--browser", "firefox"]
+    missed = unclaimed(cwd)
+    if missed:
+        result.note(
+            f"{tag} ships test paths this runner neither runs nor excludes: "
+            + ", ".join(missed)
+            + ". Add them to TARGETS, or to EXCLUDED with a reason. Refusing to report a "
+            "pass over a suite that quietly got narrower."
+        )
+        result.finish(results.ERROR).save(args.results_dir)
+        return 1
+
+    base_args = ["-p", "pw_camoufox_plugin", "--browser", "firefox"]
     if args.headful:
-        pytest_args.append("--headed")
-    pytest_args.append(target)
+        base_args.append("--headed")
+    pytest_args = [*base_args, *TARGETS]
 
     # The plugin reads the skiplist from the repository, not the fetched
     # checkout, so a local edit takes effect without re-preparing.
@@ -97,13 +176,39 @@ def main(argv: Optional[List[str]] = None) -> int:
         result.finish(results.ERROR).save(args.results_dir)
         return 1
 
+    # The isolated group, in its own process. Only on the first shard: it is six
+    # tests, and giving each shard its own copy would either duplicate the
+    # records or hand some shard an empty selection, which pytest exits 5 for.
+    first_shard = not args.shard or args.shard.split("/")[0] == "1"
+    if first_shard:
+        isolated_junit = WORK_DIR / f"junit{suffix}-isolated.xml"
+        log(f"running the isolated group separately: {', '.join(ISOLATED_TARGETS)}")
+        iso_proc = run_pytest(
+            cwd=cwd,
+            python=python,
+            args=[*base_args, *ISOLATED_TARGETS],
+            junit=isolated_junit,
+            env={k: v for k, v in env.items() if k != "CI_SHARD"},
+            timeout=args.timeout,
+        )
+        isolated = parse_junit(isolated_junit)
+        if not isolated:
+            result.note(
+                f"the isolated group exited {iso_proc.code} and produced no junit results. "
+                "It did not run; that is a failure, not an empty pass."
+            )
+            result.finish(results.ERROR).save(args.results_dir)
+            return 1
+        outcomes.update(isolated)
+        result.metrics["isolated_tests"] = len(isolated)
+
     for tid, outcome in outcomes.items():
         result.record(tid, outcome)
 
     # Re-run only what failed. A test that passes on a retry is flaky, not
     # broken, and the record keeps its best outcome.
     failing = [t for t, o in outcomes.items() if o in (results.FAIL, results.ERROR)]
-    retry_args = [a for a in pytest_args if a != target] + ["--last-failed", target]
+    retry_args = [a for a in pytest_args if a not in TARGETS] + ["--last-failed", *TARGETS]
     for attempt in range(args.retries):
         if not failing:
             break

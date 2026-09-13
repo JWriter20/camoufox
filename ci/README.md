@@ -77,6 +77,29 @@ A re-fetched suite cannot drift, and a deliberate difference from upstream now
 has to be written down in `ci/skiplist.yml` with a reason, where it is visible,
 instead of being encoded as a silent edit to a vendored file.
 
+## What "the suite" means
+
+`ci/run_playwright.py` names its targets explicitly rather than pointing at
+`tests/`, so the one thing left out stays visible:
+
+| | |
+|---|---|
+| `tests/async/` + `tests/sync/` | one pytest process |
+| `tests/common/`, `tests/test_reference_count_async.py` | **their own** process |
+| `tests/test_installation.py` | excluded, with a reason |
+
+The isolated pair each call `sync_playwright()`/`async_playwright()` inside the
+test body, which cannot start while the session fixtures already hold a loop
+(`Cannot run the event loop while another loop is running`). Run with the others
+all six fail; run alone all six pass. Skiplisting them for that would have
+recorded a browser failure that does not exist.
+
+This used to be `tests/async/` alone — 722 tests, 31% of the suite, excluded with
+nothing written down. Not a decision: the vendored fork carried `async/` and no
+sync suite, and this runner was pointed at the same shape without checking what
+upstream shipped. `unclaimed()` now fails the run if upstream adds a test path
+that is neither in `TARGETS` nor in `EXCLUDED` with a reason.
+
 ## Main-world execution, and the skip list
 
 The suite runs with world isolation **off**. It asserts upstream

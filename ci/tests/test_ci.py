@@ -1622,3 +1622,71 @@ def test_every_shipped_skiplist_entry_is_auditable():
         f"these skiplist entries cannot be audited: {unresolved}. Either express them "
         "as a module/test, or decide how their truth gets checked."
     )
+
+
+# ---------------------------------------------------------------------------
+# which of upstream's tests we run, and which we admit we do not
+# ---------------------------------------------------------------------------
+
+
+def test_the_sync_suite_is_in_the_target_set():
+    """It was not, for no reason anyone had written down.
+
+    `tests/async/` alone left out 722 of upstream's 2306 tests -- inherited from
+    the vendored fork, which carried no sync suite -- with nothing recorded to
+    say so. Pinned here so dropping it again has to be deliberate.
+    """
+    from ci.run_playwright import TARGETS
+
+    assert "tests/sync/" in TARGETS
+    assert "tests/async/" in TARGETS
+
+
+def test_the_isolated_group_is_not_in_the_main_target_set():
+    """They cannot share a pytest process with tests/sync/.
+
+    Each calls sync_playwright()/async_playwright() inside the test body, which
+    cannot start while the session fixtures hold a loop. Run together all six
+    fail; run alone all six pass. Putting them back in TARGETS would produce six
+    failures that say nothing about the browser -- and the obvious "fix" for
+    that is a skiplist entry recording a browser failure that does not exist.
+    """
+    from ci.run_playwright import ISOLATED_TARGETS, TARGETS
+
+    assert ISOLATED_TARGETS, "the isolated group is empty"
+    assert not (set(TARGETS) & set(ISOLATED_TARGETS)), (
+        "a target in both sets would run twice, once into the conflict it exists to avoid"
+    )
+
+
+def test_every_exclusion_carries_a_reason():
+    """Same bar as the skiplist: not running something requires saying why."""
+    from ci.run_playwright import EXCLUDED
+
+    assert EXCLUDED, "nothing is excluded, so either the set is stale or the guard is"
+    for path, reason in EXCLUDED.items():
+        assert len(reason.split()) >= 5, f"{path} is excluded without a real reason"
+
+
+def test_a_new_upstream_subtree_is_reported_not_ignored(tmp_path):
+    """Upstream adding a test directory must fail the run, not vanish from it.
+
+    The silent version of this is the bug: the suite gets narrower, every number
+    still looks healthy, and nothing says coverage moved.
+    """
+    from ci.run_playwright import unclaimed
+
+    tests = tmp_path / "tests"
+    (tests / "async").mkdir(parents=True)
+    (tests / "async" / "test_a.py").write_text("")
+    (tests / "assets").mkdir()
+    (tests / "assets" / "page.html").write_text("")       # fixtures, not tests
+    (tests / "golden-firefox").mkdir()
+    (tests / "test_installation.py").write_text("")        # excluded with a reason
+
+    assert unclaimed(tmp_path) == []
+
+    (tests / "integration").mkdir()
+    (tests / "integration" / "test_new.py").write_text("")
+    (tests / "test_brand_new.py").write_text("")
+    assert unclaimed(tmp_path) == ["tests/integration/", "tests/test_brand_new.py"]
