@@ -485,6 +485,17 @@ jobs:
           python -m camoufox fetch
           install_dir="$(python -m camoufox path)"
           echo "install dir: $install_dir"
+          # Which browser did we actually get? This path does not build, it
+          # downloads the current release -- correct for a driver change, since
+          # that is what users run. But the SUITE comes from upstream.sh, and in
+          # an upgrade window the two part company: upstream.sh moves to the new
+          # Firefox before any build of it is published, and this would then test
+          # the old browser against the new suite. Beta drift inside a generation
+          # is fine; a generation apart is not.
+          active="$(python -m camoufox active)"
+          echo "fetched: $active"
+          python3 -m ci.versions --check-fetched "$active" \
+            ${{ inputs.browser_version && format('--browser-version {0}', inputs.browser_version) || '' }}
           test -x "$install_dir/camoufox-bin" || {
             echo "::error::no camoufox-bin under $install_dir after fetch"; exit 1; }
           # The published build is packaged, so properties.json and the font

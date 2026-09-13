@@ -1745,3 +1745,31 @@ def test_the_workflow_actually_runs_that_check():
         "ci.versions is invoked without --check-upstream, so a browser_version "
         "that disagrees with upstream.sh would silently test the wrong browser"
     )
+
+
+def test_a_fetched_build_from_another_firefox_generation_is_refused():
+    """The driver-only path downloads; the suite comes from upstream.sh.
+
+    Those agree until an upgrade window, when upstream.sh names a Firefox nobody
+    has published yet. Then a driver PR fetches the old browser and is judged by
+    the new suite -- green, and about nothing.
+    """
+    from ci.versions import fetched_mismatch
+
+    # Beta drift inside a generation is expected and fine.
+    assert fetched_mismatch("official/prerelease/152.0.4-beta.30 (5720d45b)", "152.0.4") is None
+    assert fetched_mismatch("152.0.4-beta.31", "152.0.4") is None
+    # A generation apart is the bug.
+    problem = fetched_mismatch("official/prerelease/149.0-beta.1 (x)", "152.0.4")
+    assert problem and "149" in problem and "152" in problem
+    # Unreadable input fails closed rather than passing by accident.
+    assert fetched_mismatch("", "152.0.4")
+    assert fetched_mismatch("no digits here", "152.0.4")
+
+
+def test_the_workflow_checks_the_fetched_build():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "--check-fetched" in text, (
+        "the fetch path installs a browser without checking it is the generation "
+        "the Playwright suite was chosen for"
+    )

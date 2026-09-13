@@ -231,17 +231,62 @@ def upstream_mismatch(browser_version: Optional[str]) -> Optional[str]:
     )
 
 
+def fetched_mismatch(fetched: str, expected: str) -> Optional[str]:
+    """The published build must be the Firefox generation the suite was chosen for.
+
+    The driver-only path does not build; it downloads the current release, which
+    is the right browser to judge a driver change against -- it is what users
+    run. But the suite comes from upstream.sh, and during an upgrade window those
+    two part company: upstream.sh moves to the new Firefox before any build of it
+    is published, so a driver PR would fetch the OLD browser and test it against
+    the NEW suite.
+
+    Beta drift inside a generation is fine and expected (beta.30 vs beta.31 does
+    not change which Playwright tag is right). A generation apart is not.
+    """
+    found = re.search(r"(\d+(?:\.\d+)*)", fetched or "")
+    if not found:
+        return f"could not read a version out of the fetched build: {fetched!r}"
+    try:
+        got, want = major(found.group(1)), major(expected)
+    except ValueError:
+        return f"could not compare fetched {fetched!r} with expected {expected!r}"
+    if got == want:
+        return None
+    return (
+        f"fetched Camoufox {found.group(1)} (Firefox {got}), but the suite was chosen "
+        f"for Firefox {want}. A driver-only run tests the published release, and no "
+        f"release of Firefox {want} is published yet. Wait for one, or let this run "
+        "build from source instead."
+    )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser-version", help="override the version from upstream.sh")
     parser.add_argument("--playwright-tag", help="pin the suite instead of resolving one")
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
+        "--check-fetched",
+        metavar="VERSION",
+        help="fail if this fetched build is a different Firefox generation than the suite",
+    )
+    parser.add_argument(
         "--check-upstream",
         action="store_true",
         help="fail if --browser-version disagrees with upstream.sh",
     )
     args = parser.parse_args(argv)
+
+    if args.check_fetched:
+        upstream = read_upstream_sh()
+        expected = args.browser_version or upstream.get("version", "")
+        problem = fetched_mismatch(args.check_fetched, expected)
+        if problem:
+            log(problem, level="ERROR")
+            return 1
+        log(f"fetched build agrees with the suite's Firefox generation ({major(expected)})")
+        return 0
 
     if args.check_upstream:
         problem = upstream_mismatch(args.browser_version)
