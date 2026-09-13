@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from . import results
 from ._pytest import parse_junit, require_binary, run_pytest
@@ -37,32 +37,43 @@ from .versions import resolve
 # suite, and this runner was pointed at the same shape without checking what
 # upstream had. The sync tests were never incompatible; they had simply never
 # been run.
-TARGETS = (
-    "tests/async/",
-    # The sync API is a greenlet-based wrapper over the same Juggler traffic, so
-    # much of this duplicates tests/async/ at the protocol level. It is here
-    # anyway because pythonlib ships a sync API that users actually drive, and
-    # the wrapper has its own behaviour around timeouts and reentrancy that the
-    # async tests cannot reach.
-    "tests/sync/",
+class Group(NamedTuple):
+    """A set of paths that share one pytest process, and whether it shards."""
+
+    targets: Tuple[str, ...]
+    sharded: bool
+
+
+# Each group gets its OWN pytest process. This is not tidiness: upstream's sync
+# suite is a greenlet wrapper and its async suite runs under pytest-asyncio, and
+# putting them in one process breaks the loop for whichever runs second --
+#
+#     RuntimeError: Runner.run() cannot be called from a running event loop
+#
+# Measured: async alone, 1526 passed / 1 timing flake. async + one sync module,
+# 14 failed. Sync first, 46 errors. The damage lands in async fixture setup, so
+# it reads as "the fetch tests are flaky" rather than as a harness fault, and the
+# retry logic quietly hides it -- 50 tests passed only on retry before this split.
+#
+# tests/common/ and test_reference_count_async.py each start their own Playwright
+# inside the test body, which cannot happen while session fixtures hold a loop.
+# They are fine together (6 passed) but not with the suites above.
+GROUPS: Tuple[Group, ...] = (
+    Group(("tests/async/",), sharded=True),
+    # The sync API is a greenlet wrapper over the same Juggler traffic, so much of
+    # this duplicates tests/async/ at the protocol level. It is here because
+    # pythonlib ships a sync API that users drive, and the wrapper has its own
+    # timeout and reentrancy behaviour the async tests cannot reach.
+    Group(("tests/sync/",), sharded=True),
+    # Six tests. Not sharded: splitting them would hand some shard an empty
+    # selection, which pytest exits 5 for. Kept because ProtocolCallback objects
+    # accumulate when the browser never replies to a protocol message, and this
+    # fork patches Juggler heavily, so that leak can be ours.
+    Group(("tests/common/", "tests/test_reference_count_async.py"), sharded=False),
 )
 
-# Same suite, but these cannot share a pytest process with the above.
-#
-# Each of them calls sync_playwright() or async_playwright() inside the test
-# body, which cannot start while the session-scoped fixtures already hold a
-# loop: "RuntimeError: Cannot run the event loop while another loop is running".
-# Run together with tests/sync/ all six fail; run on their own all six pass.
-# That is a harness constraint, not a browser result, and skiplisting them for
-# it would have recorded a browser failure that does not exist.
-#
-# Worth the second pytest invocation (six tests, ~12s) because the leak they
-# detect can be ours: ProtocolCallback objects accumulate when the browser never
-# replies to a protocol message, and this fork patches Juggler heavily.
-ISOLATED_TARGETS = (
-    "tests/common/",
-    "tests/test_reference_count_async.py",
-)
+TARGETS: Tuple[str, ...] = tuple(t for g in GROUPS for t in g.targets)
+
 
 # Left out on purpose, with the reason, so "not run" is never merely implied.
 EXCLUDED = {
@@ -81,7 +92,7 @@ def unclaimed(checkout: Path) -> List[str]:
     same hole the skiplist had one level down, so it gets the same treatment --
     a new subtree fails the run until somebody decides about it.
     """
-    claimed = {t.rstrip("/") for t in (*TARGETS, *ISOLATED_TARGETS)} | set(EXCLUDED)
+    claimed = {t.rstrip("/") for t in TARGETS} | set(EXCLUDED)
     root = checkout / "tests"
     missed: List[str] = []
     for child in sorted(root.iterdir()):
@@ -123,7 +134,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     env = {"CAMOUFOX_EXECUTABLE_PATH": str(binary.resolve())}
-    junit = WORK_DIR / f"junit{suffix}.xml"
 
     versions = resolve(
         browser_version=args.browser_version, playwright_tag=args.playwright_tag
@@ -154,71 +164,72 @@ def main(argv: Optional[List[str]] = None) -> int:
     base_args = ["-p", "pw_camoufox_plugin", "--browser", "firefox"]
     if args.headful:
         base_args.append("--headed")
-    pytest_args = [*base_args, *TARGETS]
 
     # The plugin reads the skiplist from the repository, not the fetched
     # checkout, so a local edit takes effect without re-preparing.
     env["CI_SKIPLIST"] = str(REPO_ROOT / "ci" / "skiplist.yml")
     if args.shard:
-        env["CI_SHARD"] = args.shard
         result.metrics["shard"] = args.shard
 
-    proc = run_pytest(
-        cwd=cwd, python=python, args=pytest_args, junit=junit, env=env, timeout=args.timeout
-    )
-    outcomes = parse_junit(junit)
-
-    if not outcomes:
-        result.note(
-            f"pytest exited {proc.code} and produced no junit results. The suite did not "
-            "run; that is a failure, not an empty pass."
-        )
-        result.finish(results.ERROR).save(args.results_dir)
-        return 1
-
-    # The isolated group, in its own process. Only on the first shard: it is six
-    # tests, and giving each shard its own copy would either duplicate the
-    # records or hand some shard an empty selection, which pytest exits 5 for.
     first_shard = not args.shard or args.shard.split("/")[0] == "1"
-    if first_shard:
-        isolated_junit = WORK_DIR / f"junit{suffix}-isolated.xml"
-        log(f"running the isolated group separately: {', '.join(ISOLATED_TARGETS)}")
-        iso_proc = run_pytest(
+    outcomes: Dict[str, str] = {}
+    ran: List[Group] = []
+
+    for index, group in enumerate(GROUPS):
+        if not group.sharded and not first_shard:
+            continue
+        group_env = dict(env)
+        if args.shard and group.sharded:
+            group_env["CI_SHARD"] = args.shard
+        group_junit = WORK_DIR / f"junit{suffix}-{index}.xml"
+        log(f"group {index + 1}/{len(GROUPS)}: {', '.join(group.targets)}")
+        proc = run_pytest(
             cwd=cwd,
             python=python,
-            args=[*base_args, *ISOLATED_TARGETS],
-            junit=isolated_junit,
-            env={k: v for k, v in env.items() if k != "CI_SHARD"},
+            args=[*base_args, *group.targets],
+            junit=group_junit,
+            env=group_env,
             timeout=args.timeout,
         )
-        isolated = parse_junit(isolated_junit)
-        if not isolated:
+        part = parse_junit(group_junit)
+        if not part:
             result.note(
-                f"the isolated group exited {iso_proc.code} and produced no junit results. "
-                "It did not run; that is a failure, not an empty pass."
+                f"{', '.join(group.targets)} exited {proc.code} and produced no junit "
+                "results. That group did not run; it is a failure, not an empty pass."
             )
             result.finish(results.ERROR).save(args.results_dir)
             return 1
-        outcomes.update(isolated)
-        result.metrics["isolated_tests"] = len(isolated)
+        outcomes.update(part)
+        ran.append(group)
+
+    result.metrics["groups"] = len(ran)
 
     for tid, outcome in outcomes.items():
         result.record(tid, outcome)
 
     # Re-run only what failed. A test that passes on a retry is flaky, not
-    # broken, and the record keeps its best outcome.
+    # broken, and the record keeps its best outcome. Retries stay inside their
+    # own group, for the same reason the groups exist.
     failing = [t for t, o in outcomes.items() if o in (results.FAIL, results.ERROR)]
-    retry_args = [a for a in pytest_args if a not in TARGETS] + ["--last-failed", *TARGETS]
     for attempt in range(args.retries):
         if not failing:
             break
         log(f"retry {attempt + 1}: {len(failing)} failing test(s)")
-        retry_junit = WORK_DIR / f"junit{suffix}-retry{attempt + 1}.xml"
-        run_pytest(
-            cwd=cwd, python=python, args=retry_args,
-            junit=retry_junit, env=env, timeout=args.timeout,
-        )
-        retried = parse_junit(retry_junit)
+        retried: Dict[str, str] = {}
+        for index, group in enumerate(ran):
+            retry_junit = WORK_DIR / f"junit{suffix}-{index}-retry{attempt + 1}.xml"
+            group_env = dict(env)
+            if args.shard and group.sharded:
+                group_env["CI_SHARD"] = args.shard
+            run_pytest(
+                cwd=cwd,
+                python=python,
+                args=[*base_args, "--last-failed", *group.targets],
+                junit=retry_junit,
+                env=group_env,
+                timeout=args.timeout,
+            )
+            retried.update(parse_junit(retry_junit))
         recovered = [t for t in failing if retried.get(t) == results.PASS]
         for tid in recovered:
             result.record(tid, results.PASS)
@@ -227,7 +238,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         failing = [t for t in failing if retried.get(t) not in (None, results.PASS)]
 
     tally = result.tally()
-    result.artifacts.append(junit.name)
+    result.artifacts.extend(
+        f"junit{suffix}-{i}.xml" for i in range(len(GROUPS)) if i < len(ran)
+    )
     result.metrics["exit_code"] = proc.code
     result.note(
         f"{tally.get('pass', 0)} passed, {tally.get('fail', 0)} failed, "

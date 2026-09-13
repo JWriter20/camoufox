@@ -1642,21 +1642,42 @@ def test_the_sync_suite_is_in_the_target_set():
     assert "tests/async/" in TARGETS
 
 
-def test_the_isolated_group_is_not_in_the_main_target_set():
-    """They cannot share a pytest process with tests/sync/.
+def test_async_and_sync_are_in_separate_groups():
+    """They cannot share a pytest process, and the damage does not look like it.
 
-    Each calls sync_playwright()/async_playwright() inside the test body, which
-    cannot start while the session fixtures hold a loop. Run together all six
-    fail; run alone all six pass. Putting them back in TARGETS would produce six
-    failures that say nothing about the browser -- and the obvious "fix" for
-    that is a skiplist entry recording a browser failure that does not exist.
+    Upstream's sync suite is greenlet-based and its async suite runs under
+    pytest-asyncio; together, whichever runs second breaks the other's loop and
+    the failures land in async FIXTURE SETUP. That reads as "the fetch tests are
+    flaky", and the retry pass hides it: 50 tests passed only on retry before
+    these were split. A group boundary is the fix; a skiplist entry would have
+    recorded a browser failure that does not exist.
     """
-    from ci.run_playwright import ISOLATED_TARGETS, TARGETS
+    from ci.run_playwright import GROUPS
 
-    assert ISOLATED_TARGETS, "the isolated group is empty"
-    assert not (set(TARGETS) & set(ISOLATED_TARGETS)), (
-        "a target in both sets would run twice, once into the conflict it exists to avoid"
+    home = {}
+    for index, group in enumerate(GROUPS):
+        for target in group.targets:
+            home[target] = index
+    assert home["tests/async/"] != home["tests/sync/"], (
+        "async and sync share a pytest process; that produces fixture errors in async"
     )
+
+
+def test_every_target_belongs_to_exactly_one_group():
+    """A target in two groups runs twice and double-counts."""
+    from ci.run_playwright import GROUPS, TARGETS
+
+    flat = [t for g in GROUPS for t in g.targets]
+    assert len(flat) == len(set(flat)), f"a target appears in more than one group: {flat}"
+    assert tuple(flat) == TARGETS
+
+
+def test_the_small_group_is_not_sharded():
+    """Sharding six tests hands some shard an empty selection; pytest exits 5."""
+    from ci.run_playwright import GROUPS
+
+    small = [g for g in GROUPS if "tests/common/" in g.targets]
+    assert small and not small[0].sharded
 
 
 def test_every_exclusion_carries_a_reason():
