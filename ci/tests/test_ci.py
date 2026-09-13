@@ -1831,3 +1831,178 @@ def test_the_browser_suites_are_required_either_way():
 def test_sundial_is_required_only_when_there_is_a_credential():
     assert "sundial" in _required_suites("true", "true")
     assert "sundial" not in _required_suites("true", "false")
+
+
+# ---------------------------------------------------------------------------
+# sundial being down is not a verdict about the browser
+# ---------------------------------------------------------------------------
+
+
+def _write_result(directory, gate, status, **extra):
+    payload = {"gate": gate, "status": status, "tests": {}, "metrics": {}, "notes": []}
+    payload.update(extra)
+    (directory / f"{gate}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_a_skipped_suite_fails_the_run_unless_it_is_explicitly_allowed(tmp_path):
+    """`--allow-skip` is the whole permission, and it is per suite.
+
+    Without it a SKIP must stay a failure: a suite that did not run has not
+    passed, and "record a skip" would otherwise be the cheapest way to make any
+    gate disappear.
+    """
+    from ci.summarize import main as summarize
+
+    _write_result(tmp_path, "sundial", results.SKIP, notes=["sundial is unreachable"])
+    _write_result(tmp_path, "playwright", results.SKIP, notes=["did not feel like it"])
+
+    # Not allowed: both are failures.
+    assert summarize(["--results-dir", str(tmp_path), "--require", "sundial", "playwright"]) == 1
+
+    # Allowing one does not allow the other.
+    code = summarize([
+        "--results-dir", str(tmp_path), "--require", "sundial", "playwright",
+        "--allow-skip", "sundial",
+    ])
+    assert code == 1, "a skip for a suite outside --allow-skip must still fail"
+
+    (tmp_path / "playwright.json").unlink()
+    code = summarize([
+        "--results-dir", str(tmp_path), "--require", "sundial", "--allow-skip", "sundial",
+    ])
+    assert code == 0
+
+
+def test_an_allowed_skip_is_still_shown_as_a_skip(tmp_path):
+    """Tolerated is not the same as invisible: it keeps its icon and its reason."""
+    from ci.summarize import render
+
+    merged = {"sundial": {
+        "gate": "sundial", "status": results.SKIP, "tests": {}, "metrics": {},
+        "notes": ["stealth check skipped -- sundial could not be reached"],
+    }}
+    markdown = render(merged, ["sundial"], [], {})
+    assert "⏭️" in markdown
+    assert "could not be reached" in markdown
+    assert "✅ Tests passed" in markdown  # tolerated: the run still passes
+    # And it must not render as a measurement that came back empty.
+    assert "grade **?**" not in markdown
+
+
+def test_the_workflow_allows_a_skip_only_for_sundial():
+    """A skip is tolerated because sundial is someone else's uptime. Nothing else
+    in this pipeline has that excuse -- every other suite runs on the runner."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    allowed = re.findall(r"--allow-skip ([^\\\n]*)", text)
+    assert allowed, "the summary step no longer passes --allow-skip"
+    for line in allowed:
+        assert line.split() == ["sundial"], line
+
+
+def test_only_a_transport_failure_counts_as_sundial_being_down():
+    """An HTTP reply is an answer, and answers get judged.
+
+    401 means the credential is wrong and 403 means the edge refused us -- both
+    are this repository's problem to fix, and skipping past them would turn a
+    misconfigured stealth gate into a permanently green one.
+    """
+    from ci.run_sundial import _unavailable_reason
+
+    def http(code):
+        return urllib.error.HTTPError("https://sundial.invalid", code, "", {}, None)
+
+    assert _unavailable_reason(http(500))
+    assert _unavailable_reason(http(503))
+    assert _unavailable_reason(http(429))
+    assert _unavailable_reason(urllib.error.URLError("Name or service not known"))
+    assert _unavailable_reason(TimeoutError("timed out"))
+    assert _unavailable_reason(ConnectionResetError("reset"))
+
+    assert _unavailable_reason(http(401)) is None
+    assert _unavailable_reason(http(403)) is None
+    assert _unavailable_reason(http(404)) is None
+    assert _unavailable_reason(RuntimeError("sundial rejected the credentials")) is None
+
+
+def test_an_unreachable_sundial_is_a_skip_and_a_bad_credential_is_not(monkeypatch, tmp_path):
+    """The gate's two exits, and the line between them.
+
+    Down: the browser was never measured, so neither pass nor fail is true, and
+    an outage on another host must not block every merge here. Rejected: sundial
+    answered, and the answer was about this repository's configuration.
+    """
+    import ci.run_sundial as rs
+
+    monkeypatch.setattr(rs, "_config", lambda: {
+        "enabled": True, "url": "https://sundial.invalid",
+        "gated_categories": ["Identity"], "ungated_categories": [], "min_pass_rate": 0.9,
+    })
+    monkeypatch.setenv("SUNDIAL_AUTOMATION_KEY", "a-key")
+    binary = tmp_path / "fake-bin"
+    binary.write_text("")
+
+    def down(*_a, **_k):
+        raise rs.SundialUnavailable("sundial could not be reached (Connection refused)")
+
+    monkeypatch.setattr(rs, "authenticate", down)
+    assert rs.gate(["--binary", str(binary), "--evidence-dir", str(tmp_path)]) == 0
+    saved = json.loads((tmp_path / "sundial.json").read_text())
+    assert saved["status"] == results.SKIP
+    assert "could not be reached" in " ".join(saved["notes"])
+
+    def rejected(*_a, **_k):
+        raise RuntimeError("sundial rejected the credentials.")
+
+    monkeypatch.setattr(rs, "authenticate", rejected)
+    assert rs.gate(["--binary", str(binary), "--evidence-dir", str(tmp_path)]) == 1
+    saved = json.loads((tmp_path / "sundial.json").read_text())
+    assert saved["status"] == results.ERROR
+
+
+def test_a_skip_note_cannot_carry_the_credential(monkeypatch, tmp_path):
+    """The token route puts the secret in the URL, and a URLError carries it."""
+    import ci.run_sundial as rs
+
+    secret = "super-secret-automation-key"
+    monkeypatch.setattr(rs, "_config", lambda: {
+        "enabled": True, "url": "https://sundial.invalid",
+        "gated_categories": ["Identity"], "ungated_categories": [], "min_pass_rate": 0.9,
+    })
+    monkeypatch.setenv("SUNDIAL_AUTOMATION_KEY", secret)
+    binary = tmp_path / "fake-bin"
+    binary.write_text("")
+
+    def down(*_a, **_k):
+        raise rs.SundialUnavailable(
+            f"sundial could not be reached: https://sundial.invalid/automated?key={secret}"
+        )
+
+    monkeypatch.setattr(rs, "authenticate", down)
+    rs.gate(["--binary", str(binary), "--evidence-dir", str(tmp_path)])
+    assert secret not in (tmp_path / "sundial.json").read_text()
+
+
+def test_one_route_answering_means_sundial_is_up(monkeypatch):
+    """Both routes are tried, and the key one 401s whenever the secret is a
+    password. That is an answer, so the failure that follows is a real one."""
+    import ci.run_sundial as rs
+
+    def key_route(*_a, **_k):
+        raise RuntimeError("the automation key route returned 401 and no session cookie")
+
+    def form_route(*_a, **_k):
+        raise RuntimeError("sundial rejected the credentials.")
+
+    monkeypatch.setattr(rs, "login_with_key", key_route)
+    monkeypatch.setattr(rs, "login", form_route)
+    with pytest.raises(RuntimeError) as caught:
+        rs.authenticate("https://sundial.invalid", "guest", "secret")
+    assert not isinstance(caught.value, rs.SundialUnavailable)
+
+    def unreachable(*_a, **_k):
+        raise rs.SundialUnavailable("sundial could not be reached (Connection refused)")
+
+    monkeypatch.setattr(rs, "login_with_key", unreachable)
+    monkeypatch.setattr(rs, "login", unreachable)
+    with pytest.raises(rs.SundialUnavailable):
+        rs.authenticate("https://sundial.invalid", "guest", "secret")

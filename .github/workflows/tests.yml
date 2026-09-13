@@ -16,7 +16,10 @@ name: Tests
 # it with main-world execution.
 #
 # The stealth check reports a letter grade and a count. Its per-vector detail
-# never leaves ci/run_sundial.py, because this repository is public.
+# never leaves ci/run_sundial.py, because this repository is public. It depends
+# on a service outside this repository, so an outage there records a SKIP with
+# its reason rather than blocking every merge (see `--allow-skip` below); a bad
+# credential or a bad score still fails.
 #
 # Ordering: cheapest first, and every tier gates the next, so a pull request that
 # fails a two-second lint never reaches a seventy-minute build.
@@ -751,6 +754,13 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install -e pythonlib
       - name: Run
+        # Exits 0 with a SKIP result if sundial itself is unreachable -- the
+        # browser was never measured, so neither a pass nor a failure would be
+        # true, and an outage on someone else's host must not block this
+        # repository. Anything sundial actually answers -- rejected credential,
+        # a role that would be served the vectors, a full report where a score
+        # was asked for, a pass rate under the floor -- still fails.
+        #
         # The only step in this workflow that sees the sundial credential. It
         # asks for `?auto=1&score=1`, so what comes back is already counts
         # rather than a report; ci/run_sundial.py checks the session's role
@@ -823,6 +833,7 @@ jobs:
           python3 -m ci.summarize \
             --results-dir .ci-work/results \
             --require $required \
+            --allow-skip sundial \
             --markdown summary.md \
             --out summary.json \
             --browser-version "${{ needs.resolve.outputs.browser_version }}" \

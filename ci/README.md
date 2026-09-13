@@ -348,6 +348,20 @@ Anything else that is not `success` fails it — **including `skipped`**. A suit
 that did not run has not passed, and quietly skipping one is the cheapest route
 to a green tick.
 
+`build` is also the one suite dropped from `--require` when the browser was
+fetched rather than compiled: that job writes no result, and requiring a name
+nothing produces fails a run where everything passed.
+
+One suite may additionally record a **`skip` result** without failing the run,
+named explicitly in `--allow-skip`: `sundial`, and only when sundial itself is
+unreachable. It is a separate service on a separate host, so an outage there
+means this browser was never measured — neither a pass nor a failure is true,
+and blocking every merge in the repository on someone else's downtime is the
+wrong answer. The summary shows it as skipped with the reason. A rejected
+credential, a role that would be served the private vectors, a full report where
+a score was requested, or a score under the floor all still fail: those are
+answers, and an answer gets judged.
+
 The settings live in [`ci/branch-protection.json`](branch-protection.json) so
 they are reviewable rather than lore. To apply them (needs admin):
 

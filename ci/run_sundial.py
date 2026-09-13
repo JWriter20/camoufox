@@ -37,6 +37,7 @@ import json
 import os
 import sys
 import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, timedelta
@@ -125,6 +126,46 @@ def _assert_publishable(metrics: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+class SundialUnavailable(RuntimeError):
+    """The deployment could not be reached -- not a verdict about the browser.
+
+    Sundial is a separate service on a separate host. When it is down, or DNS
+    fails, or the edge answers 502 for a minute, the browser under test has not
+    been measured at all -- and failing the merge gate for that makes an
+    unrelated outage into a block on every pull request in the repository.
+
+    So this is raised for transport-level failures only, and `gate()` turns it
+    into a SKIP that `ci/summarize.py` is told to tolerate. Everything that is
+    an actual answer from sundial -- a rejected credential, a role that would be
+    served the vectors, a full report where a score was asked for, a pass rate
+    under the floor -- stays a hard failure, because those are statements about
+    this repository's configuration or this browser, and neither gets to be
+    waved through by an exception type.
+    """
+
+
+def _unavailable_reason(exc: BaseException) -> Optional[str]:
+    """Why this exception means "sundial is down", or None if it does not.
+
+    An HTTPError IS a reply, so most of them are real answers and must fail:
+    401 is a bad credential, 403 is the edge refusing us. Only 5xx (the origin
+    is broken) and 429 (it is refusing to serve anyone right now) are outages.
+    Anything that is a URLError but not an HTTPError never reached a server at
+    all -- DNS, refused connection, TLS, timeout.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code >= 500:
+            return f"sundial returned HTTP {exc.code}"
+        if exc.code == 429:
+            return "sundial is rate-limiting every request (HTTP 429)"
+        return None
+    if isinstance(exc, urllib.error.URLError):
+        return f"sundial could not be reached ({exc.reason})"
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return f"sundial could not be reached ({type(exc).__name__}: {exc})"
+    return None
+
+
 # Cloudflare sits in front of sundial and refuses document requests carrying a
 # non-browser User-Agent, before they reach sundial at all. Measured against the
 # live host: `/automated?key=<bogus>` answers **401** with a browser User-Agent
@@ -180,7 +221,14 @@ def login_with_key(base_url: str, key: str, *, timeout: int = 30) -> str:
         resp = opener.open(req, timeout=timeout)
         status, headers = resp.status, resp.headers
     except urllib.error.HTTPError as exc:
+        outage = _unavailable_reason(exc)
+        if outage:
+            raise SundialUnavailable(outage) from None
         status, headers = exc.code, exc.headers
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        # HTTPError is a URLError, and is handled above; reaching here means no
+        # server answered at all.
+        raise SundialUnavailable(_unavailable_reason(exc) or str(exc)) from None
     cookie = _session_cookie(headers)
     if cookie:
         log("sundial auth OK (automation key)")
@@ -216,10 +264,13 @@ def login(base_url: str, username: str, password: str, *, timeout: int = 30) -> 
                 "sundial rejected the credentials. Check SUNDIAL_USERNAME and "
                 "SUNDIAL_AUTOMATION_KEY."
             ) from None
-        if status == 429:
-            raise RuntimeError("sundial rate-limited the login; try again in a few minutes.") from None
+        outage = _unavailable_reason(exc)
+        if outage:
+            raise SundialUnavailable(outage) from None
         if status != 303:
             raise RuntimeError(f"sundial login returned {status}") from None
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        raise SundialUnavailable(_unavailable_reason(exc) or str(exc)) from None
 
     cookie = _session_cookie(headers)
     if cookie:
@@ -310,16 +361,34 @@ def authenticate(base_url: str, username: str, secret: str, *, timeout: int = 30
     the secret is a password is one extra request that 401s.
     """
     errors = []
+    # Only if BOTH routes failed for transport reasons is the deployment down.
+    # One route 401ing is an answer -- it says the secret is the other shape --
+    # so a single real reply is enough to know sundial is up, and a failure
+    # after that is this repository's problem to fix rather than an outage.
+    outages = []
     try:
         return login_with_key(base_url, secret, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 -- reported below if the form fails too
         detail = scrub(str(exc), secret)
         errors.append(f"automation key: {detail}")
+        if isinstance(exc, SundialUnavailable):
+            outages.append(detail)
         log(f"automation-key login did not take ({detail}); trying the form", level="WARN")
     try:
         return login(base_url, username, secret, timeout=timeout)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"form login as {username!r}: {scrub(str(exc), secret)}")
+        if isinstance(exc, SundialUnavailable):
+            outages.append(scrub(str(exc), secret))
+
+    if len(outages) == len(errors):
+        raise SundialUnavailable(
+            scrub(
+                "sundial is unreachable; neither auth route got an answer:\n  "
+                + "\n  ".join(errors),
+                secret,
+            )
+        )
     raise RuntimeError(
         scrub(
             "could not authenticate to sundial. Both routes were tried:\n  "
@@ -834,6 +903,22 @@ def gate(argv: Optional[List[str]] = None) -> int:
                 timeout=args.timeout,
             )
         )
+    except SundialUnavailable as exc:
+        # The service is down, so this browser was never measured. Recording a
+        # failure would block every merge in the repository on somebody else's
+        # outage, and recording a pass would claim a measurement that does not
+        # exist. So: a skip, with the reason attached, which the workflow tells
+        # ci/summarize.py to tolerate for this suite alone (--allow-skip).
+        #
+        # Scrubbed like the failure path below -- an exception raised inside
+        # urllib can carry the URL that produced it, and for the token route
+        # that URL contains the credential.
+        result.note(
+            scrub(f"stealth check skipped -- {exc}", password)
+            + " No stealth measurement was taken for this run."
+        )
+        result.finish(evidence.SKIP).save(args.evidence_dir)
+        return 0
     except Exception as exc:  # noqa: BLE001 -- any failure here is a gate failure
         # Scrubbed: this note goes to the results artifact and the pull request
         # comment, and an exception from deep inside urllib can carry the URL

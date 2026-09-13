@@ -9,6 +9,12 @@ Runs last in CI. Three jobs:
   * **Decide.** A required suite that produced no result file is a failure, not
     a skip -- otherwise deleting a job would be the cheapest way to a green
     tick. Anything that failed is a failure.
+
+    One narrow exception, opt-in per suite via `--allow-skip`: a suite that ran
+    and recorded SKIP with a reason. That exists for the stealth check, which
+    depends on a separate service -- when sundial is down the browser was never
+    measured, and blocking every merge in the repository on somebody else's
+    outage is the wrong answer. It is still not reported as a pass.
   * **Report.** Writes the Markdown that lands in the job summary and the pull
     request. The stealth line is a grade and a count; it never names a vector.
 
@@ -161,9 +167,14 @@ def render(merged: Dict[str, dict], required: List[str], problems: List[str], me
     for name in ordered:
         record = merged[name]
         status = record.get("status", "error")
-        icon = {"pass": "✅", "fail": "❌", "error": "💥"}.get(status, "❓")
+        icon = {"pass": "✅", "fail": "❌", "error": "💥", "skip": "⏭️"}.get(status, "❓")
         tally = (record.get("metrics") or {}).get("tally") or {}
-        if name == "sundial":
+        if status == "skip":
+            # A skipped suite has a reason and no numbers; the reason is the
+            # only useful thing to show, and showing a grade of "?" next to it
+            # would read as a measurement that came back empty.
+            detail = (record.get("notes") or ["skipped"])[-1]
+        elif name == "sundial":
             # Grade and counts only. Never a category, never a vector.
             # Named distinctly from the shard `metrics` above so the self-test
             # can hold just these reads to sundial's publishable whitelist.
@@ -217,6 +228,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--version-note", default="", help="how ci.versions chose the suite")
     parser.add_argument("--allow-failure", nargs="*", default=[],
                         help="suites whose failure is reported but not fatal")
+    parser.add_argument("--allow-skip", nargs="*", default=[],
+                        help=(
+                            "suites allowed to record a reasoned SKIP without failing the "
+                            "run. For a suite that depends on something outside this "
+                            "repository -- the stealth check needs sundial to be up."
+                        ))
     args = parser.parse_args(argv)
 
     records = results.load_all(args.results_dir)
@@ -235,10 +252,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     for name, record in sorted(merged.items()):
         if record.get("status") == results.PASS:
             continue
+        note = (record.get("notes") or ["see the job log"])[-1]
+        if record.get("status") == results.SKIP and name in args.allow_skip:
+            # Reported, never silent: it is on the summary table with its reason
+            # and an explicit skip icon. What it is not is a merge block.
+            log(f"{name} was skipped: {note}", level="WARN")
+            continue
         if name in args.allow_failure:
             log(f"{name} failed but is advisory on this run", level="WARN")
             continue
-        note = (record.get("notes") or ["see the job log"])[-1]
         problems.append(f"`{name}` reported {record.get('status')}: {note}")
 
     meta = {
