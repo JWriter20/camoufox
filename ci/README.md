@@ -113,18 +113,44 @@ sync suite, and this runner was pointed at the same shape without checking what
 upstream shipped. `unclaimed()` now fails the run if upstream adds a test path
 that is neither in `TARGETS` nor in `EXCLUDED` with a reason.
 
-## Main-world execution, and the skip list
+## Which world, and the skip list
 
-The suite runs with world isolation **off**. It asserts upstream
-semantics — tests read globals their own page scripts defined and pass handles
-into `evaluate()` — and about 37 of them fail on "X is not defined" otherwise.
-Camoufox's actual isolated-world behaviour is covered by
-`tests/patches/isolated-evaluate.py`, which must keep passing *without* that
-flag. That file is what to check if isolation regresses, not this suite.
+The suite runs **isolated first** — the configuration Camoufox actually ships —
+and falls back to the main world only for what fails, counting every test that
+needed the fallback.
 
-With main world on, 1575 of the 1584 collected tests run. The other 9 are
-deselected by [`ci/skiplist.yml`](skiplist.yml), which requires a stated reason
-per entry — `ci/summarize.py` fails the run on an unreasoned one.
+Upstream asserts upstream semantics: tests read globals their own page scripts
+defined and pass handles into `evaluate()`, and a test doing that fails under
+isolation by design. Running the whole suite main-world-only (the previous
+behaviour) made those pass, which is true but uninformative — it measured a mode
+nobody ships and produced no number for what isolation costs.
+
+Each group is therefore run up to three times:
+
+| Pass | `CI_WORLD` | What it establishes |
+| --- | --- | --- |
+| 1 | `isolated` | the browser as users run it |
+| 2 | `isolated` | re-run of the failures: a pass here was a flake, not a world difference |
+| 3 | `main` | what is still failing, with isolation off |
+
+A test that passes in pass 3 is recorded as a **main-world fallback**: it counts
+as a pass for the run, and its identity goes into
+`metrics.main_world_fallbacks`, with `metrics.main_world_fallback_count` on the
+summary table (summed across shards). A test failing in *both* worlds is a plain
+failure. The fallback count is the isolated-world conformance gap — watch it
+between runs; a jump means the isolation boundary moved.
+
+`tests/patches/isolated-evaluate.py` still owns the direct coverage of isolated
+evaluation, and must keep passing regardless. That file is what to check if
+isolation itself regresses.
+
+`ci/run_skiplist_audit.py` deliberately runs in the **main world**: a skiplist
+entry has to claim a test cannot pass in *either* world, or the suite would have
+counted it as a fallback rather than a failure.
+
+Ten tests are deselected outright by [`ci/skiplist.yml`](skiplist.yml), which
+requires a stated reason per entry — `ci/summarize.py` fails the run on an
+unreasoned one.
 
 **A reason is not evidence, so the reasons are checked.** The first version of
 this file inherited all nine `tests/async/*.disabled` modules from the vendored
@@ -135,7 +161,7 @@ leaving them bare.
 
 `ci/run_skiplist_audit.py` now runs every entry with the skiplist disabled and
 **fails the build if a skipped test passes**. It is cheap precisely because a
-correct skiplist is short — nine tests, a few seconds — and it is what keeps the
+correct skiplist is short — ten tests, a few seconds — and it is what keeps the
 list from drifting back into a place failing tests go to disappear.
 
 ```bash

@@ -13,7 +13,10 @@ name: Tests
 # the suite's own Firefox pin is usually a release or two behind the browser
 # under test, and that is expected rather than a mismatch. ci/run_playwright.py
 # fetches it fresh, applies ci/skiplist.yml, overlays tests/camoufox/ and runs
-# it with main-world execution.
+# it with world isolation ON -- the configuration Camoufox ships -- re-running
+# only what fails with isolation off, and counting those as main-world
+# fallbacks. A test that needs the fallback still passes; the size of that set
+# is reported, because it is the isolated-world conformance gap.
 #
 # The stealth check reports a letter grade and a count. Its per-vector detail
 # never leaves ci/run_sundial.py, because this repository is public. It depends

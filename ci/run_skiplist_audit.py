@@ -16,6 +16,12 @@ So: run the skipped tests with the skiplist disabled, and fail if any of them
 passes. A written reason is an assertion about the browser, and this is the
 thing that checks it.
 
+Run in the **main world**, deliberately, even though the suite itself now runs
+isolated-first. `ci/run_playwright.py` counts a test that needs the main world
+as a fallback rather than a failure, so "this test cannot pass" has to mean
+"cannot pass in either world" -- auditing under isolation would let an entry
+justify itself with a failure the suite would not have counted.
+
 Cheap, because a correct skiplist is short -- it runs only what the list names.
 
 Run:
@@ -33,6 +39,7 @@ from typing import List, Optional, Tuple
 from . import results
 from ._pytest import parse_junit, require_binary, run_pytest
 from ._util import REPO_ROOT, RESULTS_DIR, WORK_DIR, log
+from .pw_camoufox_plugin import MAIN_WORLD
 from .suite import prepare
 from .versions import resolve
 
@@ -107,6 +114,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             env={
                 "CAMOUFOX_EXECUTABLE_PATH": str(binary.resolve()),
                 "CI_SKIPLIST": str(empty),
+                # The most permissive world, on purpose -- see the module
+                # docstring. An entry that survives this really is unpassable.
+                "CI_WORLD": MAIN_WORLD,
             },
             timeout=args.timeout,
         )

@@ -10,15 +10,25 @@ so upstream can refactor its conftest freely without breaking us. Four jobs:
    the plugin refuses to start, because the alternative is silently testing a
    downloaded stock Firefox and reporting a meaningless pass.
 
-2. **Run in the page's own world.** Camoufox evaluates in an isolated world --
-   the reason the fork exists. Upstream's suite asserts upstream semantics:
-   tests read globals their own page scripts defined and pass handles into
-   `evaluate()`. Roughly 37 tests fail on "X is not defined" for a global the
-   page really did set. Isolation is therefore off for this suite alone, so that
-   what is measured is Playwright conformance rather than the isolation design.
-   Camoufox's isolated-world behaviour keeps its own coverage in
-   `tests/patches/isolated-evaluate.py`, which must go on passing *without* this
-   flag -- that is the file to check if isolation regresses, not this suite.
+2. **Choose which world `evaluate()` runs in.** `CI_WORLD` selects it:
+   `isolated` (the default, and what users get) or `main`.
+
+   Camoufox evaluates in an isolated world -- the reason the fork exists.
+   Upstream's suite asserts upstream semantics: tests read globals their own
+   page scripts defined and pass handles into `evaluate()`, so a number of them
+   fail on "X is not defined" for a global the page really did set. That is a
+   known and deliberate divergence, not a regression.
+
+   The suite therefore runs **isolated first**, which is the configuration users
+   actually ship, and `ci/run_playwright.py` re-runs only what failed with
+   `CI_WORLD=main` -- counting, naming and publishing every test that needed the
+   fallback. A test that passes either way is conformant; the size of the
+   fallback set is the isolated-world conformance gap, and watching it move is
+   the point of measuring it this way round.
+
+   Camoufox's own isolated-world behaviour keeps separate coverage in
+   `tests/patches/isolated-evaluate.py`, which must go on passing regardless --
+   that is the file to check if isolation itself regresses, not this suite.
 
 3. **Apply `ci/skiplist.yml`.** Deselects, rather than xfails, the tests Camoufox
    cannot pass by design. Deselection keeps them out of the totals entirely, so
@@ -41,6 +51,10 @@ from typing import Any, Dict, List, Optional, Tuple
 _EXECUTABLE_ENV = "CAMOUFOX_EXECUTABLE_PATH"
 _SHARD_ENV = "CI_SHARD"
 _SKIPLIST_ENV = "CI_SKIPLIST"
+_WORLD_ENV = "CI_WORLD"
+
+MAIN_WORLD = "main"
+ISOLATED_WORLD = "isolated"
 
 
 # ---------------------------------------------------------------------------
@@ -147,10 +161,31 @@ def shard_of(nodeid: str, count: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _enable_main_world() -> None:
+def selected_world() -> str:
+    """Which world this process evaluates in. Isolated unless asked otherwise.
+
+    Defaulting to isolated means the plain `pytest -p pw_camoufox_plugin`
+    someone runs by hand measures the browser as it actually ships, rather than
+    a mode only the conformance suite uses.
+    """
+    return MAIN_WORLD if os.environ.get(_WORLD_ENV, "").strip().lower() == MAIN_WORLD else ISOLATED_WORLD
+
+
+def _apply_world(world: str) -> None:
+    """Set (or clear) `disableWorldIsolation` in CAMOU_CONFIG for this process.
+
+    Clearing matters as much as setting: the fallback pass and the isolated pass
+    are separate pytest processes but may inherit the same CAMOU_CONFIG from the
+    job environment, and a stale `disableWorldIsolation: true` would make an
+    "isolated" run quietly measure the main world -- which is precisely the
+    reading this whole arrangement exists to produce.
+    """
     raw = os.environ.get("CAMOU_CONFIG")
     config = json.loads(raw) if raw else {}
-    config["disableWorldIsolation"] = True
+    if world == MAIN_WORLD:
+        config["disableWorldIsolation"] = True
+    else:
+        config.pop("disableWorldIsolation", None)
     os.environ["CAMOU_CONFIG"] = json.dumps(config)
 
 
@@ -183,7 +218,8 @@ def _install_executable_path(path: str) -> None:
 
 
 def pytest_configure(config) -> None:  # noqa: ANN001
-    _enable_main_world()
+    config._camoufox_world = selected_world()
+    _apply_world(config._camoufox_world)
     executable = os.environ.get(_EXECUTABLE_ENV)
     if not executable:
         raise RuntimeError(
@@ -228,10 +264,17 @@ def pytest_collection_modifyitems(config, items) -> None:  # noqa: ANN001
 
 def pytest_report_header(config) -> List[str]:  # noqa: ANN001
     shard = getattr(config, "_camoufox_shard", None)
+    world = getattr(config, "_camoufox_world", ISOLATED_WORLD)
     lines = [
         f"camoufox: binary={os.environ.get(_EXECUTABLE_ENV)}",
-        "camoufox: main-world execution enabled for this suite "
-        "(isolation is covered by tests/patches/isolated-evaluate.py)",
+        f"camoufox: evaluating in the {world} world"
+        + (
+            " -- this is the main-world FALLBACK pass; a test passing here failed "
+            "under isolation"
+            if world == MAIN_WORLD
+            else " (as shipped). Failures are re-run in the main world and counted "
+            "as fallbacks, not hidden."
+        ),
         f"camoufox: {len(getattr(config, '_camoufox_skiplist', []))} skiplist entries "
         f"from {getattr(config, '_camoufox_skiplist_path', '(not loaded)')}",
     ]

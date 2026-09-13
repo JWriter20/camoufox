@@ -2,13 +2,30 @@
 """Run the Playwright suite against a Camoufox build.
 
 One suite: playwright-python's own tests, fetched fresh at the tag
-`ci/versions.py` resolved for this browser, run unmodified with main-world
-execution and `ci/skiplist.yml` applied, plus the Camoufox-specific modules
-`ci/suite.py` overlays from `tests/camoufox/`.
+`ci/versions.py` resolved for this browser, run unmodified with
+`ci/skiplist.yml` applied, plus the Camoufox-specific modules `ci/suite.py`
+overlays from `tests/camoufox/`.
 
 This is the conformance check -- does Camoufox still honour the automation
 contract its users hold it to -- and, through the overlay, the regression check
 for the behaviours that are ours alone. Shardable.
+
+**Isolated first, main world as a counted fallback.** Each group is run three
+times at most:
+
+  1. isolated world -- the configuration Camoufox actually ships. `evaluate()`
+     runs in its own compartment, so a test that reads a global its page script
+     defined fails here by design.
+  2. the same failures again, still isolated: anything that passes was flaky,
+     and a flake must not be mistaken for a world difference.
+  3. what is still failing, with isolation off. A test that passes now is
+     recorded as a **main-world fallback**: it counts as a pass for the run, and
+     is named and counted in the result so the size of that set is visible and
+     comparable between runs. A change in it means the isolated-world
+     conformance gap moved, which is a fact about the browser worth seeing.
+
+Running main-world-only (the previous behaviour) hid that number entirely. A
+test failing in *both* worlds is a plain failure.
 
 Run:
     python3 -m ci.run_playwright --binary path/to/camoufox-bin
@@ -25,6 +42,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 from . import results
 from ._pytest import parse_junit, require_binary, run_pytest
 from ._util import REPO_ROOT, RESULTS_DIR, WORK_DIR, log
+from .pw_camoufox_plugin import ISOLATED_WORLD, MAIN_WORLD
 from .suite import prepare
 from .versions import resolve
 
@@ -174,6 +192,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     first_shard = not args.shard or args.shard.split("/")[0] == "1"
     outcomes: Dict[str, str] = {}
     ran: List[Group] = []
+    # Still failing under isolation once flakes are excluded -- the set handed
+    # to the main-world pass.
+    isolated_failures: List[str] = []
+    # ...and the subset of those that passed with isolation off.
+    fallbacks: List[str] = []
+    fallback_junits: List[str] = []
+    last_code = 0
 
     for index, group in enumerate(GROUPS):
         if not group.sharded and not first_shard:
@@ -181,67 +206,128 @@ def main(argv: Optional[List[str]] = None) -> int:
         group_env = dict(env)
         if args.shard and group.sharded:
             group_env["CI_SHARD"] = args.shard
+
+        # One pytest cache per group, never the checkout's shared default.
+        # `--last-failed` below reads it, and pytest's `lastfailed` accumulates
+        # across every run sharing a cache -- it only drops an entry when that
+        # test is collected again and passes. With one cache for the whole
+        # checkout, the async group's rerun would be selecting from a set the
+        # sync group had also written into: pytest keeps the entries it did not
+        # collect, so the selection was either "everything in this group"
+        # (when this group had no failures of its own, since pytest declines to
+        # filter when nothing selected previously failed) or nothing at all.
+        # Per-group, `--last-failed` means exactly what it says.
+        cache_dir = WORK_DIR / f"pytest-cache{suffix}" / str(index)
+        common = [*base_args, "-o", f"cache_dir={cache_dir}"]
+        targets = ", ".join(group.targets)
+
+        # --- 1. isolated world: the browser as it ships --------------------
+        log(f"group {index + 1}/{len(GROUPS)}: {targets} [{ISOLATED_WORLD} world]")
         group_junit = WORK_DIR / f"junit{suffix}-{index}.xml"
-        log(f"group {index + 1}/{len(GROUPS)}: {', '.join(group.targets)}")
         proc = run_pytest(
             cwd=cwd,
             python=python,
-            args=[*base_args, *group.targets],
+            args=[*common, *group.targets],
             junit=group_junit,
-            env=group_env,
+            env={**group_env, "CI_WORLD": ISOLATED_WORLD},
             timeout=args.timeout,
         )
+        last_code = proc.code
         part = parse_junit(group_junit)
         if not part:
             result.note(
-                f"{', '.join(group.targets)} exited {proc.code} and produced no junit "
+                f"{targets} exited {proc.code} and produced no junit "
                 "results. That group did not run; it is a failure, not an empty pass."
             )
             result.finish(results.ERROR).save(args.results_dir)
             return 1
-        outcomes.update(part)
+        for tid, outcome in part.items():
+            if outcomes.get(tid) != results.PASS:
+                outcomes[tid] = outcome
         ran.append(group)
+
+        failing = {t for t, o in part.items() if o in (results.FAIL, results.ERROR)}
+
+        # --- 2. the same world again: sort flakes from real differences ----
+        for attempt in range(args.retries):
+            if not failing:
+                break
+            log(f"  retry {attempt + 1} [{ISOLATED_WORLD} world]: {len(failing)} failing test(s)")
+            retry_junit = WORK_DIR / f"junit{suffix}-{index}-retry{attempt + 1}.xml"
+            run_pytest(
+                cwd=cwd,
+                python=python,
+                args=[*common, "--last-failed", *group.targets],
+                junit=retry_junit,
+                env={**group_env, "CI_WORLD": ISOLATED_WORLD},
+                timeout=args.timeout,
+            )
+            retried = parse_junit(retry_junit)
+            recovered = {t for t in failing if retried.get(t) == results.PASS}
+            for tid in recovered:
+                outcomes[tid] = results.PASS
+            if recovered:
+                result.note(
+                    f"{len(recovered)} test(s) passed on retry in the same world "
+                    "(flaky, not counted as failures or as fallbacks)"
+                )
+            failing -= recovered
+
+        if not failing:
+            continue
+
+        # --- 3. main world: what isolation, specifically, costs ------------
+        isolated_failures.extend(sorted(failing))
+        log(f"  fallback [{MAIN_WORLD} world]: {len(failing)} test(s) that isolation failed")
+        fallback_junit = WORK_DIR / f"junit{suffix}-{index}-mainworld.xml"
+        run_pytest(
+            cwd=cwd,
+            python=python,
+            args=[*common, "--last-failed", *group.targets],
+            junit=fallback_junit,
+            env={**group_env, "CI_WORLD": MAIN_WORLD},
+            timeout=args.timeout,
+        )
+        fallback_junits.append(fallback_junit.name)
+        recovered_in_main = parse_junit(fallback_junit)
+        recovered = {t for t in failing if recovered_in_main.get(t) == results.PASS}
+        for tid in recovered:
+            outcomes[tid] = results.PASS
+        fallbacks.extend(sorted(recovered))
 
     result.metrics["groups"] = len(ran)
 
     for tid, outcome in outcomes.items():
         result.record(tid, outcome)
 
-    # Re-run only what failed. A test that passes on a retry is flaky, not
-    # broken, and the record keeps its best outcome. Retries stay inside their
-    # own group, for the same reason the groups exist.
-    failing = [t for t, o in outcomes.items() if o in (results.FAIL, results.ERROR)]
-    for attempt in range(args.retries):
-        if not failing:
-            break
-        log(f"retry {attempt + 1}: {len(failing)} failing test(s)")
-        retried: Dict[str, str] = {}
-        for index, group in enumerate(ran):
-            retry_junit = WORK_DIR / f"junit{suffix}-{index}-retry{attempt + 1}.xml"
-            group_env = dict(env)
-            if args.shard and group.sharded:
-                group_env["CI_SHARD"] = args.shard
-            run_pytest(
-                cwd=cwd,
-                python=python,
-                args=[*base_args, "--last-failed", *group.targets],
-                junit=retry_junit,
-                env=group_env,
-                timeout=args.timeout,
-            )
-            retried.update(parse_junit(retry_junit))
-        recovered = [t for t in failing if retried.get(t) == results.PASS]
-        for tid in recovered:
-            result.record(tid, results.PASS)
-        if recovered:
-            result.note(f"{len(recovered)} test(s) passed on retry (flaky, not counted as failures)")
-        failing = [t for t in failing if retried.get(t) not in (None, results.PASS)]
+    # Published on purpose. These tests pass, so they are invisible in the
+    # failure count -- but this is the isolated-world conformance gap, and the
+    # whole reason for running isolation first is to have a number for it that
+    # moves when the browser does.
+    result.metrics["isolated_world_failures"] = len(isolated_failures)
+    result.metrics["main_world_fallback_count"] = len(fallbacks)
+    result.metrics["main_world_fallbacks"] = sorted(fallbacks)
+    if fallbacks:
+        result.note(
+            f"{len(fallbacks)} test(s) failed under world isolation and passed with it off. "
+            "They count as passes -- Camoufox honours the contract -- but the set is "
+            "recorded so a change in it is visible: "
+            + ", ".join(sorted(fallbacks)[:8])
+            + (" ..." if len(fallbacks) > 8 else "")
+        )
+    unexplained = len(isolated_failures) - len(fallbacks)
+    if unexplained:
+        result.note(
+            f"{unexplained} test(s) failed in BOTH worlds; those are real failures, not "
+            "an isolation difference."
+        )
 
     tally = result.tally()
     result.artifacts.extend(
         f"junit{suffix}-{i}.xml" for i in range(len(GROUPS)) if i < len(ran)
     )
-    result.metrics["exit_code"] = proc.code
+    result.artifacts.extend(fallback_junits)
+    result.metrics["exit_code"] = last_code
     result.note(
         f"{tally.get('pass', 0)} passed, {tally.get('fail', 0)} failed, "
         f"{tally.get('error', 0)} errored, {tally.get('skip', 0)} skipped "

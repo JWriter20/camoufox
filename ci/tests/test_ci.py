@@ -2006,3 +2006,169 @@ def test_one_route_answering_means_sundial_is_up(monkeypatch):
     monkeypatch.setattr(rs, "login", unreachable)
     with pytest.raises(rs.SundialUnavailable):
         rs.authenticate("https://sundial.invalid", "guest", "secret")
+
+
+# ---------------------------------------------------------------------------
+# isolated world first, main world as a counted fallback
+# ---------------------------------------------------------------------------
+
+
+def test_the_isolated_world_is_what_runs_unless_asked_otherwise(monkeypatch):
+    """The default has to be the configuration users ship.
+
+    The suite used to force main-world execution for every run, which made the
+    upstream tests pass and measured a mode nobody ships. Anyone running the
+    plugin by hand now gets the real thing.
+    """
+    from ci.pw_camoufox_plugin import ISOLATED_WORLD, MAIN_WORLD, selected_world
+
+    monkeypatch.delenv("CI_WORLD", raising=False)
+    assert selected_world() == ISOLATED_WORLD
+    monkeypatch.setenv("CI_WORLD", "")
+    assert selected_world() == ISOLATED_WORLD
+    monkeypatch.setenv("CI_WORLD", "isolated")
+    assert selected_world() == ISOLATED_WORLD
+    monkeypatch.setenv("CI_WORLD", "MAIN")
+    assert selected_world() == MAIN_WORLD
+
+
+def test_an_isolated_run_clears_a_stale_main_world_flag(monkeypatch):
+    """Clearing matters as much as setting.
+
+    The two passes are separate processes that inherit the same job
+    environment. A leftover `disableWorldIsolation: true` would make the
+    "isolated" pass quietly measure the main world -- and since that pass is
+    what produces the fallback count, the number would silently become zero
+    while reading as a clean result.
+    """
+    from ci.pw_camoufox_plugin import ISOLATED_WORLD, MAIN_WORLD, _apply_world
+
+    monkeypatch.setenv("CAMOU_CONFIG", json.dumps({
+        "disableWorldIsolation": True, "webgl:renderer": "keep me",
+    }))
+    _apply_world(ISOLATED_WORLD)
+    config = json.loads(os.environ["CAMOU_CONFIG"])
+    assert "disableWorldIsolation" not in config
+    assert config["webgl:renderer"] == "keep me", "unrelated config must survive"
+
+    _apply_world(MAIN_WORLD)
+    assert json.loads(os.environ["CAMOU_CONFIG"])["disableWorldIsolation"] is True
+
+
+def test_the_runner_hands_each_phase_the_world_it_says_it_does():
+    """Three phases, and the third is the only one with isolation off.
+
+    Read out of the source because the alternative is running the suite: the
+    thing that must not silently change is that phases 1 and 2 are isolated, so
+    a fallback means what it claims.
+    """
+    source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
+    assert source.count('"CI_WORLD": ISOLATED_WORLD') == 2, (
+        "the first pass and the flake retry must both run isolated, or a flake "
+        "becomes indistinguishable from a world difference"
+    )
+    assert source.count('"CI_WORLD": MAIN_WORLD') == 1, (
+        "exactly one pass may turn isolation off -- the fallback"
+    )
+
+
+def test_every_group_gets_its_own_pytest_cache():
+    """`--last-failed` reads pytest's cache, and the cache is per directory.
+
+    All three groups run in one checkout, and pytest only drops a `lastfailed`
+    entry when that test is collected again and passes -- so with a shared
+    cache the async group's rerun selected from a set the sync group had also
+    written into. Depending on which groups had failed that meant re-running
+    the entire group or selecting nothing at all.
+    """
+    source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
+    assert 'cache_dir = WORK_DIR / f"pytest-cache{suffix}" / str(index)' in source
+    assert 'common = [*base_args, "-o", f"cache_dir={cache_dir}"]' in source
+    # Every rerun goes through `common`, which is what carries the redirected
+    # cache. A `--last-failed` that did not would silently read the shared one.
+    reruns = re.findall(r"args=\[([^\]]*--last-failed[^\]]*)\]", source)
+    assert len(reruns) == 2, f"expected the retry and the fallback, got {reruns}"
+    for args in reruns:
+        assert args.strip().startswith("*common"), args
+
+
+def test_the_skiplist_audit_runs_in_the_most_permissive_world():
+    """An entry has to mean "cannot pass in either world".
+
+    The suite counts a test needing the main world as a fallback, not a
+    failure. Auditing under isolation would let an entry justify itself with a
+    failure the suite would never have counted -- which is the same class of
+    untrue-but-plausible reason the audit exists to catch.
+    """
+    source = (CI_ROOT / "run_skiplist_audit.py").read_text(encoding="utf-8")
+    assert '"CI_WORLD": MAIN_WORLD' in source
+
+
+def test_fallback_counts_are_summed_across_shards_not_sampled():
+    """Six shards each report their own share; the first shard's is not the total."""
+    merged = merge_shards({
+        "playwright-1of3": {
+            "gate": "playwright-1of3", "status": "pass",
+            "tests": {"a.py::t1": "pass"},
+            "metrics": {
+                "main_world_fallback_count": 2,
+                "main_world_fallbacks": ["a.py::t1", "a.py::t2"],
+                "isolated_world_failures": 3,
+                "playwright_tag": "v1.61.0",
+            },
+        },
+        "playwright-2of3": {
+            "gate": "playwright-2of3", "status": "pass",
+            "tests": {"b.py::t3": "pass"},
+            "metrics": {
+                "main_world_fallback_count": 4,
+                "main_world_fallbacks": ["b.py::t3"],
+                "isolated_world_failures": 4,
+                "playwright_tag": "v1.61.0",
+            },
+        },
+        "playwright-3of3": {
+            "gate": "playwright-3of3", "status": "pass",
+            "tests": {"c.py::t4": "pass"},
+            "metrics": {
+                "main_world_fallback_count": 0,
+                "main_world_fallbacks": [],
+                "isolated_world_failures": 0,
+                "playwright_tag": "v1.61.0",
+            },
+        },
+    })
+    metrics = merged["playwright"]["metrics"]
+    assert metrics["main_world_fallback_count"] == 6
+    assert metrics["isolated_world_failures"] == 7
+    assert metrics["main_world_fallbacks"] == ["a.py::t1", "a.py::t2", "b.py::t3"]
+    # A property of the run as a whole is still taken once, not summed.
+    assert metrics["playwright_tag"] == "v1.61.0"
+
+
+def test_the_summary_publishes_the_fallback_count():
+    """It is invisible in the pass/fail totals by construction -- these tests
+    pass -- so if it is not on the table it is not anywhere a reviewer looks."""
+    from ci.summarize import render
+
+    merged = {"playwright": {
+        "gate": "playwright", "status": "pass", "tests": {}, "notes": [],
+        "metrics": {
+            "tally": {"pass": 2229, "fail": 0, "total": 2295},
+            "main_world_fallback_count": 37,
+        },
+    }}
+    markdown = render(merged, ["playwright"], [], {})
+    assert "37 via main-world fallback" in markdown
+
+
+def test_a_zero_fallback_count_is_still_printed():
+    """Zero is the interesting value: it is the one that means the gap closed,
+    and an absent line reads the same as a line nobody added."""
+    from ci.summarize import render
+
+    merged = {"playwright": {
+        "gate": "playwright", "status": "pass", "tests": {}, "notes": [],
+        "metrics": {"tally": {"pass": 10, "fail": 0, "total": 10}, "main_world_fallback_count": 0},
+    }}
+    assert "0 via main-world fallback" in render(merged, ["playwright"], [], {})

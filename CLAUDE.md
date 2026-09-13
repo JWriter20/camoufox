@@ -81,7 +81,10 @@ PR can merge; the workflow is `.github/workflows/tests.yml`.
 - **Playwright** — upstream playwright-python, fetched fresh at the tag
   `ci/versions.py` resolves for the browser, with `ci/skiplist.yml` applied and
   `tests/camoufox/` overlaid. This is the automation-contract check, not the
-  stealth check.
+  stealth check. It runs **isolated-world first** (what users ship) and re-runs
+  only the failures with isolation off; those are counted and named as
+  main-world fallbacks rather than hidden, so the size of the isolated-world
+  gap is visible per run.
   ```bash
   make tests                # or: python3 -m ci.run_playwright --binary ...
   ```

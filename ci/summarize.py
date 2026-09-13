@@ -41,6 +41,15 @@ from ._util import REPO_ROOT, RESULTS_DIR, SKIPLIST_PATH, log, summary, write_js
 # "playwright-3of6" -> "playwright"
 _SHARD_SUFFIX = re.compile(r"-\d+of\d+$")
 
+# Counts every shard contributes its own share of. Summing rather than taking
+# the first shard's is the difference between "6 tests fell back to the main
+# world" and "1 did", on a six-way shard -- and this number is the one being
+# watched over time, so a sixth of it is worse than none.
+_SUMMED_METRICS = frozenset({"main_world_fallback_count", "isolated_world_failures"})
+
+# Lists of test identities, which are disjoint across shards by construction.
+_UNIONED_METRICS = frozenset({"main_world_fallbacks"})
+
 # Presented in this order; anything unexpected is appended.
 _ORDER = [
     "native_rules", "pythonlib", "patches_apply", "build", "patch_guards",
@@ -74,7 +83,15 @@ def merge_shards(records: Dict[str, dict]) -> Dict[str, dict]:
             artifacts.extend(part.get("artifacts") or [])
             statuses.append(part.get("status"))
             for key, value in (part.get("metrics") or {}).items():
-                metrics.setdefault(key, value)
+                if key in _SUMMED_METRICS and isinstance(value, (int, float)):
+                    metrics[key] = metrics.get(key, 0) + value
+                elif key in _UNIONED_METRICS and isinstance(value, list):
+                    metrics[key] = sorted(set(metrics.get(key, [])) | set(value))
+                else:
+                    # Everything else is a property of the run as a whole (the
+                    # resolved tag, the browser version) and is identical across
+                    # shards, so the first one is the answer.
+                    metrics.setdefault(key, value)
         metrics.pop("shard", None)
         metrics["shards"] = len(parts)
         tally: Dict[str, int] = {}
@@ -191,6 +208,13 @@ def render(merged: Dict[str, dict], required: List[str], problems: List[str], me
             shards = (record.get("metrics") or {}).get("shards")
             if shards:
                 detail += f" (across {shards} shards)"
+            # Published deliberately. These tests pass, so they do not show up
+            # in the failure count -- but the number is the isolated-world
+            # conformance gap, and a silent change in it is exactly what this
+            # line exists to make visible between one run and the next.
+            fallbacks = (record.get("metrics") or {}).get("main_world_fallback_count")
+            if fallbacks is not None:
+                detail += f", {fallbacks} via main-world fallback"
         else:
             detail = (record.get("notes") or ["—"])[-1]
         lines.append(f"| `{name}` | {icon} {status} | {detail} |")
@@ -206,11 +230,14 @@ def render(merged: Dict[str, dict], required: List[str], problems: List[str], me
     lines += [
         "",
         "<sub>The Playwright suite is upstream playwright-python at the tag above, "
-        "fetched fresh, run with main-world execution, with "
-        "[`tests/camoufox/`](tests/camoufox) overlaid. Tests Camoufox cannot pass by "
-        "design are deselected via [`ci/skiplist.yml`](ci/skiplist.yml) — each with a "
-        "stated reason. The stealth check reports a grade only; its per-vector detail "
-        "is deliberately never published.</sub>",
+        "fetched fresh, with [`tests/camoufox/`](tests/camoufox) overlaid. It runs with "
+        "world isolation on — the configuration Camoufox ships — and only the failures "
+        "are re-run with it off; those count as passes and are reported above as "
+        "main-world fallbacks, which is the size of the isolated-world gap. Tests "
+        "Camoufox cannot pass by design are deselected via "
+        "[`ci/skiplist.yml`](ci/skiplist.yml) — each with a stated reason. The stealth "
+        "check reports a grade only; its per-vector detail is deliberately never "
+        "published.</sub>",
     ]
     return "\n".join(lines)
 
