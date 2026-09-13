@@ -1,10 +1,10 @@
 """The evidence bundle: the only thing allowed to decide whether a run is green.
 
-Every gate writes one JSON file here and nothing else. `verify.py` reads those
-files and the baseline, and computes the verdict. No gate reports its own
-verdict to the pull request, and the repair agent never writes into this
-directory -- so "the agent said it worked" is structurally not a thing that can
-happen.
+Every gate writes one JSON file here and nothing else. `ci/summarize.py` reads
+those files and computes the run's verdict; no gate reports its own verdict to
+the pull request. (The auto-update harness, which lives outside this repository,
+consumes the same files against a stored baseline -- which is why the records
+carry per-test identities rather than just counts.)
 
 Two properties do the real work:
 
@@ -12,6 +12,11 @@ Two properties do the real work:
     short-circuiting a gate cannot make a run pass.
   * Every record is stamped with the current run id. A stale file left over
     from an earlier run does not satisfy a gate.
+
+The one deliberate exception is a gate that records SKIP for a stated reason --
+currently only the stealth check, when sundial itself is unreachable. That is
+tolerated only for suites the workflow names in `--allow-skip`, and it is still
+not a pass: the summary shows it as skipped, with the reason.
 """
 
 from __future__ import annotations

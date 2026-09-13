@@ -1,8 +1,8 @@
 # Scope and thresholds for the build-tester suite.
 #
-# Here rather than in harness/policy.yml for the same reason ci/sundial.yml is:
-# this runs on every pull request, and the auto-update harness is only one of
-# its callers.
+# Here, in the repository, for the same reason ci/sundial.yml is: this runs on
+# every pull request, and the auto-update harness (not part of this repository)
+# is only one of its callers.
 
 schema: 1
 

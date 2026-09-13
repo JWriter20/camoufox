@@ -12,8 +12,8 @@ that passed last release is failing now", which is the only thing the gate
 needs, and it is not enough to learn what the vector was.
 
 Scope: only categories Camoufox actually claims to implement are gated
-(`policy.yml: gates.sundial.gated_categories`). Cross-OS rendering parity, for
-one, is measured and reported but never fails a build -- Camoufox does not claim
+(`ci/sundial.yml: gated_categories`). Cross-OS rendering parity, for one, is
+measured and reported but never fails a build -- Camoufox does not claim
 byte-identical emulation of another platform's rasterizer.
 
 How it runs:
@@ -627,8 +627,10 @@ def redact(
     even opaque ones, because a map of HMACs still publishes how many distinct
     checks fail and lets a reader follow one across releases.
 
-    Regression detection is therefore per-score, not per-vector: policy.yml
-    carries a floor and a maximum allowed drop. For the per-vector view set
+    Regression detection is therefore per-score, not per-vector:
+    `ci/sundial.yml` carries the floor (`min_pass_rate`), and the auto-update
+    harness -- which is not in this repository -- adds a maximum allowed drop
+    against its own baseline. For the per-vector view set
     SUNDIAL_REPORT_AGE_RECIPIENT and read the sealed report locally.
     """
     score_mode = payload.get("mode") == "score"
@@ -954,7 +956,7 @@ def gate(argv: Optional[List[str]] = None) -> int:
     del report
 
     # Deliberately no per-test map. See redact(): a set of opaque ids is still
-    # per-vector data, and verify.py judges this gate on the score instead.
+    # per-vector data, and this gate is judged on the score instead.
     result.metrics = metrics
     # Re-added after the wholesale assignment above: which role the run
     # authenticated as is part of the evidence, not a detail of it. An artifact
@@ -1010,19 +1012,26 @@ def gate(argv: Optional[List[str]] = None) -> int:
     _assert_publishable(result.metrics)
 
     result.finish(status).save(args.evidence_dir)
-    # Per-test regressions are verify.py's job; this only reports the floor.
+    # This reports the floor only. Per-test regression against a stored
+    # baseline is the auto-update harness's job, outside this repository.
     return 0 if status == evidence.PASS else 1
 
 
 def waive(argv: Optional[List[str]] = None) -> int:
-    """Print a policy.yml waiver stanza for a vector, without naming it there."""
+    """Print a waiver stanza for a vector, without naming the vector in it.
+
+    The file this is pasted into belongs to the auto-update harness and is not
+    in this repository; the command is here because computing the opaque id
+    needs the same salt the gate uses.
+    """
     parser = argparse.ArgumentParser(description="compute a waiver entry for a sundial vector")
     parser.add_argument("--key", required=True, help="the vector key, as it appears in the report")
     parser.add_argument("--reason", required=True, help="why Camoufox does not claim this")
     parser.add_argument("--days", type=int, default=90, help="waiver lifetime (default 90)")
     args = parser.parse_args(argv)
 
-    print("\nAdd under gates.sundial.waivers in the auto-update pipeline's policy file:\n")
+    print("\nAdd under gates.sundial.waivers in the auto-update harness's policy file\n"
+          "(that file is not part of this repository):\n")
     print(f"  - id: {opaque_id(args.key)}")
     print(f"    reason: {args.reason}")
     print(f"    expires: {date.today() + timedelta(days=args.days)}")

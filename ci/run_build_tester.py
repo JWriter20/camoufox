@@ -2,8 +2,10 @@
 """build-tester gate: the raw binary, 8 fingerprint profiles, graded per check.
 
 Grades per individual check rather than per profile, so the evidence carries
-~hundreds of stable identities and verify.py can say "this exact check passed on
-the last release and does not now" instead of "the grade dropped from A to B".
+~hundreds of stable identities and a baseline comparison can say "this exact
+check passed on the last release and does not now" instead of "the grade dropped
+from A to B". (Nothing in this repository holds that baseline; the auto-update
+harness does. Here the identities make a failure legible.)
 
 Run:
     python3 -m ci.run_build_tester --binary /path/to/camoufox-bin

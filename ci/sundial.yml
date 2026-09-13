@@ -1,9 +1,10 @@
 # Scope and thresholds for the stealth check.
 #
-# Lives here rather than in harness/policy.yml because the stealth check is a
-# repo-wide test that runs on every pull request; the harness is just one of its
-# callers. harness/policy.yml keeps the things only the auto-update pipeline
-# cares about -- baselines, regression waivers, which gates are mandatory.
+# Lives here, in the repository, because the stealth check is a repo-wide test
+# that runs on every pull request; the auto-update harness (which is not part of
+# this repository) is just one of its callers. Its own policy file keeps the
+# things only that pipeline cares about -- baselines, regression waivers, which
+# gates are mandatory.
 #
 # Nothing in this file is secret. What is secret is the report sundial returns,
 # and that never leaves ci/run_sundial.py::redact() intact.

@@ -572,7 +572,6 @@ def sync_attach_vd(
     return browser
 
 
-
 def resolve_verstr(executable_path: Optional[Path] = None) -> str:
     """The version of the build about to be launched.
 
@@ -597,6 +596,7 @@ def resolve_verstr(executable_path: Optional[Path] = None) -> str:
         except OSError:
             pass
     return installed_verstr()
+
 
 def launch_options(
     *,
