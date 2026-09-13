@@ -1773,3 +1773,61 @@ def test_the_workflow_checks_the_fetched_build():
         "the fetch path installs a browser without checking it is the generation "
         "the Playwright suite was chosen for"
     )
+
+
+# ---------------------------------------------------------------------------
+# what the summary is told to require
+# ---------------------------------------------------------------------------
+
+
+def _required_suites(browser_changed: str, has_sundial: str) -> set:
+    """Run the workflow's own `required=` assembly and report what it produced.
+
+    Extracted and executed rather than pattern-matched, because the bug this
+    guards was a comparison that read as deliberate (`!= "skip"`) against a
+    value that is only ever `true` or `false`. Only running it says what it
+    does.
+    """
+    import subprocess
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    start = text.index('required="pythonlib')
+    end = text.index("python3 -m ci.summarize", start)
+    block = text[start:end]
+    block = block.replace("${{ needs.resolve.outputs.browser_changed }}", browser_changed)
+    block = block.replace("${{ needs.resolve.outputs.has_sundial }}", has_sundial)
+    proc = subprocess.run(
+        ["bash", "-c", block + '\necho "$required"'],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return set(proc.stdout.split())
+
+
+def test_build_is_required_only_when_the_browser_was_built():
+    """A driver-only pull request skips `build`, so requiring it fails the gate.
+
+    `build` writes a result file only from the build job, which is skipped
+    whenever the browser was fetched instead. summarize treats a required suite
+    with no result as a failure -- correctly -- so requiring it unconditionally
+    blocked every pull request that did not touch browser sources: docs,
+    pythonlib, ci/ and tests/ alike. That is most of them, and it is precisely
+    the cheap path this pipeline advertises.
+    """
+    assert "build" in _required_suites("true", "false")
+    assert "build" not in _required_suites("false", "false")
+
+
+def test_the_browser_suites_are_required_either_way():
+    """Fetching instead of building narrows what was compiled, not what is tested."""
+    for changed in ("true", "false"):
+        required = _required_suites(changed, "false")
+        assert {
+            "pythonlib", "native_rules", "patch_guards", "skiplist_audit",
+            "build_tester", "playwright", "native_browser",
+        } <= required, changed
+
+
+def test_sundial_is_required_only_when_there_is_a_credential():
+    assert "sundial" in _required_suites("true", "true")
+    assert "sundial" not in _required_suites("true", "false")

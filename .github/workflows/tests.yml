@@ -805,9 +805,17 @@ jobs:
           # the pipeline self-tests, which write no result, and native_rules,
           # which is named here. The gate separately fails if the job itself did
           # not succeed, so nothing is lost by leaving it out.
-          required="pythonlib native_rules"
-          if [ "${{ needs.resolve.outputs.browser_changed }}" != "skip" ]; then
-            required="$required build patch_guards skiplist_audit build_tester playwright native_browser"
+          #
+          # The browser suites are required either way -- they run against a
+          # fetched release just as they do against a fresh build. `build` is
+          # the one that is not: on a driver-only pull request that job is
+          # skipped by design and writes no result, and requiring it there made
+          # summarize report "produced no result file" and fail the gate on
+          # every pull request that did not touch the browser. Which is most of
+          # them, and exactly the cheap path this pipeline advertises.
+          required="pythonlib native_rules patch_guards skiplist_audit build_tester playwright native_browser"
+          if [ "${{ needs.resolve.outputs.browser_changed }}" = "true" ]; then
+            required="$required build"
           fi
           if [ "${{ needs.resolve.outputs.has_sundial }}" = "true" ]; then
             required="$required sundial"
