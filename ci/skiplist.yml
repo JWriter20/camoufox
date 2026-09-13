@@ -64,14 +64,50 @@ skip:
       expects a timeout error when the element never settles, and Camoufox does
       not raise one.
 
-  # --- not built into the binary ---------------------------------------------
+  # --- client certificates the BROWSER has to present ------------------------
+  #
+  # Not the whole module. Playwright offers client certs two ways, and only one
+  # of them goes through the browser:
+  #
+  #   playwright.request.new_context(client_certificates=...)  -> the Node driver
+  #       does the TLS handshake itself. Works: both tests using it pass.
+  #   browser.new_context(client_certificates=...)             -> the BROWSER does
+  #       the handshake, and this build has no client-cert support to do it with.
+  #
+  # Listed per test rather than per module because a module entry hid that
+  # distinction -- and the audit caught it, in CI, one run after it was written.
+  # Worth recording why it was written: all five fail on a local machine whose
+  # Node/OpenSSL rejects the fixture server outright ("wrong version number"),
+  # which looked like uniform absence of support. CI is the authority here.
 
-  - module: tests/async/test_browsercontext_client_certificates.py
+  - test: tests/async/test_browsercontext_client_certificates.py::test_should_work_with_new_context
     reason: >-
-      Client-certificate support is not built into the Camoufox binary. All five
-      tests fail at the TLS layer (SSL_ERROR_UNKNOWN, "wrong version number"),
-      which is the handshake never being offered a certificate rather than any
-      automation behaviour.
+      browser.new_context(client_certificates=...) needs the browser to present a
+      certificate during the TLS handshake. The Camoufox build has no client-cert
+      support, so the server never sees one and the page never renders the
+      "certificate was issued by" text the test asserts.
+
+  - test: tests/async/test_browsercontext_client_certificates.py::test_should_work_with_new_context_passing_as_content
+    reason: >-
+      The same browser-side handshake, with the certificate passed as bytes
+      rather than a path.
+
+  - test: tests/async/test_browsercontext_client_certificates.py::test_should_work_with_new_persistent_context
+    reason: >-
+      The same browser-side handshake, through a persistent context.
+
+  - test: tests/sync/test_browsercontext_client_certificates.py::test_should_work_with_new_context
+    reason: >-
+      The sync mirror of the browser-side handshake above. Listed separately so
+      removing one when support lands cannot silently leave the other behind.
+
+  - test: tests/sync/test_browsercontext_client_certificates.py::test_should_work_with_new_context_passing_as_content
+    reason: >-
+      The sync mirror, certificate passed as bytes.
+
+  - test: tests/sync/test_browsercontext_client_certificates.py::test_should_work_with_new_persistent_context
+    reason: >-
+      The sync mirror, through a persistent context.
 
   # --- upstream expectations that encode a stock-Firefox quirk ---------------
   #

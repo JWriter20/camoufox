@@ -129,10 +129,18 @@ list from drifting back into a place failing tests go to disappear.
 python3 -m ci.run_skiplist_audit --binary /path/to/camoufox-bin
 ```
 
-What remains after the audit: two `test_click.py` tests where Playwright's
-stable-position wait races the humanized travel time, the five client-certificate
-tests (not built into the binary), and the two upstream expectations that encode
-a stock-Firefox quirk and are replaced by `tests/camoufox/`.
+What remains after the audit, 10 tests: two `test_click.py` tests where
+Playwright's stable-position wait races the humanized travel time; six
+client-certificate tests (async and sync) that need the **browser** to present a
+certificate during the TLS handshake — the two that go through the Node driver's
+own request context instead pass, and are not skipped; and the two upstream
+expectations that encode a stock-Firefox quirk, replaced by `tests/camoufox/`.
+
+That client-certificate split is the audit earning its place. The entry was
+first written as a whole module, because on a local machine all five fail —
+Node/OpenSSL there rejects the fixture server outright. In CI two of them pass,
+and the audit failed the build one run after the entry was written. **CI is the
+authority for what fails; a local run is a hypothesis.**
 
 ## Camoufox's own suite
 
