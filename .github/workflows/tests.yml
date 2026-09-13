@@ -46,7 +46,7 @@ on:
   workflow_dispatch:
     inputs:
       browser_version:
-        description: "Firefox version to test (default: whatever upstream.sh pins)"
+        description: "Firefox version to test. Must match upstream.sh -- the build follows that, not this."
         required: false
         type: string
       playwright_tag:
@@ -129,7 +129,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python3 -m ci.versions \
+          # --check-upstream: only suite SELECTION follows browser_version.
+          # The build reads upstream.sh, and the fetch path downloads whatever
+          # pythonlib considers current, so a browser_version the branch does not
+          # pin would compile the OLD browser and judge it against the NEW
+          # suite -- silently. A real Firefox bump edits upstream.sh, and then
+          # resolution reads it by default and the two cannot disagree.
+          python3 -m ci.versions --check-upstream \
             ${{ inputs.browser_version && format('--browser-version {0}', inputs.browser_version) || '' }} \
             ${{ inputs.playwright_tag && format('--playwright-tag {0}', inputs.playwright_tag) || '' }}
 

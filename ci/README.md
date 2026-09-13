@@ -48,6 +48,19 @@ python3 -m ci.versions --json                          # what would run
 python3 -m ci.versions --browser-version 153.0.4 --json
 ```
 
+**The version under test has to be the version that gets built.** Only *suite
+selection* follows `--browser-version`; the build reads `upstream.sh` and the
+fetch path downloads whatever pythonlib considers current. Asking for a version
+the branch does not pin would therefore compile the old browser and judge it
+against the new suite — green, meaningless and silent. `--check-upstream`
+refuses that, and the workflow passes it.
+
+So an upgrade to a new Firefox is a branch that **edits `upstream.sh`**, which is
+what an upgrade is anyway. Resolution then reads it by default, the build
+produces it, and the suite is chosen for it — the three cannot disagree. The
+`browser_version` input exists for a caller that wants to state the version
+explicitly; it must match.
+
 ## The Playwright suite
 
 One suite, fetched fresh per run: upstream playwright-python at the resolved tag.

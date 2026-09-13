@@ -1711,3 +1711,37 @@ def test_a_new_upstream_subtree_is_reported_not_ignored(tmp_path):
     (tests / "integration" / "test_new.py").write_text("")
     (tests / "test_brand_new.py").write_text("")
     assert unclaimed(tmp_path) == ["tests/integration/", "tests/test_brand_new.py"]
+
+
+# ---------------------------------------------------------------------------
+# the version under test has to be the version that gets built
+# ---------------------------------------------------------------------------
+
+
+def test_a_requested_version_the_branch_does_not_pin_is_refused(monkeypatch):
+    """Only suite selection follows --browser-version; the build reads upstream.sh.
+
+    So asking for a version the branch does not pin builds the OLD browser and
+    judges it against the NEW suite. Green, meaningless, and silent -- which is
+    the worst combination available.
+    """
+    from ci import versions
+
+    monkeypatch.setattr(versions, "read_upstream_sh", lambda: {"version": "152.0.4"})
+
+    problem = versions.upstream_mismatch("155.0")
+    assert problem and "152.0.4" in problem and "155.0" in problem
+
+    # The legitimate flows: no input at all, or an input that agrees.
+    assert versions.upstream_mismatch(None) is None
+    assert versions.upstream_mismatch("152.0.4") is None
+    assert versions.upstream_mismatch("  152.0.4  ") is None
+
+
+def test_the_workflow_actually_runs_that_check():
+    """A guard nothing invokes is decoration."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "--check-upstream" in text, (
+        "ci.versions is invoked without --check-upstream, so a browser_version "
+        "that disagrees with upstream.sh would silently test the wrong browser"
+    )

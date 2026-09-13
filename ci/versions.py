@@ -205,12 +205,49 @@ def resolve(
     return resolved
 
 
+def upstream_mismatch(browser_version: Optional[str]) -> Optional[str]:
+    """Complain if a requested version is not the one the build will produce.
+
+    Only suite SELECTION follows `--browser-version`. The build does not: both
+    `ci.run_build` and `make` read upstream.sh, and the fetch path downloads
+    whatever pythonlib considers current. So asking for a version the branch
+    does not pin gets you the old browser tested against the new suite -- the
+    exact inversion of the intent, and silent.
+
+    The legitimate flow has no mismatch in it: a Firefox bump edits upstream.sh
+    on its branch, and resolution then reads that by default. This exists to
+    catch the other case before it produces a meaningless green run.
+    """
+    if not browser_version:
+        return None
+    pinned = (read_upstream_sh().get("version") or "").strip()
+    if not pinned or pinned == browser_version.strip():
+        return None
+    return (
+        f"asked to test Firefox {browser_version}, but upstream.sh pins {pinned}. "
+        "The build follows upstream.sh, so this would compile "
+        f"{pinned} and judge it against the suite chosen for {browser_version}. "
+        "Bump upstream.sh on the branch instead -- that is what an upgrade is."
+    )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser-version", help="override the version from upstream.sh")
     parser.add_argument("--playwright-tag", help="pin the suite instead of resolving one")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--check-upstream",
+        action="store_true",
+        help="fail if --browser-version disagrees with upstream.sh",
+    )
     args = parser.parse_args(argv)
+
+    if args.check_upstream:
+        problem = upstream_mismatch(args.browser_version)
+        if problem:
+            log(problem, level="ERROR")
+            return 1
 
     resolved = resolve(
         browser_version=args.browser_version, playwright_tag=args.playwright_tag
