@@ -317,12 +317,25 @@ jobs:
             echo "| | |"
             echo "| --- | --- |"
             echo "| Firefox | \`${{ needs.detect.outputs.current_version }}\` → \`${TARGET_VERSION}\` |"
-            echo "| Playwright suite | \`${{ needs.detect.outputs.playwright_tag }}\` |"
+            echo "| Playwright suite | \`${{ needs.detect.outputs.playwright_tag }}\` (targets Firefox \`${{ needs.detect.outputs.playwright_firefox }}\`) |"
             echo "| Run | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
             echo
             echo "The repository's ordinary test pipeline passed on this branch, and"
             echo "\`harness/verify.py\` found no regression against the recorded baseline."
             echo
+            # Under `latest` the suite routinely lags the browser, and then the
+            # sentence above is true but much weaker than it sounds. Say so in
+            # the body rather than leaving a reviewer to notice the version skew
+            # in the table on their own.
+            if [ "${{ needs.detect.outputs.suite_matches_target }}" != "true" ]; then
+              echo "> [!WARNING]"
+              echo "> ${{ needs.detect.outputs.reason }}"
+              echo ">"
+              echo "> Nothing above covers behaviour introduced after Firefox"
+              echo "> \`${{ needs.detect.outputs.playwright_firefox }}\`. Review the patch diff on its"
+              echo "> own merits; a green pipeline is necessary here, not sufficient."
+              echo
+            fi
             cat report.md 2>/dev/null || true
             echo
             echo "---"
@@ -355,6 +368,11 @@ jobs:
             echo "- Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
             echo "- Branch: \`${BRANCH}\` (pushed, not proposed)"
             echo "- Test pipeline: ${{ needs.test.result }}"
+            echo "- Playwright suite: \`${{ needs.detect.outputs.playwright_tag }}\`, which targets Firefox \`${{ needs.detect.outputs.playwright_firefox }}\`"
+            if [ "${{ needs.detect.outputs.suite_matches_target }}" != "true" ]; then
+              echo "- **The suite does not match the target.** A failure here may be the"
+              echo "  suite not knowing this Firefox, rather than a real regression."
+            fi
             echo
             cat report.md 2>/dev/null || echo "_No regression report was produced._"
             echo
