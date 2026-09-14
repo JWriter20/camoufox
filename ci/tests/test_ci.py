@@ -2465,6 +2465,36 @@ def test_isolation_hangs_still_run_somewhere():
     assert "hang that stops running is how coverage disappears" in source
 
 
+def test_declared_hangs_run_unsharded_on_one_shard():
+    """Sharding a six-test module hands most shards nothing.
+
+    pytest exits 5 on an empty selection and writes no junit, which the guard
+    above cannot tell from "did not run" -- so it failed every shard that owned
+    none of the module ("collected 6 items / 6 deselected / 0 selected"), which
+    was three of six on the first run that got this far. Run once, whole, the
+    way tests/common/ is.
+
+    CI_SHARD is cleared rather than dropped because ci/_util.run() layers env
+    over os.environ, so an omitted key still inherits whatever is there.
+    """
+    source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
+    assert "if hangs and first_shard:" in source
+    assert '"CI_SHARD": ""' in source
+    # Cleared for the declared-hang pass only; the real passes stay sharded.
+    assert source.count('"CI_SHARD": ""') == 1
+
+
+def test_empty_shard_selection_is_not_a_shard_number():
+    """parse_shard must read cleared-to-empty as 'no shard', not raise.
+
+    That is what makes clearing CI_SHARD a working way to unshard one run; if
+    it raised, the declared-hang pass would die on an unparseable shard instead.
+    """
+    assert parse_shard("") is None
+    assert parse_shard(None) is None
+    assert parse_shard("3/6") == (3, 6)
+
+
 def test_every_isolation_hang_is_inside_a_group_target():
     """A declared module outside every target would be deselected from nothing
     and then run in a main-world pass that no group reaches -- covered on

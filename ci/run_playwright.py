@@ -339,7 +339,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Its own cache_dir, for the reason the shared one is avoided above --
         # `--last-failed` in pass 2 reads that cache, and a module that failed
         # here would otherwise be re-selected there and run a second time.
-        if hangs:
+        #
+        # Unsharded, and on the first shard only, for the reason tests/common/
+        # is unsharded: these are a handful of tests, and sharding a handful
+        # hands most shards an empty selection. pytest exits 5 for that and
+        # writes no junit, which is indistinguishable from "did not run" -- so
+        # the guard below fired on every shard that happened to own none of
+        # them ("collected 6 items / 6 deselected / 0 selected"). Running them
+        # once, whole, also means the fallback accounting is not spread across
+        # shards that each saw a fraction of the module.
+        if hangs and first_shard:
             log(f"  declared isolation hangs [{MAIN_WORLD} world]: {', '.join(hangs)}")
             hang_cache = WORK_DIR / f"pytest-cache{suffix}" / f"{index}-hangs"
             hang_junit = WORK_DIR / f"junit{suffix}-{index}-hangs.xml"
@@ -348,7 +357,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 python=python,
                 args=[*base_args, "-o", f"cache_dir={hang_cache}", *hangs],
                 junit=hang_junit,
-                env={**group_env, "CI_WORLD": MAIN_WORLD},
+                # Cleared rather than omitted: ci/_util.run() layers env over
+                # os.environ, so dropping the key would still inherit one.
+                # parse_shard() reads empty as "no shard", the same way
+                # _NO_UPSTREAM_RERUNS clears $CI.
+                env={**group_env, "CI_SHARD": "", "CI_WORLD": MAIN_WORLD},
                 timeout=args.group_timeout,
             )
             fallback_junits.append(hang_junit.name)
