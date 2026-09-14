@@ -98,16 +98,32 @@ TARGETS: Tuple[str, ...] = tuple(t for g in GROUPS for t in g.targets)
 # as Camoufox ships?". Both settings below bound what a "no" is allowed to cost,
 # and neither applies to the passes that adjudicate afterwards.
 #
-# Some isolated failures do not fail -- they HANG. `expose_function` installs its
-# binding on the isolated world's global, so page script calling `window.fn()`
-# looks at the page's own window, does not find it, and the call never reaches
-# Python. A test awaiting the future that call was meant to resolve waits
-# forever, because that await has no Playwright timeout behind it. Reproduced
-# directly against a build: page-script-triggered binding hangs isolated and
-# resolves in the main world, while the same binding called from evaluate()
-# works in both. That is isolation doing its job -- a page that can see an
-# automation binding can detect it -- so these tests cannot be fixed, only
-# recognised, which pass 2 does in about half a second each.
+# Some isolated failures do not fail -- they HANG, and always the same four, all
+# in tests/async/test_route_web_socket.py.
+#
+# The general shape: a Playwright feature implemented by installing something on
+# the page's global lands in the isolated world instead, so anything the PAGE
+# originates never reaches the automation. Two instances measured directly
+# against a build:
+#
+#   route_web_socket   replaces window.WebSocket from an init script. Isolated,
+#                      that replacement lands in the sandbox, so a socket the
+#                      page's own script opens is never intercepted and the
+#                      handler never fires.
+#   expose_function    installs its binding on the sandbox global, so page
+#                      script calling window.fn() finds nothing. (Called from
+#                      evaluate() it works, which is why it does not hang here.)
+#
+# They hang rather than fail because the waits involved -- a Twisted future from
+# the test server, an asyncio future a binding was meant to resolve -- have no
+# Playwright timeout behind them. Everything else that isolation breaks fails at
+# Playwright's 30s.
+#
+# route_web_socket not reaching page sockets is a real limitation, not a test
+# artifact: it is what a user gets too. It is also not fixable here -- the
+# feature works by replacing a page global, which is exactly what an isolated
+# world exists to prevent a page from seeing. Pass 2 recognises these in about
+# half a second each.
 #
 # 90s, against a measured worst case of 30.4s across all 2295 tests in the
 # main-world baseline (only two exceeded 30s, none exceeded 45s) and a 30s

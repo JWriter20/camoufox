@@ -166,23 +166,36 @@ refine.
 
 ### Why some isolated failures hang
 
-Not every isolated failure fails. Some wait forever, and it is worth knowing
-why, because the shape recurs:
+Not every isolated failure fails. Four wait forever, always the same four, all in
+`tests/async/test_route_web_socket.py`.
+
+The shape recurs, so it is worth stating generally: **a Playwright feature
+implemented by installing something on the page's global lands in the isolated
+world instead, so anything the page itself originates never reaches the
+automation.** Two instances, both measured directly against a build:
 
 ```
-page script calls window.exposedFn()   isolated -> HANG      main -> resolves
-evaluate() calls window.exposedFn()    isolated -> resolves  main -> resolves
+page's own script opens a WebSocket    isolated -> handler never fires   main -> intercepted
+page script calls window.exposedFn()   isolated -> HANG                  main -> resolves
+evaluate() calls window.exposedFn()    isolated -> resolves              main -> resolves
 ```
 
-`expose_function` installs its binding on the **isolated world's** global. Page
-script calling `window.fn()` looks at the *page's* window, does not find it, and
-the call never reaches Python — so a test awaiting the future that call was
-meant to resolve waits forever, since that `await` has no Playwright timeout
-behind it. `evaluate()` works because it runs in the same world as the binding.
+`route_web_socket` works by replacing `window.WebSocket` from an init script;
+isolated, that replacement lands in the sandbox, so a socket the page opens is
+never seen. `expose_function` installs its binding on the sandbox global, so page
+script calling `window.fn()` finds nothing — though called from `evaluate()` it
+works, which is why that one does not hang here.
 
-This is isolation working, not a defect: a page that can reach an automation
-binding can detect it, which is the whole reason this fork exists. Such tests
-cannot be fixed, only recognised — which pass 2 does in about half a second.
+They **hang** rather than fail because the waits involved — a Twisted future from
+the test server, an asyncio future a binding was meant to resolve — have no
+Playwright timeout behind them. Everything else isolation breaks fails at
+Playwright's 30s.
+
+Worth being clear that the `route_web_socket` half is **not a test artifact**: a
+real site's WebSocket is not intercepted either. It is also not fixable here —
+the feature works by replacing a page global, which is precisely what an
+isolated world exists to stop a page from seeing. So these are recognised rather
+than fixed, which pass 2 does in about half a second each.
 
 So pass 1 is **cost-bounded**, and only pass 1:
 
