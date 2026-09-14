@@ -52,6 +52,15 @@ release_detection:
 # The agentic patch-rebase loop
 # ---------------------------------------------------------------------------
 repair:
+  # Which coding agent repairs the patch stack: claude | codex | none.
+  #
+  # A workflow_dispatch can override this; a scheduled run cannot, so this is
+  # what the cron actually uses. `none` still detects, builds, tests and reports
+  # -- it just stops at the first broken patch and opens an issue instead of
+  # fixing it, which is the honest setting while you are still deciding whether
+  # to trust an agent with the patch stack.
+  agent: claude
+
   # Hard ceiling on agent turns. Each turn may edit the tree and re-run the
   # patch applier; only `compile_attempts` of them are allowed to trigger a
   # (slow) build.

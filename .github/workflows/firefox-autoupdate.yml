@@ -36,11 +36,11 @@ on:
         required: false
         type: string
       agent:
-        description: "Patch-repair agent"
+        description: "Patch-repair agent (overrides harness/policy.yml)"
         required: false
-        default: codex
+        default: claude
         type: choice
-        options: [codex, claude, none]
+        options: [claude, codex, none]
       mode:
         description: "Detection mode (overrides harness/policy.yml)"
         required: false
@@ -137,10 +137,24 @@ jobs:
           sudo apt-get install -y aria2 p7zip-full
           pip install -r ci/requirements.txt
 
-      - name: Install the patch-repair agent
-        if: inputs.agent != 'none'
+      - name: Resolve the repair agent
+        id: agent
+        # A dispatch input wins; otherwise harness/policy.yml decides, exactly
+        # as it does for detection mode. The previous `|| 'codex'` fallback made
+        # every scheduled run use Codex no matter what the policy said, because
+        # inputs.agent is empty on a schedule.
         run: |
-          case "${{ inputs.agent || 'codex' }}" in
+          AGENT="${{ inputs.agent }}"
+          if [ -z "$AGENT" ]; then
+            AGENT=$(python3 -c "import yaml; print((yaml.safe_load(open('harness/policy.yml')).get('repair') or {}).get('agent') or 'codex')")
+          fi
+          echo "agent=$AGENT" >> "$GITHUB_OUTPUT"
+          echo "repair agent: $AGENT"
+
+      - name: Install the patch-repair agent
+        if: steps.agent.outputs.agent != 'none'
+        run: |
+          case "${{ steps.agent.outputs.agent }}" in
             codex)  npm install -g @openai/codex ;;
             claude) npm install -g @anthropic-ai/claude-code ;;
           esac
@@ -150,12 +164,22 @@ jobs:
         # push. Whatever the agent writes leaves as a patch artifact and is
         # applied by a job that runs no agent.
         env:
-          HARNESS_AGENT: ${{ inputs.agent || 'codex' }}
+          HARNESS_AGENT: ${{ steps.agent.outputs.agent }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CAMOUFOX_PASSWD: ${{ secrets.CAMOUFOX_PASSWD }}
-        run: python3 -m harness.repair_patches --target-version "$TARGET_VERSION"
+        run: |
+          # An unset secret still arrives as an exported empty string, and an
+          # empty ANTHROPIC_API_KEY outranks CLAUDE_CODE_OAUTH_TOKEN -- the run
+          # would then burn its timeout failing to authenticate with a key that
+          # was never set. Drop the empties so precedence reflects what exists.
+          for var in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY CODEX_AUTH_JSON CAMOUFOX_PASSWD; do
+            eval "value=\${$var}"
+            [ -n "$value" ] || unset "$var"
+          done
+          python3 -m harness.repair_patches --target-version "$TARGET_VERSION"
 
       - name: Confirm the agent left the gates alone
         # repair_patches.py enforces this after every turn; asserted again here

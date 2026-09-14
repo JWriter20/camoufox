@@ -173,7 +173,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-version", required=True)
     parser.add_argument("--release", help="camoufox release tag; defaults to bumping the current one")
-    parser.add_argument("--agent", help="codex | claude | none (default: $HARNESS_AGENT or codex)")
+    parser.add_argument("--agent", help="claude | codex | none (default: $HARNESS_AGENT, else policy.yml repair.agent)")
     parser.add_argument("--evidence-dir", type=Path, default=EVIDENCE_DIR)
     parser.add_argument("--turn-timeout", type=int, default=1800)
     parser.add_argument("--skip-fetch", action="store_true")
@@ -212,7 +212,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     tree = prepare_tree(args.target_version, release, skip_fetch=args.skip_fetch)
     source_dir_name = tree.name
 
-    provider = providers.get(args.agent)
+    # Precedence: explicit flag, then the environment the workflow sets, then
+    # policy.yml. Without the policy fallback the default lived in two places --
+    # providers.get() and the workflow's `|| 'codex'` -- and the workflow's copy
+    # silently won every scheduled run.
+    provider = providers.get(args.agent or os.environ.get("HARNESS_AGENT") or cfg.get("agent"))
     unavailable = provider.available()
     result.metrics["agent"] = provider.name
     log(f"agent provider: {provider.name}" + (f" (unavailable: {unavailable})" if unavailable else ""))
