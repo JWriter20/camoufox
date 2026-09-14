@@ -15,23 +15,21 @@ Closes #
 
 ## Testing
 
-<!-- How did you test your changes? -->
+<!-- How did you test your changes? Anything a reviewer should run by hand, or
+     anything CI cannot reach. -->
 
-## Fingerprint Report
-
-Please submit a report from both the service tester and build tester.
-
-<details>
-<summary>Fingerprint report</summary>
-
-<!-- Paste your report here -->
-
-</details>
+<!--
+CI runs the full pipeline on this pull request and posts the results as a
+comment: build (or the published release, for a driver-only change), patch
+guards, build-tester, the upstream Playwright suite, leaks, and the stealth
+grade. No report needs pasting in here, and no screenshots -- the numbers in
+the comment came from a browser built from this branch, which a screenshot
+could never show. See ci/README.md to reproduce any gate locally.
+-->
 
 ## Checklist
 
 - [ ] I have linked a related issue above
 - [ ] My changes are focused on a single logical change
 - [ ] I have added testing instructions which include the desired result
-- [ ] ~~Service tests pass (for python library changes) -`./service-tester/run_tests.sh --browser-version official/prerelease/146.0.1-alpha.25` (attach screenshot)~~ temporarily out of service lol
-- [ ] Build test passes (for patch changes) - `./build-tester/run_tests.sh` A score of at least 1000 must be achieved (attach screenshot)
+- [ ] The `All tests passed` check is green (CI runs every suite; see `ci/README.md`)
