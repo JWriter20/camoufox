@@ -166,8 +166,10 @@ refine.
 
 ### Why some isolated failures hang
 
-Not every isolated failure fails. Four wait forever, always the same four, all in
-`tests/async/test_route_web_socket.py`.
+Not every isolated failure fails. Some wait forever, in both
+`tests/async/test_route_web_socket.py` and `tests/sync/test_route_web_socket.py`
+— and the two are not equally recoverable, which is the subject of the second
+half of this section.
 
 The shape recurs, so it is worth stating generally: **a Playwright feature
 implemented by installing something on the page's global lands in the isolated
@@ -192,10 +194,13 @@ Playwright timeout behind them. Everything else isolation breaks fails at
 Playwright's 30s.
 
 Worth being clear that the `route_web_socket` half is **not a test artifact**: a
-real site's WebSocket is not intercepted either. It is also not fixable here —
-the feature works by replacing a page global, which is precisely what an
-isolated world exists to stop a page from seeing. So these are recognised rather
-than fixed, which pass 2 does in about half a second each.
+real site's WebSocket is not intercepted either, and the user gets no error
+saying so. It is not fixable at this layer — the feature works by replacing a
+page global, which is precisely what an isolated world exists to stop a page
+from seeing. Tracked in [#775][ws-issue]; the fix is native interception below
+the DOM object, which is also the only version of it that stays undetectable.
+
+[ws-issue]: https://github.com/daijro/camoufox/issues/775
 
 So pass 1 is **cost-bounded**, and only pass 1:
 
@@ -209,6 +214,43 @@ by not rerunning is not lost — it fails pass 1, passes pass 2, and is counted 
 a fallback. Note that `--reruns 0` as an *argument* would not work: upstream's
 conftest overwrites `config.option.reruns` in `pytest_configure`, so clearing
 the environment variable is the only lever that holds.
+
+#### The ones a timeout cannot bound
+
+That bound is not enough for all of them, and it is worth knowing exactly where
+it stops working. Measured on run 34799668707 with the 90s bound already in
+place:
+
+| Group | Isolated pass | Outcome |
+| --- | --- | --- |
+| `tests/async/` | completed in 296s | the bound works |
+| `tests/sync/` | `test_should_work_with_ws_close` printed pytest-timeout's `+++ Timeout +++` banner at exactly 90s | **the process then sat for 1h50m**, until the job's `timeout-minutes` killed it |
+
+So the signal fires and the *test* dies; the *process* does not. pytest-timeout's
+signal method raises at the next bytecode boundary, and Playwright's sync API is
+parked in a greenlet switch that never reaches one cleanly — the raise lands
+inside the dispatcher and wedges it. `--timeout-method=thread` fires reliably but
+kills the interpreter, taking the other ~1500 tests in the group with it. **There
+is no per-test timeout value that bounds this.**
+
+So those modules are **declared, not discovered** — `ISOLATION_HANGS` in
+`ci/run_playwright.py`. The isolated pass cannot learn that they hang without
+hanging, so it is told: they are `--ignore`d out of pass 1 and run directly in
+the main world (pass 1b), where they pass and are counted as fallbacks exactly
+as if isolation had failed them honestly. The same tests still run, in the world
+that can run them.
+
+**Why not `ci/skiplist.yml`.** That list means "fails in the most permissive
+world", and `ci/run_skiplist_audit.py` enforces it by running every entry with
+`CI_WORLD=main` and failing the build on any that **pass**. A `route_web_socket`
+test passes there — the main world is precisely where the feature works — so an
+entry would be rejected by the audit, and would be untrue as written. The two
+lists are not interchangeable, and `test_isolation_hangs_are_not_in_the_skiplist`
+keeps them apart.
+
+Pass 1b sits **above** the `if not failing: continue` guard, deliberately: a
+group whose isolated pass found nothing would otherwise skip it, and coverage
+would disappear on exactly the runs that look healthiest.
 
 `tests/patches/isolated-evaluate.py` still owns the direct coverage of isolated
 evaluation, and must keep passing regardless. That file is what to check if

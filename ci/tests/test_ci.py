@@ -2070,8 +2070,10 @@ def test_only_the_first_pass_runs_isolated():
         "a second isolated pass re-runs deterministic world differences at a "
         "timeout each and recovers nothing"
     )
-    # The fallback, and the retry for what failed in both worlds.
-    assert source.count('"CI_WORLD": MAIN_WORLD') == 2
+    # The declared-hang pass (1b), the fallback (2), and the retry for what
+    # failed in both worlds (3). Isolation is the half that must stay at one;
+    # a main-world run is cheap and adjudicates, an isolated one measures.
+    assert source.count('"CI_WORLD": MAIN_WORLD') == 3
 
 
 def test_only_the_isolated_pass_is_cost_bounded():
@@ -2422,3 +2424,98 @@ def test_the_prebuilt_cache_has_no_restore_keys():
     step = next(s for s in _build_job()["steps"] if s.get("id") == "prebuilt")
     assert "restore-keys" not in step["with"]
     assert step["with"]["path"] == "camoufox-dist.tar.zst"
+
+
+# ---------------------------------------------------------------------------
+# declared isolation hangs
+# ---------------------------------------------------------------------------
+
+
+def test_isolation_hangs_are_deselected_from_the_isolated_pass():
+    """The whole point of declaring them: they must not reach pass 1.
+
+    A hang there is bounded by nothing. pytest-timeout's signal fires and the
+    sync API's greenlet never unwinds, so the process wedges with the timeout
+    banner already printed -- which is what burned four shards for two hours
+    each on run 34799668707.
+    """
+    from ci.run_playwright import ISOLATION_HANGS
+
+    source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
+    assert ISOLATION_HANGS
+    # Built from the declared list rather than spelled out, so adding an entry
+    # cannot leave the isolated pass still collecting it.
+    assert 'args=[*common, *[f"--ignore={m}" for m in hangs], *group.targets]' in source
+    assert "hangs = [m for m in ISOLATION_HANGS" in source
+
+
+def test_isolation_hangs_still_run_somewhere():
+    """Deselecting is not skipping. They run in the main world, and must.
+
+    The run has to sit above the `failing` guard: a group whose isolated pass
+    found nothing hits `continue`, and anything below it would quietly stop
+    being covered on exactly the runs that look healthiest.
+    """
+    source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
+    declared = source.index("# --- 1b.")
+    guard = source.index("if not failing:")
+    second = source.index("# --- 2.")
+    assert declared < guard < second
+    # And an empty result is a failure, not an empty pass.
+    assert "hang that stops running is how coverage disappears" in source
+
+
+def test_every_isolation_hang_is_inside_a_group_target():
+    """A declared module outside every target would be deselected from nothing
+    and then run in a main-world pass that no group reaches -- covered on
+    paper, run never."""
+    from ci.run_playwright import GROUPS, ISOLATION_HANGS
+
+    targets = [t for g in GROUPS for t in g.targets]
+    for module in ISOLATION_HANGS:
+        assert any(module.startswith(t) for t in targets), module
+
+
+def test_isolation_hangs_are_not_in_the_skiplist():
+    """These two lists mean different things and the audit enforces the split.
+
+    ci/skiplist.yml means "fails in the most permissive world", and
+    run_skiplist_audit.py checks it by running every entry with CI_WORLD=main
+    and failing the build on any that PASS. A route_web_socket test passes
+    there -- main world is precisely where the feature works -- so an entry
+    would be rejected by the audit and would be untrue as written.
+    """
+    from ci.run_playwright import ISOLATION_HANGS
+
+    entries = load_skiplist(CI_ROOT / "skiplist.yml")
+    listed = {str(e.get("module") or e.get("test") or "").lstrip("./") for e in entries}
+    for module in ISOLATION_HANGS:
+        assert module not in listed, (
+            f"{module} is declared as an isolation hang AND skiplisted; the audit "
+            "runs skiplist entries in the main world, where it passes."
+        )
+
+
+def test_group_timeout_is_shorter_than_the_job_timeout():
+    """The backstop can only fire if it is reached first.
+
+    This is the bug that made a hang cost two hours rather than twenty minutes:
+    the per-invocation subprocess bound defaulted to 10800s against a job capped
+    at 120 minutes, so GitHub hard-killed the runner before it ever ran out --
+    taking the junit and diagnostics uploads with it.
+    """
+    import yaml
+
+    from ci.run_playwright import main as _main  # noqa: F401
+
+    source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
+    default = int(re.search(r'"--group-timeout", type=int, default=(\d+)', source).group(1))
+
+    job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["playwright"]
+    job_seconds = int(job["timeout-minutes"]) * 60
+    assert default < job_seconds, (default, job_seconds)
+    # And with enough room left over to still upload what it collected.
+    assert default <= job_seconds // 2
+    # Four times the slowest healthy invocation measured (296s); below that it
+    # starts cutting slow-but-working groups short.
+    assert default >= 900

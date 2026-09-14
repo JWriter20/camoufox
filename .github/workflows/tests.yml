@@ -614,7 +614,12 @@ jobs:
     needs: [resolve, build, fetch-browser, patch-guards, build-tester]
     if: always() && needs.patch-guards.result == 'success' && needs.build-tester.result == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # A healthy shard is 5-9 minutes. At 120 a wedged shard sat on a runner for
+    # two hours before anyone found out, four shards at a time -- which is also
+    # a queueing problem for everything behind it. ci/run_playwright.py bounds
+    # each pytest invocation at 20 minutes, so this only has to be comfortably
+    # clear of one backstop firing and still reporting.
+    timeout-minutes: 40
     permissions:
       contents: read
     strategy:

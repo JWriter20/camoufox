@@ -98,32 +98,14 @@ TARGETS: Tuple[str, ...] = tuple(t for g in GROUPS for t in g.targets)
 # as Camoufox ships?". Both settings below bound what a "no" is allowed to cost,
 # and neither applies to the passes that adjudicate afterwards.
 #
-# Some isolated failures do not fail -- they HANG, and always the same four, all
-# in tests/async/test_route_web_socket.py.
+# Some isolated failures do not fail -- they HANG, because the waits involved
+# (a Twisted future from the test server, an asyncio future a binding was meant
+# to resolve) have no Playwright timeout behind them. Everything else that
+# isolation breaks fails at Playwright's 30s.
 #
-# The general shape: a Playwright feature implemented by installing something on
-# the page's global lands in the isolated world instead, so anything the PAGE
-# originates never reaches the automation. Two instances measured directly
-# against a build:
-#
-#   route_web_socket   replaces window.WebSocket from an init script. Isolated,
-#                      that replacement lands in the sandbox, so a socket the
-#                      page's own script opens is never intercepted and the
-#                      handler never fires.
-#   expose_function    installs its binding on the sandbox global, so page
-#                      script calling window.fn() finds nothing. (Called from
-#                      evaluate() it works, which is why it does not hang here.)
-#
-# They hang rather than fail because the waits involved -- a Twisted future from
-# the test server, an asyncio future a binding was meant to resolve -- have no
-# Playwright timeout behind them. Everything else that isolation breaks fails at
-# Playwright's 30s.
-#
-# route_web_socket not reaching page sockets is a real limitation, not a test
-# artifact: it is what a user gets too. It is also not fixable here -- the
-# feature works by replacing a page global, which is exactly what an isolated
-# world exists to prevent a page from seeing. Pass 2 recognises these in about
-# half a second each.
+# The bound below catches the ones it can. The ones it cannot are declared in
+# ISOLATION_HANGS and never reach this pass -- see the note there, which is also
+# where the reason they hang is written down.
 #
 # 90s, against a measured worst case of 30.4s across all 2295 tests in the
 # main-world baseline (only two exceeded 30s, none exceeded 45s) and a 30s
@@ -139,6 +121,48 @@ ISOLATED_TIMEOUT = 90
 # each for the ones that hang. A flake missed here is not lost; it fails the
 # isolated pass, passes pass 2, and is counted as a fallback.
 _NO_UPSTREAM_RERUNS = {"CI": ""}
+
+
+# Isolation does not fail these -- it HANGS them, and unlike everything else in
+# this file that is not a duration that can be tuned down.
+#
+# Measured on run 34799668707, with ISOLATED_TIMEOUT already at 90s:
+#
+#   tests/async/  isolated pass completed in 296s. The bound works.
+#   tests/sync/   test_should_work_with_ws_close printed pytest-timeout's
+#                 "+++ Timeout +++" banner at exactly 90s -- and the process
+#                 then sat there for the remaining 1h50m, until the job's
+#                 timeout-minutes killed it.
+#
+# So the signal fires and the test dies; the PROCESS does not. pytest-timeout's
+# signal method raises at the next bytecode boundary, and Playwright's sync API
+# is parked in a greenlet switch that never reaches one cleanly -- the raise
+# lands inside the dispatcher and wedges it. `--timeout-method=thread` would
+# fire, but it kills the interpreter outright and takes the other ~1500 tests in
+# the group with it. There is no per-test value that bounds this.
+#
+# Hence declared rather than discovered. The isolated pass cannot find out that
+# these hang without hanging, so it is told, and they are run in the main world
+# directly -- where they pass, and where they are counted as fallbacks exactly
+# as if isolation had failed them honestly. Coverage is not lost: the same tests
+# run, in the world that can run them.
+#
+# Why not ci/skiplist.yml, which is where tests Camoufox cannot pass live: that
+# list means "fails in the most permissive world", and run_skiplist_audit.py
+# enforces it by running every entry with CI_WORLD=main and failing the build on
+# any that pass. These pass there. An entry would be rejected by the audit, and
+# would be wrong on its own terms.
+#
+# The cause is real and is not a test artifact: page.route_web_socket() works by
+# replacing window.WebSocket from an init script, which under isolation lands in
+# the sandbox, so a socket the page's own script opens is never intercepted and
+# the handler never fires. A user gets no interception and no error. Tracked in
+# https://github.com/daijro/camoufox/issues/775 -- when that is fixed these stop
+# hanging under isolation and this list goes with it.
+ISOLATION_HANGS: Tuple[str, ...] = (
+    "tests/async/test_route_web_socket.py",
+    "tests/sync/test_route_web_socket.py",
+)
 
 
 # Left out on purpose, with the reason, so "not run" is never merely implied.
@@ -183,7 +207,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--shard", help="e.g. 3/6")
     parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR)
     parser.add_argument("--name", help="result file name; defaults to playwright[-shard]")
-    parser.add_argument("--timeout", type=int, default=10800)
+    # The backstop for a hang nothing else bounds, so it has to be shorter than
+    # the job's timeout-minutes or it can never fire: at 10800 (3h) against a
+    # 120-minute job, GitHub hard-killed the runner first and the junit and
+    # diagnostics uploads went with it. This is per pytest invocation, not per
+    # job. The slowest healthy one measured is 296s, so 20 minutes is roughly
+    # four times the real worst case -- long enough never to cut a slow-but-
+    # working group short, short enough that a wedge costs minutes.
+    parser.add_argument("--group-timeout", type=int, default=1200)
     parser.add_argument("--retries", type=int, default=1, help="rerun failures this many times")
     parser.add_argument("--headful", action="store_true")
     args = parser.parse_args(argv)
@@ -269,16 +300,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         common = [*base_args, "-o", f"cache_dir={cache_dir}"]
         targets = ", ".join(group.targets)
 
+        # Modules isolation hangs rather than fails. Deselected from the pass
+        # below, because a hang there is not bounded by anything (ISOLATION_HANGS).
+        hangs = [m for m in ISOLATION_HANGS if any(m.startswith(t) for t in group.targets)]
+
         # --- 1. isolated world: the browser as it ships --------------------
         log(f"group {index + 1}/{len(GROUPS)}: {targets} [{ISOLATED_WORLD} world]")
         group_junit = WORK_DIR / f"junit{suffix}-{index}.xml"
         proc = run_pytest(
             cwd=cwd,
             python=python,
-            args=[*common, *group.targets],
+            args=[*common, *[f"--ignore={m}" for m in hangs], *group.targets],
             junit=group_junit,
             env={**group_env, **_NO_UPSTREAM_RERUNS, "CI_WORLD": ISOLATED_WORLD},
-            timeout=args.timeout,
+            timeout=args.group_timeout,
             per_test_timeout=ISOLATED_TIMEOUT,
         )
         last_code = proc.code
@@ -294,6 +329,45 @@ def main(argv: Optional[List[str]] = None) -> int:
             if outcomes.get(tid) != results.PASS:
                 outcomes[tid] = outcome
         ran.append(group)
+
+        # --- 1b. declared hangs, straight to the main world ----------------
+        #
+        # Above the `failing` guard on purpose: these owe nothing to what the
+        # isolated pass found, and a group with no failures at all still has to
+        # run them or they would silently stop being covered.
+        #
+        # Its own cache_dir, for the reason the shared one is avoided above --
+        # `--last-failed` in pass 2 reads that cache, and a module that failed
+        # here would otherwise be re-selected there and run a second time.
+        if hangs:
+            log(f"  declared isolation hangs [{MAIN_WORLD} world]: {', '.join(hangs)}")
+            hang_cache = WORK_DIR / f"pytest-cache{suffix}" / f"{index}-hangs"
+            hang_junit = WORK_DIR / f"junit{suffix}-{index}-hangs.xml"
+            run_pytest(
+                cwd=cwd,
+                python=python,
+                args=[*base_args, "-o", f"cache_dir={hang_cache}", *hangs],
+                junit=hang_junit,
+                env={**group_env, "CI_WORLD": MAIN_WORLD},
+                timeout=args.group_timeout,
+            )
+            fallback_junits.append(hang_junit.name)
+            hung = parse_junit(hang_junit)
+            if not hung:
+                result.note(
+                    f"the declared isolation hangs ({', '.join(hangs)}) produced no junit "
+                    "results, so they did not run. Treating that as a failure: a declared "
+                    "hang that stops running is how coverage disappears quietly."
+                )
+                result.finish(results.ERROR).save(args.results_dir)
+                return 1
+            for tid, outcome in hung.items():
+                outcomes[tid] = outcome
+            # Accounted for exactly like a discovered fallback, so the published
+            # isolated-world gap keeps meaning "what isolation costs us" rather
+            # than "what isolation cost us, minus the part we knew about".
+            isolated_failures.extend(sorted(hung))
+            fallbacks.extend(sorted(t for t, o in hung.items() if o == results.PASS))
 
         failing = {t for t, o in part.items() if o in (results.FAIL, results.ERROR)}
         if not failing:
@@ -332,7 +406,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             args=[*common, "--last-failed", *group.targets],
             junit=fallback_junit,
             env={**group_env, "CI_WORLD": MAIN_WORLD},
-            timeout=args.timeout,
+            timeout=args.group_timeout,
         )
         fallback_junits.append(fallback_junit.name)
         recovered_in_main = parse_junit(fallback_junit)
@@ -362,7 +436,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 args=[*common, "--last-failed", *group.targets],
                 junit=retry_junit,
                 env={**group_env, "CI_WORLD": MAIN_WORLD},
-                timeout=args.timeout,
+                timeout=args.group_timeout,
             )
             retried = parse_junit(retry_junit)
             recovered = {t for t in failing if retried.get(t) == results.PASS}
@@ -385,6 +459,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # whole reason for running isolation first is to have a number for it that
     # moves when the browser does.
     result.metrics["isolated_world_failures"] = len(isolated_failures)
+    # Declared, not measured -- so say so rather than letting them sit inside
+    # the fallback count looking like something the isolated pass discovered.
+    result.metrics["declared_isolation_hangs"] = list(ISOLATION_HANGS)
     result.metrics["main_world_fallback_count"] = len(fallbacks)
     result.metrics["main_world_fallbacks"] = sorted(fallbacks)
     if fallbacks:
