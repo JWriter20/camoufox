@@ -2250,35 +2250,138 @@ def _build_job():
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["build"]
 
 
-def test_the_prebuilt_key_covers_everything_that_can_change_the_binary():
+def test_the_native_inputs_cover_everything_that_can_change_the_binary():
     """The cache key and the "did the browser change?" test must agree.
 
     `resolve` decides whether to build at all by grepping the diff for paths
     that can alter the binary. The build job then reuses a cached browser keyed
-    on a hash of paths. If the first list ever grows and the second does not,
-    a change to the new path would neither force a build nor invalidate the
-    cache -- and every suite downstream would report on a browser that predates
-    it, looking perfectly healthy while doing so.
+    on a hash of the native inputs. If the first list ever grows and the second
+    does not, a change to the new path would neither force a build nor
+    invalidate the cache -- and every suite would report on a browser that
+    predates it, looking perfectly healthy while doing so.
     """
-    text = WORKFLOW.read_text(encoding="utf-8")
+    from ci.browser_inputs import BROWSER_DIRS, BROWSER_FILES
 
+    text = WORKFLOW.read_text(encoding="utf-8")
     scope = re.search(r"grep -qE '\^\(([^)]*)\)'", text)
     assert scope, "the browser_changed grep is gone or was reshaped"
     considered = {
-        part.replace("\\", "").rstrip("/")
-        for part in scope.group(1).split("|")
-        if part
+        part.replace("\\", "").rstrip("/") for part in scope.group(1).split("|") if part
     }
-
-    key = re.search(r"hashFiles\((.*?)\)", text, re.S)
-    assert key, "the prebuilt-browser cache key is gone"
-    hashed = {p.strip().strip("'\"").replace("/**", "").rstrip("/") for p in key.group(1).split(",")}
-
+    hashed = set(BROWSER_DIRS) | set(BROWSER_FILES)
     missing = considered - hashed
     assert not missing, (
-        f"{sorted(missing)} can change the binary but is not in the cache key, so a "
-        "change there would be served a stale browser"
+        f"{sorted(missing)} can change the binary but does not feed the native hash, "
+        "so a change there would be served a stale browser"
     )
+
+
+def test_jar_mn_is_read_not_guessed():
+    """Two files in one source directory land at different depths.
+
+    This is the trap the whole overlay turns on. A prefix rule would write
+    JugglerFrameChild.sys.mjs one level too deep, leave the old copy in place,
+    and run stale Juggler while every suite went green.
+    """
+    from ci.browser_inputs import jar_entries
+
+    entries = jar_entries()
+    assert entries["additions/juggler/TargetRegistry.js"] == "chrome/juggler/content/TargetRegistry.js"
+    assert entries["additions/juggler/content/FrameTree.js"] == "chrome/juggler/content/content/FrameTree.js"
+    assert entries["additions/juggler/content/JugglerFrameChild.sys.mjs"] == "chrome/juggler/content/JugglerFrameChild.sys.mjs"
+
+
+def _fake_repo(tmp_path):
+    """A miniature additions/juggler with one resource and one native file."""
+    jug = tmp_path / "additions" / "juggler"
+    (jug / "content").mkdir(parents=True)
+    (jug / "screencast").mkdir()
+    (jug / "Helper.js").write_text("resource\n")
+    (jug / "content" / "FrameTree.js").write_text("resource\n")
+    (jug / "screencast" / "Encoder.cpp").write_text("native\n")
+    (jug / "jar.mn").write_text(
+        "juggler.jar:\n% content juggler %content/\n"
+        "  content/Helper.js (Helper.js)\n"
+        "  content/content/FrameTree.js (content/FrameTree.js)\n"
+    )
+    (tmp_path / "upstream.sh").write_text("version=1\n")
+    return tmp_path
+
+
+def test_a_javascript_change_does_not_move_the_native_hash(tmp_path):
+    """The whole point: editing packaged JavaScript must not force a rebuild."""
+    from ci.browser_inputs import native_digest
+
+    root = _fake_repo(tmp_path)
+    before = native_digest(root)
+    (root / "additions" / "juggler" / "content" / "FrameTree.js").write_text("changed\n")
+    assert native_digest(root) == before
+
+
+def test_a_cpp_change_does_move_the_native_hash(tmp_path):
+    """...and the converse, which is the half that must never be wrong.
+
+    additions/juggler/ holds the screencast encoder and the debugging pipe as
+    well as the JavaScript. Treating the directory as "all resources" would ship
+    a browser without a C++ change in it.
+    """
+    from ci.browser_inputs import native_digest
+
+    root = _fake_repo(tmp_path)
+    before = native_digest(root)
+    (root / "additions" / "juggler" / "screencast" / "Encoder.cpp").write_text("changed\n")
+    assert native_digest(root) != before
+
+
+def test_an_unrecognised_file_counts_as_native(tmp_path):
+    """Fail closed. A file type nobody has thought about forces a build."""
+    from ci.browser_inputs import native_digest
+
+    root = _fake_repo(tmp_path)
+    before = native_digest(root)
+    (root / "additions" / "juggler" / "something.rs").write_text("who knows\n")
+    assert native_digest(root) != before
+
+
+def test_jar_mn_itself_is_native(tmp_path):
+    """It decides the mapping and what is packaged at all.
+
+    If changing it only re-overlaid, a resource removed from jar.mn would keep
+    its stale copy in the dist forever.
+    """
+    from ci.browser_inputs import native_digest
+
+    root = _fake_repo(tmp_path)
+    before = native_digest(root)
+    (root / "additions" / "juggler" / "jar.mn").write_text(
+        "juggler.jar:\n% content juggler %content/\n  content/Helper.js (Helper.js)\n"
+    )
+    assert native_digest(root) != before
+
+
+def test_the_overlay_writes_where_jar_mn_says(tmp_path):
+    from ci.browser_inputs import overlay
+
+    root = _fake_repo(tmp_path)
+    dist = tmp_path / "bin"
+    (root / "additions" / "juggler" / "content" / "FrameTree.js").write_text("new js\n")
+    written = overlay(dist, root)
+    assert sorted(written) == [
+        "chrome/juggler/content/Helper.js",
+        "chrome/juggler/content/content/FrameTree.js",
+    ]
+    assert (dist / "chrome/juggler/content/content/FrameTree.js").read_text() == "new js\n"
+
+
+def test_the_overlay_runs_only_on_a_hit_and_before_the_upload():
+    """On a fresh build the dist already holds the right resources; overlaying
+    there would cost a 634 MB unpack and repack to copy files onto themselves."""
+    steps = _build_job()["steps"]
+    names = [s.get("name") or s.get("uses") or "run" for s in steps]
+    overlay = next(i for i, n in enumerate(names) if "resources over the restored" in n)
+    upload = next(i for i, n in enumerate(names) if n == "actions/upload-artifact@v4")
+    assert steps[overlay]["if"].strip() == "steps.prebuilt.outputs.cache-hit == 'true'"
+    assert overlay < upload, "the artifact would be uploaded before the resources were laid over it"
 
 
 def test_a_restored_browser_still_reports_a_build_result():

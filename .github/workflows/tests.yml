@@ -321,31 +321,35 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Is this exact browser already built?
+      - name: Hash the inputs that can change compiled output
+        id: native
+        # Not hashFiles(): this has to EXCLUDE the files jar.mn packages as
+        # resources, and hashFiles has no way to say "everything except".
+        # ci/browser_inputs.py is stdlib-only on purpose -- it runs here, before
+        # the pip install that a cache hit skips.
+        run: echo "hash=$(python3 -m ci.browser_inputs --digest)" >> "$GITHUB_OUTPUT"
+
+      - name: Is a browser with this compiled half already built?
         id: prebuilt
         uses: actions/cache@v4
         with:
           path: camoufox-dist.tar.zst
-          # Every input that can change the binary, and nothing that cannot.
-          # The same path list `resolve` uses to decide whether to build at all
-          # -- plus this workflow, which pins the toolchain the build runs on.
+          # Keyed on the COMPILED inputs only, so a Juggler JavaScript change
+          # still hits: the .js files jar.mn packages are laid over the restored
+          # browser below instead of relinking libxul to deliver them.
           #
-          # `browser_changed` is computed against the pull request's BASE, so it
-          # stays true for every push to a branch that touched patches/ even
-          # once. That is correct -- the published release does not contain this
-          # branch's browser changes, so it cannot be tested against -- but it
-          # meant recompiling a byte-identical browser on every push, 24 minutes
-          # at a time, to fix a typo in ci/. This key is the narrower question:
-          # not "does this branch change the browser" but "has the browser
-          # changed since the last time we built one".
-          key: >-
-            browser-${{ needs.resolve.outputs.browser_version }}-${{ needs.resolve.outputs.browser_release }}-${{
-              hashFiles('patches/**', 'additions/**', 'settings/**', 'assets/**',
-                        'upstream.sh', 'Makefile', 'scripts/**',
-                        '.github/workflows/tests.yml') }}
-          # No restore-keys, deliberately. A partial match here would serve a
-          # browser built from different sources, and every suite downstream
-          # would report on the wrong binary while looking perfectly healthy.
+          # The hash is the classification. There is no "did only JS change?"
+          # diff, because a diff compares against the pull request's base while
+          # the question is whether THIS cached browser has the same native
+          # sources -- and if the hash matches, it does, whatever the diff says.
+          #
+          # `browser_changed` (see resolve) is a different question and stays as
+          # it is: it decides build-versus-fetch against the base, and is true
+          # for every push to a branch that touched the browser once.
+          key: browser-${{ needs.resolve.outputs.browser_version }}-${{ needs.resolve.outputs.browser_release }}-native-${{ steps.native.outputs.hash }}
+          # No restore-keys, deliberately. A prefix match would serve a browser
+          # whose compiled half was built from different sources, and every
+          # suite downstream would report on it looking perfectly healthy.
 
       - name: Maximize build space
         if: steps.prebuilt.outputs.cache-hit != 'true'
@@ -490,15 +494,37 @@ jobs:
       # request, arrived at from the other direction. It records WHERE the
       # binary came from, so "this run did not compile anything" is a fact in
       # the evidence rather than an absence in it.
+      - name: Lay this branch's resources over the restored browser
+        if: steps.prebuilt.outputs.cache-hit == 'true'
+        # The compiled half is identical by construction -- that is what the key
+        # asserts. What can still differ is the JavaScript, and in the
+        # unpackaged dist/bin that CI archives there is no omni.ja to rebuild:
+        # Juggler is loose files under chrome/juggler/, so delivering new
+        # JavaScript is a copy. ci/browser_inputs.py reads the destinations out
+        # of jar.mn rather than assuming a prefix, because two files in the same
+        # source directory land at different depths.
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y zstd; }
+          mkdir -p restored
+          zstd -d -c camoufox-dist.tar.zst | tar -C restored -xf -
+          python3 -m ci.browser_inputs --overlay restored/bin
+          test -f restored/bin/camoufox-bin || { echo "::error::restored artifact has no camoufox-bin"; exit 1; }
+          tar -C restored -chf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst
+          rm -rf restored
+
       - name: Record that the browser was restored, not built
         if: steps.prebuilt.outputs.cache-hit == 'true'
         run: |
           python3 -c "
           from ci import results
+          from ci.browser_inputs import jar_entries
           r = results.GateResult(gate='build')
           r.metrics['from_cache'] = True
+          r.metrics['resources_overlaid'] = len(jar_entries())
           r.metrics['cache_key'] = '''${{ steps.prebuilt.outputs.cache-primary-key }}'''
-          r.note('restored a browser built from identical sources; nothing was compiled')
+          r.note('restored a browser whose compiled half was built from identical '
+                 'sources, and laid this branch\\'s resources over it; nothing was compiled')
           r.finish(results.PASS).save()
           "
 

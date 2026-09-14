@@ -483,6 +483,27 @@ Each tier gates the next, so a two-second lint failure never reaches the build:
 `fetch-browser` downloads the published release and the browser suites run
 against the build users are actually on — a minute instead of seventy.
 
+**Changing Juggler's JavaScript does not rebuild the browser.** Measured on a
+real build: ccache reported a **98.63%** hit rate, so almost none of those 24
+minutes was compiling C++ — it was Rust, linking libxul, and packaging, none of
+which a `.js` file affects. And in the *unpackaged* `dist/bin` that CI archives
+there is no `omni.ja` at all: Juggler is loose files under `chrome/juggler/`, so
+delivering new JavaScript is a file copy.
+
+So the build cache is keyed on a hash of the **compiled** inputs only
+(`ci/browser_inputs.py`). If that hash matches, the compiled half is identical
+*by construction* — no diff required, and no dependence on what the pull request
+base happened to contain — and this branch's resources are laid over the
+restored browser. A Juggler JavaScript change costs about a minute instead of
+twenty-four.
+
+Two things make that dangerous, and both are closed and mutation-tested:
+
+| Trap | What closes it |
+| --- | --- |
+| `additions/juggler/` is **not** all JavaScript — it holds the screencast encoder and the debugging pipe (5 `.cpp`, 5 `.h`, 2 `.idl`, 3 `components.conf`, 4 `moz.build`) | Only files `jar.mn` actually lists are resources. Everything else — including any extension nobody has considered yet — is native and forces a build. `jar.mn` itself is native, so removing an entry cannot leave a stale file behind |
+| The source→destination mapping is **per-file, not a prefix** | It is read from `jar.mn`. `TargetRegistry.js` → `content/TargetRegistry.js` (a level added), `content/FrameTree.js` → `content/content/FrameTree.js` (preserved), `content/JugglerFrameChild.sys.mjs` → `content/JugglerFrameChild.sys.mjs` (dropped). Two files in one source directory landing at different depths is exactly what a prefix rule gets wrong — and it would run stale Juggler while every suite went green |
+
 **A browser that is already built is not built again.** `browser_changed` is
 computed against the pull request's *base*, so it stays true for every push to a
 branch that touched `patches/` even once. That is right — the published release
