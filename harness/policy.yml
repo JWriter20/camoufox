@@ -21,11 +21,23 @@ release_detection:
   # latest  -- target LATEST_FIREFOX_VERSION regardless, using the newest suite
   #            available. Fires sooner, but the upstream suite may not yet know
   #            about the Firefox you are shipping.
-  mode: paired
+  #
+  # Set to `latest` deliberately: we would rather ship the current Firefox and
+  # read an ambiguous suite result than ship a browser three majors behind the
+  # one real users run. Read the caveat on max_major_jump before changing it
+  # back -- the two settings only make sense together.
+  mode: latest
 
-  # Refuse to jump more than this many Firefox majors in one run. A two-major
-  # jump is a different job from a point bump and wants a human driving it.
-  max_major_jump: 1
+  # Refuse to jump more than this many Firefox majors in one run.
+  #
+  # Raised to 3 so `latest` can actually reach Firefox 155 from the 152 we pin;
+  # at 1 the detector resolves 155 and then refuses it, which is the worst of
+  # both worlds. This is a real loosening, not a formality: three majors of
+  # upstream refactoring land on all 51 patches at once, and the newest released
+  # Playwright (v1.62.0) still pins Firefox 153, so the conformance suite cannot
+  # speak to anything 154 or 155 changed. Treat a green run at this setting as
+  # "nothing we can test broke", not "nothing broke", and read the patch diff.
+  max_major_jump: 3
 
   # Skip a Firefox release younger than this. Mozilla occasionally pulls a
   # release within a day or two of shipping it.

@@ -259,13 +259,34 @@ def decide(policy: dict, *, mode: Optional[str] = None, force_version: Optional[
         )
         return result
 
-    result.update(
-        should_update=True,
-        reason=(
+    # In `paired` mode these two always agree. Under `latest` -- or a forced
+    # version -- they routinely do not, and the difference is the whole story of
+    # how much the test run is worth. Say so here rather than in a phrasing that
+    # reads like a pairing claim, because this string is what lands in the job
+    # summary and the pull request body.
+    suite_major = major(result["playwright_firefox"])
+    target_major = major(target_version)
+    paired = suite_major == target_major
+
+    if paired:
+        reason = (
             f"Firefox {target_version} is available and Playwright "
             f"{result['playwright_tag']} targets Firefox {result['playwright_firefox']}"
-        ),
-    )
+        )
+    else:
+        span = (
+            f"Firefox {suite_major + 1}"
+            if target_major == suite_major + 1
+            else f"Firefox {suite_major + 1}-{target_major}"
+        )
+        reason = (
+            f"Firefox {target_version} is available, but the newest released Playwright "
+            f"({result['playwright_tag']}) still pins Firefox {result['playwright_firefox']}. "
+            f"The conformance suite cannot speak to anything {span} changed -- read a green "
+            f"run as 'nothing we can test broke', not 'nothing broke'."
+        )
+
+    result.update(should_update=True, suite_matches_target=paired, reason=reason)
     return result
 
 
@@ -295,6 +316,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "current_release",
         "playwright_tag",
         "playwright_firefox",
+        "suite_matches_target",
         "reason",
     ):
         value = decision.get(key, "")

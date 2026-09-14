@@ -42,9 +42,9 @@ on:
         type: choice
         options: [codex, claude, none]
       mode:
-        description: "Detection mode"
+        description: "Detection mode (overrides harness/policy.yml)"
         required: false
-        default: paired
+        default: latest
         type: choice
         options: [paired, latest]
 
@@ -70,6 +70,7 @@ jobs:
       current_version: ${{ steps.detect.outputs.current_version }}
       playwright_tag: ${{ steps.detect.outputs.playwright_tag }}
       playwright_firefox: ${{ steps.detect.outputs.playwright_firefox }}
+      suite_matches_target: ${{ steps.detect.outputs.suite_matches_target }}
       reason: ${{ steps.detect.outputs.reason }}
     steps:
       - uses: actions/checkout@v4
@@ -81,8 +82,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          # No --mode on a scheduled run: harness/policy.yml is the single
+          # source of truth for what we chase. A dispatch can override it.
           python3 -m harness.detect_release \
-            --mode "${{ inputs.mode || 'paired' }}" \
+            ${{ inputs.mode && format('--mode {0}', inputs.mode) || '' }} \
             ${{ inputs.force_version && format('--force-version {0}', inputs.force_version) || '' }}
       - name: Summarise
         run: |
