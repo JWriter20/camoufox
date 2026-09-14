@@ -510,7 +510,13 @@ jobs:
           zstd -d -c camoufox-dist.tar.zst | tar -C restored -xf -
           python3 -m ci.browser_inputs --overlay restored/bin
           test -f restored/bin/camoufox-bin || { echo "::error::restored artifact has no camoufox-bin"; exit 1; }
-          tar -C restored -chf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst
+          # Via a temporary name, not over the input. `zstd -o` refuses an
+          # existing destination ("already exists; stdin is an input - not
+          # proceeding") and exits 1, which failed every cache-hit build as soon
+          # as one actually hit. `mv` also means a repack that dies partway
+          # cannot leave a truncated archive where the restored one was.
+          tar -C restored -chf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst.new
+          mv -f camoufox-dist.tar.zst.new camoufox-dist.tar.zst
           rm -rf restored
 
       - name: Record that the browser was restored, not built
