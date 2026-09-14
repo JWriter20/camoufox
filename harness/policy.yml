@@ -1,0 +1,198 @@
+# Camoufox auto-update harness policy.
+#
+# This file is the ONLY place a gate's pass condition lives. `harness/verify.py`
+# reads it and nothing else decides whether a run is green -- in particular the
+# repair agent does not, which is the point: an agent that edits this file to
+# make itself pass shows up as a policy-digest change in the pull request, and
+# every waiver here needs a human-written reason and an expiry date.
+#
+# Read harness/TRIBAL-KNOWLEDGE.md before changing anything below.
+
+schema: 1
+
+# ---------------------------------------------------------------------------
+# What counts as "a new Firefox worth chasing"
+# ---------------------------------------------------------------------------
+release_detection:
+  # paired  -- target the newest Firefox major that a *released* playwright-python
+  #            tag actually pins. Always has a matching conformance suite, which
+  #            is what the harness needs to prove nothing regressed. This is the
+  #            default and matches how Camoufox has historically tracked Firefox.
+  # latest  -- target LATEST_FIREFOX_VERSION regardless, using the newest suite
+  #            available. Fires sooner, but the upstream suite may not yet know
+  #            about the Firefox you are shipping.
+  mode: paired
+
+  # Refuse to jump more than this many Firefox majors in one run. A two-major
+  # jump is a different job from a point bump and wants a human driving it.
+  max_major_jump: 1
+
+  # Skip a Firefox release younger than this. Mozilla occasionally pulls a
+  # release within a day or two of shipping it.
+  min_release_age_hours: 24
+
+  firefox_versions_url: https://product-details.mozilla.org/1.0/firefox_versions.json
+  firefox_releases_url: https://product-details.mozilla.org/1.0/firefox.json
+  playwright_python_repo: microsoft/playwright-python
+  playwright_repo: microsoft/playwright
+
+# ---------------------------------------------------------------------------
+# The agentic patch-rebase loop
+# ---------------------------------------------------------------------------
+repair:
+  # Hard ceiling on agent turns. Each turn may edit the tree and re-run the
+  # patch applier; only `compile_attempts` of them are allowed to trigger a
+  # (slow) build.
+  max_agent_turns: 40
+  compile_attempts: 3
+
+  # The agent may only touch these paths. Anything else it writes is reverted
+  # before the tree is used, and the run is marked tainted.
+  writable_paths:
+    - patches/
+    - additions/
+    - settings/
+    - upstream.sh
+    - docs/
+
+  # Paths the agent must never touch, checked after every turn. Editing a gate
+  # or a baseline is the one failure mode that would let a broken build ship.
+  forbidden_paths:
+    - harness/
+    - .github/workflows/
+    - tests/
+    - build-tester/
+    - service-tester/
+
+# ---------------------------------------------------------------------------
+# Gates. `required: true` means absent evidence is a FAILURE, never a skip.
+# ---------------------------------------------------------------------------
+gates:
+
+  patches_apply:
+    required: true
+    description: Every patch in patches/ applies to the new tree with zero rejects.
+
+  build:
+    required: true
+    description: ./mach build completes for linux x86_64.
+    targets: [linux-x86_64]
+
+  patch_guards:
+    required: true
+    description: tests/patches/*.py -- one standalone guard per shipped behaviour.
+    # Every guard must pass. There is no partial credit: these are the
+    # assertions that the fingerprint spoofing still does what it claims.
+    allow_failures: 0
+
+  build_tester:
+    required: true
+    description: build-tester against the raw binary, 8 profiles.
+    profile_count: 8
+    # Cross-profile uniqueness draws random fingerprints, so a single
+    # collision slot is expected noise rather than a regression -- see
+    # TRIBAL-KNOWLEDGE.md, "The build-tester uniqueness slot".
+    allow_uniqueness_collisions: 1
+    # Every other category must come back clean.
+    required_categories:
+      - Automation Detection
+      - JS Engine
+      - Lie Detection
+      - Firefox APIs
+      - Cross-Signal
+      - CSS Fingerprint
+      - Canvas Noise
+      - WebGL Render
+
+  playwright_vendored:
+    required: true
+    description: >-
+      The maintained suite in tests/. This is the no-regression gate: it is the
+      same suite that passed on the previous release, so any test that flips
+      pass -> fail is a real regression in this Firefox bump.
+    # Zero tolerance, per-test. Totals are not the check -- identities are.
+    max_new_failures: 0
+
+  playwright_upstream:
+    required: true
+    description: >-
+      Upstream playwright-python's own suite at the tag resolved for this run,
+      run unmodified against the new binary. Catches conformance the vendored
+      fork has drifted away from.
+    # Failures are allowed only if they are named in the expectations file with
+    # a reason. An unexpected failure fails the run.
+    expectations: harness/baseline/playwright-upstream-expectations.yml
+    # Until the first run records a baseline there is nothing to compare to.
+    # `bootstrap` records and reports without gating; flip to false after you
+    # have reviewed the seeded expectations. See TRIBAL-KNOWLEDGE.md.
+    bootstrap: true
+    # A suite that collapses (import error, browser won't launch) can look like
+    # "few failures" if you only count. Require a plausible collected count.
+    min_tests_collected: 900
+
+  pythonlib:
+    required: true
+    description: pythonlib's own pytest suite.
+    max_new_failures: 0
+
+  native_rules:
+    required: true
+    description: >-
+      native-tests/test_tribal_rules.py -- the decisions in ci/tribal-rules.yml
+      are still in force. Needs no browser, so it fails a bad change in seconds.
+    allow_failures: 0
+
+  native_browser:
+    required: true
+    description: >-
+      native-tests/ -- launch browsers, kill them, prove nothing survived, and
+      check that a context and a browser mean what we say they mean.
+    allow_failures: 0
+
+  sundial:
+    required: true
+    description: >-
+      Stealth report from the private sundial suite. Scope and thresholds live in
+      ci/sundial.yml, because the stealth check runs on every pull request and
+      the harness is only one of its callers. Only a grade and a count ever leave
+      the gate -- see TRIBAL-KNOWLEDGE.md, "Sundial is private".
+
+    # Individual vectors excused from the gate. Identified by opaque_id() --
+    # never by name, because this file is public. Add one with:
+    #   python3 -m harness.gates.sundial waive --key '<vector key>' --reason '...'
+    # Every entry needs a reason and an expiry; verify.py fails on an expired
+    # waiver so these cannot quietly become permanent.
+    waivers: []
+      # - id: 0123456789abcdef0123
+      #   reason: why Camoufox does not claim this, in a full sentence
+      #   expires: 2027-01-01
+
+    # The absolute floor lives in ci/sundial.yml (min_pass_rate); the gate
+    # records a breach as a policy_violation, which stays fatal here even when
+    # the baseline scored just as badly.
+    #
+    # This gate publishes a score and no per-vector rows, so regressions are
+    # measured against the score rather than against identities. A drop of more
+    # than this against the recorded baseline fails the run. It is coarser than
+    # naming the vector that broke -- that is the price of not publishing them,
+    # and it is deliberate. For the per-vector view, set
+    # SUNDIAL_REPORT_AGE_RECIPIENT and read the sealed report locally.
+    max_pass_rate_drop: 0.02
+
+# ---------------------------------------------------------------------------
+# How "no regression" is decided, for every per-test gate above.
+# ---------------------------------------------------------------------------
+regression:
+  # A test that passed in the baseline and does not pass now is a regression,
+  # full stop -- including when it errors, is skipped, or disappears from the
+  # run entirely. Disappearing is the important one: deleting a failing test is
+  # the cheapest way to make a suite go green, so it is counted as a failure.
+  treat_missing_as_regression: true
+
+  # A test absent from the baseline but failing now. These are new upstream
+  # tests. They do not block a `bootstrap` gate but do block a gated one.
+  treat_new_failure_as_regression: true
+
+  # Suites with genuinely flaky tests get a bounded retry, and a test only
+  # counts as failed if it fails every attempt.
+  retries: 2

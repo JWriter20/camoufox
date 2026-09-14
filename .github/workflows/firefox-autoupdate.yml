@@ -1,0 +1,342 @@
+name: Firefox auto-update
+
+# Chases new Firefox releases on its own: detect a release paired with a
+# Playwright suite that can test it, rebase the patch stack onto it with a
+# coding agent, then hand the result to the repository's ordinary test pipeline
+# and open a pull request if it passes.
+#
+# The testing is deliberately not defined here. `test` calls
+# .github/workflows/tests.yml -- the same workflow every pull request runs -- so
+# a contributor's change and an automated Firefox bump are judged by identical
+# checks. If this file grew its own copy of the suites, "the tests pass" would
+# quietly come to mean two different things.
+#
+# Four jobs, so the job that runs a model and the job that can write to the
+# repository are never the same job:
+#
+#   detect   read-only, no secrets.
+#   update   runs the agent with `contents: read`. It physically cannot push;
+#            the rebased change leaves as an artifact.
+#   stage    applies that artifact to a branch and pushes it. No agent, no model
+#            credential.
+#   test     the shared pipeline, against that branch.
+#   propose  opens the pull request, or an issue explaining why there isn't one.
+#
+# Nothing here merges anything.
+
+on:
+  schedule:
+    # Twice a day. Firefox ships roughly monthly; this is about not sitting on a
+    # release for a week, not about winning a race.
+    - cron: "17 4,16 * * *"
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: "Target this Firefox version instead of detecting one"
+        required: false
+        type: string
+      agent:
+        description: "Patch-repair agent"
+        required: false
+        default: codex
+        type: choice
+        options: [codex, claude, none]
+      mode:
+        description: "Detection mode"
+        required: false
+        default: paired
+        type: choice
+        options: [paired, latest]
+
+permissions: {}
+
+concurrency:
+  group: firefox-autoupdate
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  detect:
+    name: Detect release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      should_update: ${{ steps.detect.outputs.should_update }}
+      target_version: ${{ steps.detect.outputs.target_version }}
+      current_version: ${{ steps.detect.outputs.current_version }}
+      playwright_tag: ${{ steps.detect.outputs.playwright_tag }}
+      playwright_firefox: ${{ steps.detect.outputs.playwright_firefox }}
+      reason: ${{ steps.detect.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r ci/requirements.txt
+      - id: detect
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m harness.detect_release \
+            --mode "${{ inputs.mode || 'paired' }}" \
+            ${{ inputs.force_version && format('--force-version {0}', inputs.force_version) || '' }}
+      - name: Summarise
+        run: |
+          {
+            echo "### Firefox auto-update — detection"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Currently pinned | \`${{ steps.detect.outputs.current_version }}\` |"
+            echo "| Target | \`${{ steps.detect.outputs.target_version || '—' }}\` |"
+            echo "| Playwright suite | \`${{ steps.detect.outputs.playwright_tag || '—' }}\` |"
+            echo "| Proceeding | ${{ steps.detect.outputs.should_update }} |"
+            echo
+            echo "> ${{ steps.detect.outputs.reason }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  update:
+    name: Rebase the patch stack
+    needs: detect
+    if: needs.detect.outputs.should_update == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      TARGET_VERSION: ${{ needs.detect.outputs.target_version }}
+      HARNESS_WORK_DIR: ${{ github.workspace }}/.harness-work
+    steps:
+      - name: Maximize disk space
+        # Extracting the Firefox source needs room even though this job does not
+        # compile it.
+        uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef # v4.1
+        with:
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y aria2 p7zip-full
+          pip install -r ci/requirements.txt
+
+      - name: Install the patch-repair agent
+        if: inputs.agent != 'none'
+        run: |
+          case "${{ inputs.agent || 'codex' }}" in
+            codex)  npm install -g @openai/codex ;;
+            claude) npm install -g @anthropic-ai/claude-code ;;
+          esac
+
+      - name: Rebase
+        # The only step the model credential is visible to, in a job that cannot
+        # push. Whatever the agent writes leaves as a patch artifact and is
+        # applied by a job that runs no agent.
+        env:
+          HARNESS_AGENT: ${{ inputs.agent || 'codex' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CAMOUFOX_PASSWD: ${{ secrets.CAMOUFOX_PASSWD }}
+        run: python3 -m harness.repair_patches --target-version "$TARGET_VERSION"
+
+      - name: Confirm the agent left the gates alone
+        # repair_patches.py enforces this after every turn; asserted again here
+        # from outside the process that could have been influenced.
+        run: |
+          changed=$(git status --porcelain=v1 --untracked-files=all \
+            | awk '{ $1=""; sub(/^ /,""); print }' \
+            | grep -E '^(harness/|ci/|native-tests/|tests/|build-tester/|service-tester/|\.github/)' || true)
+          if [ -n "$changed" ]; then
+            echo "::error::the repair step modified gate-owning paths:"
+            echo "$changed"
+            exit 1
+          fi
+          echo "gate-owning paths are untouched"
+
+      - name: Bundle the change
+        run: |
+          mkdir -p out
+          # Only the paths the agent may write. The generated Firefox tree is
+          # scratch and must never reach the pull request.
+          git add -A -- patches additions settings upstream.sh docs 2>/dev/null || true
+          git diff --cached --binary > out/proposed.patch || true
+          git reset -q
+          test -s out/proposed.patch || echo "::warning::the patch stack needed no changes"
+          wc -c out/proposed.patch
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proposed-${{ env.TARGET_VERSION }}
+          path: |
+            out/proposed.patch
+            .harness-work/results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  stage:
+    name: Stage the branch
+    needs: [detect, update]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      branch: ${{ steps.push.outputs.branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: proposed-${{ needs.detect.outputs.target_version }}
+          path: incoming
+      - id: push
+        run: |
+          set -euo pipefail
+          BRANCH="autoupdate/firefox-${{ needs.detect.outputs.target_version }}"
+          git config user.name  "camoufox-autoupdate[bot]"
+          git config user.email "camoufox-autoupdate@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          if [ -s incoming/out/proposed.patch ]; then
+            git apply --binary --index incoming/out/proposed.patch
+          fi
+          git commit -q --allow-empty -m "chore(firefox): update to ${{ needs.detect.outputs.target_version }}"
+          # Force-pushed: this branch is regenerated from scratch every run and
+          # is not a place anyone should be committing to by hand.
+          git push -f origin "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test
+    needs: [detect, stage]
+    # The repository's ordinary pipeline, not a copy of it.
+    uses: ./.github/workflows/tests.yml
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      browser_version: ${{ needs.detect.outputs.target_version }}
+      playwright_tag: ${{ needs.detect.outputs.playwright_tag }}
+      ref: ${{ needs.stage.outputs.branch }}
+      shards: "6"
+    secrets:
+      SUNDIAL_USERNAME: ${{ secrets.SUNDIAL_USERNAME }}
+      SUNDIAL_AUTOMATION_KEY: ${{ secrets.SUNDIAL_AUTOMATION_KEY }}
+
+  # ---------------------------------------------------------------------------
+  propose:
+    name: Open a pull request
+    needs: [detect, stage, test]
+    if: always() && needs.stage.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      TARGET_VERSION: ${{ needs.detect.outputs.target_version }}
+      BRANCH: ${{ needs.stage.outputs.branch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r ci/requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          merge-multiple: true
+          path: .harness-work/results
+          run-id: ${{ github.run_id }}
+        continue-on-error: true
+
+      - name: Check for regressions against the baseline
+        id: verify
+        # The shared pipeline says whether the suites passed. This says whether
+        # anything that passed on the *previous release* stopped passing --
+        # which is the question only the harness has a baseline to answer.
+        run: |
+          set +e
+          python3 -m harness.verify \
+            --evidence-dir .harness-work/results \
+            --markdown report.md --out report.json
+          echo "verdict=$([ $? -eq 0 ] && echo pass || echo fail)" >> "$GITHUB_OUTPUT"
+
+      - name: Open the pull request
+        if: needs.test.result == 'success' && steps.verify.outputs.verdict == 'pass'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Automated Firefox update from \`.github/workflows/firefox-autoupdate.yml\`."
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Firefox | \`${{ needs.detect.outputs.current_version }}\` → \`${TARGET_VERSION}\` |"
+            echo "| Playwright suite | \`${{ needs.detect.outputs.playwright_tag }}\` |"
+            echo "| Run | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+            echo
+            echo "The repository's ordinary test pipeline passed on this branch, and"
+            echo "\`harness/verify.py\` found no regression against the recorded baseline."
+            echo
+            cat report.md 2>/dev/null || true
+            echo
+            echo "---"
+            echo
+            echo "**Before merging**, per \`CONTRIBUTING.md\`: link an issue. Note that CI"
+            echo "builds and gates linux x86_64 only — Windows and macOS are cross-compiled"
+            echo "by the release workflow and are not covered here."
+          } > pr-body.md
+
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --title "chore(firefox): update to ${TARGET_VERSION}" --body-file pr-body.md
+          else
+            gh pr create \
+              --base "${{ github.event.repository.default_branch }}" \
+              --head "$BRANCH" \
+              --title "chore(firefox): update to ${TARGET_VERSION}" \
+              --body-file pr-body.md
+          fi
+
+      - name: Report the failure as an issue
+        if: needs.test.result != 'success' || steps.verify.outputs.verdict != 'pass'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE="Firefox ${TARGET_VERSION} auto-update did not pass"
+          {
+            echo "The harness attempted Firefox \`${TARGET_VERSION}\` and stopped."
+            echo
+            echo "- Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo "- Branch: \`${BRANCH}\` (pushed, not proposed)"
+            echo "- Test pipeline: ${{ needs.test.result }}"
+            echo
+            cat report.md 2>/dev/null || echo "_No regression report was produced._"
+            echo
+            echo "Start with \`harness/TRIBAL-KNOWLEDGE.md\`, then \`docs/patch-upgrading-guide.md\`."
+          } > issue-body.md
+
+          existing=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number' || true)
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh issue comment "$existing" --body-file issue-body.md
+          else
+            gh issue create --title "$TITLE" --body-file issue-body.md
+          fi

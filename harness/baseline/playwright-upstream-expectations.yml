@@ -1,0 +1,28 @@
+# Upstream Playwright tests that Camoufox is expected to fail.
+#
+# Camoufox deliberately breaks some of upstream's automation contract -- that is
+# what makes it undetectable -- so a handful of upstream's own tests cannot pass
+# and should not. Each one is named here with the reason.
+#
+# This file is empty on purpose. `gates.playwright_upstream.bootstrap` is `true`
+# in policy.yml, so the first real run records what actually fails instead of
+# guessing; run the gate with `--seed-expectations` to write the observed set
+# here, then replace every `reason: TRIAGE` with a real one and flip bootstrap
+# to false.
+#
+# verify.py rejects an entry whose reason is empty, so the file cannot silently
+# become a list of unexplained failures.
+#
+# A legitimate reason names a behaviour Camoufox intentionally does not provide:
+#
+#   - id: 'async/test_page_evaluate.py::test_should_work_with_window_globals'
+#     reason: >-
+#       Camoufox evaluates in an isolated world, so a global the page's own
+#       script defined is not visible to evaluate(). This is the core of the
+#       fork, not a defect. Covered instead by tests/patches/isolated-evaluate.py.
+#
+# "It was failing when I got here" is not a reason -- that is a regression
+# wearing a disguise.
+
+seeded_from: null
+expected_failures: []
