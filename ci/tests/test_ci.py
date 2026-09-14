@@ -2237,3 +2237,85 @@ def test_a_zero_fallback_count_is_still_printed():
         "metrics": {"tally": {"pass": 10, "fail": 0, "total": 10}, "main_world_fallback_count": 0},
     }}
     assert "0 via main-world fallback" in render(merged, ["playwright"], [], {})
+
+
+# ---------------------------------------------------------------------------
+# reusing a browser that is already built
+# ---------------------------------------------------------------------------
+
+
+def _build_job():
+    import yaml
+
+    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["build"]
+
+
+def test_the_prebuilt_key_covers_everything_that_can_change_the_binary():
+    """The cache key and the "did the browser change?" test must agree.
+
+    `resolve` decides whether to build at all by grepping the diff for paths
+    that can alter the binary. The build job then reuses a cached browser keyed
+    on a hash of paths. If the first list ever grows and the second does not,
+    a change to the new path would neither force a build nor invalidate the
+    cache -- and every suite downstream would report on a browser that predates
+    it, looking perfectly healthy while doing so.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    scope = re.search(r"grep -qE '\^\(([^)]*)\)'", text)
+    assert scope, "the browser_changed grep is gone or was reshaped"
+    considered = {
+        part.replace("\\", "").rstrip("/")
+        for part in scope.group(1).split("|")
+        if part
+    }
+
+    key = re.search(r"hashFiles\((.*?)\)", text, re.S)
+    assert key, "the prebuilt-browser cache key is gone"
+    hashed = {p.strip().strip("'\"").replace("/**", "").rstrip("/") for p in key.group(1).split(",")}
+
+    missing = considered - hashed
+    assert not missing, (
+        f"{sorted(missing)} can change the binary but is not in the cache key, so a "
+        "change there would be served a stale browser"
+    )
+
+
+def test_a_restored_browser_still_reports_a_build_result():
+    """Otherwise the gate fails on a cache hit.
+
+    `build` is required whenever the browser was built rather than fetched, and
+    requiring a suite that produced no result is -- correctly -- a failure. A
+    cache hit skips the job that writes it, so the hit path has to write one
+    itself. Same trap as requiring `build` on a driver-only run, reached from
+    the other side.
+    """
+    steps = _build_job()["steps"]
+    hit = [s for s in steps if s.get("if", "").strip() == "steps.prebuilt.outputs.cache-hit == 'true'"]
+    assert hit, "nothing runs on a cache hit, so no build result is produced"
+    assert any("GateResult(gate='build')" in str(s.get("run", "")) for s in hit)
+
+
+def test_every_expensive_build_step_is_skipped_on_a_hit():
+    """A hit that still spends twenty minutes clearing disk has saved nothing."""
+    steps = _build_job()["steps"]
+    guard = "steps.prebuilt.outputs.cache-hit != 'true'"
+    expensive = ("Maximize build space", "Remove unwanted tools", "Install build dependencies",
+                 "Create swap", "Prepare the source tree", "Build",
+                 "Package the binary for the test jobs", "Restore ccache")
+    for name in expensive:
+        step = next((s for s in steps if s.get("name") == name), None)
+        assert step is not None, f"{name} is gone -- update this list"
+        assert step.get("if", "").strip() == guard, f"{name} runs even when the browser was restored"
+
+
+def test_the_prebuilt_cache_has_no_restore_keys():
+    """A prefix match would serve a browser built from different sources.
+
+    Everywhere else in this workflow `restore-keys` is right -- a partially warm
+    ccache is still warm. Here it would hand the test jobs the wrong binary
+    while every suite reported on it as though it were the one under review.
+    """
+    step = next(s for s in _build_job()["steps"] if s.get("id") == "prebuilt")
+    assert "restore-keys" not in step["with"]
+    assert step["with"]["path"] == "camoufox-dist.tar.zst"

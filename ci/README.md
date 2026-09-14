@@ -483,6 +483,29 @@ Each tier gates the next, so a two-second lint failure never reaches the build:
 `fetch-browser` downloads the published release and the browser suites run
 against the build users are actually on — a minute instead of seventy.
 
+**A browser that is already built is not built again.** `browser_changed` is
+computed against the pull request's *base*, so it stays true for every push to a
+branch that touched `patches/` even once. That is right — the published release
+does not contain that branch's browser changes, so it cannot be tested against —
+but taken alone it meant recompiling a byte-identical browser on every push, 24
+minutes at a time, to fix a typo in `ci/`.
+
+The build job therefore asks a narrower question first: not "does this branch
+change the browser" but "has the browser changed since the last one we built".
+The answer is a cache keyed on a hash of every input that can alter the binary —
+the same path list `browser_changed` uses, plus this workflow, which pins the
+toolchain. On a hit, a 634 MB `camoufox-dist.tar.zst` is restored and every
+build step is skipped; the run still records a `build` result saying the browser
+was restored rather than compiled, because a required suite that reports nothing
+fails the gate, and "nothing was compiled" should be a fact in the evidence
+rather than a hole in it.
+
+Deliberately **no `restore-keys`** on that cache. Everywhere else a partial
+match is fine — a partly warm ccache is still warm — but here it would hand the
+test jobs a browser built from different sources, and every suite would report
+on it looking perfectly healthy. A self-test asserts the key covers every path
+`browser_changed` considers browser-affecting, so the two cannot drift apart.
+
 **The ccache is kept warm from `main`.** Pushes to `main` populate it and a
 twice-weekly schedule keeps it from being evicted (GitHub drops a cache after
 seven days unused). Pull requests restore it through `restore-keys`, so a build

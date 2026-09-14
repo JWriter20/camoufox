@@ -316,7 +316,39 @@ jobs:
       # dir` + `make build` do not.
       BUILD_TARGET: linux,x86_64
     steps:
+      # Checkout first, because the cache key below is a hash of the tree.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Is this exact browser already built?
+        id: prebuilt
+        uses: actions/cache@v4
+        with:
+          path: camoufox-dist.tar.zst
+          # Every input that can change the binary, and nothing that cannot.
+          # The same path list `resolve` uses to decide whether to build at all
+          # -- plus this workflow, which pins the toolchain the build runs on.
+          #
+          # `browser_changed` is computed against the pull request's BASE, so it
+          # stays true for every push to a branch that touched patches/ even
+          # once. That is correct -- the published release does not contain this
+          # branch's browser changes, so it cannot be tested against -- but it
+          # meant recompiling a byte-identical browser on every push, 24 minutes
+          # at a time, to fix a typo in ci/. This key is the narrower question:
+          # not "does this branch change the browser" but "has the browser
+          # changed since the last time we built one".
+          key: >-
+            browser-${{ needs.resolve.outputs.browser_version }}-${{ needs.resolve.outputs.browser_release }}-${{
+              hashFiles('patches/**', 'additions/**', 'settings/**', 'assets/**',
+                        'upstream.sh', 'Makefile', 'scripts/**',
+                        '.github/workflows/tests.yml') }}
+          # No restore-keys, deliberately. A partial match here would serve a
+          # browser built from different sources, and every suite downstream
+          # would report on the wrong binary while looking perfectly healthy.
+
       - name: Maximize build space
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef # v4.1
         with:
           remove-dotnet: "true"
@@ -328,6 +360,7 @@ jobs:
           remove-swapfile: "true"
 
       - name: Remove unwanted tools
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         run: |
           sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' \
             '^mongodb-.*' '^mysql-.*' > /dev/null 2>&1 || true
@@ -337,17 +370,17 @@ jobs:
           sudo apt-get clean > /dev/null 2>&1 || true
           df -h /
 
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-python@v5
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - uses: actions/setup-go@v5
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         with:
           go-version: "1.23"
 
       - name: Install build dependencies
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         run: |
           wget -q https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 18
           sudo apt-get install -y lld-18 clang-18
@@ -358,6 +391,7 @@ jobs:
           sudo apt-get install -y msitools p7zip-full aria2 ccache libsqlite3-dev
 
       - name: Restore ccache
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.ccache
@@ -369,6 +403,7 @@ jobs:
             ccache-
 
       - name: Create swap
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         run: |
           # The link step is OOM-killed on a standard runner without this, and
           # reports as a bare SIGTERM that looks nothing like out-of-memory.
@@ -377,8 +412,10 @@ jobs:
           free -h
 
       - run: pip install -r ci/requirements.txt
+        if: steps.prebuilt.outputs.cache-hit != 'true'
 
       - name: Prepare the source tree
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         env:
           CAMOUFOX_PASSWD: ${{ secrets.CAMOUFOX_PASSWD }}
         run: |
@@ -397,13 +434,16 @@ jobs:
           python3 -m ci.run_prepare
 
       - name: Build
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         env:
           CARGO_BUILD_JOBS: "1"
         run: python3 -m ci.run_build
 
       - run: ccache -s
+        if: steps.prebuilt.outputs.cache-hit != 'true'
 
       - name: Package the binary for the test jobs
+        if: steps.prebuilt.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           src="camoufox-${{ needs.resolve.outputs.browser_version }}-${{ needs.resolve.outputs.browser_release }}/obj-x86_64-pc-linux-gnu/dist/bin"
@@ -443,6 +483,24 @@ jobs:
           # file looked present right up until it was unpacked somewhere else.
           tar -C "$(dirname "$src")" -chf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst
           ls -lh camoufox-dist.tar.zst
+
+      # A restored browser still has to produce the `build` result, or the
+      # summary reports a required suite that never ran and the gate goes red --
+      # which is the same trap as requiring `build` on a driver-only pull
+      # request, arrived at from the other direction. It records WHERE the
+      # binary came from, so "this run did not compile anything" is a fact in
+      # the evidence rather than an absence in it.
+      - name: Record that the browser was restored, not built
+        if: steps.prebuilt.outputs.cache-hit == 'true'
+        run: |
+          python3 -c "
+          from ci import results
+          r = results.GateResult(gate='build')
+          r.metrics['from_cache'] = True
+          r.metrics['cache_key'] = '''${{ steps.prebuilt.outputs.cache-primary-key }}'''
+          r.note('restored a browser built from identical sources; nothing was compiled')
+          r.finish(results.PASS).save()
+          "
 
       - uses: actions/upload-artifact@v4
         with:
