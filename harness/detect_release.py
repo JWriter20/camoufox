@@ -280,10 +280,14 @@ def decide(policy: dict, *, mode: Optional[str] = None, force_version: Optional[
             else f"Firefox {suite_major + 1}-{target_major}"
         )
         reason = (
-            f"Firefox {target_version} is available, but the newest released Playwright "
-            f"({result['playwright_tag']}) still pins Firefox {result['playwright_firefox']}. "
-            f"The conformance suite cannot speak to anything {span} changed -- read a green "
-            f"run as 'nothing we can test broke', not 'nothing broke'."
+            f"Firefox {target_version} is available, but the newest released "
+            f"playwright-python ({result['playwright_tag']}) pins Firefox "
+            f"{result['playwright_firefox']}. The suite is selected from "
+            f"microsoft/playwright-python, not microsoft/playwright: the vendored tests are "
+            f"pytest, so the Python binding is what has to be installable, and it trails the "
+            f"JS release by roughly one to four weeks. The suite therefore cannot speak to "
+            f"anything {span} changed -- read a green run as 'nothing we can test broke', "
+            f"not 'nothing broke'."
         )
 
     result.update(should_update=True, suite_matches_target=paired, reason=reason)

@@ -33,10 +33,16 @@ release_detection:
   # Raised to 3 so `latest` can actually reach Firefox 155 from the 152 we pin;
   # at 1 the detector resolves 155 and then refuses it, which is the worst of
   # both worlds. This is a real loosening, not a formality: three majors of
-  # upstream refactoring land on all 51 patches at once, and the newest released
-  # Playwright (v1.62.0) still pins Firefox 153, so the conformance suite cannot
-  # speak to anything 154 or 155 changed. Treat a green run at this setting as
-  # "nothing we can test broke", not "nothing broke", and read the patch diff.
+  # upstream refactoring land on all 51 patches at once.
+  #
+  # On the suite gap, be precise about which Playwright is behind. microsoft/
+  # playwright v1.63.0 (2026-09-04) already pins Firefox 155.0; what has not
+  # shipped is playwright-python 1.63, and that is the one that matters, because
+  # the vendored suite is pytest and ci/versions.py resolves tags from
+  # microsoft/playwright-python. The binding has trailed the JS release by 6, 13,
+  # 6 and 28 days over the last four minors -- so `paired` reaching 155 is
+  # probably a short wait, not a long one. Worth re-checking before assuming
+  # this setting is still the one you want.
   max_major_jump: 3
 
   # Skip a Firefox release younger than this. Mozilla occasionally pulls a
