@@ -94,6 +94,37 @@ GROUPS: Tuple[Group, ...] = (
 TARGETS: Tuple[str, ...] = tuple(t for g in GROUPS for t in g.targets)
 
 
+# The isolated pass is a classifier: its only question is "does this test pass
+# as Camoufox ships?". Both settings below bound what a "no" is allowed to cost,
+# and neither applies to the passes that adjudicate afterwards.
+#
+# Some isolated failures do not fail -- they HANG. `expose_function` installs its
+# binding on the isolated world's global, so page script calling `window.fn()`
+# looks at the page's own window, does not find it, and the call never reaches
+# Python. A test awaiting the future that call was meant to resolve waits
+# forever, because that await has no Playwright timeout behind it. Reproduced
+# directly against a build: page-script-triggered binding hangs isolated and
+# resolves in the main world, while the same binding called from evaluate()
+# works in both. That is isolation doing its job -- a page that can see an
+# automation binding can detect it -- so these tests cannot be fixed, only
+# recognised, which pass 2 does in about half a second each.
+#
+# 90s, against a measured worst case of 30.4s across all 2295 tests in the
+# main-world baseline (only two exceeded 30s, none exceeded 45s) and a 30s
+# Playwright action timeout. Three times the slowest thing that legitimately
+# happens, and half the default.
+ISOLATED_TIMEOUT = 90
+
+# upstream's tests/conftest.py sets `reruns = 3` whenever $CI is set, which is
+# the only thing it reads $CI for. Insurance that almost never pays out -- the
+# main-world baseline recorded 2 reruns across all 2295 tests -- and under
+# isolation it turns every deterministic world difference into four attempts:
+# 138 reruns in one shard's isolated pass, recovering nothing, at up to 180s
+# each for the ones that hang. A flake missed here is not lost; it fails the
+# isolated pass, passes pass 2, and is counted as a fallback.
+_NO_UPSTREAM_RERUNS = {"CI": ""}
+
+
 # Left out on purpose, with the reason, so "not run" is never merely implied.
 EXCLUDED = {
     "tests/test_installation.py": (
@@ -230,8 +261,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             python=python,
             args=[*common, *group.targets],
             junit=group_junit,
-            env={**group_env, "CI_WORLD": ISOLATED_WORLD},
+            env={**group_env, **_NO_UPSTREAM_RERUNS, "CI_WORLD": ISOLATED_WORLD},
             timeout=args.timeout,
+            per_test_timeout=ISOLATED_TIMEOUT,
         )
         last_code = proc.code
         part = parse_junit(group_junit)

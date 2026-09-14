@@ -164,6 +164,39 @@ collected previously failed, so an unguarded `--last-failed` runs the *whole*
 group again — in the other world, silently replacing the result it was meant to
 refine.
 
+### Why some isolated failures hang
+
+Not every isolated failure fails. Some wait forever, and it is worth knowing
+why, because the shape recurs:
+
+```
+page script calls window.exposedFn()   isolated -> HANG      main -> resolves
+evaluate() calls window.exposedFn()    isolated -> resolves  main -> resolves
+```
+
+`expose_function` installs its binding on the **isolated world's** global. Page
+script calling `window.fn()` looks at the *page's* window, does not find it, and
+the call never reaches Python — so a test awaiting the future that call was
+meant to resolve waits forever, since that `await` has no Playwright timeout
+behind it. `evaluate()` works because it runs in the same world as the binding.
+
+This is isolation working, not a defect: a page that can reach an automation
+binding can detect it, which is the whole reason this fork exists. Such tests
+cannot be fixed, only recognised — which pass 2 does in about half a second.
+
+So pass 1 is **cost-bounded**, and only pass 1:
+
+| Bound | Value | Why |
+| --- | --- | --- |
+| per-test timeout | 90s | the slowest test in the whole main-world baseline was 30.4s; only two exceeded 30s and none exceeded 45s. A Playwright action times out at 30s |
+| upstream reruns | off (`CI=""`) | `tests/conftest.py` sets `reruns = 3` whenever `$CI` is set — the only thing it reads `$CI` for. The baseline recorded **2** reruns across all 2295 tests; the isolated pass recorded **138 in one shard**, all re-running deterministic world differences |
+
+Together that turns a hang from up to 4 × 180s into one 90s wait. A flake missed
+by not rerunning is not lost — it fails pass 1, passes pass 2, and is counted as
+a fallback. Note that `--reruns 0` as an *argument* would not work: upstream's
+conftest overwrites `config.option.reruns` in `pytest_configure`, so clearing
+the environment variable is the only lever that holds.
+
 `tests/patches/isolated-evaluate.py` still owns the direct coverage of isolated
 evaluation, and must keep passing regardless. That file is what to check if
 isolation itself regresses.

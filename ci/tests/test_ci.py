@@ -2074,6 +2074,49 @@ def test_only_the_first_pass_runs_isolated():
     assert source.count('"CI_WORLD": MAIN_WORLD') == 2
 
 
+def test_only_the_isolated_pass_is_cost_bounded():
+    """The tighter timeout and the rerun suppression belong to pass 1 only.
+
+    Pass 1 asks one question -- does this pass as Camoufox ships? -- and a test
+    that hangs has already answered it. Passes 2 and 3 are the ones that decide
+    what the answer means, so they keep upstream's conditions: the full timeout,
+    and upstream's own reruns.
+    """
+    from ci.run_playwright import ISOLATED_TIMEOUT, _NO_UPSTREAM_RERUNS
+
+    source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
+    assert source.count("per_test_timeout=ISOLATED_TIMEOUT") == 1
+    assert source.count("**_NO_UPSTREAM_RERUNS") == 1
+    # Both on the isolated pass, not on a main-world one.
+    isolated = source.index('"CI_WORLD": ISOLATED_WORLD')
+    first_main = source.index('"CI_WORLD": MAIN_WORLD', source.index("# --- 2."))
+    for marker in ("per_test_timeout=ISOLATED_TIMEOUT", "**_NO_UPSTREAM_RERUNS"):
+        at = source.index(marker)
+        assert abs(at - isolated) < abs(at - first_main), marker
+
+    # 30.4s was the slowest test in the whole main-world baseline, and a
+    # Playwright action times out at 30s. Below ~60 this starts failing honest
+    # tests; at 180 a hang costs three minutes.
+    assert 60 <= ISOLATED_TIMEOUT <= 120
+    assert _NO_UPSTREAM_RERUNS == {"CI": ""}
+
+
+def test_suppressing_reruns_survives_upstreams_conftest():
+    """`--reruns 0` on the command line would not work.
+
+    upstream's tests/conftest.py sets `config.option.reruns = 3` in
+    pytest_configure whenever $CI is set, which overwrites anything passed as an
+    argument. Clearing the variable is the only lever that holds, and $CI is the
+    only thing that conftest reads it for -- so this must stay an env change,
+    not an argument.
+    """
+    source = (CI_ROOT / "run_playwright.py").read_text(encoding="utf-8")
+    assert "--reruns" not in source, (
+        "upstream's conftest overwrites config.option.reruns whenever $CI is "
+        "set, so a --reruns argument is silently ignored"
+    )
+
+
 def test_no_rerun_pass_can_start_from_an_empty_failure_set():
     """`--last-failed` with nothing previously failed runs EVERYTHING.
 
