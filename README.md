@@ -496,7 +496,11 @@ Anti-bot systems also run client-side scripts to monitor your behavior. For exam
 
 <video src="https://github.com/user-attachments/assets/6d33d6af-3537-4603-bf24-6bd3f4f8f455" width="200px" autoplay loop muted></video>
 
-Camoufox tries its best with its human-like mouse movement algorithm. The natural motion algorithm was originally from [riflosnake's HumanCursor](https://github.com/riflosnake/HumanCursor) and has been rewritten in C++ and modified for more distance-aware trajectories.
+Camoufox does not draw its cursor paths. With `humanize=True` it uses [**Cursory**](https://github.com/Vinyzu/cursory) by [Vinyzu](https://github.com/Vinyzu), which holds 2357 mouse movements recorded from real people: it picks a recording whose direction, distance and wander suit the move being made, morphs it onto the requested start and end points, and replays it with that recording's own timing — pauses, overshoots and all.
+
+That last part matters as much as the shape. Camoufox previously walked a Bézier curve through two random knots and emitted a point every 10ms. Both halves of that are tells: an analytic curve sampled at a fixed rate has velocity and jerk profiles that separate cleanly from a hand's, and the acceleration came entirely from one easing function, so every movement Camoufox ever made sped up and slowed down the same way. A replayed recording has neither property.
+
+Camoufox ships [cursory-js](https://github.com/JWriter20/cursory-js), a TypeScript port of Cursory, vendored into Juggler at `additions/juggler/input/cursory/`. It reproduces the Python original bit for bit, so a path can be reproduced against `pip install cursory`. **Cursory is LGPLv3-or-later, not MPL-2.0 like the rest of Camoufox**; its licence and full provenance are in `additions/juggler/input/cursory/NOTICE`.
 
 However, this isn't perfect. It may still be detected with sophisticated enough analysis. (WIP for the future)
 
@@ -787,7 +791,8 @@ Debloating & references:
 
 Web scraping & testing:
 
-- [riflosnake/HumanCursor](https://github.com/riflosnake/HumanCursor): Original human-like cursor movement algorithm, ported to C++
+- [Vinyzu/cursory](https://github.com/Vinyzu/cursory): The recorded human mouse trajectories behind `humanize=True`, vendored via [cursory-js](https://github.com/JWriter20/cursory-js) (LGPLv3-or-later — see `additions/juggler/input/cursory/NOTICE`)
+- [riflosnake/HumanCursor](https://github.com/riflosnake/HumanCursor): The Bézier cursor algorithm Camoufox used before Cursory
 - [CreepJS](https://github.com/abrahamjuliot/creepjs), [Browserleaks](https://browserleaks.com), [BrowserScan](https://www.browserscan.net/) - Valuable leak testing sites
 
 UI theming:

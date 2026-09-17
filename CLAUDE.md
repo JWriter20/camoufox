@@ -49,7 +49,7 @@ Low-level equivalents: `make patch ./patches/x.patch`, `make unpatch ./patches/x
 
 - **`patches/`** — the diffs applied to Firefox source. This is where browser behavior is changed.
 - **`additions/`** — whole files copied *into* the source tree (not diffs) by `scripts/copy-additions.sh`:
-  - `additions/camoucfg/` — the C++ config layer. `MaskConfig.hpp` reads the spoofing config (from `CAMOU_CONFIG` env var / `camoufox.cfg`) that the patches consult at the C++ level; `MouseTrajectories.hpp` is the human-cursor algorithm.
+  - `additions/camoucfg/` — the C++ config layer. `MaskConfig.hpp` reads the spoofing config (from `CAMOU_CONFIG` env var / `camoufox.cfg`) that the patches consult at the C++ level. (The human-cursor algorithm used to live here too; it is now `additions/juggler/input/CursorTrajectory.js` and the vendored Cursory beside it.)
   - `additions/juggler/` — Camoufox's patched **Juggler** (Firefox's Playwright automation protocol, the Firefox analog of CDP). This is where Playwright is made undetectable — the page agent runs in an isolated scope so injected automation JS is not visible to the page.
 - **`settings/`** — `camoufox.cfg`, `chrome.css`, `properties.json`, `camoucfg.jvv`, prefs/policies. Copied into the source's `lw/` dir by `copy-additions.sh`. Edit the built config with `make edit-cfg`.
 - **`scripts/`** — `patch.py` (the patcher, LibreWolf-derived), `developer.py` (the `make edits` UI), `package.py`, `copy-additions.sh`, `install-deps.sh`.

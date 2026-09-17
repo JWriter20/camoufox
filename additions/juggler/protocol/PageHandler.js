@@ -7,6 +7,7 @@
 const {Helper, EventWatcher} = ChromeUtils.importESModule('chrome://juggler/content/Helper.js');
 const {NetUtil} = ChromeUtils.importESModule('resource://gre/modules/NetUtil.sys.mjs');
 const {NetworkObserver, PageNetwork} = ChromeUtils.importESModule('chrome://juggler/content/NetworkObserver.js');
+const {humanizedSteps} = ChromeUtils.importESModule('chrome://juggler/content/input/CursorTrajectory.js');
 const {PageTarget} = ChromeUtils.importESModule('chrome://juggler/content/TargetRegistry.js');
 const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
 const {MouseDispatch} = ChromeUtils.importESModule('chrome://juggler/content/input/MouseDispatch.js');
@@ -534,16 +535,14 @@ export class PageHandler {
       const promises = [];
       for (const eventType of types) {
         // Camoufox: when humanize is enabled, expand a direct mousemove into a
-        // human-like trajectory of intermediate mousemoves generated in C++
-        // (ChromeUtils.camouGetMouseTrajectory / MouseTrajectories.hpp).
+        // human-like trajectory of intermediate mousemoves, replayed from a
+        // recording of a real hand (input/CursorTrajectory.js -> Cursory).
         if (eventType === 'mousemove' && ChromeUtils.camouGetBool('humanize', false)) {
-          const trajectory = ChromeUtils.camouGetMouseTrajectory(this._lastTrackedPos.x, this._lastTrackedPos.y, x, y);
-          // The first and last pairs are skipped: the last pair is the exact
-          // destination, which is dispatched explicitly below.
-          const points = [];
-          for (let i = 2; i < trajectory.length - 2; i += 2)
-            points.push([trajectory[i], trajectory[i + 1]]);
-          await dispatch.sendTrajectoryAcked(watcher, 'mousemove', points);
+          // The endpoints are excluded: the cursor is already on the first, and
+          // the last is the destination dispatched explicitly below.
+          const {steps, trailingDelayMs} =
+              humanizedSteps(this._lastTrackedPos.x, this._lastTrackedPos.y, x, y);
+          await dispatch.sendTrajectoryAcked(watcher, 'mousemove', steps, trailingDelayMs);
           // Always finish exactly on the requested destination.
           promises.push(dispatch.sendAcked(watcher, 'mousemove', x, y));
         } else {

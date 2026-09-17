@@ -1,17 +1,23 @@
 """
-Verify humanize=True produces a native cursor trajectory (daijro/camoufox#677).
+Verify humanize=True produces a human cursor trajectory (daijro/camoufox#677).
 
 Camoufox's cursor humanization has a single call site: the `mousemove` branch of
 `sendEvents()` in additions/juggler/protocol/PageHandler.js, which calls
-`ChromeUtils.camouGetMouseTrajectory(...)` and dispatches the intermediate
-points. The Firefox 146 Juggler migration (commit 03c1230) rewrote that helper
-and silently dropped the branch, so from FF146 through v152 `humanize=True`
-emitted only the endpoint mousemove -- no trajectory at all.
+`humanizedSteps()` (additions/juggler/input/CursorTrajectory.js) and dispatches
+the intermediate points. The Firefox 146 Juggler migration (commit 03c1230)
+rewrote that helper and silently dropped the branch, so from FF146 through v152
+`humanize=True` emitted only the endpoint mousemove -- no trajectory at all.
 
-This is runtime-only: the C++ generator (MouseTrajectories.hpp), the ChromeUtils
-bindings, and the config plumbing all stay intact and every patch applies
-cleanly, so nothing fails loudly. Only driving a real browser and counting the
-emitted mousemove events catches it.
+This is runtime-only: the generator, its vendored Cursory backend and the config
+plumbing all stay intact and every patch applies cleanly, so nothing fails
+loudly. Only driving a real browser and counting the emitted mousemove events
+catches it.
+
+The timing check is the other half. Camoufox used to emit trajectory points on a
+flat 10ms metronome, which is a giveaway on its own: no hand moves a mouse at a
+perfectly constant rate. Cursory carries each recording's own timing, so the
+gaps between events must come out uneven -- and a regression that reverted to a
+fixed cadence would otherwise pass every other assertion here.
 
 Run against a specific build:
     CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python tests/patches/humanize-mouse-trajectory.py
@@ -23,6 +29,8 @@ fonts fails startup in a way that surfaces as a confusing TargetClosedError.
 What PASS means:
     * humanize=True expands one long mouse.move into many intermediate
       mousemove events, ending exactly on the requested destination;
+    * those events are spread over a plausible human duration, with uneven
+      gaps between them rather than a fixed cadence;
     * a humanized click still lands on the target element;
     * without humanize, each move emits only its endpoint (pins the other
       direction so accidental always-on humanization is also caught).
@@ -38,8 +46,13 @@ DEST = (1100, 650)
 BODY = '<body style="margin:0;width:1400px;height:800px"></body>'
 RECORDER = """
     window.moves = [];
-    addEventListener("mousemove", e => moves.push([e.clientX, e.clientY]));
+    addEventListener("mousemove", e => moves.push([e.clientX, e.clientY, performance.now()]));
 """
+
+# The default humanize ceiling is 1.5s; anything under 50ms for a ~1200px move
+# means the trajectory is being emitted as fast as the event loop allows.
+MIN_DURATION_MS = 50
+MAX_DURATION_MS = 3000
 
 EXECUTABLE_PATH = os.environ.get("CAMOUFOX_EXECUTABLE_PATH")
 
@@ -76,22 +89,46 @@ async def _humanized_click_hits_target():
         return await page.evaluate("moves"), await page.evaluate("clicked")
 
 
+def _gaps(moves):
+    """Inter-event gaps, in ms, of the trajectory that followed the first move."""
+    times = [m[2] for m in moves[1:]]
+    return [round(b - a, 1) for a, b in zip(times, times[1:])]
+
+
 async def main() -> int:
     passed = True
 
     humanized = await _collect_moves(True)
     print("\n=== humanize=True ===")
-    print(f"  mousemove events: {len(humanized)}  (endpoint: {humanized[-1] if humanized else None})")
-    if len(humanized) >= 10 and humanized[-1] == list(DEST):
+    print(f"  mousemove events: {len(humanized)}  (endpoint: {humanized[-1][:2] if humanized else None})")
+    if len(humanized) >= 10 and humanized[-1][:2] == list(DEST):
         print("  PASS: humanized trajectory emitted, ending on destination")
     else:
         passed = False
         print("  FAIL: expected >=10 intermediate points ending exactly on the destination")
 
+    gaps = _gaps(humanized)
+    duration = round(sum(gaps), 1)
+    distinct = len(set(gaps))
+    print(f"  duration: {duration}ms over {len(gaps)} gaps; {distinct} distinct gap values")
+    print(f"  gaps (first 12): {gaps[:12]}")
+    if MIN_DURATION_MS <= duration <= MAX_DURATION_MS:
+        print(f"  PASS: movement spans a plausible human duration")
+    else:
+        passed = False
+        print(f"  FAIL: expected {MIN_DURATION_MS}-{MAX_DURATION_MS}ms, got {duration}ms")
+    # A metronome would produce one or two distinct values (the fixed step, plus
+    # scheduler noise clustering around it). Real recorded timing does not.
+    if distinct >= max(4, len(gaps) // 4):
+        print("  PASS: gaps are uneven, not a fixed cadence")
+    else:
+        passed = False
+        print(f"  FAIL: only {distinct} distinct gaps across {len(gaps)} -- looks like a fixed cadence")
+
     plain = await _collect_moves(False)
     print("\n=== humanize off ===")
-    print(f"  mousemove events: {plain}")
-    if plain == [[20, 20], list(DEST)]:
+    print(f"  mousemove events: {[m[:2] for m in plain]}")
+    if [m[:2] for m in plain] == [[20, 20], list(DEST)]:
         print("  PASS: only endpoints emitted")
     else:
         passed = False

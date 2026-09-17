@@ -2,12 +2,11 @@ diff --git a/dom/base/ChromeUtils.cpp b/dom/base/ChromeUtils.cpp
 index 52f0af76ec..2a7a9ae4fc 100644
 --- a/dom/base/ChromeUtils.cpp
 +++ b/dom/base/ChromeUtils.cpp
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,7 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  #include "ChromeUtils.h"
 +#include "MaskConfig.hpp"
-+#include "MouseTrajectories.hpp"
  
  #include "JSOracleParent.h"
  #include "ThirdPartyUtil.h"
@@ -36,7 +35,7 @@ index 52f0af76ec..2a7a9ae4fc 100644
  double ChromeUtils::DateNow(GlobalObject&) { return JS_Now() / 1000.0; }
  
  /* static */
-@@ -2141,6 +2161,77 @@ void ChromeUtils::GetAllPossibleUtilityActorNames(GlobalObject& aGlobal,
+@@ -2141,6 +2161,65 @@ void ChromeUtils::GetAllPossibleUtilityActorNames(GlobalObject& aGlobal,
    }
  }
  
@@ -99,18 +98,6 @@ index 52f0af76ec..2a7a9ae4fc 100644
 +  aRetVal.Clear();
 +}
 +
-+/* static */
-+void ChromeUtils::CamouGetMouseTrajectory(GlobalObject& aGlobal, long aFromX,
-+                                          long aFromY, long aToX, long aToY,
-+                                          nsTArray<int32_t>& aPoints) {
-+  HumanizeMouseTrajectory trajectory(std::make_pair(aFromX, aFromY),
-+                                     std::make_pair(aToX, aToY));
-+  std::vector<int> flattenedPoints = trajectory.getPoints();
-+
-+  aPoints.Clear();
-+  aPoints.AppendElements(flattenedPoints.data(), flattenedPoints.size());
-+}
-+
  /* static */
  bool ChromeUtils::ShouldResistFingerprinting(
      GlobalObject& aGlobal, JSRFPTarget aTarget,
@@ -129,7 +116,7 @@ index 138b9c3f80..c7c7ce74bf 100644
    static double DateNow(GlobalObject&);
  
    static void EnsureJSOracleStarted(GlobalObject&);
-@@ -314,6 +318,24 @@ class ChromeUtils {
+@@ -314,6 +318,20 @@ class ChromeUtils {
    static void GetAllPossibleUtilityActorNames(GlobalObject& aGlobal,
                                                nsTArray<nsCString>& aNames);
  
@@ -146,10 +133,6 @@ index 138b9c3f80..c7c7ce74bf 100644
 +
 +  static void CamouGetStringList(GlobalObject& aGlobal, const nsAString& aVarName,
 +                                 nsTArray<nsString>& aRetVal);
-+
-+  static void CamouGetMouseTrajectory(GlobalObject& aGlobal, long aFromX,
-+                                     long aFromY, long aToX, long aToY,
-+                                     nsTArray<int32_t>& aPoints);
 +
    static bool ShouldResistFingerprinting(
        GlobalObject& aGlobal, JSRFPTarget aTarget,
@@ -172,7 +155,7 @@ index 6a99703db1..82415eba19 100644
    /**
     * Starts the JSOracle process for ORB JavaScript validation, if it hasn't started already.
     */
-@@ -761,6 +768,36 @@ partial namespace ChromeUtils {
+@@ -761,6 +768,31 @@ partial namespace ChromeUtils {
    [ChromeOnly]
    readonly attribute unsigned long aliveUtilityProcesses;
  
@@ -200,11 +183,6 @@ index 6a99703db1..82415eba19 100644
 +   * Get a list of strings from Camoufox MaskConfig.
 +   */
 +  sequence<DOMString> camouGetStringList(DOMString varName);
-+
-+  /**
-+   * Calculate a human-like mouse trajectory between two points.
-+   */
-+  sequence<long> camouGetMouseTrajectory(long fromX, long fromY, long toX, long toY);
 +
    /**
     * Get a list of all possible Utility process Actor Names ; mostly useful to
