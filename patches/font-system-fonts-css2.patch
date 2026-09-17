@@ -71,7 +71,7 @@ index 2ec366ca45..bcdc4301b9 100644
      "/dom/base",
      "/dom/html",
 diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
-index 1e76b87091..7ce1ef01d2 100644
+index 1e76b87091..53a7006f01 100644
 --- a/layout/base/nsLayoutUtils.cpp
 +++ b/layout/base/nsLayoutUtils.cpp
 @@ -4,6 +4,7 @@
@@ -82,7 +82,7 @@ index 1e76b87091..7ce1ef01d2 100644
  #include <algorithm>
  #include <limits>
  
-@@ -9748,6 +9749,105 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
+@@ -9748,6 +9749,113 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
  
  static void GetSpoofedSystemFontForRFP(LookAndFeel::FontID aFontID,
                                         gfxFontStyle& aStyle, nsAString& aName) {
@@ -124,6 +124,11 @@ index 1e76b87091..7ce1ef01d2 100644
 +    if (starts_with("linux")) return SpoofedOS::Linux;
 +    return SpoofedOS::Other;
 +  }();
++  // Every branch must mark the result as a system font, as the upstream path at
++  // the end of this function does: ComputeSystemFont copies the flag into
++  // FontFamilyList::is_system_font, and without it canvas's font setter
++  // overrides the size and cannot serialize the value, so
++  // `ctx.font = "caption"` was silently ignored ("10px sans-serif").
 +  if (sSpoofedOS == SpoofedOS::Mac) {
 +    // Same per-keyword table as a real macOS (see the XP_MACOSX branch below).
 +    aName = u"-apple-system"_ns;
@@ -143,6 +148,7 @@ index 1e76b87091..7ce1ef01d2 100644
 +        aStyle.size = 12;
 +        break;
 +    }
++    aStyle.systemFont = true;
 +    return;
 +  }
 +  if (sSpoofedOS == SpoofedOS::Win) {
@@ -173,6 +179,7 @@ index 1e76b87091..7ce1ef01d2 100644
 +        break;
 +    }
 +    aStyle.size = 12.0f * sWinScale;
++    aStyle.systemFont = true;
 +    return;
 +  }
 +  if (sSpoofedOS == SpoofedOS::Linux) {
@@ -181,6 +188,7 @@ index 1e76b87091..7ce1ef01d2 100644
 +    // resistFingerprinting user shows, not a regular desktop.
 +    aName = u"Ubuntu"_ns;
 +    aStyle.size = 14.6667f;
++    aStyle.systemFont = true;
 +    return;
 +  }
 +  // iPhone / unspoofed: fall through to upstream behavior.
@@ -188,7 +196,7 @@ index 1e76b87091..7ce1ef01d2 100644
  #if defined(XP_MACOSX) || defined(MOZ_WIDGET_UIKIT)
    aName = u"-apple-system"_ns;
    // Values taken from a macOS 10.15 system.
-@@ -9802,8 +9887,22 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
+@@ -9802,8 +9910,22 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
                                        const Document* aDocument) {
    gfxFontStyle fontStyle;
    nsAutoString systemFontName;

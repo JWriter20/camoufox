@@ -1,5 +1,5 @@
 diff --git a/gfx/thebes/CoreTextFontList.cpp b/gfx/thebes/CoreTextFontList.cpp
-index 09cc159cad..177e156c2d 100644
+index 09cc159cad..d999473501 100644
 --- a/gfx/thebes/CoreTextFontList.cpp
 +++ b/gfx/thebes/CoreTextFontList.cpp
 @@ -4,6 +4,7 @@
@@ -24,8 +24,33 @@ index 09cc159cad..177e156c2d 100644
      auto timerId = glean::fontlist::bundledfonts_activate.Start();
      ActivateBundledFonts();
      glean::fontlist::bundledfonts_activate.StopAndAccumulate(
+@@ -1475,6 +1481,11 @@ gfxFontEntry* CoreTextFontList::LookupLocalFont(
+   // Reset our string length to match the actual C string we got, which will
+   // usually be much shorter than the maximal buffer we allocated.
+   key.Truncate(strlen(key.get()));
++  // Camoufox: keep the family name for the caller. A CTFontEntry built here
++  // carries none, and gfxUserFontSet holds a local() source to the spoofed font
++  // list by the RESOLVED family: with an empty name every local() face failed
++  // with NetworkError on macOS, installed and allowed or not.
++  nsAutoCString familyName(key);
+   ToLowerCase(key);
+   // If the family can't be looked up, this font is not available for use.
+   FontFamily family = FindFamily(aFontVisibilityProvider, key);
+@@ -1482,8 +1493,10 @@ gfxFontEntry* CoreTextFontList::LookupLocalFont(
+     return nullptr;
+   }
+ 
+-  return new CTFontEntry(aFontName, fontRef, aWeightForEntry, aStretchForEntry,
+-                         aStyleForEntry, false, true);
++  auto* fe = new CTFontEntry(aFontName, fontRef, aWeightForEntry,
++                             aStretchForEntry, aStyleForEntry, false, true);
++  fe->mFamilyName = familyName;
++  return fe;
+ }
+ 
+ static void ReleaseData(void* info, const void* data, size_t size) {
 diff --git a/gfx/thebes/gfxDWriteFontList.cpp b/gfx/thebes/gfxDWriteFontList.cpp
-index 9c81c07a44..72930f574b 100644
+index 9c81c07a44..b2941ca5d7 100644
 --- a/gfx/thebes/gfxDWriteFontList.cpp
 +++ b/gfx/thebes/gfxDWriteFontList.cpp
 @@ -7,6 +7,7 @@
@@ -36,7 +61,7 @@ index 9c81c07a44..72930f574b 100644
  #include "gfxDWriteFonts.h"
  #include "gfxDWriteCommon.h"
  #include "nsUnicharUtils.h"
-@@ -1629,6 +1630,8 @@
+@@ -1629,6 +1630,8 @@ void gfxDWriteFontList::InitSharedFontListForPlatform() {
    // We activate bundled fonts if the pref is > 0 (on) or < 0 (auto), only an
    // explicit value of 0 (off) will disable them.
    TimeStamp start1 = TimeStamp::Now();
@@ -45,7 +70,7 @@ index 9c81c07a44..72930f574b 100644
    if (StaticPrefs::gfx_bundled_fonts_activate_AtStartup() != 0) {
      mBundledFonts = CreateBundledFontsCollection(factory);
    }
-@@ -2622,22 +2625,49 @@
+@@ -2622,22 +2625,49 @@ class BundledFontFileEnumerator : public IDWriteFontFileEnumerator {
    nsCOMPtr<nsIFile> mFontDir;
    nsCOMPtr<nsIDirectoryEnumerator> mEntries;
    nsCOMPtr<nsISupports> mCurrent;
@@ -248,10 +273,10 @@ index 50964eff36..7e98560f36 100644
  
    bool AddWithLegacyFamilyName(const nsACString& aLegacyName,
 diff --git a/gfx/thebes/gfxUserFontSet.cpp b/gfx/thebes/gfxUserFontSet.cpp
-index 6ae5b3c04d..406ba6263c 100644
+index 6ae5b3c04d..724e04364e 100644
 --- a/gfx/thebes/gfxUserFontSet.cpp
 +++ b/gfx/thebes/gfxUserFontSet.cpp
-@@ -466,6 +466,24 @@ void gfxUserFontEntry::DoLoadNextSrc(bool aIsContinue) {
+@@ -466,6 +466,26 @@ void gfxUserFontEntry::DoLoadNextSrc(bool aIsContinue) {
          fe = gfxPlatform::GetPlatform()->LookupLocalFont(
              fontSet->GetFontVisibilityProvider(), currSrc.mLocalName, Weight(),
              Stretch(), SlantStyle());
@@ -270,6 +295,8 @@ index 6ae5b3c04d..406ba6263c 100644
 +          ToLowerCase(familyKey);
 +          if (gfxPlatformFontList::MaskedFontListBlocks(
 +                  fontSet->GetFontVisibilityProvider(), familyKey)) {
++            // The lookup hands back a new, unowned entry: release it.
++            RefPtr<gfxFontEntry> discard(fe);
 +            fe = nullptr;
 +          }
 +        }
