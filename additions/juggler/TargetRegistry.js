@@ -33,6 +33,19 @@ const Cr = Components.results;
 const helper = new Helper();
 
 const IDENTITY_NAME = 'JUGGLER ';
+
+// Camoufox: every juggler browser context is a Firefox container. A PUBLIC
+// container renders its name ("JUGGLER <id>") and colour in the URL bar and the
+// tab strip -- a visible automation cue a real Firefox never shows. The
+// userContextId (not the public flag) is what isolates cookies and storage, so
+// keep the identity but mark it non-public: tabbrowser's indicator and the
+// container menus only render public identities. ContextualIdentityService.remove()
+// only deletes public identities, so flip the flag back before removing.
+function setIdentityPublic(userContextId, isPublic) {
+  const record = (ContextualIdentityService._identities || []).find(i => i.userContextId == userContextId);
+  if (record)
+    record.public = isPublic;
+}
 const HUNDRED_YEARS = 60 * 60 * 24 * 365 * 100;
 
 // Capture rate for the compositor-backed screencast. Playwright muxes at 25fps
@@ -154,11 +167,14 @@ export class TargetRegistry {
     this._browserProxy = null;
 
     // Cleanup containers from previous runs (if any)
-    for (const identity of ContextualIdentityService.getPublicIdentities()) {
-      if (identity.name && identity.name.startsWith(IDENTITY_NAME)) {
-        ContextualIdentityService.remove(identity.userContextId);
-        ContextualIdentityService.closeContainerTabs(identity.userContextId);
-      }
+    ContextualIdentityService.ensureDataReady();
+    const staleIds = (ContextualIdentityService._identities || [])
+        .filter(identity => identity.name && identity.name.startsWith(IDENTITY_NAME))
+        .map(identity => identity.userContextId);
+    for (const userContextId of staleIds) {
+      setIdentityPublic(userContextId, true);
+      ContextualIdentityService.remove(userContextId);
+      ContextualIdentityService.closeContainerTabs(userContextId);
     }
 
     this._defaultContext = new BrowserContext(this, undefined, undefined);
@@ -1166,6 +1182,7 @@ class BrowserContext {
     if (browserContextId !== undefined) {
       const identity = ContextualIdentityService.create(IDENTITY_NAME + browserContextId);
       this.userContextId = identity.userContextId;
+      setIdentityPublic(this.userContextId, false);
     }
     this._principals = [];
     // Maps origins to the permission lists.
@@ -1230,6 +1247,7 @@ class BrowserContext {
 
   async destroy() {
     if (this.userContextId !== 0) {
+      setIdentityPublic(this.userContextId, true);
       ContextualIdentityService.remove(this.userContextId);
       for (const page of this.pages)
         page.close();

@@ -51,11 +51,13 @@ index 1cfa4b8497..bdf8d7202e 100644
      // If we are given a tab to swap in, take care of it before first paint to
      // avoid an about:blank flash.
      let tabToAdopt = this.getTabToAdopt();
-@@ -345,6 +371,31 @@ var gBrowserInit = {
+@@ -345,6 +371,33 @@ var gBrowserInit = {
        }
      }
  
-+    if (ChromeUtils.camouGetBool("showcursor", true)) {
++    // Camoufox: debugging aid only -- a red dot following the mouse is a visible
++    // automation cue no real Firefox draws. Opt in with config showcursor=true.
++    if (ChromeUtils.camouGetBool("showcursor", false)) {
 +      let cursorFollower = document.createElement("div");
 +      cursorFollower.id = "cursor-highlighter";
 +      cursorFollower.style.cssText = `
