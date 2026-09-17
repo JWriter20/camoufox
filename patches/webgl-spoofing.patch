@@ -125,10 +125,10 @@ index 0000000000..72df27b6e5
 +
 +#endif  // mozilla_dom_WebGLParamsManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index 470fcd8b5b..23e33db4da 100644
+index 922a79af86..b718f44036 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -570,6 +570,14 @@ EXPORTS.mozilla.dom += [
+@@ -572,6 +572,14 @@ EXPORTS.mozilla.dom += [
      "SpeechVoicesManager.h",
  ]
  
@@ -144,10 +144,10 @@ index 470fcd8b5b..23e33db4da 100644
  # CharacterDataBuffer.cpp
  if CONFIG["INTEL_ARCHITECTURE"]:
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index d2f6fb36bd..d4a967ce53 100644
+index 3db3ef3003..007e8f5eae 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -26,6 +26,7 @@
+@@ -27,6 +27,7 @@
  #include "FontListManager.h"
  #include "Units.h"
  #include "VRManagerChild.h"
@@ -155,7 +155,7 @@ index d2f6fb36bd..d4a967ce53 100644
  #include "WindowDestroyedEvent.h"
  #include "WindowNamedPropertiesHandler.h"
  #include "js/ComparisonOperators.h"
-@@ -8032,6 +8033,51 @@ void nsGlobalWindowInner::SetSpeechVoices(const nsAString& aVoices,
+@@ -8036,6 +8037,51 @@ void nsGlobalWindowInner::SetSpeechVoices(const nsAString& aVoices,
    }
  }
  
@@ -208,10 +208,10 @@ index d2f6fb36bd..d4a967ce53 100644
      bool aGranted) {
    // Invalidate cached StorageAllowed field so that calls to GetLocalStorage
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 0db8833f47..063843934e 100644
+index bfde19786c..17e00f408f 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -709,6 +709,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -710,6 +710,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
    // Per-context speech voices
    void SetSpeechVoices(const nsAString& aVoices, mozilla::ErrorResult& aRv);
  
@@ -223,7 +223,7 @@ index 0db8833f47..063843934e 100644
    void Alert(nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
    void Alert(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
 diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.cpp
-index aee042ab75..54b5638d19 100644
+index aee042ab75..b2e38ce09f 100644
 --- a/dom/canvas/ClientWebGLContext.cpp
 +++ b/dom/canvas/ClientWebGLContext.cpp
 @@ -3,6 +3,14 @@
@@ -277,57 +277,17 @@ index aee042ab75..54b5638d19 100644
  void ClientWebGLContext::GetContextAttributes(
      dom::Nullable<dom::WebGLContextAttributes>& retval) {
    retval.SetNull();
-@@ -769,15 +806,40 @@ void ClientWebGLContext::GetContextAttributes(
+@@ -769,6 +806,9 @@ void ClientWebGLContext::GetContextAttributes(
  
    const auto& options = mNotLost->info.options;
  
--  result.mAlpha.Construct(options.alpha);
--  result.mDepth = options.depth;
--  result.mStencil = options.stencil;
--  result.mAntialias.Construct(options.antialias);
--  result.mPremultipliedAlpha = options.premultipliedAlpha;
--  result.mPreserveDrawingBuffer = options.preserveDrawingBuffer;
--  result.mFailIfMajorPerformanceCaveat = options.failIfMajorPerformanceCaveat;
--  result.mPowerPreference = options.powerPreference;
--  result.mForceSoftwareRendering = options.forceSoftwareRendering;
-+  result.mAlpha.Construct(MBoolVal("alpha", options.alpha));
-+  result.mDepth = MBoolVal("depth", options.depth);
-+  result.mStencil = MBoolVal("stencil", options.stencil);
-+  result.mAntialias.Construct(MBoolVal("antialias", options.antialias));
-+  result.mPremultipliedAlpha = MBoolVal(
-+      "webGl:contextAttributes.premultipliedAlpha", options.premultipliedAlpha);
-+  result.mPreserveDrawingBuffer =
-+      MBoolVal("preserveDrawingBuffer", options.preserveDrawingBuffer);
-+  result.mFailIfMajorPerformanceCaveat = MBoolVal(
-+      "failIfMajorPerformanceCaveat", options.failIfMajorPerformanceCaveat);
-+  if (auto value =
-+          MaskConfig::GetAttribute<std::string>("powerPreference", mIsWebGL2);
-+      value.has_value()) {
-+    // Convert to enum
-+    switch (value.value()[0]) {
-+      case 'd':
-+        result.mPowerPreference = dom::WebGLPowerPreference::Default;
-+        break;
-+      case 'l':
-+        result.mPowerPreference = dom::WebGLPowerPreference::Low_power;
-+        break;
-+      case 'h':
-+        result.mPowerPreference = dom::WebGLPowerPreference::High_performance;
-+        break;
-+      default:
-+        // Invalid value
-+        result.mPowerPreference = options.powerPreference;
-+        break;
-+    }
-+  } else {
-+    result.mPowerPreference = options.powerPreference;
-+  }
-+  result.mForceSoftwareRendering = MBoolVal(
-+      "forceSoftwareRendering", options.forceSoftwareRendering);
- }
- 
- // -----------------------
-@@ -974,18 +1036,28 @@ bool ClientWebGLContext::CreateHostContext(const uvec2& requestedSize) {
++  // Camoufox: context attributes are what the page requested (resolved by the
++  // real context), never a spoofed table -- a page compares them with what it
++  // asked for, and stock Firefox always agrees with itself.
+   result.mAlpha.Construct(options.alpha);
+   result.mDepth = options.depth;
+   result.mStencil = options.stencil;
+@@ -974,18 +1014,28 @@ bool ClientWebGLContext::CreateHostContext(const uvec2& requestedSize) {
  std::unordered_map<GLenum, bool> webgl::MakeIsEnabledMap(const bool webgl2) {
    auto ret = std::unordered_map<GLenum, bool>{};
  
@@ -341,39 +301,135 @@ index aee042ab75..54b5638d19 100644
 -  ret[LOCAL_GL_SCISSOR_TEST] = false;
 -  ret[LOCAL_GL_STENCIL_TEST] = false;
 +  ret[LOCAL_GL_BLEND] =
-+      MaskConfig::MParamGL<bool>(LOCAL_GL_BLEND, false, webgl2);
++      false;
 +  ret[LOCAL_GL_CULL_FACE] =
-+      MaskConfig::MParamGL<bool>(LOCAL_GL_CULL_FACE, false, webgl2);
++      false;
 +  ret[LOCAL_GL_DEPTH_TEST] =
-+      MaskConfig::MParamGL<bool>(LOCAL_GL_DEPTH_TEST, false, webgl2);
++      false;
 +  ret[LOCAL_GL_DITHER] =
-+      MaskConfig::MParamGL<bool>(LOCAL_GL_DITHER, true, webgl2);
++      true;
 +  ret[LOCAL_GL_POLYGON_OFFSET_FILL] =
-+      MaskConfig::MParamGL<bool>(LOCAL_GL_POLYGON_OFFSET_FILL, false, webgl2);
++      false;
 +  ret[LOCAL_GL_SAMPLE_ALPHA_TO_COVERAGE] = MaskConfig::MParamGL<bool>(
 +      LOCAL_GL_SAMPLE_ALPHA_TO_COVERAGE, false, webgl2);
 +  ret[LOCAL_GL_SAMPLE_COVERAGE] =
-+      MaskConfig::MParamGL<bool>(LOCAL_GL_SAMPLE_COVERAGE, false, webgl2);
++      false;
 +  ret[LOCAL_GL_SCISSOR_TEST] =
-+      MaskConfig::MParamGL<bool>(LOCAL_GL_SCISSOR_TEST, false, webgl2);
++      false;
 +  ret[LOCAL_GL_STENCIL_TEST] =
-+      MaskConfig::MParamGL<bool>(LOCAL_GL_STENCIL_TEST, false, webgl2);
++      false;
  
    if (webgl2) {
 -    ret[LOCAL_GL_RASTERIZER_DISCARD] = false;
 +    ret[LOCAL_GL_RASTERIZER_DISCARD] =
-+        MaskConfig::MParamGL<bool>(LOCAL_GL_RASTERIZER_DISCARD, false, webgl2);
++        false;
    }
  
    return ret;
-@@ -2027,6 +2099,57 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2027,6 +2077,151 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
    const auto& state = State();
  
    // -
++  // Camoufox: live state (bindings, enables, clear values, viewport, scissor,
++  // line width, pixel-store, blend/depth/stencil funcs, sample counts) is
++  // answered by the real context; only device identity and limits come from
++  // the spoofed table.
++  const bool isDynamicState = [&]() {
++    switch (pname) {
++      case LOCAL_GL_LINE_WIDTH:
++      case LOCAL_GL_VIEWPORT:
++      case LOCAL_GL_SCISSOR_BOX:
++      case LOCAL_GL_SCISSOR_TEST:
++      case LOCAL_GL_COLOR_CLEAR_VALUE:
++      case LOCAL_GL_COLOR_WRITEMASK:
++      case LOCAL_GL_DEPTH_CLEAR_VALUE:
++      case LOCAL_GL_DEPTH_FUNC:
++      case LOCAL_GL_DEPTH_RANGE:
++      case LOCAL_GL_DEPTH_TEST:
++      case LOCAL_GL_DEPTH_WRITEMASK:
++      case LOCAL_GL_STENCIL_CLEAR_VALUE:
++      case LOCAL_GL_STENCIL_TEST:
++      case LOCAL_GL_STENCIL_FUNC:
++      case LOCAL_GL_STENCIL_REF:
++      case LOCAL_GL_STENCIL_VALUE_MASK:
++      case LOCAL_GL_STENCIL_WRITEMASK:
++      case LOCAL_GL_STENCIL_FAIL:
++      case LOCAL_GL_STENCIL_PASS_DEPTH_FAIL:
++      case LOCAL_GL_STENCIL_PASS_DEPTH_PASS:
++      case LOCAL_GL_STENCIL_BACK_FUNC:
++      case LOCAL_GL_STENCIL_BACK_REF:
++      case LOCAL_GL_STENCIL_BACK_VALUE_MASK:
++      case LOCAL_GL_STENCIL_BACK_WRITEMASK:
++      case LOCAL_GL_STENCIL_BACK_FAIL:
++      case LOCAL_GL_STENCIL_BACK_PASS_DEPTH_FAIL:
++      case LOCAL_GL_STENCIL_BACK_PASS_DEPTH_PASS:
++      case LOCAL_GL_BLEND:
++      case LOCAL_GL_BLEND_COLOR:
++      case LOCAL_GL_BLEND_SRC_RGB:
++      case LOCAL_GL_BLEND_SRC_ALPHA:
++      case LOCAL_GL_BLEND_DST_RGB:
++      case LOCAL_GL_BLEND_DST_ALPHA:
++      case LOCAL_GL_BLEND_EQUATION_RGB:
++      case LOCAL_GL_BLEND_EQUATION_ALPHA:
++      case LOCAL_GL_CULL_FACE:
++      case LOCAL_GL_CULL_FACE_MODE:
++      case LOCAL_GL_FRONT_FACE:
++      case LOCAL_GL_DITHER:
++      case LOCAL_GL_POLYGON_OFFSET_FILL:
++      case LOCAL_GL_POLYGON_OFFSET_FACTOR:
++      case LOCAL_GL_POLYGON_OFFSET_UNITS:
++      case LOCAL_GL_SAMPLE_ALPHA_TO_COVERAGE:
++      case LOCAL_GL_SAMPLE_COVERAGE:
++      case LOCAL_GL_SAMPLE_COVERAGE_VALUE:
++      case LOCAL_GL_SAMPLE_COVERAGE_INVERT:
++      case LOCAL_GL_SAMPLES:
++      case LOCAL_GL_SAMPLE_BUFFERS:
++      case LOCAL_GL_GENERATE_MIPMAP_HINT:
++      case LOCAL_GL_PACK_ALIGNMENT:
++      case LOCAL_GL_UNPACK_ALIGNMENT:
++      case LOCAL_GL_ACTIVE_TEXTURE:
++      case LOCAL_GL_ARRAY_BUFFER_BINDING:
++      case LOCAL_GL_ELEMENT_ARRAY_BUFFER_BINDING:
++      case LOCAL_GL_FRAMEBUFFER_BINDING:
++      case LOCAL_GL_RENDERBUFFER_BINDING:
++      case LOCAL_GL_TEXTURE_BINDING_2D:
++      case LOCAL_GL_TEXTURE_BINDING_CUBE_MAP:
++      case LOCAL_GL_CURRENT_PROGRAM:
++      case LOCAL_GL_RASTERIZER_DISCARD:
++      case LOCAL_GL_READ_BUFFER:
++      case LOCAL_GL_VERTEX_ARRAY_BINDING:
++      case LOCAL_GL_UNIFORM_BUFFER_BINDING:
++      case LOCAL_GL_TRANSFORM_FEEDBACK_BINDING:
++      case LOCAL_GL_TRANSFORM_FEEDBACK_ACTIVE:
++      case LOCAL_GL_TRANSFORM_FEEDBACK_PAUSED:
++      case LOCAL_GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
++      case LOCAL_GL_COPY_READ_BUFFER_BINDING:
++      case LOCAL_GL_COPY_WRITE_BUFFER_BINDING:
++      case LOCAL_GL_PIXEL_PACK_BUFFER_BINDING:
++      case LOCAL_GL_PIXEL_UNPACK_BUFFER_BINDING:
++      case LOCAL_GL_SAMPLER_BINDING:
++      case LOCAL_GL_TEXTURE_BINDING_2D_ARRAY:
++      case LOCAL_GL_TEXTURE_BINDING_3D:
++      case LOCAL_GL_UNPACK_ROW_LENGTH:
++      case LOCAL_GL_UNPACK_SKIP_ROWS:
++      case LOCAL_GL_UNPACK_SKIP_PIXELS:
++      case LOCAL_GL_UNPACK_SKIP_IMAGES:
++      case LOCAL_GL_UNPACK_IMAGE_HEIGHT:
++      case LOCAL_GL_PACK_ROW_LENGTH:
++      case LOCAL_GL_PACK_SKIP_ROWS:
++      case LOCAL_GL_PACK_SKIP_PIXELS:
++        return true;
++      default:
++        return false;
++    }
++  }();
++
 +  std::optional<
 +      std::variant<int64_t, bool, double, std::string, std::nullptr_t>>
 +      data;
-+  data = MaskConfig::GLParam(pname, mIsWebGL2);
++  if (!isDynamicState) {
++    data = MaskConfig::GLParam(pname, mIsWebGL2);
++  }
 +
 +  if (data.has_value()) {
 +    const auto& value = data.value();
@@ -393,10 +449,9 @@ index aee042ab75..54b5638d19 100644
 +      retval.set(StringValue(cx, std::get<std::string>(value), rv));
 +      return;
 +    }
-+    if (std::holds_alternative<std::nullptr_t>(value)) {
-+      retval.set(JS::NullValue());
-+      return;
-+    }
++    // Camoufox: a null table entry is "not captured for this device", so the
++    // real context answers (an extension constant the page can query after
++    // getExtension() succeeded must never come back null).
 +  }
 +  // If the value is not array (we will handle those later),
 +  // then check if it should be blocked.
@@ -415,24 +470,22 @@ index aee042ab75..54b5638d19 100644
 +    case dom::WEBGL_debug_renderer_info_Binding::UNMASKED_VENDOR_WEBGL:
 +      break;
 +    default:
-+      if (MaskConfig::CheckBool(mIsWebGL2 ? "webGl2:parameters:blockIfNotDefined"
-+                                          : "webGl:parameters:blockIfNotDefined")) {
-+        retval.set(JS::NullValue());
-+        return;
-+      }
++      // Camoufox: a pname outside the spoofed table (extension constants such
++      // as MAX_TEXTURE_MAX_ANISOTROPY_EXT, live state) is answered by the real
++      // context. Returning null here was itself a tell.
++      break;
 +  }
  
    const auto fnSetRetval_Buffer = [&](const GLenum target) {
      const auto buffer = *MaybeFind(state.mBoundBufferByTarget, target);
-@@ -2132,49 +2255,84 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2132,49 +2327,79 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
  
      // 2 floats
      case LOCAL_GL_DEPTH_RANGE:
 -      retval.set(Create<dom::Float32Array>(cx, this, state.mDepthRange, rv));
 +      retval.set(Create<dom::Float32Array>(
 +          cx, this,
-+          MaskConfig::MParamGL<std::array<float, 2UL>>(pname, state.mDepthRange,
-+                                                       mIsWebGL2),
++          state.mDepthRange,
 +          rv));
        return;
  
@@ -461,8 +514,7 @@ index aee042ab75..54b5638d19 100644
 -      retval.set(Create<dom::Float32Array>(cx, this, state.mClearColor, rv));
 +      retval.set(Create<dom::Float32Array>(
 +          cx, this,
-+          MaskConfig::MParamGL<std::array<float, 4UL>>(pname, state.mClearColor,
-+                                                       mIsWebGL2),
++          state.mClearColor,
 +          rv));
        return;
  
@@ -470,8 +522,7 @@ index aee042ab75..54b5638d19 100644
 -      retval.set(Create<dom::Float32Array>(cx, this, state.mBlendColor, rv));
 +      retval.set(Create<dom::Float32Array>(
 +          cx, this,
-+          MaskConfig::MParamGL<std::array<float, 4UL>>(pname, state.mBlendColor,
-+                                                       mIsWebGL2),
++          state.mBlendColor,
 +          rv));
        return;
  
@@ -493,8 +544,7 @@ index aee042ab75..54b5638d19 100644
 -      retval.set(Create<dom::Int32Array>(cx, this, state.mScissor, rv));
 +      retval.set(Create<dom::Int32Array>(
 +          cx, this,
-+          MaskConfig::MParamGL<std::array<int32_t, 4UL>>(pname, state.mScissor,
-+                                                         mIsWebGL2),
++          state.mScissor,
 +          rv));
        return;
  
@@ -502,8 +552,7 @@ index aee042ab75..54b5638d19 100644
 -      retval.set(Create<dom::Int32Array>(cx, this, state.mViewport, rv));
 +      retval.set(Create<dom::Int32Array>(
 +          cx, this,
-+          MaskConfig::MParamGL<std::array<int32_t, 4UL>>(pname, state.mViewport,
-+                                                         mIsWebGL2),
++          state.mViewport,
 +          rv));
        return;
  
@@ -522,7 +571,7 @@ index aee042ab75..54b5638d19 100644
        return;
    }
  
-@@ -2355,6 +2513,17 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2355,6 +2580,17 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
  
          switch (pname) {
            case dom::WEBGL_debug_renderer_info_Binding::UNMASKED_RENDERER_WEBGL:
@@ -540,7 +589,7 @@ index aee042ab75..54b5638d19 100644
              if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo) ||
                  ShouldResistFingerprinting(RFPTarget::WebGLRendererConstant)) {
                ret = Some("Mozilla"_ns);
-@@ -2367,6 +2536,17 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2367,6 +2603,17 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
              break;
  
            case dom::WEBGL_debug_renderer_info_Binding::UNMASKED_VENDOR_WEBGL:
@@ -558,7 +607,7 @@ index aee042ab75..54b5638d19 100644
              if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo)) {
                ret = Some("Mozilla"_ns);
              } else if (ShouldResistFingerprinting(
-@@ -2478,7 +2658,9 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2478,7 +2725,9 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
          case LOCAL_GL_COLOR_WRITEMASK: {
            const auto mask = uint8_t(*maybe);
            const auto bs = std::bitset<4>(mask);
@@ -569,7 +618,7 @@ index aee042ab75..54b5638d19 100644
            JS::Rooted<JS::Value> arr(cx);
            if (!dom::ToJSValue(cx, src.data(), src.size(), &arr)) {
              rv = NS_ERROR_OUT_OF_MEMORY;
-@@ -2871,6 +3053,24 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
+@@ -2871,6 +3120,24 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
    const FuncScope funcScope(*this, "getShaderPrecisionFormat");
    if (IsContextLost()) return nullptr;
  
@@ -594,7 +643,7 @@ index aee042ab75..54b5638d19 100644
    const auto& shaderPrecisions = *notLost->info.shaderPrecisions;
    const auto args =
        webgl::GetShaderPrecisionFormatArgs{shadertype, precisiontype};
-@@ -5948,6 +6148,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
+@@ -5948,6 +6215,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
      return false;
    }
  
@@ -612,7 +661,7 @@ index aee042ab75..54b5638d19 100644
    const auto& limits = Limits();
    return limits.supportedExtensions[ext];
  }
-@@ -5959,6 +6170,18 @@ void ClientWebGLContext::GetSupportedExtensions(
+@@ -5959,6 +6237,18 @@ void ClientWebGLContext::GetSupportedExtensions(
    if (IsContextLost()) return;
  
    auto& retarr = retval.SetValue();
@@ -663,11 +712,11 @@ index b370df55dd..71893f4db2 100644
      "/js/xpconnect/wrappers",
  ]
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index afa1dd59f3..d630148361 100644
+index f01e8011cc..3a13d4963f 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
 @@ -1009,6 +1009,18 @@ partial interface Window {
-   undefined setNavigatorUserAgent(DOMString ua);
+   undefined setScreenColorDepth(unsigned long depth);
  };
  
 +// Per-context WebGL vendor spoofing
