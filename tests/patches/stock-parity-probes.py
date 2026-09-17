@@ -133,11 +133,21 @@ PROBES = """async (port) => {
     setTimeout(() => r('timeout'), 5000);
   });
 
-  const time = (fn) => { const t = performance.now(); for (let i = 0; i < 20000; i++) fn(); return performance.now() - t; };
-  out.costColor = time(() => matchMedia('(color: 8)').matches);
-  out.costMinWidth = time(() => matchMedia('(min-width: 1px)').matches);
+  // The result of every read is accumulated into `sink`, and `sink` is returned.
+  // Without that the JIT elides the whole loop for a side-effect-free getter --
+  // which it did for navigator.userAgent on a CI runner, timing the BASELINE at
+  // 0 ms and collapsing the comparison below into a flat 15 ms allowance.
+  let sink = 0;
+  const time = (fn) => {
+    const t = performance.now();
+    for (let i = 0; i < 20000; i++) sink += fn();
+    return performance.now() - t;
+  };
+  out.costColor = time(() => matchMedia('(color: 8)').matches ? 1 : 0);
+  out.costMinWidth = time(() => matchMedia('(min-width: 1px)').matches ? 1 : 0);
   out.costHwc = time(() => navigator.hardwareConcurrency);
-  out.costUA = time(() => navigator.userAgent);
+  out.costUA = time(() => navigator.userAgent.length);
+  out.sink = sink;
   // Fresh Date objects: a Date caches its local-time fields after one read.
   let n = 0;
   out.costLocalDate = time(() => new Date(1.6e12 + (n++) * 3.6e6).getHours());
@@ -255,12 +265,21 @@ def main() -> int:
     humanized = out["wheelHumanized"]
     if len(humanized) != 3 or any(e["wd"] % 120 for e in humanized):
         failures.append(f"wheel-notches: humanized wheel(0, 300) gave {humanized}")
-    if out["costColor"] > 5 * out["costMinWidth"] + 15:
+    # 20000 reads of a value that lives in the config cost ~20 ms here, i.e.
+    # ~1 us each: a hash lookup, no IPC. The state this guards against is a sync
+    # IPC per read, measured at ~12 us each when it regressed -- 240 ms over the
+    # same loop. The allowance sits an order of magnitude below that and well
+    # above a healthy read, so neither a fast runner nor a slow one flips it.
+    if out["costColor"] > 5 * out["costMinWidth"] + 40:
         failures.append(f"query-cost: (color) {out['costColor']:.0f} ms vs (min-width) {out['costMinWidth']:.0f} ms")
-    if out["costHwc"] > 5 * out["costUA"] + 15:
+    if out["costHwc"] > 5 * out["costUA"] + 40:
         failures.append(f"query-cost: hardwareConcurrency {out['costHwc']:.0f} ms vs userAgent {out['costUA']:.0f} ms")
     if out["timeZone"] != "Asia/Tokyo":
         failures.append(f"timezone: launch-level zone not applied ({out['timeZone']}) -- timezone-cost is vacuous")
+    # Not widened like the two above: a healthy local-Date loop costs ~2 ms here
+    # against ~1 ms for UTC, and the regression this catches (DateTimeInfo
+    # rebuilt per call under a launch timezone) ran ~1 us per call, i.e. ~20 ms
+    # over this loop. A 40 ms allowance would step straight over it.
     if out["costLocalDate"] > 5 * out["costUTCDate"] + 15:
         failures.append(f"timezone-cost: getHours {out['costLocalDate']:.0f} ms vs getUTCHours {out['costUTCDate']:.0f} ms")
     if relaunch != [["Asia/Tokyo"] * 2, ["America/Chicago"] * 2]:
