@@ -80,6 +80,27 @@ class TestPinnedIdentityIsStable:
         assert (first["canvas:seed"], first["audio:seed"]) == (second["canvas:seed"], second["audio:seed"])
         assert first["fonts"] == second["fonts"]
 
+    @pytest.mark.parametrize("os_name", ["windows", "macos", "linux"])
+    def test_every_bundled_preset_launches(self, os_name):
+        # The test above draws ONE preset at random, so a preset that cannot
+        # launch shows up as a 1-in-11 flake rather than a failure -- which is
+        # how it reached CI. 39 of the 435 bundled presets name a GPU that is
+        # not among the 33 in webgl_data.db, and sample_webgl raises for those.
+        # Every preset has to produce launch options; see the fallback in
+        # utils.launch_options.
+        from camoufox.webgl import sample_webgl
+
+        presets = fp.load_presets("150")["presets"][os_name]
+        key = {"windows": "win", "macos": "mac", "linux": "lin"}[os_name]
+        for i, preset in enumerate(presets):
+            config = launch(os=os_name, fingerprint_preset=preset)
+            # Whatever GPU survives, the renderer the page reads and the
+            # parameters behind it must come from the SAME recorded device --
+            # merge_into does not overwrite, so a fallback that forgets to drop
+            # the preset's pair leaves one device's name on another's data.
+            assert config.get("webGl:parameters"), (os_name, i)
+            sample_webgl(key, config["webGl:vendor"], config["webGl:renderer"])
+
     def test_caller_seeds_are_kept(self):
         config = launch(config={"canvas:seed": 7, "audio:seed": 9})
         assert (config["canvas:seed"], config["audio:seed"]) == (7, 9)

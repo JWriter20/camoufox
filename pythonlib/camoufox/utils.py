@@ -1296,7 +1296,34 @@ def launch_options(
             webgl_fp = sample_webgl(target_os, *webgl_config, seed=identity_seed(config, _identity_salt))
         elif config.get('webGl:vendor') and config.get('webGl:renderer'):
             # Preset already set vendor/renderer — sample matching WebGL params
-            webgl_fp = sample_webgl(target_os, config['webGl:vendor'], config['webGl:renderer'], seed=identity_seed(config, _identity_salt))
+            try:
+                webgl_fp = sample_webgl(target_os, config['webGl:vendor'], config['webGl:renderer'], seed=identity_seed(config, _identity_salt))
+            except ValueError:
+                # The pair is not in webgl_data.db, which holds 33 GPUs. 39 of the
+                # 435 bundled presets name one it does not have -- including rows
+                # that cannot be the OS they are filed under, e.g. a Windows
+                # preset claiming "ANGLE (Unknown, Adreno (TM) 650 ...)", a phone
+                # GPU. Raising here made launch_options() fail outright for ~9% of
+                # presets, and a caller passing their own preset dict had no way
+                # to know which pairs are supported.
+                #
+                # There is no way to keep the named GPU: the parameters, extension
+                # list and shader precisions all have to come from a real recorded
+                # device, and there is none for an unknown renderer. So draw a GPU
+                # that fits the screen and let it replace the pair -- the identity
+                # loses the preset's GPU string but stays internally coherent,
+                # which is the property that matters to a page reading both.
+                webgl_fp = sample_webgl_for_screen(
+                    target_os, config.get('screen.width'), config.get('screen.height'),
+                    seed=identity_seed(config, _identity_salt),
+                )
+                # merge_into does not overwrite keys that are already set, and the
+                # preset set these two. Drop them, or the page would read the
+                # preset's renderer string with another device's parameters,
+                # extensions and shader precisions behind it -- a mismatch louder
+                # than the unknown GPU we are replacing.
+                config.pop('webGl:vendor', None)
+                config.pop('webGl:renderer', None)
         else:
             # Synthetic path: keep the GPU coherent with the screen BrowserForge
             # already picked. Sampling the two independently yields pairs no
