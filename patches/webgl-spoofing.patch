@@ -223,7 +223,7 @@ index bfde19786c..17e00f408f 100644
    void Alert(nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
    void Alert(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
 diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.cpp
-index aee042ab75..b2e38ce09f 100644
+index aee042ab75..383ab5a761 100644
 --- a/dom/canvas/ClientWebGLContext.cpp
 +++ b/dom/canvas/ClientWebGLContext.cpp
 @@ -3,6 +3,14 @@
@@ -310,8 +310,8 @@ index aee042ab75..b2e38ce09f 100644
 +      true;
 +  ret[LOCAL_GL_POLYGON_OFFSET_FILL] =
 +      false;
-+  ret[LOCAL_GL_SAMPLE_ALPHA_TO_COVERAGE] = MaskConfig::MParamGL<bool>(
-+      LOCAL_GL_SAMPLE_ALPHA_TO_COVERAGE, false, webgl2);
++  ret[LOCAL_GL_SAMPLE_ALPHA_TO_COVERAGE] =
++      false;
 +  ret[LOCAL_GL_SAMPLE_COVERAGE] =
 +      false;
 +  ret[LOCAL_GL_SCISSOR_TEST] =
@@ -326,99 +326,77 @@ index aee042ab75..b2e38ce09f 100644
    }
  
    return ret;
-@@ -2027,6 +2077,151 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2027,6 +2077,129 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
    const auto& state = State();
  
    // -
-+  // Camoufox: live state (bindings, enables, clear values, viewport, scissor,
-+  // line width, pixel-store, blend/depth/stencil funcs, sample counts) is
-+  // answered by the real context; only device identity and limits come from
-+  // the spoofed table.
-+  const bool isDynamicState = [&]() {
++  // Camoufox: only the device's fixed LIMITS come from the spoofed table, and
++  // only where stock Firefox answers the pname at all: WebGL 2 limits on a
++  // WebGL 2 context, extension limits once the page has enabled the extension.
++  // Everything else is answered by the real context: live state (bindings,
++  // enables, clear values, viewport, pixel-store flags, hints, draw buffers),
++  // values that follow the bound framebuffer (*_BITS,
++  // IMPLEMENTATION_COLOR_READ_*), the strings (VENDOR/RENDERER/VERSION; the
++  // UNMASKED_* strings come from webGl:vendor/renderer on the extension path
++  // below) and invalid enums. Answering those from the table read back state
++  // the page had just changed (UNPACK_FLIP_Y_WEBGL false after pixelStorei,
++  // ALPHA_BITS 8 on an {alpha: false} context, DRAW_BUFFER0 after
++  // drawBuffers) and returned UNMASKED_RENDERER_WEBGL without the extension,
++  // where stock returns null with INVALID_ENUM.
++  const bool fromTable = [&]() {
 +    switch (pname) {
-+      case LOCAL_GL_LINE_WIDTH:
-+      case LOCAL_GL_VIEWPORT:
-+      case LOCAL_GL_SCISSOR_BOX:
-+      case LOCAL_GL_SCISSOR_TEST:
-+      case LOCAL_GL_COLOR_CLEAR_VALUE:
-+      case LOCAL_GL_COLOR_WRITEMASK:
-+      case LOCAL_GL_DEPTH_CLEAR_VALUE:
-+      case LOCAL_GL_DEPTH_FUNC:
-+      case LOCAL_GL_DEPTH_RANGE:
-+      case LOCAL_GL_DEPTH_TEST:
-+      case LOCAL_GL_DEPTH_WRITEMASK:
-+      case LOCAL_GL_STENCIL_CLEAR_VALUE:
-+      case LOCAL_GL_STENCIL_TEST:
-+      case LOCAL_GL_STENCIL_FUNC:
-+      case LOCAL_GL_STENCIL_REF:
-+      case LOCAL_GL_STENCIL_VALUE_MASK:
-+      case LOCAL_GL_STENCIL_WRITEMASK:
-+      case LOCAL_GL_STENCIL_FAIL:
-+      case LOCAL_GL_STENCIL_PASS_DEPTH_FAIL:
-+      case LOCAL_GL_STENCIL_PASS_DEPTH_PASS:
-+      case LOCAL_GL_STENCIL_BACK_FUNC:
-+      case LOCAL_GL_STENCIL_BACK_REF:
-+      case LOCAL_GL_STENCIL_BACK_VALUE_MASK:
-+      case LOCAL_GL_STENCIL_BACK_WRITEMASK:
-+      case LOCAL_GL_STENCIL_BACK_FAIL:
-+      case LOCAL_GL_STENCIL_BACK_PASS_DEPTH_FAIL:
-+      case LOCAL_GL_STENCIL_BACK_PASS_DEPTH_PASS:
-+      case LOCAL_GL_BLEND:
-+      case LOCAL_GL_BLEND_COLOR:
-+      case LOCAL_GL_BLEND_SRC_RGB:
-+      case LOCAL_GL_BLEND_SRC_ALPHA:
-+      case LOCAL_GL_BLEND_DST_RGB:
-+      case LOCAL_GL_BLEND_DST_ALPHA:
-+      case LOCAL_GL_BLEND_EQUATION_RGB:
-+      case LOCAL_GL_BLEND_EQUATION_ALPHA:
-+      case LOCAL_GL_CULL_FACE:
-+      case LOCAL_GL_CULL_FACE_MODE:
-+      case LOCAL_GL_FRONT_FACE:
-+      case LOCAL_GL_DITHER:
-+      case LOCAL_GL_POLYGON_OFFSET_FILL:
-+      case LOCAL_GL_POLYGON_OFFSET_FACTOR:
-+      case LOCAL_GL_POLYGON_OFFSET_UNITS:
-+      case LOCAL_GL_SAMPLE_ALPHA_TO_COVERAGE:
-+      case LOCAL_GL_SAMPLE_COVERAGE:
-+      case LOCAL_GL_SAMPLE_COVERAGE_VALUE:
-+      case LOCAL_GL_SAMPLE_COVERAGE_INVERT:
-+      case LOCAL_GL_SAMPLES:
-+      case LOCAL_GL_SAMPLE_BUFFERS:
-+      case LOCAL_GL_GENERATE_MIPMAP_HINT:
-+      case LOCAL_GL_PACK_ALIGNMENT:
-+      case LOCAL_GL_UNPACK_ALIGNMENT:
-+      case LOCAL_GL_ACTIVE_TEXTURE:
-+      case LOCAL_GL_ARRAY_BUFFER_BINDING:
-+      case LOCAL_GL_ELEMENT_ARRAY_BUFFER_BINDING:
-+      case LOCAL_GL_FRAMEBUFFER_BINDING:
-+      case LOCAL_GL_RENDERBUFFER_BINDING:
-+      case LOCAL_GL_TEXTURE_BINDING_2D:
-+      case LOCAL_GL_TEXTURE_BINDING_CUBE_MAP:
-+      case LOCAL_GL_CURRENT_PROGRAM:
-+      case LOCAL_GL_RASTERIZER_DISCARD:
-+      case LOCAL_GL_READ_BUFFER:
-+      case LOCAL_GL_VERTEX_ARRAY_BINDING:
-+      case LOCAL_GL_UNIFORM_BUFFER_BINDING:
-+      case LOCAL_GL_TRANSFORM_FEEDBACK_BINDING:
-+      case LOCAL_GL_TRANSFORM_FEEDBACK_ACTIVE:
-+      case LOCAL_GL_TRANSFORM_FEEDBACK_PAUSED:
-+      case LOCAL_GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
-+      case LOCAL_GL_COPY_READ_BUFFER_BINDING:
-+      case LOCAL_GL_COPY_WRITE_BUFFER_BINDING:
-+      case LOCAL_GL_PIXEL_PACK_BUFFER_BINDING:
-+      case LOCAL_GL_PIXEL_UNPACK_BUFFER_BINDING:
-+      case LOCAL_GL_SAMPLER_BINDING:
-+      case LOCAL_GL_TEXTURE_BINDING_2D_ARRAY:
-+      case LOCAL_GL_TEXTURE_BINDING_3D:
-+      case LOCAL_GL_UNPACK_ROW_LENGTH:
-+      case LOCAL_GL_UNPACK_SKIP_ROWS:
-+      case LOCAL_GL_UNPACK_SKIP_PIXELS:
-+      case LOCAL_GL_UNPACK_SKIP_IMAGES:
-+      case LOCAL_GL_UNPACK_IMAGE_HEIGHT:
-+      case LOCAL_GL_PACK_ROW_LENGTH:
-+      case LOCAL_GL_PACK_SKIP_ROWS:
-+      case LOCAL_GL_PACK_SKIP_PIXELS:
++      case LOCAL_GL_MAX_TEXTURE_SIZE:
++      case LOCAL_GL_MAX_VIEWPORT_DIMS:
++      case LOCAL_GL_SUBPIXEL_BITS:
++      case LOCAL_GL_ALIASED_POINT_SIZE_RANGE:
++      case LOCAL_GL_ALIASED_LINE_WIDTH_RANGE:
++      case LOCAL_GL_MAX_RENDERBUFFER_SIZE:
++      case LOCAL_GL_MAX_CUBE_MAP_TEXTURE_SIZE:
++      case LOCAL_GL_MAX_VERTEX_ATTRIBS:
++      case LOCAL_GL_MAX_TEXTURE_IMAGE_UNITS:
++      case LOCAL_GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
++      case LOCAL_GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
++      case LOCAL_GL_MAX_VERTEX_UNIFORM_VECTORS:
++      case LOCAL_GL_MAX_VARYING_VECTORS:
++      case LOCAL_GL_MAX_FRAGMENT_UNIFORM_VECTORS:
 +        return true;
++      case LOCAL_GL_MAX_3D_TEXTURE_SIZE:
++      case LOCAL_GL_MAX_ELEMENTS_VERTICES:
++      case LOCAL_GL_MAX_ELEMENTS_INDICES:
++      case LOCAL_GL_MAX_TEXTURE_LOD_BIAS:
++      case LOCAL_GL_MAX_ARRAY_TEXTURE_LAYERS:
++      case LOCAL_GL_MIN_PROGRAM_TEXEL_OFFSET:
++      case LOCAL_GL_MAX_PROGRAM_TEXEL_OFFSET:
++      case LOCAL_GL_MAX_VERTEX_UNIFORM_BLOCKS:
++      case LOCAL_GL_MAX_FRAGMENT_UNIFORM_BLOCKS:
++      case LOCAL_GL_MAX_COMBINED_UNIFORM_BLOCKS:
++      case LOCAL_GL_MAX_UNIFORM_BUFFER_BINDINGS:
++      case LOCAL_GL_MAX_UNIFORM_BLOCK_SIZE:
++      case LOCAL_GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS:
++      case LOCAL_GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS:
++      case LOCAL_GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT:
++      case LOCAL_GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
++      case LOCAL_GL_MAX_VERTEX_UNIFORM_COMPONENTS:
++      case LOCAL_GL_MAX_VARYING_COMPONENTS:
++      case LOCAL_GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS:
++      case LOCAL_GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS:
++      case LOCAL_GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS:
++      case LOCAL_GL_MAX_SAMPLES:
++      case LOCAL_GL_MAX_ELEMENT_INDEX:
++      case LOCAL_GL_MAX_SERVER_WAIT_TIMEOUT:
++      case LOCAL_GL_MAX_VERTEX_OUTPUT_COMPONENTS:
++      case LOCAL_GL_MAX_FRAGMENT_INPUT_COMPONENTS:
++      case LOCAL_GL_MAX_CLIENT_WAIT_TIMEOUT_WEBGL:
++        return mIsWebGL2;
++      case LOCAL_GL_MAX_DRAW_BUFFERS:
++      case LOCAL_GL_MAX_COLOR_ATTACHMENTS:
++        return mIsWebGL2 ||
++               IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers);
++      case LOCAL_GL_MAX_TEXTURE_MAX_ANISOTROPY:
++        return IsExtensionEnabled(
++            WebGLExtensionID::EXT_texture_filter_anisotropic);
++      case LOCAL_GL_MAX_VIEWS_OVR:
++        return IsExtensionEnabled(WebGLExtensionID::OVR_multiview2);
 +      default:
 +        return false;
 +    }
@@ -427,7 +405,7 @@ index aee042ab75..b2e38ce09f 100644
 +  std::optional<
 +      std::variant<int64_t, bool, double, std::string, std::nullptr_t>>
 +      data;
-+  if (!isDynamicState) {
++  if (fromTable) {
 +    data = MaskConfig::GLParam(pname, mIsWebGL2);
 +  }
 +
@@ -478,7 +456,7 @@ index aee042ab75..b2e38ce09f 100644
  
    const auto fnSetRetval_Buffer = [&](const GLenum target) {
      const auto buffer = *MaybeFind(state.mBoundBufferByTarget, target);
-@@ -2132,49 +2327,79 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2132,49 +2305,80 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
  
      // 2 floats
      case LOCAL_GL_DEPTH_RANGE:
@@ -563,15 +541,16 @@ index aee042ab75..b2e38ce09f 100644
 +      std::vector<uint32_t> compressedTextureUint32(
 +          state.mCompressedTextureFormats.begin(),
 +          state.mCompressedTextureFormats.end());
++      // Camoufox: the formats of the compressed-texture extensions the page
++      // has enabled, as stock reports them -- not a captured list.
 +      retval.set(Create<dom::Uint32Array>(
 +          cx, this,
-+          MaskConfig::MParamGLVector<uint32_t>(pname, compressedTextureUint32,
-+                                               mIsWebGL2),
++          compressedTextureUint32,
 +          rv));
        return;
    }
  
-@@ -2355,6 +2580,17 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2355,6 +2559,17 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
  
          switch (pname) {
            case dom::WEBGL_debug_renderer_info_Binding::UNMASKED_RENDERER_WEBGL:
@@ -589,7 +568,7 @@ index aee042ab75..b2e38ce09f 100644
              if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo) ||
                  ShouldResistFingerprinting(RFPTarget::WebGLRendererConstant)) {
                ret = Some("Mozilla"_ns);
-@@ -2367,6 +2603,17 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2367,6 +2582,17 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
              break;
  
            case dom::WEBGL_debug_renderer_info_Binding::UNMASKED_VENDOR_WEBGL:
@@ -607,7 +586,7 @@ index aee042ab75..b2e38ce09f 100644
              if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo)) {
                ret = Some("Mozilla"_ns);
              } else if (ShouldResistFingerprinting(
-@@ -2478,7 +2725,9 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2478,7 +2704,9 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
          case LOCAL_GL_COLOR_WRITEMASK: {
            const auto mask = uint8_t(*maybe);
            const auto bs = std::bitset<4>(mask);
@@ -618,7 +597,7 @@ index aee042ab75..b2e38ce09f 100644
            JS::Rooted<JS::Value> arr(cx);
            if (!dom::ToJSValue(cx, src.data(), src.size(), &arr)) {
              rv = NS_ERROR_OUT_OF_MEMORY;
-@@ -2871,6 +3120,24 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
+@@ -2871,6 +3099,24 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
    const FuncScope funcScope(*this, "getShaderPrecisionFormat");
    if (IsContextLost()) return nullptr;
  
@@ -643,7 +622,7 @@ index aee042ab75..b2e38ce09f 100644
    const auto& shaderPrecisions = *notLost->info.shaderPrecisions;
    const auto args =
        webgl::GetShaderPrecisionFormatArgs{shadertype, precisiontype};
-@@ -5948,6 +6215,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
+@@ -5948,6 +6194,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
      return false;
    }
  
@@ -661,7 +640,7 @@ index aee042ab75..b2e38ce09f 100644
    const auto& limits = Limits();
    return limits.supportedExtensions[ext];
  }
-@@ -5959,6 +6237,18 @@ void ClientWebGLContext::GetSupportedExtensions(
+@@ -5959,6 +6216,18 @@ void ClientWebGLContext::GetSupportedExtensions(
    if (IsContextLost()) return;
  
    auto& retarr = retval.SetValue();
