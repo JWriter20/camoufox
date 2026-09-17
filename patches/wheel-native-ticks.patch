@@ -1,0 +1,30 @@
+diff --git a/dom/base/nsDOMWindowUtils.cpp b/dom/base/nsDOMWindowUtils.cpp
+index 9b6cddf8d9..75a1481158 100644
+--- a/dom/base/nsDOMWindowUtils.cpp
++++ b/dom/base/nsDOMWindowUtils.cpp
+@@ -801,6 +801,10 @@ nsDOMWindowUtils::SendWheelEvent(float aX, float aY, double aDeltaX,
+       (aOptions & WHEEL_EVENT_CUSTOMIZED_BY_USER_PREFS) != 0;
+   wheelEvent.mLineOrPageDeltaX = aLineOrPageDeltaX;
+   wheelEvent.mLineOrPageDeltaY = aLineOrPageDeltaY;
++  if (aOptions & WHEEL_EVENT_NATIVE_NOTCHES) {
++    wheelEvent.mWheelTicksX = aLineOrPageDeltaX / 3.0;
++    wheelEvent.mWheelTicksY = aLineOrPageDeltaY / 3.0;
++  }
+   wheelEvent.mCallbackId = notifier.SaveCallback();
+ 
+   nsPresContext* presContext = GetPresContext();
+diff --git a/dom/interfaces/base/nsIDOMWindowUtils.idl b/dom/interfaces/base/nsIDOMWindowUtils.idl
+index 44284cc319..2711040b70 100644
+--- a/dom/interfaces/base/nsIDOMWindowUtils.idl
++++ b/dom/interfaces/base/nsIDOMWindowUtils.idl
+@@ -391,6 +391,10 @@ interface nsIDOMWindowUtils : nsISupports {
+   const unsigned long WHEEL_EVENT_EXPECTED_OVERFLOW_DELTA_Y_ZERO      = 0x0100;
+   const unsigned long WHEEL_EVENT_EXPECTED_OVERFLOW_DELTA_Y_POSITIVE  = 0x0200;
+   const unsigned long WHEEL_EVENT_EXPECTED_OVERFLOW_DELTA_Y_NEGATIVE  = 0x0400;
++  // Camoufox: the event comes from wheel notches, one notch per 3 lines of
++  // aLineOrPageDelta, and carries native ticks as a physical wheel does
++  // (WheelEvent.wheelDelta is then -120 per notch).
++  const unsigned long WHEEL_EVENT_NATIVE_NOTCHES                      = 0x10000;
+   void sendWheelEvent(in float aX,
+                       in float aY,
+                       in double aDeltaX,

@@ -244,9 +244,10 @@ export class MouseDispatch {
   }
 
   /** Wheel events take the same conversion; they are not acked. */
-  sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY}) {
+  sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY, nativeNotches = false}) {
     const {x: absX, y: absY} = this.toAbsolute(x, y);
-    this._win.windowUtils.sendWheelEvent(
+    const utils = this._win.windowUtils;
+    utils.sendWheelEvent(
       absX,
       absY,
       deltaX,
@@ -256,6 +257,6 @@ export class MouseDispatch {
       this._args.modifiers,
       lineOrPageDeltaX,
       lineOrPageDeltaY,
-      0 /* options */);
+      nativeNotches ? utils.WHEEL_EVENT_NATIVE_NOTCHES : 0);
   }
 }

@@ -491,6 +491,9 @@ export class PageAgent {
     if (autoShift) {
       tip.keydown(new KeyboardEvent("", { key: 'Shift', code: 'ShiftLeft', location: 1, keyCode: 16, shiftKey: true }), 0);
       this._autoShiftKey = key;
+      // A person presses Shift tens of ms before the key it modifies; 0 ms
+      // between the two keydowns is a scripted-typing tell.
+      await new Promise(resolve => setTimeout(resolve, 35 + Math.random() * 55));
     }
     const shiftKey = this._realShiftDown || !!this._autoShiftKey;
     let keyEvent = new KeyboardEvent("", {
@@ -502,11 +505,20 @@ export class PageAgent {
       shiftKey,
     });
     if (type === 'keydown') {
-      if (text && text !== key) {
-        tip.commitCompositionWith(text, keyEvent);
-      } else {
-        const flags = 0;
-        tip.keydown(keyEvent, flags);
+      try {
+        if (text && text !== key) {
+          tip.commitCompositionWith(text, keyEvent);
+        } else {
+          const flags = 0;
+          tip.keydown(keyEvent, flags);
+        }
+      } catch (e) {
+        // Do not leave Shift latched in the input processor.
+        if (autoShift) {
+          tip.keyup(new KeyboardEvent("", { key: 'Shift', code: 'ShiftLeft', location: 1, keyCode: 16 }), 0);
+          this._autoShiftKey = null;
+        }
+        throw e;
       }
     } else if (type === 'keyup') {
       if (text)
@@ -514,8 +526,9 @@ export class PageAgent {
       const flags = 0;
       tip.keyup(keyEvent, flags);
       if (this._autoShiftKey === key) {
-        tip.keyup(new KeyboardEvent("", { key: 'Shift', code: 'ShiftLeft', location: 1, keyCode: 16 }), 0);
         this._autoShiftKey = null;
+        await new Promise(resolve => setTimeout(resolve, 20 + Math.random() * 45));
+        tip.keyup(new KeyboardEvent("", { key: 'Shift', code: 'ShiftLeft', location: 1, keyCode: 16 }), 0);
       }
     } else {
       throw new Error(`Unknown type ${type}`);

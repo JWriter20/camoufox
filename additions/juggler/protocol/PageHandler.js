@@ -672,19 +672,19 @@ export class PageHandler {
   }
 
   async ['Page.dispatchWheelEvent']({x, y, button, deltaX, deltaY, deltaZ, modifiers }) {
-    // Camoufox: a physical wheel notch reaches Gecko as LINE deltas (3 lines per
-    // notch on every desktop OS); Gecko then converts to the pixel deltaY the page
-    // sees and reports DOMMouseScroll.detail = 3. Dispatching Playwright's pixel
-    // delta directly gave detail = 100 and no line delta, which no real wheel
-    // produces (measured 2026-09-14 against XTEST input). Convert the requested
-    // pixels into whole notches: ~33 px per line, i.e. 100 px == one notch.
-    const PX_PER_LINE = 100 / 3;
-    const toLines = (d) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / PX_PER_LINE)));
-    const deltaMode = 1; // WheelEvent.DOM_DELTA_LINE
-    deltaX = toLines(deltaX);
-    deltaY = toLines(deltaY);
-    const lineOrPageDeltaX = deltaX;
-    const lineOrPageDeltaY = deltaY;
+    // Camoufox: scroll the way a physical wheel does, in notches. Each notch is
+    // its own event of 3 LINES carrying one native tick, so the page sees
+    // deltaMode 1, DOMMouseScroll.detail 3 and wheelDelta -120 per notch, and a
+    // longer scroll arrives as several such events a few tens of ms apart.
+    // Dispatching Playwright's pixel delta gave detail = 100 and no line delta;
+    // lines without ticks gave wheelDelta -396 for one notch and one big event
+    // for several (measured against XTEST input). 100 px == one notch.
+    const PX_PER_NOTCH = 100;
+    const LINES_PER_NOTCH = 3;
+    const toNotches = (d) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / PX_PER_NOTCH)));
+    const notchesX = toNotches(deltaX);
+    const notchesY = toNotches(deltaY);
+    const notchCount = Math.max(1, Math.abs(notchesX), Math.abs(notchesY));
 
     await this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
@@ -696,19 +696,25 @@ export class PageHandler {
       // 3. Make sure compositor is flushed after scrolling.
       if (win.windowUtils.flushApzRepaints())
         await helper.awaitTopic('apz-repaints-flushed');
-      // Camoufox: measure after the await, like Page.dispatchMouseEvent does.
-      const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers});
-
-      // Same conversion as a mouse event: a wheel at relative y == 0 would
-      // otherwise land on the chrome/content boundary and scroll the tab strip.
-      dispatch.sendWheel(x, y, {
-        deltaX,
-        deltaY,
-        deltaZ,
-        deltaMode,
-        lineOrPageDeltaX,
-        lineOrPageDeltaY,
-      });
+      for (let i = 0; i < notchCount; i++) {
+        if (i)
+          await new Promise(resolve => setTimeout(resolve, 18 + Math.random() * 42));
+        const stepX = i < Math.abs(notchesX) ? Math.sign(notchesX) * LINES_PER_NOTCH : 0;
+        const stepY = i < Math.abs(notchesY) ? Math.sign(notchesY) * LINES_PER_NOTCH : 0;
+        // Camoufox: measure after the await, like Page.dispatchMouseEvent does.
+        const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers});
+        // Same conversion as a mouse event: a wheel at relative y == 0 would
+        // otherwise land on the chrome/content boundary and scroll the tab strip.
+        dispatch.sendWheel(x, y, {
+          deltaX: stepX,
+          deltaY: stepY,
+          deltaZ: i ? 0 : deltaZ,
+          deltaMode: 1 /* WheelEvent.DOM_DELTA_LINE */,
+          lineOrPageDeltaX: stepX,
+          lineOrPageDeltaY: stepY,
+          nativeNotches: true,
+        });
+      }
     }, { muteNotificationsPopup: true });
   }
 
