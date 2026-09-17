@@ -272,10 +272,18 @@ def test_context_fingerprints_get_the_same_treatment(target_os):
 
 
 def test_preset_screens_are_never_lifted():
-    """Presets are real devices, coherent by construction -- #729 says so
-    explicitly. Two bundled v150 presets report genuinely sub-netbook screens,
-    and the floor used to rewrite them to 1366x768 because
-    _user_set_screen_window is computed before the preset merges in."""
+    """A preset's own small screen is kept -- #729 -- unless it is not a screen.
+
+    The original premise here was that a preset IS a real device, so the floor
+    must never rewrite it. That premise does not survive the data: the two
+    "genuinely sub-netbook" v150 presets report 736x414 (an iPhone viewport) and
+    960x540, and another reports 1440x2560, portrait. The presets are scraped
+    from live traffic, so they carry phones and bots alongside real desktops.
+
+    So the rule is narrower than "never lift a preset screen": a panel a desktop
+    could have is kept at whatever size it claims, and one no desktop reports is
+    repaired (camoufox.coherence). This asserts the keeping half; the repairing
+    half is in test_coherence.py."""
     import json
     from pathlib import Path
 
@@ -292,7 +300,11 @@ def test_preset_screens_are_never_lifted():
                 isinstance(screen, dict)
                 and screen.get("width")
                 and screen.get("height")
-                and screen["width"] * screen["height"] <= 1024 * 600
+                # Small, but a shape a desktop can have: coherence.py repairs
+                # anything narrower than 1024 or taller than it is wide.
+                and screen["width"] * screen["height"] <= 1366 * 768
+                and screen["width"] >= 1024
+                and screen["width"] >= screen["height"]
             ):
                 yield node
             for value in node.values():
@@ -302,7 +314,7 @@ def test_preset_screens_are_never_lifted():
                 yield from small_presets(value)
 
     found = list(small_presets(presets))
-    assert found, "expected the v150 presets to still carry sub-netbook screens"
+    assert found, "expected the v150 presets to still carry small desktop screens"
 
     for preset in found:
         env = launch_options(

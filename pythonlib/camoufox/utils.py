@@ -23,6 +23,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
 )
 from .fingerprints import Screen, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
+from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
 from .locales import handle_locales
@@ -959,7 +960,17 @@ def launch_options(
 
     target_os = get_target_os(config)
 
-    # Correct BrowserForge fingerprint inconsistencies that leak as headless /
+    # Drop values the source supplied that this identity cannot keep, before the
+    # pools below defer to them (a preset's own GPU pair wins over sampling).
+    coherence.drop_incoherent_source_values(config, target_os)
+    # A preset whose screen is a phone viewport is not a real desktop device;
+    # the floor is normally skipped for presets, on the assumption that a preset
+    # IS a real machine, which 736x414 disproves.
+    if not _user_set_screen_window and coherence.screen_is_implausible(config):
+        coherence.repair_screen_orientation(config)
+        raise_screen_to_modern_floor(config)
+
+    # Correct fingerprint inconsistencies that leak as headless /
     # impossible-geometry tells, unless the user is driving these themselves.
     if not _user_set_navigator:
         fix_navigator_arch(config, target_os)
@@ -1343,6 +1354,17 @@ def launch_options(
                 'webgl.force-enabled': True,
             },
         )
+
+    # Every identity passes the whole-identity checks, whatever built it: a
+    # generated fingerprint, a bundled preset, or a config the caller wrote.
+    # The pools are sampled independently -- navigator and screen from the
+    # generator, GPU from webgl_data.db, fonts and voices from their own
+    # catalogues -- so a machine that never existed can be assembled from parts
+    # that are each fine on their own. See coherence.py.
+    _incoherent = coherence.apply(config, target_os)
+    if _incoherent and debug:
+        for _violation in _incoherent:
+            print(f'Incoherent identity ({_violation.rule}): {_violation.detail}')
 
     # Cache previous pages, requests, etc (uses more memory)
     if enable_cache:
