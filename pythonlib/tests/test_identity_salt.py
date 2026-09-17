@@ -100,18 +100,13 @@ class TestVoicesFollowLocale:
 
 class TestCoreCountFloor:
     def test_small_pinnable_host_reports_table_floor(self, monkeypatch):
-        # A 1-3 core host reports 2, the table's floor and the lowest count the
-        # corpus records. It used to report 4, which no 2-core machine can back
-        # up: 4 cannot be pinned on a 3-core host, so the page measured 3 while
-        # being told 4. At 2 the pin succeeds on a 2- or 3-core host, and the
-        # 1-core tail (told 2, measures 1) is closer than 4 was.
         monkeypatch.setattr(cpu_affinity, "supported", lambda: True)
         for host_cores in (1, 2, 3):
             monkeypatch.setattr(fp, "host_cpu_count", lambda n=host_cores: n)
             for drawn_cores in (1, 2, 3, 8):
                 c = {"navigator.hardwareConcurrency": drawn_cores}
                 fp.fix_hardware_concurrency(c)
-                assert c["navigator.hardwareConcurrency"] == 2, (host_cores, drawn_cores)
+                assert c["navigator.hardwareConcurrency"] == 4, (host_cores, drawn_cores)
 
     def test_unpinned_launch_reports_host(self, monkeypatch):
         monkeypatch.setattr(cpu_affinity, "supported", lambda: True)

@@ -847,22 +847,31 @@ def host_cpu_count() -> Optional[int]:
 # Linux 1/65; 32: Linux 1/65 -- all in -v150). Leaving any of them out snapped
 # genuine machines with that count down to the next entry for no reason.
 #
-# 2 was excluded on 2026-09-15 on the grounds that it is what Firefox reports
-# under resistFingerprinting. That is no longer true and has not been for years:
-# RuntimeService::ClampedHardwareConcurrency (dom/workers/RuntimeService.cpp,
-# checked in the 152 tree on 2026-09-17) hardcodes 4 under RFP, and 8 on macOS.
-# Both of those are IN this table, so excluding 2 never protected against an
-# "is this RFP" check -- it only cost fidelity, on 6/30 macOS presets (20%) and
-# 4.2% of Linux draws, i.e. every genuinely dual-core machine. Restored.
+# 2 is EXCLUDED, and stays excluded -- but not for the reason first written
+# here. That reason ("2 is what Firefox reports under resistFingerprinting") is
+# false and has been for years: RuntimeService::ClampedHardwareConcurrency
+# (dom/workers/RuntimeService.cpp, read in the 152 tree on 2026-09-17) hardcodes
+# 4 under RFP, and 8 on macOS -- both already in this table.
 #
-# (Sundial's cjResistance helper still tested hardwareConcurrency === 2 for the
-# same stale reason; corrected the same day.)
+# The real reason is coherence with the rest of the identity. 85% of macOS
+# identities draw "Apple M1, or similar" as the WebGL renderer, and no Apple
+# Silicon part has ever had 2 cores; the lowest is 8. A page reading
+# navigator.hardwareConcurrency and UNMASKED_RENDERER_WEBGL together -- two
+# property reads -- would see a machine that does not exist.
+#
+# The recorded corpus does contain 2 (11/67 macOS presets, 17/180 Windows,
+# 6/65 Linux), and that is not a reason to ship it: those rows report 2 more
+# often than 4 on macOS, which no real hardware population does. The corpus is
+# scraped from live traffic, so it carries other people's privacy-hardened
+# browsers, 2-vCPU VMs and bots. "The corpus says so" settles what real MACHINES
+# report only where the field is hardware; this one is a number the browser can
+# be made to say.
 #
 # A host outside this table would hand its own oddity to the fingerprint: a
 # 64-thread build box reports 32, anything under 4 threads reports 4. Odd
 # counts (5, 7, 9, 11, 13, 15) never appear in the corpus -- they are
 # browserforge Bayesian synthesis -- so they keep getting snapped down.
-PLAUSIBLE_CORE_COUNTS = (2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32)
+PLAUSIBLE_CORE_COUNTS = (4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32)
 
 
 def fix_hardware_concurrency(config: Dict[str, Any], can_pin: Optional[bool] = None) -> None:
@@ -918,8 +927,8 @@ def fix_hardware_concurrency(config: Dict[str, Any], can_pin: Optional[bool] = N
         # instead, capped by the host so pinning can honour it.
         target = min(drawn, cap)
         allowed = [c for c in PLAUSIBLE_CORE_COUNTS if c <= target]
-        # The floor is the table's even on a 1-core host: a draw of 1 reports 2,
-        # the lowest count the corpus actually records.
+        # The floor is the table's even on a 1-3 core host: reporting the host's
+        # own 1, 2 or 3 would contradict the drawn GPU (see the table above).
         config['navigator.hardwareConcurrency'] = (
             allowed[-1] if allowed else PLAUSIBLE_CORE_COUNTS[0]
         )
