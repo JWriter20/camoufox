@@ -298,33 +298,31 @@ class TestFixHardwareConcurrency:
             assert c["navigator.hardwareConcurrency"] == drawn
 
     def test_snaps_implausible_draws_down_into_the_table(self, monkeypatch):
-        # browserforge draws counts no desktop ships with: over 400 linux draws
-        # 8.0% were < 4 cores and 4.2% were exactly 2. hardwareConcurrency == 2
-        # is what Firefox reports under resistFingerprinting, so CreepJS-style
-        # heuristics label the browser "Firefox resistFingerprinting"; odd counts
-        # (5, 7, 9, ...) are equally synthetic. They snap DOWN into
+        # browserforge draws counts no desktop ships with -- odd ones (5, 7, 9,
+        # ...) are Bayesian synthesis, not machines. They snap DOWN into
         # PLAUSIBLE_CORE_COUNTS, with the table floor for anything below it.
+        # 2 IS a real count (20% of the macOS presets) and stays: Firefox's
+        # resistFingerprinting value is 4, or 8 on macOS, not 2.
         from camoufox import cpu_affinity, fingerprints as fp
 
         monkeypatch.setattr(cpu_affinity, "supported", lambda: True)
         monkeypatch.setattr(fp, "host_cpu_count", lambda: 16)
-        for drawn, expected in ((1, 4), (2, 4), (3, 4), (5, 4), (7, 6), (9, 8),
+        for drawn, expected in ((1, 2), (2, 2), (3, 2), (5, 4), (7, 6), (9, 8),
                                 (11, 10), (13, 12), (15, 14), (32, 16)):
             c = {"navigator.hardwareConcurrency": drawn}
             fp.fix_hardware_concurrency(c)
             assert c["navigator.hardwareConcurrency"] == expected, drawn
         # never above what the host can be pinned to
         monkeypatch.setattr(fp, "host_cpu_count", lambda: 4)
-        c = {"navigator.hardwareConcurrency": 2}
+        c = {"navigator.hardwareConcurrency": 8}
         fp.fix_hardware_concurrency(c)
         assert c["navigator.hardwareConcurrency"] == 4
 
     def test_snaps_host_parallelism_when_it_cannot_pin(self, monkeypatch):
         # The host count, snapped DOWN into the
-        # counts real machines ship with; the tails report 32 / 4. Used when the
+        # counts real machines ship with; the tails report 32 / 2. Used when the
         # draw exceeds the host or the host cannot pin (macOS).
-        # 18/22/24/28/32 are in the table (recorded on real devices); 2 is NOT,
-        # although it is recorded, because 2 is the resistFingerprinting value.
+        # 2/18/22/24/28/32 are all in the table, all recorded on real devices.
         from camoufox import cpu_affinity, fingerprints as fp
 
         monkeypatch.setattr(cpu_affinity, "supported", lambda: False)
@@ -338,7 +336,9 @@ class TestFixHardwareConcurrency:
             (22, 22),
             (7, 6),
             (5, 4),
-            (2, 4),
+            (3, 2),
+            (2, 2),
+            (1, 2),
             (9, 8),
         ):
             monkeypatch.setattr(fp, "host_cpu_count", lambda host=host: host)

@@ -105,7 +105,8 @@ async def AsyncNewBrowser(
         virtual_display = None
 
     if not from_options:
-        kwargs.setdefault('pin_cpu_cores', True)
+        # Opt-in; see the note in sync_api.launch_options_or_default.
+        kwargs.setdefault('pin_cpu_cores', False)
         from_options = await asyncio.get_event_loop().run_in_executor(
             None,
             partial(launch_options, headless=headless, debug=debug, **kwargs),

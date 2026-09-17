@@ -847,16 +847,22 @@ def host_cpu_count() -> Optional[int]:
 # Linux 1/65; 32: Linux 1/65 -- all in -v150). Leaving any of them out snapped
 # genuine machines with that count down to the next entry for no reason.
 #
-# 2 is recorded too -- and is common, 6/30 macOS presets (20%) -- but is
-# deliberately EXCLUDED (user, 2026-09-15): 2 is what Firefox reports under
-# resistFingerprinting, and the goal is to look like a DEFAULT Firefox, which
-# RFP is not. So a draw of 2 snaps up to the table floor of 4.
+# 2 was excluded on 2026-09-15 on the grounds that it is what Firefox reports
+# under resistFingerprinting. That is no longer true and has not been for years:
+# RuntimeService::ClampedHardwareConcurrency (dom/workers/RuntimeService.cpp,
+# checked in the 152 tree on 2026-09-17) hardcodes 4 under RFP, and 8 on macOS.
+# Both of those are IN this table, so excluding 2 never protected against an
+# "is this RFP" check -- it only cost fidelity, on 6/30 macOS presets (20%) and
+# 4.2% of Linux draws, i.e. every genuinely dual-core machine. Restored.
+#
+# (Sundial's cjResistance helper still tested hardwareConcurrency === 2 for the
+# same stale reason; corrected the same day.)
 #
 # A host outside this table would hand its own oddity to the fingerprint: a
 # 64-thread build box reports 32, anything under 4 threads reports 4. Odd
 # counts (5, 7, 9, 11, 13, 15) never appear in the corpus -- they are
 # browserforge Bayesian synthesis -- so they keep getting snapped down.
-PLAUSIBLE_CORE_COUNTS = (4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32)
+PLAUSIBLE_CORE_COUNTS = (2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32)
 
 
 def fix_hardware_concurrency(config: Dict[str, Any], can_pin: Optional[bool] = None) -> None:
@@ -889,8 +895,9 @@ def fix_hardware_concurrency(config: Dict[str, Any], can_pin: Optional[bool] = N
     # The fingerprint's own value survives when the browser can be pinned to
     # that many cores (cpu_affinity: Linux, Windows): reported and measurable
     # then agree by construction, and the identity keeps its diversity. A draw
-    # the host cannot honour (more cores than it has), or a host that cannot
-    # pin (macOS), falls back to the snapped host count.
+    # the host cannot honour (more cores than it has), a host that cannot pin
+    # (macOS), or pin_cpu_cores left off -- the default since 2026-09-17 --
+    # falls back to the snapped host count, which is equally coherent.
     from .cpu_affinity import supported as _can_pin
 
     # can_pin=False: the caller launches the browser itself and nothing will
@@ -906,17 +913,13 @@ def fix_hardware_concurrency(config: Dict[str, Any], can_pin: Optional[bool] = N
     if pinnable and isinstance(drawn, int) and drawn >= 1:
         # The fingerprint's value is kept for diversity, but it still has to be
         # a count a real desktop ships with. Accepting any 1..host let
-        # browserforge's low/odd draws through: over 400 linux draws, 8.0% were
-        # < 4 cores and 4.2% were exactly 2 -- and hardwareConcurrency == 2 is
-        # the value Firefox reports under resistFingerprinting, so CreepJS-style
-        # heuristics label the browser "Firefox resistFingerprinting" (this is
-        # what intermittently failed sundial's "Privacy mode verdict"). Odd
-        # counts (5, 7, 9, 11, 13, 15) survived the same way. Snap the draw DOWN
-        # into the table instead, capped by the host so pinning can honour it.
+        # browserforge's synthetic odd draws through (5, 7, 9, 11, 13, 15 --
+        # counts the corpus never records). Snap the draw DOWN into the table
+        # instead, capped by the host so pinning can honour it.
         target = min(drawn, cap)
         allowed = [c for c in PLAUSIBLE_CORE_COUNTS if c <= target]
-        # The floor is the table's even on a 1-3 core host: min(4, cap)
-        # reported 1, 2 or 3 there, and 2 is the resistFingerprinting value.
+        # The floor is the table's even on a 1-core host: a draw of 1 reports 2,
+        # the lowest count the corpus actually records.
         config['navigator.hardwareConcurrency'] = (
             allowed[-1] if allowed else PLAUSIBLE_CORE_COUNTS[0]
         )
@@ -1367,11 +1370,13 @@ def sample_webgl_for_screen(
     and widening it here to flatter the GPU would push a headful window back
     off the monitor it is drawn on (#499).
 
-    The first draw settles hardware-vs-software at the pool's natural rate and
-    is never resampled once it lands on a rasterizer. Rejecting only hardware
-    draws would renormalise the survivors onto llvmpipe / WARP / SwiftShader:
-    on a small screen that turns a 1.5% software rate into a 40% one, trading
-    a weak incoherence for the strongest VM/headless tell there is.
+    Software rasterisers are the one exception to keeping the pool's rate: a
+    draw that lands on llvmpipe / WARP / SwiftShader is resampled, so they
+    never present as the GPU (see below). That does cost fidelity -- the corpus
+    records them at ~1.5%, because real users do run without working drivers --
+    but "no consumer machine reports llvmpipe" is a live, standard check on a
+    string every fingerprint script already reads, so the trade is worth it.
+    Reviewed against the JS-detectability bar on 2026-09-17 and kept.
 
     Falls back to that first draw when the pool holds nothing coherent, so an
     unusual screen degrades to today's behaviour rather than raising.

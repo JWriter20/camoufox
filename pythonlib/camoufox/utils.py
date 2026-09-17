@@ -812,10 +812,12 @@ def launch_options(
         virtual_display (Optional[str]):
             Virtual display number. Ex: ':99'. This is handled by Camoufox & AsyncCamoufox.
         pin_cpu_cores (Optional[bool]):
-            The browser will be pinned to navigator.hardwareConcurrency cores
-            (Linux/Windows), so the fingerprint's core count can be kept. Set by
-            Camoufox & AsyncCamoufox, which apply the pin; without it the host's
-            own (snapped) core count is reported, since nothing pins the browser.
+            Pin the browser to navigator.hardwareConcurrency cores
+            (Linux/Windows) so the fingerprint's own core count can be kept:
+            a page timing N parallel workers then measures the number it was
+            told. OFF by default -- it costs real CPU and serializes concurrent
+            launches. Without it the host's own (snapped) count is reported,
+            which is equally coherent, just less diverse.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
         **launch_options (Dict[str, Any]):

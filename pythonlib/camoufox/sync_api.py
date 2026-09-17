@@ -107,7 +107,13 @@ def NewBrowser(
         virtual_display = None
 
     if not from_options:
-        kwargs.setdefault('pin_cpu_cores', True)
+        # Opt-in (2026-09-17). Pinning keeps the identity's core count by
+        # constraining the browser to that many cores; it costs real CPU, needs
+        # a launch lock, and does nothing on macOS. What it defends against is a
+        # page timing N parallel workers, which is expensive and noisy on a busy
+        # machine. Off, the host's own snapped count is reported, so reported
+        # and measurable still agree -- the identity just loses that one draw.
+        kwargs.setdefault('pin_cpu_cores', False)
         from_options = launch_options(headless=headless, debug=debug, **kwargs)
 
     # Playwright's default viewport deadlocks Juggler when the window is spoofed
