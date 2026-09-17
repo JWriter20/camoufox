@@ -12,8 +12,10 @@ an invariant stock Firefox 152 holds:
   gum-fake            getUserMedia({audio: true, fake: true}) resolves without a
                       prompt
   storage-partition   a cross-site iframe's document.hasStorageAccess() is false
-  wheel-notches       page.mouse.wheel(0, 300) arrives as 3 events with
-                      wheelDeltaY a multiple of 120
+  wheel-default       page.mouse.wheel(0, 300) delivers the delta the caller
+                      asked for: one event, deltaMode 0, deltaY 300
+  wheel-notches       the same scroll with humanize=True arrives as 3 events
+                      with wheelDeltaY a multiple of 120, as a physical wheel
   query-cost          matchMedia('(color: 8)') and navigator.hardwareConcurrency
                       cost about what matchMedia('(min-width: 1px)') and
                       navigator.userAgent do (no sync IPC per read)
@@ -166,6 +168,25 @@ def run_probes(binary, port):
         return out
 
 
+def probe_wheel(binary, port, humanize):
+    """One scroll of 300px, with humanize on or off.
+
+    Off (the default) the caller's delta is delivered verbatim, which is what
+    upstream's own suite asserts. On, the scroll is quantised into the notches a
+    physical wheel produces. Both are shipped behaviour, so both are checked.
+    """
+    from camoufox.sync_api import Camoufox
+
+    with Camoufox(headless=True, executable_path=str(binary), humanize=humanize,
+                  i_know_what_im_doing=True) as b:
+        page = b.new_page()
+        page.goto(f"http://localhost:{port}/")
+        page.mouse.move(200, 200)
+        page.mouse.wheel(0, 300)
+        page.wait_for_timeout(1500)
+        return json.loads(page.evaluate("() => document.body.dataset.wheel || '[]'"))
+
+
 def relaunch_timezones(binary, port):
     from camoufox.sync_api import Camoufox
 
@@ -194,6 +215,7 @@ def main() -> int:
     server, port = serve()
     try:
         out = run_probes(binary, port)
+        out["wheelHumanized"] = probe_wheel(binary, port, humanize=True)
         relaunch = relaunch_timezones(binary, port)
     finally:
         server.shutdown()
@@ -226,8 +248,13 @@ def main() -> int:
     if out["storageAccess"] is not False:
         failures.append(f"storage-partition: cross-site iframe hasStorageAccess() = {out['storageAccess']}")
     wheel = out["wheel"]
-    if len(wheel) != 3 or any(e["wd"] % 120 for e in wheel):
-        failures.append(f"wheel-notches: wheel(0, 300) gave {wheel}")
+    # Default: the delta the caller asked for, in pixels, as one event.
+    if len(wheel) != 1 or wheel[0]["mode"] != 0 or wheel[0]["dy"] != 300:
+        failures.append(f"wheel-default: wheel(0, 300) gave {wheel}")
+    # humanize=True: notches, each carrying one native tick.
+    humanized = out["wheelHumanized"]
+    if len(humanized) != 3 or any(e["wd"] % 120 for e in humanized):
+        failures.append(f"wheel-notches: humanized wheel(0, 300) gave {humanized}")
     if out["costColor"] > 5 * out["costMinWidth"] + 15:
         failures.append(f"query-cost: (color) {out['costColor']:.0f} ms vs (min-width) {out['costMinWidth']:.0f} ms")
     if out["costHwc"] > 5 * out["costUA"] + 15:
