@@ -1,8 +1,8 @@
 diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
-index 1ff3195235..795cb05bc3 100644
+index a63cb68d9f..2a96a949e3 100644
 --- a/dom/ipc/ContentParent.cpp
 +++ b/dom/ipc/ContentParent.cpp
-@@ -1231,6 +1231,26 @@ mozilla::ipc::IPCResult ContentParent::RecvCreateGMPService() {
+@@ -1265,6 +1265,28 @@ mozilla::ipc::IPCResult ContentParent::RecvCreateGMPService() {
    return IPC_OK();
  }
  
@@ -12,7 +12,9 @@ index 1ff3195235..795cb05bc3 100644
 +  if (!StringBeginsWith(aPrefName, "roverfox.s."_ns)) {
 +    return IPC_OK();
 +  }
-+  Preferences::SetCString(aPrefName.get(), aValue);
++  // Default branch: session state, never written to prefs.js (see
++  // RoverfoxStorageManager.cpp).
++  Preferences::SetCString(aPrefName.get(), aValue, PrefValueKind::Default);
 +  return IPC_OK();
 +}
 +
@@ -22,7 +24,7 @@ index 1ff3195235..795cb05bc3 100644
 +    *aOutValue = ""_ns;
 +    return IPC_OK();
 +  }
-+  Preferences::GetCString(aPrefName.get(), *aOutValue);
++  Preferences::GetCString(aPrefName.get(), *aOutValue, PrefValueKind::Default);
 +  return IPC_OK();
 +}
 +
@@ -30,10 +32,10 @@ index 1ff3195235..795cb05bc3 100644
      const nsACString& aHost, PrivateAttributionImpressionType aType,
      uint32_t aIndex, const nsAString& aAd, const nsACString& aTargetHost) {
 diff --git a/dom/ipc/ContentParent.h b/dom/ipc/ContentParent.h
-index 4a478a5a4d..161a1f993e 100644
+index 4c84f11137..a090082892 100644
 --- a/dom/ipc/ContentParent.h
 +++ b/dom/ipc/ContentParent.h
-@@ -362,6 +362,11 @@ class ContentParent final : public PContentParent,
+@@ -363,6 +363,11 @@ class ContentParent final : public PContentParent,
        Endpoint<PClipboardContentAnalysisParent>&& aParentEndpoint);
    mozilla::ipc::IPCResult RecvCreateGMPService();
  
@@ -46,10 +48,10 @@ index 4a478a5a4d..161a1f993e 100644
  
    NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 diff --git a/dom/ipc/PContent.ipdl b/dom/ipc/PContent.ipdl
-index 39b01c305d..882bd54b8f 100644
+index edb1259e51..10a0bea039 100644
 --- a/dom/ipc/PContent.ipdl
 +++ b/dom/ipc/PContent.ipdl
-@@ -1113,6 +1113,13 @@ parent:
+@@ -1136,6 +1136,13 @@ parent:
  
      async CreateGMPService();
  
@@ -64,10 +66,10 @@ index 39b01c305d..882bd54b8f 100644
  
      async InitStreamFilter(uint64_t channelId, nsString addonId)
 diff --git a/ipc/ipdl/sync-messages.ini b/ipc/ipdl/sync-messages.ini
-index abcdef1234..1234abcdef 100644
+index d562255670..6ea4f999b0 100644
 --- a/ipc/ipdl/sync-messages.ini
 +++ b/ipc/ipdl/sync-messages.ini
-@@ -369,5 +369,11 @@ description = This must be synchronous until quota file streams become non-blocki
+@@ -371,6 +371,12 @@ description = Finds certificates and private keys in the parent process. As this
  [PIPCClientCerts::Sign]
  description = Performs a signature on given data with a key corresponding to the given identifier. This is called from PKCS#11, so there is no way to make this asynchronous.
  # -
@@ -79,11 +81,12 @@ index abcdef1234..1234abcdef 100644
 +# -
  [PRemoteQuotaObject::MaybeUpdateSize]
  description = This must be synchronous until quota file streams become non-blocking. The synchronous message is never used on the main thread or the PBackground thread or a DOM worker threed.
+ 
 diff --git a/modules/libpref/Preferences.cpp b/modules/libpref/Preferences.cpp
-index c307035819..4402775905 100644
+index 6e2b95ff7f..c13dd1eb5b 100644
 --- a/modules/libpref/Preferences.cpp
 +++ b/modules/libpref/Preferences.cpp
-@@ -6519,6 +6519,8 @@ static const PrefListEntry sDynamicPrefOverrideList[]{
+@@ -6517,6 +6517,8 @@ static const PrefListEntry sDynamicPrefOverrideList[]{
      PREF_LIST_ENTRY("toolkit.mozprotocol.url"),
      PREF_LIST_ENTRY("toolkit.telemetry.log.level"),
      PREF_LIST_ENTRY("ui."),

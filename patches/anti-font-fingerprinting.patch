@@ -176,10 +176,10 @@ index 0000000000..63d43f3b86
 \ No newline at end of file
 diff --git a/dom/base/RoverfoxStorageManager.cpp b/dom/base/RoverfoxStorageManager.cpp
 new file mode 100644
-index 0000000000..1f8b3a08f6
+index 0000000000..dcb359d25a
 --- /dev/null
 +++ b/dom/base/RoverfoxStorageManager.cpp
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,194 @@
 +#include "RoverfoxStorageManager.h"
 +#include "mozilla/Preferences.h"
 +#include "nsXULAppAPI.h"
@@ -189,10 +189,23 @@ index 0000000000..1f8b3a08f6
 +namespace mozilla {
 +namespace dom {
 +
++// Values live on the DEFAULT pref branch. They are session state (per-context
++// values a launch sets up), and default prefs are never written to prefs.js:
++// as user prefs a persistent profile kept them, so a relaunch with a different
++// config still reported the previous session's timezone and navigator values.
++// Reading the default branch alone also ignores user values an older build
++// left in a profile's prefs.js.
++static constexpr auto kKind = PrefValueKind::Default;
++
 +/* static */ nsTHashMap<nsCStringHashKey, nsCString>&
 +RoverfoxStorageManager::GetLocalCache() {
 +  static nsTHashMap<nsCStringHashKey, nsCString> sCache;
 +  return sCache;
++}
++
++/* static */ nsTHashSet<nsCString>& RoverfoxStorageManager::GetMissCache() {
++  static nsTHashSet<nsCString> sMisses;
++  return sMisses;
 +}
 +
 +/* static */ mozilla::Mutex&
@@ -208,6 +221,15 @@ index 0000000000..1f8b3a08f6
 +  return nsCString(prefName);
 +}
 +
++static void OnStoragePrefChanged(const char* aPrefName, void*) {
++  RoverfoxStorageManager::ForgetMiss(nsDependentCString(aPrefName));
++}
++
++/* static */ void RoverfoxStorageManager::ForgetMiss(const nsACString& aPrefName) {
++  MutexAutoLock lock(GetLocalCacheMutex());
++  GetMissCache().Remove(aPrefName);
++}
++
 +/* static */ void
 +RoverfoxStorageManager::SetPrefValue(const nsCString& prefName,
 +                                      const nsCString& value) {
@@ -215,15 +237,64 @@ index 0000000000..1f8b3a08f6
 +  {
 +    MutexAutoLock lock(GetLocalCacheMutex());
 +    GetLocalCache().InsertOrUpdate(prefName, nsCString(value));
++    GetMissCache().Remove(prefName);
 +  }
 +  // Sync to parent for cross-process availability
 +  if (XRE_IsParentProcess()) {
-+    Preferences::SetCString(prefName.get(), value);
++    Preferences::SetCString(prefName.get(), value, kKind);
 +  } else {
 +    ContentChild* cc = ContentChild::GetSingleton();
 +    if (cc) {
 +      cc->SendRoverfoxStoragePut(prefName, value);
 +    }
++  }
++}
++
++/* static */ void RoverfoxStorageManager::ReadValue(const nsCString& prefName,
++                                                    nsACString& outValue) {
++  // Local cache first (values set in this process)
++  {
++    MutexAutoLock lock(GetLocalCacheMutex());
++    if (auto entry = GetLocalCache().Lookup(prefName)) {
++      outValue = entry.Data();
++    }
++  }
++  // Then Preferences (values synced from other processes)
++  if (outValue.IsEmpty()) {
++    Preferences::GetCString(prefName.get(), outValue, kKind);
++  }
++  if (!outValue.IsEmpty() || XRE_IsParentProcess() || !NS_IsMainThread()) {
++    return;
++  }
++  // Sync IPC read from the parent covers a value another process put that has
++  // not reached this process's prefs yet. Once per key: a sync IPC on every
++  // read of an unset key (every read in a launch without per-context values)
++  // made navigator.hardwareConcurrency, screen.* and (color) queries ~20x
++  // slower than stock, a timing a page can measure. A later put anywhere
++  // clears the miss (pref callback / SetPrefValue).
++  {
++    MutexAutoLock lock(GetLocalCacheMutex());
++    if (GetMissCache().Contains(prefName)) {
++      return;
++    }
++  }
++  static bool sObserving = false;
++  if (!sObserving) {
++    sObserving = true;
++    Preferences::RegisterPrefixCallback(OnStoragePrefChanged, "roverfox.s."_ns);
++  }
++  ContentChild* cc = ContentChild::GetSingleton();
++  if (!cc) {
++    return;
++  }
++  nsCString fromParent;
++  cc->SendRoverfoxStorageGet(prefName, &fromParent);
++  outValue = fromParent;
++  MutexAutoLock lock(GetLocalCacheMutex());
++  if (fromParent.IsEmpty()) {
++    GetMissCache().Insert(prefName);
++  } else {
++    GetLocalCache().InsertOrUpdate(prefName, fromParent);
 +  }
 +}
 +
@@ -237,30 +308,8 @@ index 0000000000..1f8b3a08f6
 +
 +/* static */ bool
 +RoverfoxStorageManager::GetUint(const nsAString& key, uint32_t& outValue) {
-+  nsCString prefName = MakePrefName(key);
 +  nsAutoCString strValue;
-+  // Check local cache first (immediate reads for values set in this process)
-+  {
-+    MutexAutoLock lock(GetLocalCacheMutex());
-+    if (auto entry = GetLocalCache().Lookup(prefName)) {
-+      strValue = entry.Data();
-+    }
-+  }
-+  // Fall back to Preferences (values synced from other processes)
-+  if (strValue.IsEmpty()) {
-+    Preferences::GetCString(prefName.get(), strValue);
-+  }
-+  // Sync IPC read from parent (cross-process fallback for workers)
-+  if (strValue.IsEmpty() && !XRE_IsParentProcess() && NS_IsMainThread()) {
-+    ContentChild* cc = ContentChild::GetSingleton();
-+    if (cc) {
-+      cc->SendRoverfoxStorageGet(prefName, &strValue);
-+      if (!strValue.IsEmpty()) {
-+        MutexAutoLock lock(GetLocalCacheMutex());
-+        GetLocalCache().InsertOrUpdate(prefName, nsCString(strValue));
-+      }
-+    }
-+  }
++  ReadValue(MakePrefName(key), strValue);
 +  if (!strValue.IsEmpty()) {
 +    nsresult parseRv;
 +    int64_t parsed = strValue.ToInteger64(&parseRv);
@@ -281,28 +330,8 @@ index 0000000000..1f8b3a08f6
 +
 +/* static */ bool
 +RoverfoxStorageManager::GetBool(const nsAString& key, bool& outValue) {
-+  nsCString prefName = MakePrefName(key);
 +  nsAutoCString strValue;
-+  {
-+    MutexAutoLock lock(GetLocalCacheMutex());
-+    if (auto entry = GetLocalCache().Lookup(prefName)) {
-+      strValue = entry.Data();
-+    }
-+  }
-+  if (strValue.IsEmpty()) {
-+    Preferences::GetCString(prefName.get(), strValue);
-+  }
-+  // Sync IPC read from parent (cross-process fallback for workers)
-+  if (strValue.IsEmpty() && !XRE_IsParentProcess() && NS_IsMainThread()) {
-+    ContentChild* cc = ContentChild::GetSingleton();
-+    if (cc) {
-+      cc->SendRoverfoxStorageGet(prefName, &strValue);
-+      if (!strValue.IsEmpty()) {
-+        MutexAutoLock lock(GetLocalCacheMutex());
-+        GetLocalCache().InsertOrUpdate(prefName, nsCString(strValue));
-+      }
-+    }
-+  }
++  ReadValue(MakePrefName(key), strValue);
 +  if (!strValue.IsEmpty()) {
 +    outValue = strValue.EqualsLiteral("1");
 +    return true;
@@ -321,28 +350,8 @@ index 0000000000..1f8b3a08f6
 +
 +/* static */ bool
 +RoverfoxStorageManager::GetString(const nsAString& key, nsAString& outValue) {
-+  nsCString prefName = MakePrefName(key);
 +  nsAutoCString utf8Value;
-+  {
-+    MutexAutoLock lock(GetLocalCacheMutex());
-+    if (auto entry = GetLocalCache().Lookup(prefName)) {
-+      utf8Value = entry.Data();
-+    }
-+  }
-+  if (utf8Value.IsEmpty()) {
-+    Preferences::GetCString(prefName.get(), utf8Value);
-+  }
-+  // Sync IPC read from parent (cross-process fallback for workers)
-+  if (utf8Value.IsEmpty() && !XRE_IsParentProcess() && NS_IsMainThread()) {
-+    ContentChild* cc = ContentChild::GetSingleton();
-+    if (cc) {
-+      cc->SendRoverfoxStorageGet(prefName, &utf8Value);
-+      if (!utf8Value.IsEmpty()) {
-+        MutexAutoLock lock(GetLocalCacheMutex());
-+        GetLocalCache().InsertOrUpdate(prefName, nsCString(utf8Value));
-+      }
-+    }
-+  }
++  ReadValue(MakePrefName(key), utf8Value);
 +  if (!utf8Value.IsEmpty()) {
 +    CopyUTF8toUTF16(utf8Value, outValue);
 +    return true;
@@ -358,7 +367,8 @@ index 0000000000..1f8b3a08f6
 +    GetLocalCache().Remove(prefName);
 +  }
 +  if (XRE_IsParentProcess()) {
-+    Preferences::ClearUser(prefName.get());
++    // A default pref cannot be deleted; empty reads as unset.
++    Preferences::SetCString(prefName.get(), ""_ns, kKind);
 +  }
 +}
 +
@@ -366,15 +376,16 @@ index 0000000000..1f8b3a08f6
 +}  // namespace mozilla
 diff --git a/dom/base/RoverfoxStorageManager.h b/dom/base/RoverfoxStorageManager.h
 new file mode 100644
-index 0000000000..4a2dac8e8f
+index 0000000000..e6d64378e1
 --- /dev/null
 +++ b/dom/base/RoverfoxStorageManager.h
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,41 @@
 +#ifndef mozilla_dom_RoverfoxStorageManager_h
 +#define mozilla_dom_RoverfoxStorageManager_h
 +
 +#include "nsString.h"
 +#include "nsTHashMap.h"
++#include "nsTHashSet.h"
 +#include "nsHashKeys.h"
 +#include "mozilla/Mutex.h"
 +
@@ -394,10 +405,14 @@ index 0000000000..4a2dac8e8f
 +  static void PutString(const nsAString& key, const nsAString& value);
 +  static bool GetString(const nsAString& key, nsAString& outValue);
 +  static void Remove(const nsAString& key);
++  // A put reached this process's prefs: the key is no longer a known miss.
++  static void ForgetMiss(const nsACString& aPrefName);
 +
 + private:
 +  static nsCString MakePrefName(const nsAString& key);
 +  static void SetPrefValue(const nsCString& prefName, const nsCString& value);
++  static void ReadValue(const nsCString& prefName, nsACString& outValue);
++  static nsTHashSet<nsCString>& GetMissCache();
 +  static nsTHashMap<nsCStringHashKey, nsCString>& GetLocalCache();
 +  static mozilla::Mutex& GetLocalCacheMutex();
 +};
@@ -837,7 +852,7 @@ index 25022d4b5b..fe65662b77 100644
        // We can NOT assert that TEXT_IS_8BIT is false in aFlags here,
        // because this might be an 8bit-only word from a 16-bit textrun,
 diff --git a/gfx/thebes/gfxHarfBuzzShaper.cpp b/gfx/thebes/gfxHarfBuzzShaper.cpp
-index e41408f51c..ffa0bd4caf 100644
+index e41408f51c..448fcd58fd 100644
 --- a/gfx/thebes/gfxHarfBuzzShaper.cpp
 +++ b/gfx/thebes/gfxHarfBuzzShaper.cpp
 @@ -16,6 +16,10 @@
@@ -902,7 +917,7 @@ index e41408f51c..ffa0bd4caf 100644
    if (isRightToLeft) {
      hb_buffer_reverse(mBuffer);
    }
-@@ -1770,3 +1804,4 @@ nsresult gfxHarfBuzzShaper::SetGlyphsFromRun(gfxShapedText* aShapedText,
+@@ -1770,3 +1818,4 @@ nsresult gfxHarfBuzzShaper::SetGlyphsFromRun(gfxShapedText* aShapedText,
  
    return NS_OK;
  }
