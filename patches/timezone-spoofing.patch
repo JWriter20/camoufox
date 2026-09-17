@@ -109,10 +109,10 @@ index 0000000000..7cc942e7c9
 +
 +#endif  // mozilla_dom_TimezoneManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index 66b3509602..2b5e125904 100644
+index 743be1950f..922a79af86 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -280,6 +280,7 @@ EXPORTS.mozilla.dom += [
+@@ -285,6 +285,7 @@ EXPORTS.mozilla.dom += [
      "TimeoutBudgetManager.h",
      "TimeoutHandler.h",
      "TimeoutManager.h",
@@ -120,7 +120,7 @@ index 66b3509602..2b5e125904 100644
      "TreeIterator.h",
      "TreeOrderedArray.h",
      "TreeOrderedArrayInlines.h",
-@@ -493,6 +494,7 @@ UNIFIED_SOURCES += [
+@@ -503,6 +504,7 @@ UNIFIED_SOURCES += [
      "TimeoutExecutor.cpp",
      "TimeoutHandler.cpp",
      "TimeoutManager.cpp",
@@ -129,10 +129,10 @@ index 66b3509602..2b5e125904 100644
      "UIDirectionManager.cpp",
      "UserActivation.cpp",
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 5432f702ed..10568ed4f7 100644
+index 6444fccd9c..3db3ef3003 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -244,6 +244,8 @@
+@@ -249,6 +249,8 @@
  #include "nsID.h"
  #include "nsIDOMStorageManager.h"
  #include "FontSpacingSeedManager.h"
@@ -141,7 +141,7 @@ index 5432f702ed..10568ed4f7 100644
  #include "nsDocShell.h"
  #include "mozilla/OriginAttributes.h"
  #include "nsIDOMXULControlElement.h"
-@@ -7730,6 +7732,48 @@ void nsGlobalWindowInner::SetFontSpacingSeed(uint32_t seed, ErrorResult& aRv) {
+@@ -7781,6 +7783,48 @@ void nsGlobalWindowInner::SetFontSpacingSeed(uint32_t seed, ErrorResult& aRv) {
    }
  }
  
@@ -191,10 +191,10 @@ index 5432f702ed..10568ed4f7 100644
    MOZ_ASSERT(aSharedWorker);
    MOZ_ASSERT(!mSharedWorkers.Contains(aSharedWorker));
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index b26388188c..e7c3c14a3f 100644
+index bb70b2b8fe..bfde19786c 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -680,6 +680,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -685,6 +685,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
  
    // Font spacing seed for privacy-preserving font fingerprinting
    void SetFontSpacingSeed(uint32_t seed, mozilla::ErrorResult& aRv);
@@ -203,7 +203,7 @@ index b26388188c..e7c3c14a3f 100644
    void StoreSharedWorker(mozilla::dom::SharedWorker* aSharedWorker);
  
 diff --git a/dom/base/nsGlobalWindowOuter.cpp b/dom/base/nsGlobalWindowOuter.cpp
-index 7aab4d6f92..81caaa8f31 100644
+index dd0124f7e9..165853ca7f 100644
 --- a/dom/base/nsGlobalWindowOuter.cpp
 +++ b/dom/base/nsGlobalWindowOuter.cpp
 @@ -87,6 +87,8 @@
@@ -215,7 +215,7 @@ index 7aab4d6f92..81caaa8f31 100644
  #include "mozilla/Likely.h"
  #include "mozilla/Preferences.h"
  #include "mozilla/SchedulerGroup.h"
-@@ -2507,6 +2509,22 @@ nsresult nsGlobalWindowOuter::SetNewDocument(Document* aDocument,
+@@ -2506,6 +2508,27 @@ nsresult nsGlobalWindowOuter::SetNewDocument(Document* aDocument,
      MOZ_ALWAYS_SUCCEEDS(bc->SetCurrentInnerWindowId(mInnerWindow->WindowID()));
    }
  
@@ -227,10 +227,15 @@ index 7aab4d6f92..81caaa8f31 100644
 +      userContextId = bc->OriginAttributesRef().mUserContextId;
 +    }
 +    nsAutoString storedTimezone;
-+    if (mozilla::dom::TimezoneManager::GetTimezone(userContextId, storedTimezone)) {
-+      if (JSContext* cx = nsContentUtils::GetCurrentJSContext()) {
++    if (mInnerWindow &&
++        mozilla::dom::TimezoneManager::GetTimezone(userContextId, storedTimezone)) {
++      // Enter the NEW inner window's realm: the override is per realm, and the
++      // JS context current at this point belongs to whoever triggered the
++      // navigation, not to the document being created.
++      mozilla::dom::AutoJSAPI jsapi;
++      if (jsapi.Init(mInnerWindow)) {
 +        NS_LossyConvertUTF16toASCII timezoneASCII(storedTimezone);
-+        JS::SetRealmTimeZoneOverride(cx, timezoneASCII.get());
++        JS::SetRealmTimeZoneOverride(jsapi.cx(), timezoneASCII.get());
 +      }
 +    }
 +  }
@@ -238,12 +243,39 @@ index 7aab4d6f92..81caaa8f31 100644
    // We no longer need the old inner window.  Start its destruction if
    // its not being reused and clear our reference.
    if (doomCurrentInner) {
+diff --git a/dom/base/nsJSEnvironment.cpp b/dom/base/nsJSEnvironment.cpp
+index 21d69bdfed..2be70a990e 100644
+--- a/dom/base/nsJSEnvironment.cpp
++++ b/dom/base/nsJSEnvironment.cpp
+@@ -3,6 +3,8 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "nsJSEnvironment.h"
++#include "MaskConfig.hpp"
++#include "js/Date.h"
+ 
+ #include "mozilla/EventDispatcher.h"
+ #include "mozilla/HoldDropJSObjects.h"
+@@ -1800,6 +1802,13 @@ void nsJSContext::EnsureStatics() {
+     return;
+   }
+ 
++  // Camoufox: apply the launch-level timezone eagerly, in every process, so
++  // Date and Intl report it from the very first read. The per-context
++  // window.setTimezone() path still takes precedence per realm.
++  if (auto tz = MaskConfig::GetString("timezone")) {
++    JS::SetTimeZoneOverride(tz.value().c_str());
++  }
++
+   // Let's make sure that our main thread is the same as the xpcom main thread.
+   MOZ_ASSERT(NS_IsMainThread());
+ 
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index 454ef6f4e7..b96e76edb7 100644
+index 6448765fb8..f01e8011cc 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
-@@ -940,6 +940,12 @@ partial interface Window {
-   undefined setFontSpacingSeed(unsigned long seed);
+@@ -958,6 +958,12 @@ partial interface Window {
+   undefined setSpeechVoices(DOMString voices);
  };
  
 +// Timezone interface for per-context timezone spoofing
@@ -256,7 +288,7 @@ index 454ef6f4e7..b96e76edb7 100644
  // finding on a page.
  partial interface Window {
 diff --git a/dom/workers/WorkerPrivate.cpp b/dom/workers/WorkerPrivate.cpp
-index 95e5ca1574..16ec178d9e 100644
+index 6f88f1f176..b2ca52dab2 100644
 --- a/dom/workers/WorkerPrivate.cpp
 +++ b/dom/workers/WorkerPrivate.cpp
 @@ -21,6 +21,8 @@
@@ -268,7 +300,7 @@ index 95e5ca1574..16ec178d9e 100644
  #include "js/Exception.h"
  #include "js/LocaleSensitive.h"
  #include "js/MemoryMetrics.h"
-@@ -6429,6 +6431,19 @@ WorkerGlobalScope* WorkerPrivate::GetOrCreateGlobalScope(JSContext* aCx) {
+@@ -6425,6 +6427,19 @@ WorkerGlobalScope* WorkerPrivate::GetOrCreateGlobalScope(JSContext* aCx) {
      data->mScope->DisconnectGlobalTeardownObservers();
    }
  
@@ -289,10 +321,10 @@ index 95e5ca1574..16ec178d9e 100644
  
    return data->mScope;
 diff --git a/js/public/Date.h b/js/public/Date.h
-index 98d5b1176e..89c2942a68 100644
+index 90d8708e2b..2a650570f6 100644
 --- a/js/public/Date.h
 +++ b/js/public/Date.h
-@@ -56,6 +56,9 @@ namespace JS {
+@@ -55,6 +55,9 @@ namespace JS {
  extern JS_PUBLIC_API void ResetTimeZone();
  
  extern JS_PUBLIC_API bool SetTimeZoneOverride(const char* timezoneId);
@@ -303,10 +335,10 @@ index 98d5b1176e..89c2942a68 100644
  class ClippedTime;
  inline ClippedTime TimeClip(double time);
 diff --git a/js/src/vm/DateTime.cpp b/js/src/vm/DateTime.cpp
-index 96ed101921..aa78f0fe26 100644
+index f8a975acc3..05f26e45c8 100644
 --- a/js/src/vm/DateTime.cpp
 +++ b/js/src/vm/DateTime.cpp
-@@ -38,6 +38,7 @@
+@@ -36,6 +36,7 @@
  #include "util/Text.h"
  #include "vm/MutexIDs.h"
  #include "vm/Realm.h"
@@ -314,7 +346,7 @@ index 96ed101921..aa78f0fe26 100644
  
  static bool ComputeLocalTime(time_t local, struct tm* ptm) {
    // Neither localtime_s nor localtime_r are required to act as if tzset has
-@@ -256,6 +257,20 @@ js::DateTimeInfo::DateTimeInfo() {
+@@ -254,6 +255,20 @@ js::DateTimeInfo::DateTimeInfo() {
  
  js::DateTimeInfo::~DateTimeInfo() = default;
  
@@ -335,7 +367,7 @@ index 96ed101921..aa78f0fe26 100644
  int64_t js::DateTimeInfo::toClampedSeconds(int64_t milliseconds) {
    int64_t seconds = milliseconds / msPerSecond;
    int64_t millis = milliseconds % msPerSecond;
-@@ -586,6 +601,18 @@ JS_PUBLIC_API bool JS::SetTimeZoneOverride(const char* timeZoneId) {
+@@ -582,6 +597,18 @@ JS_PUBLIC_API bool JS::SetTimeZoneOverride(const char* timeZoneId) {
    return true;
  }
  
@@ -355,10 +387,10 @@ index 96ed101921..aa78f0fe26 100644
  #  if defined(XP_WIN)
  static bool IsOlsonCompatibleWindowsTimeZoneId(std::string_view tz) {
 diff --git a/js/src/vm/DateTime.h b/js/src/vm/DateTime.h
-index 110824439c..dfc88898f5 100644
+index 41b0c5be27..eb11caadb2 100644
 --- a/js/src/vm/DateTime.h
 +++ b/js/src/vm/DateTime.h
-@@ -154,6 +154,7 @@ class DateTimeInfo {
+@@ -153,6 +153,7 @@ class DateTimeInfo {
  
   public:
    ~DateTimeInfo();
@@ -367,10 +399,10 @@ index 110824439c..dfc88898f5 100644
    // The spec implicitly assumes DST and time zone adjustment information
    // never change in the course of a function -- sometimes even across
 diff --git a/js/src/vm/Realm.cpp b/js/src/vm/Realm.cpp
-index 3ed5fc6e2d..6df86a6059 100644
+index 8d195ca7c8..b16bcd07f5 100644
 --- a/js/src/vm/Realm.cpp
 +++ b/js/src/vm/Realm.cpp
-@@ -568,10 +568,15 @@ void Realm::setLocaleOverride(const char* locale) {
+@@ -597,10 +597,15 @@ void Realm::setLocaleOverride(const char* locale) {
  }
  
  js::DateTimeInfo* Realm::getDateTimeInfo() {
