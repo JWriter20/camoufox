@@ -118,12 +118,18 @@ async def main() -> int:
         passed = False
         print(f"  FAIL: expected {MIN_DURATION_MS}-{MAX_DURATION_MS}ms, got {duration}ms")
     # A metronome would produce one or two distinct values (the fixed step, plus
-    # scheduler noise clustering around it). Real recorded timing does not.
-    if distinct >= max(4, len(gaps) // 4):
+    # scheduler noise clustering around it). Real recorded timing does not. The
+    # page clock is clamped to 1 ms and the recorded steps mostly sit between 12
+    # and 20 ms, so the number of distinct values cannot scale with the number
+    # of gaps: requiring len(gaps) // 4 failed uneven runs like
+    # [19, 18, 18, 17, 88, 18, 21, 15, ...] whenever event delivery was steady.
+    # A fixed 10 ms cadence gives about three values within a few ms of each other.
+    spread = (max(gaps) - min(gaps)) if gaps else 0
+    if distinct >= 6 and spread >= 20:
         print("  PASS: gaps are uneven, not a fixed cadence")
     else:
         passed = False
-        print(f"  FAIL: only {distinct} distinct gaps across {len(gaps)} -- looks like a fixed cadence")
+        print(f"  FAIL: only {distinct} distinct gaps (spread {spread}ms) across {len(gaps)} -- looks like a fixed cadence")
 
     plain = await _collect_moves(False)
     print("\n=== humanize off ===")
