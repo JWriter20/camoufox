@@ -64,6 +64,22 @@ skip:
       expects a timeout error when the element never settles, and Camoufox does
       not raise one.
 
+  - test: tests/async/test_keyboard.py::test_should_send_proper_codes_while_typing
+    reason: >-
+      Typing "!" on a US layout takes Shift, and upstream asserts the three events
+      it dispatches for the character alone, with shiftKey false throughout. A
+      page listening to keydown therefore sees a character no keyboard could have
+      produced. Camoufox presses Shift around the shifted character, so the page
+      sees "Keydown: Shift ShiftLeft 16 [Shift]" before it and shiftKey true on
+      the character's own events. The character's own key/code/keyCode are
+      unchanged (! Digit1 49); what upstream asserts is the absence of the Shift.
+
+  - test: tests/async/test_keyboard.py::test_should_press_plus
+    reason: >-
+      The same auto-Shift, reached through keyboard.press("+") rather than
+      type(). Listed separately because dropping auto-Shift would have to unskip
+      both.
+
   # --- client certificates the BROWSER has to present ------------------------
   #
   # Not the whole module. Playwright offers client certs two ways, and only one

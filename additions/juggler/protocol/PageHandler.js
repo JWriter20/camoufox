@@ -441,7 +441,15 @@ export class PageHandler {
 
   async ['Page.goBack']({}) {
     const browsingContext = this._pageTarget.linkedBrowser().browsingContext;
-    if (!browsingContext.embedderElement?.canGoBack)
+    // Camoufox: canGoBack is the BACK BUTTON's answer -- with
+    // browser.navigation.requireUserInteraction (Firefox's default) it reports
+    // false when every entry behind this one was pushed without the user
+    // touching the page, because the button skips those. goBack() itself does
+    // not skip them, and neither does history.back(). Ask the question the
+    // traversal actually answers, as Marionette does (driver.sys.mjs).
+    const embedder = browsingContext.embedderElement;
+    const canGoBack = embedder?.canGoBackIgnoringUserInteraction ?? embedder?.canGoBack;
+    if (!canGoBack)
       return { success: false };
     browsingContext.goBack();
     return { success: true };
@@ -672,19 +680,28 @@ export class PageHandler {
   }
 
   async ['Page.dispatchWheelEvent']({x, y, button, deltaX, deltaY, deltaZ, modifiers }) {
-    // Camoufox: scroll the way a physical wheel does, in notches. Each notch is
-    // its own event of 3 LINES carrying one native tick, so the page sees
-    // deltaMode 1, DOMMouseScroll.detail 3 and wheelDelta -120 per notch, and a
-    // longer scroll arrives as several such events a few tens of ms apart.
-    // Dispatching Playwright's pixel delta gave detail = 100 and no line delta;
-    // lines without ticks gave wheelDelta -396 for one notch and one big event
-    // for several (measured against XTEST input). 100 px == one notch.
+    // Camoufox: with humanize on, scroll the way a physical wheel does, in
+    // notches. Each notch is its own event of 3 LINES carrying one native tick,
+    // so the page sees deltaMode 1, DOMMouseScroll.detail 3 and wheelDelta -120
+    // per notch, and a longer scroll arrives as several such events a few tens
+    // of ms apart. Playwright's pixel delta gives detail = 100 and no line
+    // delta; lines without ticks give wheelDelta -396 for one notch and one big
+    // event for several (measured against XTEST input). 100 px == one notch.
+    //
+    // Off by default: mouse.wheel(0, 100) has to deliver deltaY 100 in
+    // deltaMode 0, which is the delta the caller asked for and what upstream's
+    // own suite asserts. Quantising into notches changes the number the page
+    // sees, so it is opt-in with the rest of the humanized input.
+    const nativeNotches = ChromeUtils.camouGetBool('humanize', false);
     const PX_PER_NOTCH = 100;
     const LINES_PER_NOTCH = 3;
     const toNotches = (d) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / PX_PER_NOTCH)));
-    const notchesX = toNotches(deltaX);
-    const notchesY = toNotches(deltaY);
-    const notchCount = Math.max(1, Math.abs(notchesX), Math.abs(notchesY));
+    const notchesX = nativeNotches ? toNotches(deltaX) : 0;
+    const notchesY = nativeNotches ? toNotches(deltaY) : 0;
+    const notchCount = nativeNotches ? Math.max(1, Math.abs(notchesX), Math.abs(notchesY)) : 1;
+    // Upstream's conversion, used when the notches are off.
+    const pixelLineOrPageDeltaX = deltaX > 0 ? Math.floor(deltaX) : Math.ceil(deltaX);
+    const pixelLineOrPageDeltaY = deltaY > 0 ? Math.floor(deltaY) : Math.ceil(deltaY);
 
     await this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
@@ -705,7 +722,7 @@ export class PageHandler {
         const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers});
         // Same conversion as a mouse event: a wheel at relative y == 0 would
         // otherwise land on the chrome/content boundary and scroll the tab strip.
-        dispatch.sendWheel(x, y, {
+        dispatch.sendWheel(x, y, nativeNotches ? {
           deltaX: stepX,
           deltaY: stepY,
           deltaZ: i ? 0 : deltaZ,
@@ -713,6 +730,13 @@ export class PageHandler {
           lineOrPageDeltaX: stepX,
           lineOrPageDeltaY: stepY,
           nativeNotches: true,
+        } : {
+          deltaX,
+          deltaY,
+          deltaZ,
+          deltaMode: 0 /* WheelEvent.DOM_DELTA_PIXEL */,
+          lineOrPageDeltaX: pixelLineOrPageDeltaX,
+          lineOrPageDeltaY: pixelLineOrPageDeltaY,
         });
       }
     }, { muteNotificationsPopup: true });
