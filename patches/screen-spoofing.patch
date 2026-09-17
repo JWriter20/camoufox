@@ -393,7 +393,7 @@ index 06b86c6c75..9641c8457c 100644
  }
  
 diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
-index 5e39014539..341c6fc853 100644
+index 1587fcffd8..53c079bc55 100644
 --- a/layout/style/nsMediaFeatures.cpp
 +++ b/layout/style/nsMediaFeatures.cpp
 @@ -4,6 +4,7 @@
@@ -450,3 +450,36 @@ index 5e39014539..341c6fc853 100644
    if (aDocument.ShouldResistFingerprinting(RFPTarget::CSSDeviceSize)) {
      return GetSize(aDocument);
    }
+@@ -171,6 +200,32 @@ int32_t Gecko_MediaFeatures_GetColorDepth(const Document* aDocument) {
+     return 0;
+   }
+ 
++  // Camoufox: report the spoofed colour depth, for the same
++  // internal-consistency reason as GetDeviceSize above -- the CSS `color`
++  // feature has to agree with screen.colorDepth (nsScreen::PixelDepth) or the
++  // disagreement is itself the fingerprint. `color` is bits per COMPONENT, so
++  // 24 pairs with 8 and 30 with 10. Measured on a 10-bit macOS display
++  // (2026-09-15): screen.colorDepth was pinned to 24 while `(color: 10)` still
++  // matched the real panel, a pair no real Firefox produces. Per-context
++  // override wins over the global config, then colorDepth, then pixelDepth --
++  // the order nsScreen::PixelDepth uses. Runs before the RFP early-return
++  // below, since Camoufox runs with ResistFingerprinting enabled.
++  if (nsPIDOMWindowInner* win = aDocument->GetInnerWindow()) {
++    uint32_t id = 0;
++    if (BrowsingContext* bc = win->GetBrowsingContext()) {
++      id = bc->OriginAttributesRef().mUserContextId;
++    }
++    if (uint32_t d = 0; ScreenDimensionManager::GetColorDepth(id, d)) {
++      return static_cast<int32_t>(d) / 3;
++    }
++  }
++  if (auto value = MaskConfig::GetUint32("screen.colorDepth")) {
++    return static_cast<int32_t>(value.value()) / 3;
++  }
++  if (auto value = MaskConfig::GetUint32("screen.pixelDepth")) {
++    return static_cast<int32_t>(value.value()) / 3;
++  }
++
+   // Use depth of 24 when resisting fingerprinting, or when we're not being
+   // rendered.
+   int32_t depth = 24;
