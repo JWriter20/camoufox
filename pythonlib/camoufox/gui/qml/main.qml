@@ -1195,8 +1195,8 @@ ApplicationWindow {
                         Muted { text: "Playwright" }
                         T { text: backend.playwrightVersion }
 
-                        Muted { text: "Browserforge" }
-                        T { text: backend.browserforgeVersion }
+                        Muted { text: "fpgen" }
+                        T { text: backend.fpgenVersion }
 
                         Muted { text: "Fingerprints" }
                         T { text: backend.fingerprintVersion }

@@ -10,7 +10,7 @@ def captured_launch_config(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(utils, "generate_fingerprint", lambda **_kwargs: object())
-    monkeypatch.setattr(utils, "from_browserforge", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(utils, "from_fpgen", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(utils, "get_screen_cons", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         utils, "_generate_random_font_subset", lambda *_args, **_kwargs: []

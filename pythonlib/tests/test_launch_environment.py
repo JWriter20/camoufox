@@ -12,7 +12,7 @@ def isolated_launch_dependencies(monkeypatch):
     """Keep launch_options focused on environment assembly, without a browser."""
     monkeypatch.setattr(utils, "add_default_addons", lambda *args, **kwargs: None)
     monkeypatch.setattr(utils, "generate_fingerprint", lambda *args, **kwargs: object())
-    monkeypatch.setattr(utils, "from_browserforge", lambda *args, **kwargs: {})
+    monkeypatch.setattr(utils, "from_fpgen", lambda *args, **kwargs: {})
     monkeypatch.setattr(utils, "get_screen_cons", lambda *args, **kwargs: None)
     monkeypatch.setattr(utils, "_generate_random_font_subset", lambda *args: [])
     monkeypatch.setattr(utils, "_generate_random_voice_subset", lambda *args: [])

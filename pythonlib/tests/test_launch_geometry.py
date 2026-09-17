@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import orjson  # noqa: E402
 import pytest  # noqa: E402
-from browserforge.fingerprints import Screen  # noqa: E402
+from camoufox.fingerprints import Screen  # noqa: E402
 
 from camoufox import utils  # noqa: E402
 

@@ -15,7 +15,7 @@
 
 This Python library wraps around Playwright's API to help automatically generate & inject unique device characteristics (OS, CPU info, navigator, fonts, headers, screen dimensions, viewport size, WebGL, addons, etc.) into Camoufox.
 
-It uses [BrowserForge](https://github.com/daijro/browserforge) under the hood to generate fingerprints that mimic the statistical distribution of device characteristics in real-world traffic.
+It uses [fpgen](https://github.com/scrapfly/fingerprint-generator) under the hood to generate fingerprints that mimic the statistical distribution of device characteristics in real-world traffic.
 
 In addition, it will also calculate your target geolocation, timezone, and locale to avoid proxy protection ([see demo](https://i.imgur.com/UhSHfaV.png)).
 
@@ -247,7 +247,7 @@ Display the Python package version, active browser version, channel, and update 
 > camoufox version
 Python Packages
   Camoufox                    v0.5.0
-  Browserforge                v1.2.4
+  fpgen                       v1.3.0
   Apify Fingerprints          v0.10.0
   Playwright                  v1.57.1.dev0+g732639b35.d20251217
 Browser

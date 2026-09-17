@@ -32,7 +32,7 @@ rich-click = "*"
 rich = "*"
 requests = "*"
 orjson = "*"
-browserforge = "^1.2.4"
+fpgen = "^1.3.0"
 # Keep a ceiling. 1.61 added Juggler params the protocol schema had to learn
 # (viewport isMobile/screenSize, webp screenshots, webSocketFrame timestamps)
 # and every Playwright minor is free to change Juggler again, while

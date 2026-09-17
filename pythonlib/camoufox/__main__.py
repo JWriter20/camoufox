@@ -865,7 +865,7 @@ class VersionInfo:
         """
         self._header("Python Packages")
         self._pkg("Camoufox", "camoufox")
-        self._pkg("Browserforge", "browserforge")
+        self._pkg("fpgen", "fpgen")
         self._pkg("Apify Fingerprints", "apify_fingerprint_datapoints")
         self._pkg("Playwright", "playwright")
 

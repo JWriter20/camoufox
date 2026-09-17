@@ -9,19 +9,63 @@ from pathlib import Path
 from random import Random, choice, randint, randrange, random, sample, shuffle
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
-from browserforge.fingerprints import (
-    Fingerprint,
-    FingerprintGenerator,
-    ScreenFingerprint,
-)
-
 from camoufox.pkgman import load_yaml
 from camoufox.webgl import sample_webgl
 
-# Load the browserforge.yaml file
-BROWSERFORGE_DATA = load_yaml('browserforge.yml')
+# Load the fpgen mapping file
+FPGEN_DATA = load_yaml('fpgen.yml')
 
-FP_GENERATOR = FingerprintGenerator(browser='firefox', os=('linux', 'macos', 'windows'))
+# fpgen's OS names, from Camoufox's.
+_FPGEN_OS = {'lin': 'Linux', 'linux': 'Linux', 'mac': 'macOS', 'macos': 'macOS',
+             'win': 'Windows', 'windows': 'Windows'}
+
+# fpgen unpacks ~7 MB of model data on first use, so the generator is built on
+# demand rather than at import: `import camoufox` must stay cheap for callers
+# who never generate a fingerprint (they passed their own, or a preset).
+_FP_GENERATOR = None
+
+
+def _generator():
+    global _FP_GENERATOR
+    if _FP_GENERATOR is None:
+        from fpgen import Generator
+
+        _FP_GENERATOR = Generator()
+    return _FP_GENERATOR
+
+
+@dataclass
+class Screen:
+    """A bound on the screen a generated fingerprint may claim.
+
+    Replaces browserforge.fingerprints.Screen, which left with the BrowserForge
+    dependency. Same four fields, same meaning: the generated screen must fit
+    inside them.
+    """
+
+    min_width: Optional[int] = None
+    max_width: Optional[int] = None
+    min_height: Optional[int] = None
+    max_height: Optional[int] = None
+
+    def as_conditions(self) -> Dict[str, Any]:
+        """The bound, as fpgen conditions.
+
+        fpgen takes a predicate per field and rejects a value the predicate
+        refuses, so a range is a closure rather than a list of allowed values.
+        """
+        conditions: Dict[str, Any] = {}
+        lo_w, hi_w = self.min_width, self.max_width
+        lo_h, hi_h = self.min_height, self.max_height
+        if lo_w is not None or hi_w is not None:
+            conditions['screen.width'] = lambda w: (
+                isinstance(w, int) and (lo_w is None or w >= lo_w) and (hi_w is None or w <= hi_w)
+            )
+        if lo_h is not None or hi_h is not None:
+            conditions['screen.height'] = lambda h: (
+                isinstance(h, int) and (lo_h is None or h >= lo_h) and (hi_h is None or h <= hi_h)
+            )
+        return conditions
 
 # Bundled real fingerprint presets
 PRESETS_FILE = Path(__file__).parent / 'fingerprint-presets.json'
@@ -1753,14 +1797,14 @@ def generate_context_fingerprint(
         screen = preset.get('screen', {})
         webgl = preset.get('webgl', {})
     else:
-        # Fall back to BrowserForge synthetic generation
+        # Fall back to synthetic generation
         fp = generate_fingerprint(os=os)
-        config = from_browserforge(fp, ff_version)
+        config = from_fpgen(fp, ff_version)
 
         # A fresh identity: every seeded draw below gets its own salt.
         _salt = identity_salt()
 
-        # Add seeds (BrowserForge doesn't generate these)
+        # Add seeds (the generator doesn't produce these)
         config.setdefault('fonts:spacing_seed', 0)  # perturbation off; see utils.launch_options
         config.setdefault('audio:seed', randint(1, 4_294_967_295))  # nosec
         config.setdefault('canvas:seed', randint(1, 4_294_967_295))  # nosec
@@ -1910,15 +1954,6 @@ def generate_context_fingerprint(
     }
 
 
-@dataclass
-class ExtendedScreen(ScreenFingerprint):
-    """
-    An extended version of Browserforge's ScreenFingerprint class
-    """
-
-    screenY: Optional[int] = None
-
-
 def _cast_to_properties(
     camoufox_data: Dict[str, Any],
     cast_enum: Dict[str, Any],
@@ -1940,6 +1975,14 @@ def _cast_to_properties(
         if isinstance(data, dict):
             _cast_to_properties(camoufox_data, type_key, data, ff_version)
             continue
+        # fpgen carries header values as a list of the values seen for that
+        # header; a single one is the header itself, and the config wants the
+        # string. More than one is ambiguous, so take none of them.
+        if isinstance(data, list):
+            if len(data) == 1 and isinstance(data[0], str):
+                data = data[0]
+            else:
+                continue
         # Fix values that are out of bounds
         if type_key.startswith("screen.") and isinstance(data, int) and data < 0:
             data = 0
@@ -1949,15 +1992,17 @@ def _cast_to_properties(
         camoufox_data[type_key] = data
 
 
-def handle_screenXY(camoufox_data: Dict[str, Any], fp_screen: ScreenFingerprint) -> None:
+def handle_screenXY(camoufox_data: Dict[str, Any], fingerprint: Dict[str, Any]) -> None:
     """
-    Helper method to set window.screenY based on Browserforge's screenX value.
+    Helper method to set window.screenY based on the generated screenX value.
     """
     # Skip if manually provided
     if 'window.screenY' in camoufox_data:
         return
+    screen = fingerprint.get('screen') or {}
+    window = fingerprint.get('window') or {}
     # Default screenX to 0 if not provided
-    screenX = fp_screen.screenX
+    screenX = window.get('screenX')
     if not screenX:
         camoufox_data['window.screenX'] = 0
         camoufox_data['window.screenY'] = 0
@@ -1968,8 +2013,8 @@ def handle_screenXY(camoufox_data: Dict[str, Any], fp_screen: ScreenFingerprint)
         camoufox_data['window.screenY'] = screenX
         return
 
-    # Browserforge thinks the browser is windowed. # Randomly generate a screenY value.
-    screenY = fp_screen.availHeight - fp_screen.outerHeight
+    # The generator thinks the browser is windowed. Randomly generate a screenY.
+    screenY = (screen.get('availHeight') or 0) - (window.get('outerHeight') or 0)
     if screenY == 0:
         camoufox_data['window.screenY'] = 0
     elif screenY > 0:
@@ -1978,58 +2023,92 @@ def handle_screenXY(camoufox_data: Dict[str, Any], fp_screen: ScreenFingerprint)
         camoufox_data['window.screenY'] = randrange(screenY, 0)  # nosec
 
 
-def from_browserforge(fingerprint: Fingerprint, ff_version: Optional[str] = None) -> Dict[str, Any]:
+def from_fpgen(fingerprint: Dict[str, Any], ff_version: Optional[str] = None) -> Dict[str, Any]:
     """
-    Converts a Browserforge fingerprint to a Camoufox config.
+    Converts an fpgen fingerprint to a Camoufox config.
     """
     camoufox_data: Dict[str, Any] = {}
     _cast_to_properties(
         camoufox_data,
-        cast_enum=BROWSERFORGE_DATA,
-        bf_dict=asdict(fingerprint),
+        cast_enum=FPGEN_DATA,
+        bf_dict=fingerprint,
         ff_version=ff_version,
     )
-    handle_screenXY(camoufox_data, fingerprint.screen)
+    handle_screenXY(camoufox_data, fingerprint)
 
     return camoufox_data
 
 
-def handle_window_size(fp: Fingerprint, outer_width: int, outer_height: int) -> None:
+def handle_window_size(fp: Dict[str, Any], outer_width: int, outer_height: int) -> None:
     """
     Helper method to set a custom outer window size, and center it in the screen
     """
-    # Cast the screen to an ExtendedScreen
-    fp.screen = ExtendedScreen(**asdict(fp.screen))
-    sc = fp.screen
+    screen = fp.setdefault('screen', {})
+    window = fp.setdefault('window', {})
 
     # Center the window on the screen
-    sc.screenX += (sc.width - outer_width) // 2
-    sc.screenY = (sc.height - outer_height) // 2
+    window['screenX'] = (window.get('screenX') or 0) + (
+        (screen.get('width') or outer_width) - outer_width
+    ) // 2
+    window['screenY'] = ((screen.get('height') or outer_height) - outer_height) // 2
 
     # Update inner dimensions if set
-    if sc.innerWidth:
-        sc.innerWidth = max(outer_width - sc.outerWidth + sc.innerWidth, 0)
-    if sc.innerHeight:
-        sc.innerHeight = max(outer_height - sc.outerHeight + sc.innerHeight, 0)
+    if window.get('innerWidth'):
+        window['innerWidth'] = max(
+            outer_width - (window.get('outerWidth') or 0) + window['innerWidth'], 0
+        )
+    if window.get('innerHeight'):
+        window['innerHeight'] = max(
+            outer_height - (window.get('outerHeight') or 0) + window['innerHeight'], 0
+        )
 
     # Set outer dimensions
-    sc.outerWidth = outer_width
-    sc.outerHeight = outer_height
+    window['outerWidth'] = outer_width
+    window['outerHeight'] = outer_height
 
 
-def generate_fingerprint(window: Optional[Tuple[int, int]] = None, **config) -> Fingerprint:
+def generate_fingerprint(
+    window: Optional[Tuple[int, int]] = None,
+    screen: Optional[Screen] = None,
+    os: Optional[Any] = None,
+    **conditions: Any,
+) -> Dict[str, Any]:
     """
-    Generates a Firefox fingerprint with Browserforge.
+    Generates a Firefox fingerprint with fpgen.
+
+    `screen` bounds the generated screen; `window` overrides the outer window
+    size afterwards. `os` is Camoufox's name for the platform ('linux', 'macos',
+    'windows', or several); anything else is passed to fpgen as a condition.
     """
+    if os:
+        names = [os] if isinstance(os, str) else list(os)
+        try:
+            resolved = [_FPGEN_OS[str(n).lower()] for n in names]
+        except KeyError as exc:
+            raise ValueError(f'Unknown OS for fingerprint generation: {exc.args[0]!r}') from None
+        # fpgen takes one value or a predicate, not a list of alternatives.
+        conditions['os'] = resolved[0] if len(resolved) == 1 else (lambda v: v in set(resolved))
+    screen_conditions = screen.as_conditions() if screen is not None else {}
+    try:
+        fingerprint = _generator().generate(browser='Firefox', **conditions, **screen_conditions)
+    except Exception as exc:  # fpgen.exceptions.InvalidConstraints
+        if not screen_conditions or type(exc).__name__ != 'InvalidConstraints':
+            raise
+        # The screen bound is best-effort, as it was under BrowserForge, which
+        # dropped a constraint that filtered its pool empty instead of raising.
+        # It comes from the real display (get_screen_cons), and a display the
+        # pool has nothing to fit -- a 1x1 Xvfb, an unusually small panel --
+        # must not stop a fingerprint being generated. clamp_screen_to_display()
+        # still bounds the result afterwards.
+        fingerprint = _generator().generate(browser='Firefox', **conditions)
+
     if window:  # User-specified outer window size
-        fingerprint = FP_GENERATOR.generate(**config)
         handle_window_size(fingerprint, *window)
-        return fingerprint
-    return FP_GENERATOR.generate(**config)
+    return fingerprint
 
 
 if __name__ == "__main__":
     from pprint import pprint
 
     fp = generate_fingerprint()
-    pprint(from_browserforge(fp))
+    pprint(from_fpgen(fp))

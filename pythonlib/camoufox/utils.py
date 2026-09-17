@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import orjson
-from browserforge.fingerprints import Fingerprint, Screen
 from typing_extensions import TypeAlias
 from ua_parser import user_agent_parser
 
@@ -23,7 +22,7 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
+from .fingerprints import Screen, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
 from .locales import handle_locales
@@ -402,15 +401,14 @@ def update_fonts(config: Dict[str, Any], target_os: str) -> None:
         config['fonts'] = fonts
 
 
-def check_custom_fingerprint(fingerprint: Fingerprint) -> None:
+def check_custom_fingerprint(fingerprint: Dict[str, Any]) -> None:
     """
-    Asserts that the passed BrowserForge fingerprint is a valid Firefox fingerprint.
+    Asserts that the passed fingerprint is a valid Firefox fingerprint,
     and warns the user that passing their own fingerprint is not recommended.
     """
     # Check what the browser is
-    browser_name = user_agent_parser.ParseUserAgent(fingerprint.navigator.userAgent).get(
-        'family', 'Non-Firefox'
-    )
+    user_agent = (fingerprint.get('navigator') or {}).get('userAgent') or ''
+    browser_name = user_agent_parser.ParseUserAgent(user_agent).get('family', 'Non-Firefox')
     if browser_name != 'Firefox':
         raise NonFirefoxFingerprint(
             f'"{browser_name}" fingerprints are not supported in Camoufox. '
@@ -703,7 +701,7 @@ def launch_options(
     exclude_addons: Optional[List[DefaultAddons]] = None,
     screen: Optional[Screen] = None,
     window: Optional[Tuple[int, int]] = None,
-    fingerprint: Optional[Fingerprint] = None,
+    fingerprint: Optional[Dict[str, Any]] = None,
     fingerprint_preset: Optional[Union[bool, Dict[str, Any]]] = None,
     ff_version: Optional[int] = None,
     headless: Optional[bool] = None,
@@ -765,11 +763,11 @@ def launch_options(
             Default addons to exclude. Passed as a list of camoufox.DefaultAddons enums.
         screen (Optional[Screen]):
             Constrains the screen dimensions of the generated fingerprint.
-            Takes a browserforge.fingerprints.Screen instance.
+            Takes a camoufox.fingerprints.Screen instance.
         window (Optional[Tuple[int, int]]):
             Set a fixed window size instead of generating a random one
         fingerprint (Optional[Fingerprint]):
-            Use a custom BrowserForge fingerprint. Note: Not all values will be implemented.
+            Use a custom fpgen fingerprint. Note: Not all values will be implemented.
             If not provided, a random fingerprint will be generated based on the provided
             `os` & `screen` constraints.
         fingerprint_preset (Optional[Union[bool, Dict[str, Any]]]):
@@ -945,7 +943,7 @@ def launch_options(
     screen_cons = screen or (get_screen_cons(headless) if has_display(env) else None)
 
     if not _used_preset and fingerprint is None:
-        # Default: BrowserForge synthetic generation (infinite unique fingerprints)
+        # Default: synthetic generation via fpgen (infinite unique fingerprints)
         fingerprint = generate_fingerprint(
             screen=screen_cons,
             window=window,
@@ -953,10 +951,10 @@ def launch_options(
         )
 
     if not _used_preset and fingerprint is not None:
-        # Inject the BrowserForge fingerprint into the config
+        # Inject the generated fingerprint into the config
         merge_into(
             config,
-            from_browserforge(fingerprint, ff_version_str),
+            from_fpgen(fingerprint, ff_version_str),
         )
 
     target_os = get_target_os(config)

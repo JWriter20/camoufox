@@ -614,14 +614,14 @@ bundle/
 
 ## Python Library Changes
 
-The Camoufox Python package (`pythonlib/`) generates fingerprints for both `NewBrowser` (global CAMOU_CONFIG) and `NewContext` (per-context init script). **BrowserForge is the default for both paths.** Real fingerprint presets are available as an opt-in alternative.
+The Camoufox Python package (`pythonlib/`) generates fingerprints for both `NewBrowser` (global CAMOU_CONFIG) and `NewContext` (per-context init script). **fpgen is the default for both paths.** Real fingerprint presets are available as an opt-in alternative.
 
 ### Fingerprint Source Priority
 
 | Path | Default | Opt-in Alternative |
 |------|---------|-------------------|
-| **NewBrowser** (`launch_options()` in `utils.py`) | BrowserForge synthetic | Pass `fingerprint_preset=True` or a preset dict |
-| **NewContext** (`generate_context_fingerprint()` in `fingerprints.py`) | BrowserForge synthetic | Pass `preset=dict` explicitly |
+| **NewBrowser** (`launch_options()` in `utils.py`) | fpgen synthetic | Pass `fingerprint_preset=True` or a preset dict |
+| **NewContext** (`generate_context_fingerprint()` in `fingerprints.py`) | fpgen synthetic | Pass `preset=dict` explicitly |
 
 **Recommended for v149+ binaries:** opt into bundled real fingerprints via
 `fingerprint_preset=True`. The library auto-selects the v150 preset bundle
@@ -652,9 +652,9 @@ bundles are shipped in the wheel.
 
 | Property | Source | Notes |
 |----------|--------|-------|
-| UA, platform, HWC, oscpu | BrowserForge or preset | UA version patched to match Camoufox Firefox version |
-| Screen dims, colorDepth | BrowserForge or preset | Viewport adjusted by -28px for browser chrome |
-| WebGL vendor/renderer | `sample_webgl()` from `webgl_data.db` | OS-weighted probability sampling. BrowserForge does NOT generate WebGL (commented out in `browserforge.yml`). Both paths call `sample_webgl()` when WebGL values are missing. |
+| UA, platform, HWC, oscpu | fpgen or preset | UA version patched to match Camoufox Firefox version |
+| Screen dims, colorDepth | fpgen or preset | Viewport adjusted by -28px for browser chrome |
+| WebGL vendor/renderer | `sample_webgl()` from `webgl_data.db` | OS-weighted probability sampling. The generator's own GPU fields are not mapped in `fpgen.yml` yet, so both paths call `sample_webgl()` for WebGL. fpgen does carry a full WebGL set (999 renderers against webgl_data.db's 33) -- wiring it through is the follow-up. |
 | Font list | `_generate_random_font_subset()` | Random 30-78% of OS fonts. Essential + marker fonts always included. NOT from presets — generated fresh per call. |
 | Font spacing seed | `randint(1, 2^32-1)` | Excludes 0 (0 = no-op in C++) |
 | Audio seed | `randint(1, 2^32-1)` | Excludes 0 |
@@ -669,7 +669,7 @@ bundles are shipped in the wheel.
 **`fingerprints.py`** — Per-context fingerprint generation:
 - `generate_context_fingerprint()` — main API. Returns `{init_script, context_options, config, preset}`
 - `from_preset()` — converts real preset to CAMOU_CONFIG format
-- `from_browserforge()` — converts BrowserForge Fingerprint to CAMOU_CONFIG using `browserforge.yml` mappings
+- `from_fpgen()` — converts an fpgen fingerprint dict to CAMOU_CONFIG using `fpgen.yml` mappings
 - `_build_init_script()` — generates JavaScript IIFE calling 15 `window.setXxx()` functions with `typeof` guards (`setWebRTCIPv6` is not included — IPv6 is optional and rarely set)
 - `_generate_random_font_subset()` — unique random font subset per call (Fisher-Yates, essential + marker fonts always included)
 - `_generate_random_voice_subset()` — unique random voice subset per call (essential voices always included, OS-aware)
