@@ -107,6 +107,7 @@ def NewBrowser(
         virtual_display = None
 
     if not from_options:
+        kwargs.setdefault('pin_cpu_cores', True)
         from_options = launch_options(headless=headless, debug=debug, **kwargs)
 
     # Playwright's default viewport deadlocks Juggler when the window is spoofed

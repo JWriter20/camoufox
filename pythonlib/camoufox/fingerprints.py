@@ -1,8 +1,10 @@
+import hashlib
 import json
 import os
 import re
+import secrets
 import unicodedata
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from random import Random, choice, randint, randrange, random, sample, shuffle
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
@@ -333,16 +335,40 @@ WINDOWS_11_MARKER_FONTS = frozenset(_BASE_VARIANT_FONTS_WINDOWS[1])
 
 
 
-def identity_seed(config: Dict[str, Any]) -> int:
-    """A stable seed for the per-identity draws (fonts, voices).
+def identity_salt(pinned: Any = None) -> int:
+    """The entropy that makes identity_seed() belong to ONE identity.
 
-    Two launches that present the same identity (same UA, platform, screen,
-    cores, GPU) must present the same font and voice lists: a page that keeps
-    cookies across launches and sees the font set or the voice list change
-    under an otherwise identical device reads it as a spoofed browser
-    (daijro/camoufox#442, #765, #378). Deriving the seed from the identity
-    itself makes the draw a pure function of the fingerprint, so `from_options`
-    replays and persistent contexts are stable without any new state.
+    The presented values identity_seed() hashes are shared by many unrelated
+    launches: browserforge gives each OS only a handful of screens and UAs, so
+    over 500 launches per OS the unsalted seed took 12-30 distinct values, and
+    every Camoufox install everywhere drew its fonts, voices, GPU, media devices
+    and canvas/audio noise seeds from that same short list.
+
+    Pass whatever the caller pinned the identity with -- a browserforge
+    Fingerprint, a preset dict, the caller's own config -- to get a salt that
+    is stable across launches of that identity (daijro/camoufox#442, #765);
+    pass nothing for a fresh identity, which gets a random salt.
+    """
+    if pinned is None:
+        return secrets.randbits(64)
+    if is_dataclass(pinned) and not isinstance(pinned, type):
+        pinned = asdict(pinned)
+    import orjson
+
+    blob = orjson.dumps(pinned, option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS, default=str)
+    return int.from_bytes(hashlib.sha256(blob).digest()[:8], 'big')
+
+
+def identity_seed(config: Dict[str, Any], salt: int = 0) -> int:
+    """A seed for the per-identity draws (fonts, voices, GPU, media devices,
+    noise seeds): a pure function of the presented identity and its salt.
+
+    Two launches that present the same identity must present the same font and
+    voice lists: a page that keeps cookies across launches and sees the font
+    set or the voice list change under an otherwise identical device reads it
+    as a spoofed browser (daijro/camoufox#442, #765, #378). The presented
+    values alone are far too common to tell identities apart, so callers mix in
+    identity_salt() (see there).
     """
     import zlib
     parts = [
@@ -352,6 +378,7 @@ def identity_seed(config: Dict[str, Any]) -> int:
         str(config.get('screen.height', '')),
         str(config.get('navigator.hardwareConcurrency', '')),
         # not the GPU: it is sampled after the font draw in launch_options
+        str(salt),
     ]
     return zlib.crc32('|'.join(parts).encode('utf-8')) & 0xFFFFFFFF
 
@@ -587,7 +614,9 @@ def _voice_uri(os_key: str, name: str, lang: str) -> str:
 _MAC_NOVELTY_VOICES = frozenset(
     {'Albert', 'Bad News', 'Bahh', 'Bells', 'Boing', 'Bubbles', 'Cellos', 'Wobble', 'Good News', 'Jester',
      'Organ', 'Superstar', 'Trinoids', 'Whisper', 'Zarvox', 'Fred', 'Junior', 'Kathy', 'Ralph',
-     'Bruce', 'Vicki', 'Victoria', 'Agnes', 'Princess', 'Hysterical', 'Pipe Organ', 'Deranged'}
+     'Bruce', 'Vicki', 'Victoria', 'Agnes', 'Princess', 'Hysterical', 'Pipe Organ', 'Deranged',
+     # not a novelty voice, but the same MacinTalk identifier family
+     'Alex'}
 )
 _MAC_ELOQUENCE_VOICES = frozenset({'Eddy', 'Flo', 'Grandma', 'Grandpa', 'Reed', 'Rocko', 'Sandy', 'Shelley'})
 _VOICE_URIS_CACHE: Optional[Dict[str, Dict[str, str]]] = None
@@ -760,30 +789,6 @@ def _generate_random_voice_subset(
     # (SAPI), macOS or Linux (measured 2026-09-14 on all three), so a spoofed
     # default would be the odd one out.
     return voices
-    if os_key == 'mac':
-        pref = next((i for i, v in enumerate(voices) if v['name'] in ('Samantha', 'Alex') and (not locale or v['lang'].lower() == locale.lower())), -1)
-        if pref >= 0:
-            voices[pref]['isDefault'] = True
-            return voices
-    # Mark a default voice matching the spoofed locale prefix so it lines up
-    # with Intl.DateTimeFormat().resolvedOptions().locale (CreepJS flags a
-    # voiceLangMismatch otherwise).
-    if voices:
-        prefix = locale.split('-')[0].lower() if locale else 'en'
-        idx = next(
-            (i for i, v in enumerate(voices) if locale and v['lang'].lower() == locale.lower()),
-            -1,
-        )
-        if idx < 0:
-            idx = next(
-                (i for i, v in enumerate(voices) if v['lang'].split('-')[0].lower() == prefix),
-                -1,
-            )
-        if idx < 0:
-            idx = 0
-        voices[idx]['isDefault'] = True
-
-    return voices
 
 
 def _normalize_preset_voices(
@@ -837,11 +842,10 @@ def host_cpu_count() -> Optional[int]:
 
 # Core counts real desktop machines ship with, taken from the RECORDED
 # fingerprint corpus rather than invented: fingerprint-presets.json and
-# -v150.json between them contain 2, 4, 6, 8, 10, 12, 14, 16, 20 and 24.
-#
-# 24 was missing from this table and is restored (2026-09-15): it is a real
-# recorded value on Windows (2/75) and Linux (2/18), and excluding it snapped
-# genuine 24-core machines down to 20 for no reason.
+# -v150.json between them contain 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24,
+# 28 and 32 (18: macOS 2/67; 22: Windows 6/180, Linux 2/65; 28: Windows 2/180,
+# Linux 1/65; 32: Linux 1/65 -- all in -v150). Leaving any of them out snapped
+# genuine machines with that count down to the next entry for no reason.
 #
 # 2 is recorded too -- and is common, 6/30 macOS presets (20%) -- but is
 # deliberately EXCLUDED (user, 2026-09-15): 2 is what Firefox reports under
@@ -849,13 +853,13 @@ def host_cpu_count() -> Optional[int]:
 # RFP is not. So a draw of 2 snaps up to the table floor of 4.
 #
 # A host outside this table would hand its own oddity to the fingerprint: a
-# 64-thread build box reports 24, anything under 4 threads reports 4. Odd
+# 64-thread build box reports 32, anything under 4 threads reports 4. Odd
 # counts (5, 7, 9, 11, 13, 15) never appear in the corpus -- they are
 # browserforge Bayesian synthesis -- so they keep getting snapped down.
-PLAUSIBLE_CORE_COUNTS = (4, 6, 8, 10, 12, 14, 16, 20, 24)
+PLAUSIBLE_CORE_COUNTS = (4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32)
 
 
-def fix_hardware_concurrency(config: Dict[str, Any]) -> None:
+def fix_hardware_concurrency(config: Dict[str, Any], can_pin: Optional[bool] = None) -> None:
     """navigator.hardwareConcurrency = the host's parallelism, snapped DOWN
     into PLAUSIBLE_CORE_COUNTS.
 
@@ -889,12 +893,17 @@ def fix_hardware_concurrency(config: Dict[str, Any]) -> None:
     # pin (macOS), falls back to the snapped host count.
     from .cpu_affinity import supported as _can_pin
 
+    # can_pin=False: the caller launches the browser itself and nothing will
+    # pin it (launch_server, launch_options used directly), so a kept draw
+    # would be measured as the host count. None: whatever the host supports.
+    pinnable = _can_pin() and can_pin is not False
+
     cap = int(n)
     host_allowed = [c for c in PLAUSIBLE_CORE_COUNTS if c <= cap]
     host_value = host_allowed[-1] if host_allowed else PLAUSIBLE_CORE_COUNTS[0]
 
     drawn = config.get('navigator.hardwareConcurrency')
-    if _can_pin() and isinstance(drawn, int) and drawn >= 1:
+    if pinnable and isinstance(drawn, int) and drawn >= 1:
         # The fingerprint's value is kept for diversity, but it still has to be
         # a count a real desktop ships with. Accepting any 1..host let
         # browserforge's low/odd draws through: over 400 linux draws, 8.0% were
@@ -906,8 +915,10 @@ def fix_hardware_concurrency(config: Dict[str, Any]) -> None:
         # into the table instead, capped by the host so pinning can honour it.
         target = min(drawn, cap)
         allowed = [c for c in PLAUSIBLE_CORE_COUNTS if c <= target]
+        # The floor is the table's even on a 1-3 core host: min(4, cap)
+        # reported 1, 2 or 3 there, and 2 is the resistFingerprinting value.
         config['navigator.hardwareConcurrency'] = (
-            allowed[-1] if allowed else min(PLAUSIBLE_CORE_COUNTS[0], cap)
+            allowed[-1] if allowed else PLAUSIBLE_CORE_COUNTS[0]
         )
         return
     config['navigator.hardwareConcurrency'] = host_value
@@ -1049,7 +1060,7 @@ def clamp_window_position(config: Dict[str, Any]) -> None:
         config[pos_key] = max(0, min(pos, screen - outer))
 
 
-def set_media_devices_defaults(config: Dict[str, Any]) -> None:
+def set_media_devices_defaults(config: Dict[str, Any], salt: int = 0) -> None:
     """Give the identity a plausible set of media devices.
 
     The patched media backend (media-device-spoofing.patch) enumerates and
@@ -1076,7 +1087,7 @@ def set_media_devices_defaults(config: Dict[str, Any]) -> None:
         os_key = 'mac'
     else:
         os_key = 'lin'
-    config.update(draw_media_devices(os_key, identity_seed(config)))
+    config.update(draw_media_devices(os_key, identity_seed(config, salt)))
 
 
 _MEDIA_DEVICES_CACHE: Optional[Dict[str, Any]] = None
@@ -1488,10 +1499,15 @@ def _app_version_from_user_agent(user_agent: str) -> Optional[str]:
     return f"5.0 ({'; '.join(kept)})" if kept else None
 
 
-def from_preset(preset: Dict, ff_version: Optional[str] = None) -> Dict[str, Any]:
+def from_preset(preset: Dict, ff_version: Optional[str] = None, salt: Optional[int] = None) -> Dict[str, Any]:
     """
     Convert a real fingerprint preset to CAMOU_CONFIG format.
+
+    `salt` (identity_salt) keys the font/voice draws; None draws a fresh one, so
+    two users of the same recorded device do not also share its font list.
     """
+    if salt is None:
+        salt = identity_salt()
     config: Dict[str, Any] = {}
 
     nav = preset.get('navigator', {})
@@ -1578,7 +1594,7 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None) -> Dict[str, Any
     else:
         target_os = 'macos'
     try:
-        config['fonts'] = _generate_random_font_subset(target_os, seed=identity_seed(config))
+        config['fonts'] = _generate_random_font_subset(target_os, seed=identity_seed(config, salt))
     except Exception:
         # Fallback to preset fonts if font generation fails
         if preset.get('fonts'):
@@ -1591,7 +1607,7 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None) -> Dict[str, Any
             config['fonts'] = fonts
     # Generate a unique random voice subset from the OS voice list
     try:
-        config['voices'] = _generate_random_voice_subset(target_os, seed=identity_seed(config))
+        config['voices'] = _generate_random_voice_subset(target_os, seed=identity_seed(config, salt))
     except Exception:
         if preset.get('speechVoices'):
             config['voices'] = _normalize_preset_voices(
@@ -1727,6 +1743,9 @@ def generate_context_fingerprint(
         fp = generate_fingerprint(os=os)
         config = from_browserforge(fp, ff_version)
 
+        # A fresh identity: every seeded draw below gets its own salt.
+        _salt = identity_salt()
+
         # Add seeds (BrowserForge doesn't generate these)
         config.setdefault('fonts:spacing_seed', 0)  # perturbation off; see utils.launch_options
         config.setdefault('audio:seed', randint(1, 4_294_967_295))  # nosec
@@ -1743,14 +1762,14 @@ def generate_context_fingerprint(
         # Add fonts (BrowserForge doesn't generate these)
         if 'fonts' not in config:
             try:
-                config['fonts'] = _generate_random_font_subset(os_name, seed=identity_seed(config))
+                config['fonts'] = _generate_random_font_subset(os_name, seed=identity_seed(config, _salt))
             except Exception:
                 pass
 
         # Add voices (BrowserForge doesn't generate these)
         if 'voices' not in config:
             try:
-                config['voices'] = _generate_random_voice_subset(os_name, seed=identity_seed(config))
+                config['voices'] = _generate_random_voice_subset(os_name, seed=identity_seed(config, _salt))
             except Exception:
                 pass
 

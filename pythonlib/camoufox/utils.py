@@ -1,3 +1,4 @@
+import json
 import os
 import platform
 import sys
@@ -22,7 +23,7 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
+from .fingerprints import from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
 from .locales import handle_locales
@@ -173,7 +174,10 @@ def get_pref_env_vars(prefs: Dict[str, Any]) -> Dict[str, str]:
     """
     if not prefs:
         return {}
-    data = orjson.dumps(prefs).decode('utf-8')
+    # ASCII only: on Windows autoconfig's getenv() reads the environment through
+    # the ANSI code page, which would mangle a raw UTF-8 pref value (\u escapes
+    # survive it and JSON.parse restores them).
+    data = json.dumps(prefs, ensure_ascii=True, separators=(',', ':'))
     chunk_size = 2047 if OS_NAME == 'win' else 32767
     return {
         f"CAMOU_PREFS_{(i // chunk_size) + 1}": data[i : i + chunk_size]
@@ -715,6 +719,7 @@ def launch_options(
     i_know_what_im_doing: Optional[bool] = None,
     debug: Optional[bool] = None,
     virtual_display: Optional[str] = None,
+    pin_cpu_cores: Optional[bool] = None,
     **launch_options: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
@@ -806,6 +811,11 @@ def launch_options(
             Prints the config being sent to Camoufox.
         virtual_display (Optional[str]):
             Virtual display number. Ex: ':99'. This is handled by Camoufox & AsyncCamoufox.
+        pin_cpu_cores (Optional[bool]):
+            The browser will be pinned to navigator.hardwareConcurrency cores
+            (Linux/Windows), so the fingerprint's core count can be kept. Set by
+            Camoufox & AsyncCamoufox, which apply the pin; without it the host's
+            own (snapped) core count is reported, since nothing pins the browser.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
         **launch_options (Dict[str, Any]):
@@ -871,6 +881,20 @@ def launch_options(
     _user_set_dnt = 'navigator.doNotTrack' in config
     _user_set_gpc = 'navigator.globalPrivacyControl' in config
     _user_set_accept_encoding = 'headers.Accept-Encoding' in config
+    _user_set_noise_seeds = {k for k in ('audio:seed', 'canvas:seed') if k in config}
+
+    # The salt that makes every seeded draw belong to this identity (see
+    # fingerprints.identity_salt): stable when the caller pinned the identity
+    # -- a Fingerprint, a preset dict, or their own config naming the UA --
+    # and fresh otherwise.
+    if fingerprint is not None:
+        _identity_salt = identity_salt(fingerprint)
+    elif isinstance(fingerprint_preset, dict):
+        _identity_salt = identity_salt(fingerprint_preset)
+    elif 'navigator.userAgent' in config:
+        _identity_salt = identity_salt(dict(config))
+    else:
+        _identity_salt = identity_salt()
 
     # Assert the target OS is valid
     if os:
@@ -908,7 +932,7 @@ def launch_options(
         else:
             preset = get_random_preset(os=os, ff_version=ff_version_str)
         if preset:
-            merge_into(config, from_preset(preset, ff_version_str))
+            merge_into(config, from_preset(preset, ff_version_str, salt=_identity_salt))
             _used_preset = True
 
     # Bound the geometry to the real display. BrowserForge only honours this when
@@ -939,7 +963,7 @@ def launch_options(
     # impossible-geometry tells, unless the user is driving these themselves.
     if not _user_set_navigator:
         fix_navigator_arch(config, target_os)
-        fix_hardware_concurrency(config)
+        fix_hardware_concurrency(config, can_pin=bool(pin_cpu_cores))
     if not _user_set_screen_window:
         # Lift netbook-era geometry to something current hardware reports,
         # before the display clamp below so a genuinely small real monitor
@@ -993,7 +1017,7 @@ def launch_options(
         try:
             config['fonts'] = _generate_random_font_subset(
                 os_name,
-                seed=identity_seed(config),
+                seed=identity_seed(config, _identity_salt),
                 # host's own OS on macOS/Windows: the real system fonts are used
                 # (font-hijacker.patch keeps the bundle inactive), so only the
                 # OS base is claimed
@@ -1002,39 +1026,12 @@ def launch_options(
         except Exception:
             update_fonts(config, target_os)
 
-    # Spoof the speech-synthesis voice list.
-    #
-    # This has to fail CLOSED. Firefox registers the host's speech-dispatcher /
-    # SAPI / NSSpeech voices unless something stops it, and nsSynthVoiceRegistry
-    # only stops it when Camoufox owns the list. Leaving `voices` unset -- which
-    # the old `except Exception: pass` did on any generation failure -- exposed
-    # every native voice on the box (14805 espeak-ng entries on a stock Linux
-    # install) under a fingerprint claiming macOS or Windows: it both leaks the
-    # real host OS and contradicts the rest of the profile (#731).
-    if not _user_set_voices or 'voices' not in config:
-        os_name_v = {'win': 'windows', 'mac': 'macos', 'lin': 'linux'}.get(target_os, 'macos')
-        try:
-            config['voices'] = _generate_random_voice_subset(
-                os_name_v, config.get('navigator.language'), seed=identity_seed(config)
-            )
-        except Exception:
-            # An empty list still blocks the host's voices (see below), so a
-            # generation failure degrades to "no voices" rather than "all of
-            # the host's".
-            config['voices'] = []
-
-    # Pin the block explicitly instead of relying on a non-empty list to imply
-    # it, so an empty list -- or one whose entries the browser rejects as
-    # malformed -- cannot fall through to the host's native voices. set_into
-    # leaves an explicit caller value alone.
-    set_into(config, 'voices:blockIfNotDefined', True)
-
     # Draw the identity's media devices (counts + OS-style labels/groups from
     # media-devices.json, seeded by the identity) unless the caller set any
     # mediaDevices: key. An empty enumerateDevices() list is a headless tell;
     # a wrong label after a grant is a spoof tell.
     if not _user_set_media_devices:
-        set_media_devices_defaults(config)
+        set_media_devices_defaults(config, _identity_salt)
 
     # Scrollbars: a stock Firefox on a GNOME/KDE desktop and on macOS draws
     # overlay scrollbars (no layout gutter, scrollbar-width "auto"). On Windows it
@@ -1144,9 +1141,13 @@ def launch_options(
     # audio/canvas noise seeds follow the identity: a returning "same device"
     # must reproduce its audio and canvas hashes (#442/#765). Derived, not
     # equal, so the two streams differ; never 0 (0 disables the noise).
-    _ident = identity_seed(config)
-    set_into(config, 'audio:seed', ((_ident * 2654435761 + 97) & 0xFFFFFFFF) or 1)
-    set_into(config, 'canvas:seed', ((_ident * 40503 + 12345) & 0xFFFFFFFF) or 1)
+    # A preset draws its own random seeds; they are replaced here too so a
+    # pinned preset reproduces them, but a seed the caller set is kept.
+    _ident = identity_seed(config, _identity_salt)
+    if 'audio:seed' not in _user_set_noise_seeds:
+        config['audio:seed'] = ((_ident * 2654435761 + 97) & 0xFFFFFFFF) or 1
+    if 'canvas:seed' not in _user_set_noise_seeds:
+        config['canvas:seed'] = ((_ident * 40503 + 12345) & 0xFFFFFFFF) or 1
 
     # Set geolocation
     if geoip:
@@ -1221,6 +1222,42 @@ def launch_options(
         requested = 'en-US'
     firefox_user_prefs.setdefault('intl.locale.requested', requested)
 
+    # Spoof the speech-synthesis voice list.
+    #
+    # This has to fail CLOSED. Firefox registers the host's speech-dispatcher /
+    # SAPI / NSSpeech voices unless something stops it, and nsSynthVoiceRegistry
+    # only stops it when Camoufox owns the list. Leaving `voices` unset -- which
+    # the old `except Exception: pass` did on any generation failure -- exposed
+    # every native voice on the box (14805 espeak-ng entries on a stock Linux
+    # install) under a fingerprint claiming macOS or Windows: it both leaks the
+    # real host OS and contradicts the rest of the profile (#731).
+    #
+    # Drawn after the locale is resolved (locale= or geoip): the Windows voice
+    # list is the display language's pack, so an fr-FR identity has French
+    # voices, not the en-US ones.
+    if not _user_set_voices or 'voices' not in config:
+        os_name_v = {'win': 'windows', 'mac': 'macos', 'lin': 'linux'}.get(target_os, 'macos')
+        voice_locale = config.get('navigator.language')
+        if config.get('locale:language'):
+            voice_locale = '-'.join(
+                part for part in (config['locale:language'], config.get('locale:region')) if part
+            )
+        try:
+            config['voices'] = _generate_random_voice_subset(
+                os_name_v, voice_locale, seed=identity_seed(config, _identity_salt)
+            )
+        except Exception:
+            # An empty list still blocks the host's voices (see below), so a
+            # generation failure degrades to "no voices" rather than "all of
+            # the host's".
+            config['voices'] = []
+
+    # Pin the block explicitly instead of relying on a non-empty list to imply
+    # it, so an empty list -- or one whose entries the browser rejects as
+    # malformed -- cannot fall through to the host's native voices. set_into
+    # leaves an explicit caller value alone.
+    set_into(config, 'voices:blockIfNotDefined', True)
+
     # Pass the humanize option
     if humanize:
         set_into(config, 'humanize', True)
@@ -1254,10 +1291,10 @@ def launch_options(
     else:
         # If the user has provided a specific WebGL vendor/renderer pair, use it
         if webgl_config:
-            webgl_fp = sample_webgl(target_os, *webgl_config, seed=identity_seed(config))
+            webgl_fp = sample_webgl(target_os, *webgl_config, seed=identity_seed(config, _identity_salt))
         elif config.get('webGl:vendor') and config.get('webGl:renderer'):
             # Preset already set vendor/renderer — sample matching WebGL params
-            webgl_fp = sample_webgl(target_os, config['webGl:vendor'], config['webGl:renderer'], seed=identity_seed(config))
+            webgl_fp = sample_webgl(target_os, config['webGl:vendor'], config['webGl:renderer'], seed=identity_seed(config, _identity_salt))
         else:
             # Synthetic path: keep the GPU coherent with the screen BrowserForge
             # already picked. Sampling the two independently yields pairs no
@@ -1265,7 +1302,7 @@ def launch_options(
             # panel -- which consistency checks read as masking (#729).
             webgl_fp = sample_webgl_for_screen(
                 target_os, config.get('screen.width'), config.get('screen.height'),
-                seed=identity_seed(config),
+                seed=identity_seed(config, _identity_salt),
             )
         enable_webgl2 = webgl_fp.pop('webGl2Enabled')
 

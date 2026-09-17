@@ -16,6 +16,7 @@ the host's (snapped) count.
 
 import os
 import platform
+import random
 from typing import Iterable, List, Optional, Sequence
 
 
@@ -42,9 +43,22 @@ def host_cores() -> Optional[List[int]]:
     return list(range(n)) if n else None
 
 
+def _pick(cores: Sequence[int], count: int) -> List[int]:
+    """`count` adjacent cores from a random starting point (wrapping). Always
+    taking the first `count` stacked every browser on one host onto cores
+    0..count-1, so concurrent browsers measured far less parallelism than they
+    report; adjacent cores keep the SMT topology a real machine of that size
+    would have."""
+    start = random.randrange(len(cores))
+    return sorted((list(cores[start:]) + list(cores[:start]))[:count])
+
+
 def pin(pid: int, count: int) -> Optional[Sequence[int]]:
-    """Restrict `pid` to its first `count` cores. Returns the previous set so
-    it can be handed back to `restore()`, or None if nothing was changed."""
+    """Restrict `pid` to `count` of its cores. Returns the previous set so it
+    can be handed back to `restore()`, or None if nothing was changed.
+
+    The caller must not pin the same process for two launches at once: the
+    browser inherits whatever mask the driver has when it is spawned."""
     if count < 1 or not supported():
         return None
     system = platform.system()
@@ -53,7 +67,7 @@ def pin(pid: int, count: int) -> Optional[Sequence[int]]:
             before = sorted(os.sched_getaffinity(pid))  # type: ignore[attr-defined]
             if count >= len(before):
                 return None
-            os.sched_setaffinity(pid, set(before[:count]))  # type: ignore[attr-defined]
+            os.sched_setaffinity(pid, set(_pick(before, count)))  # type: ignore[attr-defined]
             return before
         except OSError:
             return None
@@ -64,7 +78,7 @@ def pin(pid: int, count: int) -> Optional[Sequence[int]]:
         before = _mask_to_cores(before_mask)
         if count >= len(before):
             return None
-        return before if _win_set_mask(pid, _cores_to_mask(before[:count])) else None
+        return before if _win_set_mask(pid, _cores_to_mask(_pick(before, count))) else None
     return None
 
 

@@ -105,6 +105,7 @@ async def AsyncNewBrowser(
         virtual_display = None
 
     if not from_options:
+        kwargs.setdefault('pin_cpu_cores', True)
         from_options = await asyncio.get_event_loop().run_in_executor(
             None,
             partial(launch_options, headless=headless, debug=debug, **kwargs),
@@ -122,23 +123,49 @@ async def AsyncNewBrowser(
 
     pin_to = pinned_core_count(from_options)
     pid = driver_pid(playwright) if pin_to else None
-    previous = cpu_affinity.pin(pid, pin_to) if pid else None
-    try:
-        # Persistent context
-        if persistent_context:
-            if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
-                from_options = {**from_options, 'no_viewport': True}
-            context = await playwright.firefox.launch_persistent_context(**from_options)
-            return await async_attach_vd(context, virtual_display)
-
-        # Browser
-        browser = await playwright.firefox.launch(**from_options)
-        if no_viewport_default:
-            attach_no_viewport_default(browser)
-        return await async_attach_vd(browser, virtual_display)
-    finally:
-        if pid:
+    if not pid:
+        return await _launch(playwright, from_options, persistent_context, no_viewport_default, virtual_display)
+    # The browser inherits the driver's mask at spawn, so two concurrent launches
+    # on one driver must not interleave pin/restore: the second pin would land on
+    # the first browser, and the first restore would leave the driver pinned.
+    async with _pin_lock(pid):
+        previous = cpu_affinity.pin(pid, pin_to)
+        try:
+            return await _launch(playwright, from_options, persistent_context, no_viewport_default, virtual_display)
+        finally:
             cpu_affinity.restore(pid, previous)
+
+
+_PIN_LOCKS: Dict[int, asyncio.Lock] = {}
+
+
+def _pin_lock(pid: int) -> asyncio.Lock:
+    # One lock per driver: a driver belongs to one event loop.
+    lock = _PIN_LOCKS.get(pid)
+    if lock is None:
+        lock = _PIN_LOCKS[pid] = asyncio.Lock()
+    return lock
+
+
+async def _launch(
+    playwright: Playwright,
+    from_options: Dict[str, Any],
+    persistent_context: bool,
+    no_viewport_default: bool,
+    virtual_display: Optional[VirtualDisplay],
+) -> Union[Browser, BrowserContext]:
+    # Persistent context
+    if persistent_context:
+        if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
+            from_options = {**from_options, 'no_viewport': True}
+        context = await playwright.firefox.launch_persistent_context(**from_options)
+        return await async_attach_vd(context, virtual_display)
+
+    # Browser
+    browser = await playwright.firefox.launch(**from_options)
+    if no_viewport_default:
+        attach_no_viewport_default(browser)
+    return await async_attach_vd(browser, virtual_display)
 
 
 def _proxy_url_with_creds(proxy: Dict[str, str]) -> str:

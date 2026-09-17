@@ -321,9 +321,9 @@ class TestFixHardwareConcurrency:
 
     def test_snaps_host_parallelism_when_it_cannot_pin(self, monkeypatch):
         # The host count, snapped DOWN into the
-        # counts real machines ship with; the tails report 24 / 4. Used when the
+        # counts real machines ship with; the tails report 32 / 4. Used when the
         # draw exceeds the host or the host cannot pin (macOS).
-        # 24 is in the table (recorded on real Windows/Linux devices); 2 is NOT,
+        # 18/22/24/28/32 are in the table (recorded on real devices); 2 is NOT,
         # although it is recorded, because 2 is the resistFingerprinting value.
         from camoufox import cpu_affinity, fingerprints as fp
 
@@ -332,8 +332,10 @@ class TestFixHardwareConcurrency:
             (16, 16),
             (10, 10),
             (24, 24),
-            (32, 24),
-            (64, 24),
+            (26, 24),
+            (32, 32),
+            (64, 32),
+            (22, 22),
             (7, 6),
             (5, 4),
             (2, 4),
