@@ -13,7 +13,41 @@ from _mixin import find_src_dir, get_moz_target, list_files, run, temp_cd
 UNNEEDED_PATHS = {'uninstall', 'pingsender.exe', 'pingsender', 'vaapitest', 'glxtest'}
 
 
-def add_includes_to_package(package_file, includes, fonts, new_file, target):
+def inject_locales(target_dir, target, version, src_dir):
+    """Bake the official language packs in as packaged locales.
+
+    Without them a spoofed non-English locale localizes Intl/number/date
+    formatting but leaves every browser-provided string that content can read
+    (input.validationMessage, XML parse errors) in English -- a mix no real
+    Firefox produces. A langpack add-on does not fix it: the parent pre-creates
+    those string bundles before add-ons start. Packaged locales are what a
+    Mozilla localized build has, selected by intl.locale.requested (pythonlib).
+    """
+    langpacks = os.path.join('bundle', 'langpacks')
+    version_file = os.path.join(langpacks, 'VERSION')
+    base_version = version.split('-')[0]
+    have = open(version_file).read().strip() if os.path.exists(version_file) else None
+    if have != base_version:
+        # Not in git (bundle/langpacks is ignored): fetch them from
+        # archive.mozilla.org the way `make fetch` fetches the source.
+        run(join([sys.executable, os.path.join('scripts', 'fetch-langpacks.py'), base_version]))
+        have = open(version_file).read().strip() if os.path.exists(version_file) else None
+    if have != base_version:
+        raise FileNotFoundError(
+            f"bundle/langpacks is for Firefox {have}, need {base_version}: "
+            f"run scripts/fetch-langpacks.py {base_version}"
+        )
+    # Mozilla's macOS Japanese build is ja-JP-mac; every other platform ships ja.
+    skip = 'ja' if target == 'macos' else 'ja-JP-mac'
+    xpis = sorted(
+        path for path in glob.glob(os.path.join(langpacks, '*.xpi'))
+        if os.path.basename(path)[:-4] != skip
+    )
+    run(join([sys.executable, os.path.join('scripts', 'inject-locales.py'),
+              '--source-tree', src_dir, target_dir, *xpis]))
+
+
+def add_includes_to_package(package_file, includes, fonts, new_file, target, version, src_dir):
     with tempfile.TemporaryDirectory() as temp_dir:
         # Extract package
         run(join(['7z', 'x', package_file, f'-o{temp_dir}']), exit_on_fail=False)
@@ -28,6 +62,8 @@ def add_includes_to_package(package_file, includes, fonts, new_file, target):
                 fonts=fonts,
                 new_file=new_file,
                 target=target,
+                version=version,
+                src_dir=src_dir,
             )
 
         if target == 'macos':
@@ -95,6 +131,8 @@ def add_includes_to_package(package_file, includes, fonts, new_file, target):
             for font in fonts or []:
                 for file in list_files(root_dir=os.path.join('bundle', 'fonts', font), suffix='*'):
                     shutil.copy2(file, os.path.join(fonts_dir, os.path.basename(file)))
+
+        inject_locales(target_dir, target, version, src_dir)
 
         # Remove unneeded paths
         for path in UNNEEDED_PATHS:
@@ -173,6 +211,8 @@ def main():
         fonts=args.fonts,
         new_file=new_name,
         target=args.os,
+        version=args.version,
+        src_dir=os.path.abspath(src_dir),
     )
 
     print(f"Packaging complete for {args.os}")

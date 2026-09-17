@@ -15,6 +15,7 @@ pythonlib/test*
 jsonvv/test*
 /.vscode
 /bundle/fonts/extra
+/bundle/langpacks/
 pythonlib/*.png
 scripts/*.png
 scripts/test*

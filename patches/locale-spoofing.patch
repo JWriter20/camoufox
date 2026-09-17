@@ -36,10 +36,10 @@ index a3319c7a59..0a86aec7d2 100644
  # License, v. 2.0. If a copy of the MPL was not distributed with this
  # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 diff --git a/intl/components/src/Locale.cpp b/intl/components/src/Locale.cpp
-index 718d8814d8..068d042bc7 100644
+index 718d8814d8..7dc23ab003 100644
 --- a/intl/components/src/Locale.cpp
 +++ b/intl/components/src/Locale.cpp
-@@ -20,11 +20,56 @@
+@@ -20,11 +20,35 @@
  
  #include "unicode/uloc.h"
  #include "unicode/utypes.h"
@@ -49,28 +49,7 @@ index 718d8814d8..068d042bc7 100644
  
  using namespace intl::LanguageTagLimits;
  
-+
-+// Helper methods for header file
-+
-+const char* Locale::GetCamouLanguage() {
-+  if (auto lang = MaskConfig::GetString("locale:language"))
-+    return lang.value().c_str();
-+  return nullptr;
-+}
-+
-+const char* Locale::GetCamouRegion() {
-+  if (auto region = MaskConfig::GetString("locale:region"))
-+    return region.value().c_str();
-+  return nullptr;
-+}
-+
-+const char* Locale::GetCamouScript() {
-+  if (auto script = MaskConfig::GetString("locale:script"))
-+    return script.value().c_str();
-+  return nullptr;
-+}
-+
-+// Publicly exposed methods
++// Camoufox: default-locale hooks (see Locale.h).
 +
 +const char* Locale::GetCamouLocale() {
 +  static std::string locale;
@@ -97,67 +76,23 @@ index 718d8814d8..068d042bc7 100644
  bool IsStructurallyValidLanguageTag(Span<const CharT> aLanguage) {
    // unicode_language_subtag = alpha{2,3} | alpha{5,8};
 diff --git a/intl/components/src/Locale.h b/intl/components/src/Locale.h
-index b7314ec5f6..a28ee88838 100644
+index b7314ec5f6..3a07b97cfa 100644
 --- a/intl/components/src/Locale.h
 +++ b/intl/components/src/Locale.h
-@@ -208,8 +208,11 @@ class MOZ_STACK_CLASS Locale final {
- 
-  private:
-   LanguageSubtag mLanguage = {};
-+  mutable LanguageSubtag mCamouLanguage = {};
-   ScriptSubtag mScript = {};
-+  mutable ScriptSubtag mCamouScript = {};
-   RegionSubtag mRegion = {};
-+  mutable RegionSubtag mCamouRegion = {};
- 
-   VariantsVector mVariants;
-   ExtensionsVector mExtensions;
-@@ -338,9 +341,28 @@ class MOZ_STACK_CLASS Locale final {
-     }
-   };
- 
--  const LanguageSubtag& Language() const { return mLanguage; }
--  const ScriptSubtag& Script() const { return mScript; }
--  const RegionSubtag& Region() const { return mRegion; }
-+  const LanguageSubtag& Language() const {
-+    if (const char* lang = GetCamouLanguage()) {
-+      mCamouLanguage.Set(mozilla::Span<const char>(lang, strlen(lang)));
-+      return mCamouLanguage;
-+    }
-+    return mLanguage;
-+  }
-+  const ScriptSubtag& Script() const {
-+    if (const char* script = GetCamouScript()) {
-+      mCamouScript.Set(mozilla::Span<const char>(script, strlen(script)));
-+      return mCamouScript;
-+    }
-+    return mScript;
-+  }
-+  const RegionSubtag& Region() const {
-+    if (const char* region = GetCamouRegion()) {
-+      mCamouRegion.Set(mozilla::Span<const char>(region, strlen(region)));
-+      return mCamouRegion;
-+    }
-+    return mRegion;
-+  }
-+  
-   auto Variants() const { return SubtagEnumeration(mVariants); }
-   auto Extensions() const { return SubtagEnumeration(mExtensions); }
-   Maybe<Span<const char>> PrivateUse() const {
-@@ -518,7 +540,15 @@ class MOZ_STACK_CLASS Locale final {
+@@ -518,7 +518,15 @@ class MOZ_STACK_CLASS Locale final {
     *
     * Also see <https://unicode-org.github.io/icu/userguide/locale>.
     */
 -  static const char* GetDefaultLocale() { return uloc_getDefault(); }
++  // Camoufox: the spoofed locale stands in for the OS/ICU default locale (see
++  // OSPreferences). Only the DEFAULT is spoofed: overriding Language()/Script()/
++  // Region() on every Locale object (as this patch once did) rewrote locales a
++  // page names explicitly -- new Intl.DisplayNames(['en'], {type: 'region'})
++  // .of('DE') returned "France" and new Intl.Locale('ja-Jpan-JP').minimize()
++  // returned the spoofed tag.
 +  static const char* GetDefaultLocale();
 +
 +  static const char* GetCamouLocale();
-+
-+  static const char* GetCamouLanguage();
-+
-+  static const char* GetCamouRegion();
-+
-+  static const char* GetCamouScript();
  
    /**
     * Returns an iterator over all supported locales.
