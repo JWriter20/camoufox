@@ -740,6 +740,7 @@ async def scan(
             page = await context.new_page()
             log(f"opening sundial (auto scan) as {os_name}")
             await page.goto(target, wait_until="load", timeout=120_000)
+            await _exercise_input(page)
 
             payload = await asyncio.get_running_loop().run_in_executor(
                 None, collector.wait, timeout
@@ -755,6 +756,32 @@ async def scan(
     if "_parse_error" in payload:
         raise RuntimeError("sundial posted something that was not JSON")
     return payload
+
+
+async def _exercise_input(page) -> None:
+    """Move and click the mouse so sundial's input-pipeline vectors have data.
+
+    The pointer vectors (pointerType, pressure, screen/client offset, down->up
+    latency, move cadence) record trusted events for a few seconds after load
+    and report "--" (pending) if nothing arrives. This is the same input path a
+    user's script takes -- page.mouse through juggler -- so a defect there
+    (e.g. an empty pointerType) fails the gate exactly the way it would fail on
+    a site. Best-effort: input errors must not abort the scan.
+    """
+    try:
+        vw = await page.evaluate("() => [innerWidth, innerHeight]")
+        w, h = (vw or [1280, 720])[:2]
+        cx, cy = max(40, w // 3), max(40, h // 3)
+        await page.mouse.move(cx - 30, cy - 20)
+        for i in range(1, 13):
+            await page.mouse.move(cx - 30 + i * 5, cy - 20 + (i % 3) * 2)
+            await asyncio.sleep(0.016)
+        await page.mouse.down()
+        await asyncio.sleep(0.09)
+        await page.mouse.up()
+        await page.keyboard.press("Shift")
+    except Exception as exc:  # noqa: BLE001 - never fail the scan on input
+        log(f"input exercise skipped: {exc}", level="WARN")
 
 
 def seal(report: dict, out: Path) -> Optional[Path]:

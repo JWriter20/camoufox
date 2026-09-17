@@ -141,7 +141,10 @@ export class MouseDispatch {
       this._args.modifiers,
       false /* aIgnoreRootScrollFrame */,
       0.0 /* pressure */,
-      0 /* inputSource */,
+      // MOZ_SOURCE_MOUSE: a real mouse reports PointerEvent.pointerType "mouse";
+      // MOZ_SOURCE_UNKNOWN (0) surfaces as an empty pointerType, which no OS
+      // input path ever produces (daijro/camoufox#776, microsoft/playwright#38376).
+      this._win.MouseEvent.MOZ_SOURCE_MOUSE /* inputSource */,
       true /* isDOMEventSynthesized */,
       false /* isWidgetEventSynthesized */,
       this._args.buttons,

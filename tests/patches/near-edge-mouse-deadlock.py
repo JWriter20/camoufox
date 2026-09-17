@@ -49,8 +49,9 @@ Both dispatch paths reach the same conversion, so both are covered:
   * humanized trajectory -- how it is actually hit in the field. Every
     PageHandler starts at `_lastTrackedPos = {x: 0, y: 0}` (PageHandler.js:86),
     so a session's FIRST humanized move always departs from the top-left corner,
-    and with the +/-80px knot boundary from MouseTrajectories.hpp the curve rides
-    the y==0 row. On a stock build a first humanized click hung on 5 of 20 cold
+    and since a generated curve wanders well off the straight line (median
+    33-57px perpendicular, 69% of paths leaving their own endpoint box) it
+    rides the y==0 row. On a stock build a first humanized click hung on 5 of 20 cold
     pages; all five had dispatched a point at y==0 and the 15 that completed had
     dispatched none. Sampled here rather than asserted deterministically, since
     whether the curve touches the row is random.

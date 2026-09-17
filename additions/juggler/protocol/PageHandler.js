@@ -7,10 +7,10 @@
 const {Helper, EventWatcher} = ChromeUtils.importESModule('chrome://juggler/content/Helper.js');
 const {NetUtil} = ChromeUtils.importESModule('resource://gre/modules/NetUtil.sys.mjs');
 const {NetworkObserver, PageNetwork} = ChromeUtils.importESModule('chrome://juggler/content/NetworkObserver.js');
-const {humanizedSteps} = ChromeUtils.importESModule('chrome://juggler/content/input/CursorTrajectory.js');
 const {PageTarget} = ChromeUtils.importESModule('chrome://juggler/content/TargetRegistry.js');
 const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
 const {MouseDispatch} = ChromeUtils.importESModule('chrome://juggler/content/input/MouseDispatch.js');
+const {humanizedSteps} = ChromeUtils.importESModule('chrome://juggler/content/input/CursorTrajectory.js');
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
@@ -523,13 +523,21 @@ export class PageHandler {
     const sendEvents = async (types) => {
       // 1. Scroll element to the desired location first; the coordinates are relative to the element.
       this._pageTarget._linkedBrowser.scrollRectIntoViewIfNeeded(x, y, 0, 0);
-      // 2. Get element's bounding box in the browser after the scroll is completed.
-      //    MouseDispatch owns every conversion from these relative coordinates to
-      //    absolute ones, and every wait for a renderer ack.
-      const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, eventArgs);
-      // 3. Make sure compositor is flushed after scrolling.
+      // 2. Make sure compositor is flushed after scrolling.
       if (win.windowUtils.flushApzRepaints())
         await helper.awaitTopic('apz-repaints-flushed');
+      // 3. Get element's bounding box in the browser after the scroll is completed.
+      //    MouseDispatch owns every conversion from these relative coordinates to
+      //    absolute ones, and every wait for a renderer ack.
+      //
+      //    Camoufox: measured AFTER the await above, synchronously before the
+      //    dispatch. The rect was previously taken before it, and the chrome can
+      //    change height during that wait (the toolbar grows 1 px when a
+      //    startup addon's button lands): a relative y of 0 then dispatched at
+      //    the stale top, one row above the content, arrived in the renderer as
+      //    an exit event at client y == -1, produced no ack, and the page saw no
+      //    mousemove (tests/patches/near-edge-mouse-deadlock.py, ~1 in 25 runs).
+      const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, eventArgs);
 
       const watcher = new EventWatcher(this._pageEventSink, types, this._pendingEventWatchers);
       const promises = [];
@@ -568,6 +576,13 @@ export class PageHandler {
         // viewport coordinates, then move the mouse off from the Web Content.
         // This way we can eliminate all the hover effects.
         dispatch.parkOffContent();
+        // Camoufox: the pointer really moved (off content), so forget the tracked
+        // position. Otherwise a later move back to the same coordinates was
+        // treated as a no-op and skipped, and the following mousedown made the
+        // pointer re-enter content with the button already down -- pointerover /
+        // pointerenter / mouseover carried buttons=1 and pressure=0.5, which a
+        // real mouse never does (measured 2026-09-14 against XTEST input).
+        this._lastTrackedPos = { x: NaN, y: NaN };
         return;
       }
 
@@ -575,7 +590,11 @@ export class PageHandler {
         if (this._isDragging)
           return;
 
-        const eventNames = button === 2 ? ['mousedown', 'contextmenu'] : ['mousedown'];
+        // Camoufox: Windows shows the context menu on button RELEASE, so the
+        // contextmenu event arrives after mouseup with buttons=0; GTK and macOS
+        // fire it on press. Follow the claimed OS (measured 2026-09-14: stock
+        // Windows contextmenu.buttons=0, camoufox 2).
+        const eventNames = (button === 2 && !this._contextMenuOnMouseUp()) ? ['mousedown', 'contextmenu'] : ['mousedown'];
         await sendEvents(eventNames);
         return;
       }
@@ -636,17 +655,36 @@ export class PageHandler {
           await watcher.ensureEventsAndDispose(['dragover']);
           this._isDragging = false;
         } else {
-          await sendEvents(['mouseup']);
+          const eventNames = (button === 2 && this._contextMenuOnMouseUp()) ? ['mouseup', 'contextmenu'] : ['mouseup'];
+          await sendEvents(eventNames);
         }
         return;
       }
     }, { muteNotificationsPopup: true });
   }
 
+  _contextMenuOnMouseUp() {
+    let platform = '';
+    try { platform = ChromeUtils.camouGetString('navigator.platform') || ''; } catch (e) {}
+    if (platform)
+      return platform.startsWith('Win');
+    return Services.appinfo.OS === 'WINNT';
+  }
+
   async ['Page.dispatchWheelEvent']({x, y, button, deltaX, deltaY, deltaZ, modifiers }) {
-    const deltaMode = 0; // WheelEvent.DOM_DELTA_PIXEL
-    const lineOrPageDeltaX = deltaX > 0 ? Math.floor(deltaX) : Math.ceil(deltaX);
-    const lineOrPageDeltaY = deltaY > 0 ? Math.floor(deltaY) : Math.ceil(deltaY);
+    // Camoufox: a physical wheel notch reaches Gecko as LINE deltas (3 lines per
+    // notch on every desktop OS); Gecko then converts to the pixel deltaY the page
+    // sees and reports DOMMouseScroll.detail = 3. Dispatching Playwright's pixel
+    // delta directly gave detail = 100 and no line delta, which no real wheel
+    // produces (measured 2026-09-14 against XTEST input). Convert the requested
+    // pixels into whole notches: ~33 px per line, i.e. 100 px == one notch.
+    const PX_PER_LINE = 100 / 3;
+    const toLines = (d) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / PX_PER_LINE)));
+    const deltaMode = 1; // WheelEvent.DOM_DELTA_LINE
+    deltaX = toLines(deltaX);
+    deltaY = toLines(deltaY);
+    const lineOrPageDeltaX = deltaX;
+    const lineOrPageDeltaY = deltaY;
 
     await this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
@@ -655,10 +693,11 @@ export class PageHandler {
       this._pageTarget._linkedBrowser.scrollRectIntoViewIfNeeded(x, y, 0, 0);
       // 2. Get element's bounding box in the browser after the scroll is completed.
       const win = this._pageTarget._window;
-      const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers});
       // 3. Make sure compositor is flushed after scrolling.
       if (win.windowUtils.flushApzRepaints())
         await helper.awaitTopic('apz-repaints-flushed');
+      // Camoufox: measure after the await, like Page.dispatchMouseEvent does.
+      const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers});
 
       // Same conversion as a mouse event: a wheel at relative y == 0 would
       // otherwise land on the chrome/content boundary and scroll the tab strip.
