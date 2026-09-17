@@ -33,7 +33,10 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional
 # Core counts Apple Silicon actually ships. The M1 is the floor at 8; nothing
 # Apple has made has fewer. Firefox reports "Apple M1, or similar" for every
 # M-series part, so the renderer string cannot narrow it further than this.
-APPLE_SILICON_CORES = frozenset({8, 10, 12, 14, 16, 20, 24, 28, 32})
+# 11 is in the set because the M3 Pro is 6P+5E -- an odd count that is real, and
+# the reason this is an explicit list rather than "8 to 32": 9, 13 and 15 are
+# not Apple parts. Apple Silicon has no SMT, so logical cores == physical.
+APPLE_SILICON_CORES = frozenset({8, 10, 11, 12, 14, 16, 20, 24, 28, 32})
 
 # devicePixelRatio by platform. Windows exposes the display-scaling steps
 # (100/125/150/175/200/250/300%); macOS reports 1 or 2 and nothing between;
@@ -51,9 +54,13 @@ PLAUSIBLE_DPR = {
 # scraped data and is not a value Firefox emits.
 PLAUSIBLE_COLOR_DEPTH = frozenset({24, 30})
 
-# maxTouchPoints: 0 on a machine with no digitiser, 5 or 10 on a touchscreen
-# (measured 5 on the Windows laptop). Macs have no touchscreen.
-PLAUSIBLE_TOUCH_POINTS = frozenset({0, 1, 5, 10})
+# maxTouchPoints: 0 with no digitiser, otherwise the panel's maximum simultaneous
+# contacts. Measured 5 on the Windows laptop. This is a RANGE rather than a list
+# of seen values, because neither source is authoritative here: fpgen's Windows
+# pool offers 0, 1 and 10 and never the 5 the real machine reports, while the
+# presets carry 40 and fpgen's draws carry 256. Consumer digitisers top out at
+# 10 contacts; anything above that is a scraped artefact.
+MAX_PLAUSIBLE_TOUCH_POINTS = 10
 
 # GPU strings that are not possible on macOS. Firefox on a Mac reports Apple
 # Silicon as "Apple M1, or similar", and Intel Macs as an Intel Iris/UHD/HD
@@ -159,8 +166,8 @@ def _check_touch_points(config: Dict[str, Any], target_os: str) -> Optional[str]
     touch = config.get('navigator.maxTouchPoints')
     if touch is None:
         return None
-    if touch not in PLAUSIBLE_TOUCH_POINTS:
-        return f'navigator.maxTouchPoints {touch}'
+    if not isinstance(touch, int) or touch < 0 or touch > MAX_PLAUSIBLE_TOUCH_POINTS:
+        return f'navigator.maxTouchPoints {touch}; a digitiser reports at most {MAX_PLAUSIBLE_TOUCH_POINTS}'
     if target_os == 'mac' and touch:
         return f'macOS identity with maxTouchPoints {touch}; no Mac has a touchscreen'
     return None
@@ -168,8 +175,30 @@ def _check_touch_points(config: Dict[str, Any], target_os: str) -> Optional[str]
 
 def _repair_touch_points(config: Dict[str, Any], target_os: str) -> None:
     touch = config.get('navigator.maxTouchPoints')
-    if target_os == 'mac' or (touch is not None and touch not in PLAUSIBLE_TOUCH_POINTS):
+    too_many = isinstance(touch, int) and touch > MAX_PLAUSIBLE_TOUCH_POINTS
+    if target_os == 'mac' or too_many or (touch is not None and not isinstance(touch, int)):
+        # A machine claiming 256 contacts is not a machine with a better
+        # touchscreen; the value is noise, so the identity has no digitiser.
         config['navigator.maxTouchPoints'] = 0
+
+
+def _check_device_pixel_ratio(config: Dict[str, Any], target_os: str) -> Optional[str]:
+    dpr = config.get('window.devicePixelRatio')
+    if dpr is None:
+        return None
+    allowed = PLAUSIBLE_DPR.get(target_os)
+    if allowed and float(dpr) not in {float(v) for v in allowed}:
+        return f'window.devicePixelRatio {dpr} is not a display mode {target_os} offers'
+    return None
+
+
+def _repair_device_pixel_ratio(config: Dict[str, Any], target_os: str) -> None:
+    dpr = config.get('window.devicePixelRatio')
+    allowed = PLAUSIBLE_DPR.get(target_os)
+    if dpr is None or not allowed:
+        return
+    # Nearest real scaling step: 1.818 becomes 1.75 on Windows, 2 on macOS.
+    config['window.devicePixelRatio'] = min(allowed, key=lambda v: abs(float(v) - float(dpr)))
 
 
 def _check_screen_shape(config: Dict[str, Any], target_os: str) -> Optional[str]:
@@ -217,6 +246,7 @@ RULES: List[Rule] = [
     Rule('gpu-matches-os', _check_gpu_matches_os, None),
     Rule('color-depth', _check_color_depth, _repair_color_depth),
     Rule('touch-points', _check_touch_points, _repair_touch_points),
+    Rule('device-pixel-ratio', _check_device_pixel_ratio, _repair_device_pixel_ratio),
     Rule('screen-shape', _check_screen_shape, None),
     Rule('avail-bounds', _check_avail_bounds, _repair_avail_bounds),
     Rule('arch-agreement', _check_arch_agreement, None),

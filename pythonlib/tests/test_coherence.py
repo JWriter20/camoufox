@@ -67,12 +67,29 @@ class TestRules:
         assert [v.rule for v in coherence.validate(config, "win")] == ["touch-points"]
         assert coherence.apply(config, "win") == []
         assert config["navigator.maxTouchPoints"] == 0
-        # 5 is real -- measured on win-i9, a touchscreen laptop.
-        assert coherence.validate({"navigator.maxTouchPoints": 5}, "win") == []
+        # 5 is real -- measured on win-i9, a touchscreen laptop -- and so are
+        # 2 and 10; fpgen offers none of 2/5 and the presets carry 40.
+        for real in (0, 1, 2, 5, 10):
+            assert coherence.validate({"navigator.maxTouchPoints": real}, "win") == [], real
 
     def test_a_mac_has_no_touchscreen(self):
         config = {"navigator.maxTouchPoints": 5}
         assert [v.rule for v in coherence.validate(config, "mac")] == ["touch-points"]
+
+    def test_device_pixel_ratio_is_a_real_display_mode(self):
+        # 1.818 is a scraped artefact: a zoom level folded into the ratio.
+        config = {"window.devicePixelRatio": 1.8181818181818181}
+        assert [v.rule for v in coherence.validate(config, "win")] == ["device-pixel-ratio"]
+        assert coherence.apply(config, "win") == []
+        assert config["window.devicePixelRatio"] == 1.75
+        # The three measured machines: 1 on linux, 2.5 on win-i9, 2 on the Mac.
+        assert coherence.validate({"window.devicePixelRatio": 1}, "lin") == []
+        assert coherence.validate({"window.devicePixelRatio": 2.5}, "win") == []
+        assert coherence.validate({"window.devicePixelRatio": 2}, "mac") == []
+        # macOS has no fractional scaling.
+        assert [v.rule for v in coherence.validate({"window.devicePixelRatio": 1.5}, "mac")] == [
+            "device-pixel-ratio"
+        ]
 
     def test_desktop_screens_are_landscape(self):
         config = {"screen.width": 1440, "screen.height": 2560}
