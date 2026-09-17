@@ -44,15 +44,23 @@ def test_entries_are_full_objects(target_os):
 
 
 @pytest.mark.parametrize("target_os", ["macos", "windows", "linux"])
-def test_exactly_one_default(target_os):
+def test_no_default_voice(target_os):
+    # Stock Firefox 152 marks no SpeechSynthesisVoice.default on any OS.
     voices = _generate_random_voice_subset(target_os, "en-US")
-    assert sum(1 for v in voices if v["isDefault"]) == 1
+    assert voices and not any(v["isDefault"] for v in voices)
 
 
-def test_default_matches_spoofed_locale_prefix():
-    de = _generate_random_voice_subset("linux", "de-DE")
-    default = next(v for v in de if v["isDefault"])
-    assert default["lang"].split("-")[0] == "de"
+def test_windows_display_language_pack():
+    # A German display language gets the German OneCore pack first; en-US is
+    # the pack every stock en-US box reports (David / Mark / Zira + Desktop).
+    de = _generate_random_voice_subset("windows", "de-DE", seed=1)
+    assert de[0]["lang"] == "de-DE"
+    en = _generate_random_voice_subset("windows", "en-US", seed=1)
+    assert [v["name"] for v in en[:3]] == [
+        "Microsoft David - English (United States)",
+        "Microsoft Mark - English (United States)",
+        "Microsoft Zira - English (United States)",
+    ]
 
 
 class TestLinuxSpeechdUris:

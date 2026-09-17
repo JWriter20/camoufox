@@ -153,20 +153,19 @@ def test_hardware_is_not_mistaken_for_software(monkeypatch):
         assert not is_software_renderer(renderer)
 
 
-def test_software_first_draw_is_never_resampled(monkeypatch):
-    """The strongest reason this sampler must not be a plain reject loop.
-
-    Rejecting hardware draws while accepting every software one renormalises
-    the pool onto llvmpipe / WARP / SwiftShader. On a sub-floor screen that
-    turned a 1.5% software rate into ~40%, trading a weak incoherence for the
-    strongest VM/headless tell there is. So the first draw settles the class.
-    """
+def test_software_first_draw_is_resampled_to_hardware(monkeypatch):
+    """A presented llvmpipe / WARP / SwiftShader is the first thing every
+    consumer-hardware check flags (measured 2026-09-14 with sundial), so a
+    software first draw is retried until a hardware renderer that fits the
+    screen comes up, and only kept when the pool offers nothing else."""
     draws = iter([{"webGl:renderer": _LLVMPIPE}, {"webGl:renderer": _INTEL}])
     monkeypatch.setattr(fingerprints, "sample_webgl", lambda *a, **kw: next(draws))
 
-    # 1024x600 would reject a discrete GPU, but llvmpipe is plausible there and
-    # must be returned as drawn rather than swapped for the Intel part.
-    assert sample_webgl_for_screen("lin", 1024, 600)["webGl:renderer"] == _LLVMPIPE
+    assert sample_webgl_for_screen("lin", 1024, 600)["webGl:renderer"] == _INTEL
+
+    only_software = iter([{"webGl:renderer": _LLVMPIPE}] * 40)
+    monkeypatch.setattr(fingerprints, "sample_webgl", lambda *a, **kw: next(only_software))
+    assert sample_webgl_for_screen("lin", 1920, 1080)["webGl:renderer"] == _LLVMPIPE
 
 
 def test_software_draws_are_skipped_when_resampling(monkeypatch):

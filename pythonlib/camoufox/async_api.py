@@ -114,18 +114,31 @@ async def AsyncNewBrowser(
     # to a different size (daijro/camoufox#666), so default to no_viewport.
     no_viewport_default = spoofs_window_dimensions(from_options)
 
-    # Persistent context
-    if persistent_context:
-        if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
-            from_options = {**from_options, 'no_viewport': True}
-        context = await playwright.firefox.launch_persistent_context(**from_options)
-        return await async_attach_vd(context, virtual_display)
+    # Pin the driver (and so the browser it is about to spawn) to as many
+    # cores as the identity reports, so measurable parallelism matches
+    # navigator.hardwareConcurrency; the driver gets its cores back afterwards.
+    from . import cpu_affinity
+    from .utils import driver_pid, pinned_core_count
 
-    # Browser
-    browser = await playwright.firefox.launch(**from_options)
-    if no_viewport_default:
-        attach_no_viewport_default(browser)
-    return await async_attach_vd(browser, virtual_display)
+    pin_to = pinned_core_count(from_options)
+    pid = driver_pid(playwright) if pin_to else None
+    previous = cpu_affinity.pin(pid, pin_to) if pid else None
+    try:
+        # Persistent context
+        if persistent_context:
+            if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
+                from_options = {**from_options, 'no_viewport': True}
+            context = await playwright.firefox.launch_persistent_context(**from_options)
+            return await async_attach_vd(context, virtual_display)
+
+        # Browser
+        browser = await playwright.firefox.launch(**from_options)
+        if no_viewport_default:
+            attach_no_viewport_default(browser)
+        return await async_attach_vd(browser, virtual_display)
+    finally:
+        if pid:
+            cpu_affinity.restore(pid, previous)
 
 
 def _proxy_url_with_creds(proxy: Dict[str, str]) -> str:
