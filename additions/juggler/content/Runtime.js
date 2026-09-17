@@ -710,12 +710,13 @@ class ExecutionContext {
   }
 
   async evaluateScript(script, exceptionDetails = {}) {
-    const userInputHelper = this._domWindow ? this._domWindow.windowUtils.setHandlingUserInput(true) : null;
-    if (this._domWindow && this._domWindow.document)
-      this._domWindow.document.notifyUserGestureActivation();
-
+    // Camoufox: upstream Playwright runs every evaluate() as user input and
+    // grants the document a user-gesture activation. Init scripts run through
+    // this path at load, so every page saw navigator.userActivation.hasBeenActive
+    // === true, autoplay "allowed" and popups permitted before any input -- a
+    // stock Firefox grants activation only from real input, which juggler's
+    // synthesized-trusted clicks already provide (measured 2026-09-14).
     let {success, obj} = this._getResult(this._debuggee.executeInGlobal(script), exceptionDetails);
-    userInputHelper && userInputHelper.destruct();
     if (!success)
       return null;
     if (obj && obj.isPromise) {
@@ -755,11 +756,8 @@ class ExecutionContext {
         default: return this._toDebugger(arg.value);
       }
     });
-    const userInputHelper = this._domWindow ? this._domWindow.windowUtils.setHandlingUserInput(true) : null;
-    if (this._domWindow && this._domWindow.document)
-      this._domWindow.document.notifyUserGestureActivation();
+    // Camoufox: no synthetic user activation here either (see evaluateScript).
     let {success, obj} = this._getResult(funEvaluation.obj.apply(null, args), exceptionDetails);
-    userInputHelper && userInputHelper.destruct();
     if (!success)
       return null;
     if (obj && obj.isPromise) {
