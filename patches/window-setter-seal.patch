@@ -16,9 +16,8 @@ diff --git a/dom/base/ChromeUtils.cpp b/dom/base/ChromeUtils.cpp
 index 8657d3282b..d8889edb6a 100644
 --- a/dom/base/ChromeUtils.cpp
 +++ b/dom/base/ChromeUtils.cpp
-@@ -6,6 +6,10 @@
+@@ -6,5 +6,9 @@
  #include "MaskConfig.hpp"
- #include "MouseTrajectories.hpp"
  
 +// Camoufox: for CamouSealFingerprintSetters below.
 +#include "mozilla/dom/ScriptSettings.h"
@@ -27,8 +26,8 @@ index 8657d3282b..d8889edb6a 100644
  #include "JSOracleParent.h"
  #include "ThirdPartyUtil.h"
  #include "VsyncSource.h"
-@@ -2781,6 +2785,74 @@ void ChromeUtils::CamouGetMouseTrajectory(GlobalObject& aGlobal, long aFromX,
-   aPoints.AppendElements(flattenedPoints.data(), flattenedPoints.size());
+@@ -2768,6 +2772,74 @@ void ChromeUtils::CamouGetStringList(GlobalObject& aGlobal,
+   aRetVal.Clear();
  }
  
 +// Camoufox: every per-context fingerprint setter, in the order the managers
@@ -106,9 +105,9 @@ diff --git a/dom/base/ChromeUtils.h b/dom/base/ChromeUtils.h
 index e32ee77dfd..8747d75c44 100644
 --- a/dom/base/ChromeUtils.h
 +++ b/dom/base/ChromeUtils.h
-@@ -365,6 +365,12 @@ class ChromeUtils {
-                                      long aFromY, long aToX, long aToY,
-                                      nsTArray<int32_t>& aPoints);
+@@ -361,6 +361,12 @@ class ChromeUtils {
+   static void CamouGetStringList(GlobalObject& aGlobal, const nsAString& aVarName,
+                                  nsTArray<nsString>& aRetVal);
  
 +  static void CamouSealFingerprintSetters(GlobalObject& aGlobal,
 +                                          uint64_t aInnerWindowId);
@@ -336,9 +335,9 @@ diff --git a/dom/chrome-webidl/ChromeUtils.webidl b/dom/chrome-webidl/ChromeUtil
 index 4c15c49fef..33aa276db2 100644
 --- a/dom/chrome-webidl/ChromeUtils.webidl
 +++ b/dom/chrome-webidl/ChromeUtils.webidl
-@@ -943,6 +943,20 @@ partial namespace ChromeUtils {
+@@ -938,6 +938,20 @@ partial namespace ChromeUtils {
     */
-   sequence<long> camouGetMouseTrajectory(long fromX, long fromY, long toX, long toY);
+   sequence<DOMString> camouGetStringList(DOMString varName);
  
 +  /**
 +   * Camoufox: open and close the window.setXxx() fingerprint setters.
