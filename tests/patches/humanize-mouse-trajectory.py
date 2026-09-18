@@ -42,7 +42,13 @@ import sys
 
 from camoufox.async_api import AsyncCamoufox
 
-DEST = (1100, 650)
+# The far corner of the move, clamped to the viewport the identity happened to
+# draw. It used to be a flat (1100, 650), which silently tested nothing whenever
+# the drawn window was smaller than that: the move landed outside the content
+# area, no mousemove was delivered, and the run failed reporting only the start
+# point. Drawn windows vary far more than they used to (fpgen), and one was
+# 924x1364 -- narrower than the old x.
+DEST_MAX = (1100, 650)
 BODY = '<body style="margin:0;width:1400px;height:800px"></body>'
 RECORDER = """
     window.moves = [];
@@ -57,6 +63,15 @@ MAX_DURATION_MS = 3000
 EXECUTABLE_PATH = os.environ.get("CAMOUFOX_EXECUTABLE_PATH")
 
 
+async def _dest_within(page):
+    """DEST_MAX, or the far corner of this viewport if it is smaller."""
+    viewport = await page.evaluate("({w: innerWidth, h: innerHeight})")
+    return (
+        min(DEST_MAX[0], viewport["w"] - 10),
+        min(DEST_MAX[1], viewport["h"] - 10),
+    )
+
+
 def _launch_kwargs(humanize):
     kwargs = dict(headless=True, os="linux", humanize=humanize)
     if EXECUTABLE_PATH:
@@ -69,9 +84,10 @@ async def _collect_moves(humanize):
         page = await browser.new_page()
         await page.set_content(BODY)
         await page.evaluate(RECORDER)
+        dest = await _dest_within(page)
         await page.mouse.move(20, 20)
-        await page.mouse.move(*DEST)
-        return await page.evaluate("moves")
+        await page.mouse.move(*dest)
+        return await page.evaluate("moves"), dest
 
 
 async def _humanized_click_hits_target():
@@ -98,10 +114,10 @@ def _gaps(moves):
 async def main() -> int:
     passed = True
 
-    humanized = await _collect_moves(True)
+    humanized, dest = await _collect_moves(True)
     print("\n=== humanize=True ===")
     print(f"  mousemove events: {len(humanized)}  (endpoint: {humanized[-1][:2] if humanized else None})")
-    if len(humanized) >= 10 and humanized[-1][:2] == list(DEST):
+    if len(humanized) >= 10 and humanized[-1][:2] == list(dest):
         print("  PASS: humanized trajectory emitted, ending on destination")
     else:
         passed = False
@@ -131,10 +147,10 @@ async def main() -> int:
         passed = False
         print(f"  FAIL: only {distinct} distinct gaps (spread {spread}ms) across {len(gaps)} -- looks like a fixed cadence")
 
-    plain = await _collect_moves(False)
+    plain, plain_dest = await _collect_moves(False)
     print("\n=== humanize off ===")
     print(f"  mousemove events: {[m[:2] for m in plain]}")
-    if [m[:2] for m in plain] == [[20, 20], list(DEST)]:
+    if [m[:2] for m in plain] == [[20, 20], list(plain_dest)]:
         print("  PASS: only endpoints emitted")
     else:
         passed = False

@@ -43,8 +43,23 @@ screen:
 window:
   outerHeight: window.outerHeight
   outerWidth: window.outerWidth
-  innerHeight: window.innerHeight
-  innerWidth: window.innerWidth
+  # innerWidth/innerHeight are deliberately NOT mapped.
+  #
+  # Spoofing them deadlocks Playwright: setViewportSize resizes the window and
+  # then waits for the page to report the size it asked for, and a spoofed
+  # innerWidth/innerHeight never changes, so the wait never ends. Camoufox
+  # already defaults to no_viewport for this reason (#666); this is the same
+  # trap reached through an explicit set_viewport_size() call.
+  #
+  # BrowserForge hid it by accident -- its Firefox samples carry innerWidth and
+  # innerHeight as 0, and _cast_to_properties skips falsy values, so these were
+  # never spoofed there either. fpgen reports the real numbers, which turned an
+  # unmapped field into a hang (tests/patches/humanize-edge-deadlock.py, which
+  # calls set_viewport_size, timed out at 600s in CI).
+  #
+  # Leaving them real is also the more coherent answer: the content area a page
+  # measures is then the one it actually has, which is what makes input at the
+  # bottom edge land (see BROWSER_CHROME_HEIGHT in coherence.py).
   screenX: window.screenX
   screenY: window.screenY
   pageYOffset: screen.pageYOffset

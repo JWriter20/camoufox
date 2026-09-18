@@ -62,6 +62,20 @@ PLAUSIBLE_COLOR_DEPTH = frozenset({24, 30})
 # 10 contacts; anything above that is a scraped artefact.
 MAX_PLAUSIBLE_TOUCH_POINTS = 10
 
+# The browser's own chrome height, in CSS pixels: the toolbar strip above the
+# content area. Measured 86 on this build (stock Firefox's own value; see the
+# leak register's chrome-height row), and it is a property of the BINARY, not of
+# the identity -- the same window furniture renders whatever OS is claimed.
+#
+# It matters because the real window is sized from window.outerHeight, so the
+# content area a page can actually receive input in is outerHeight - 86. An
+# identity claiming `outerHeight - innerHeight` SMALLER than that is claiming a
+# viewport taller than the window can hold, and the difference is unreachable:
+# mouse events dispatched into those bottom rows are delivered to nothing.
+# Measured 2026-09-17 -- a drawn pair of outer 801 / inner 717 (chrome 84) left
+# the bottom 2 rows dead, which the boundary-sweep guard caught.
+BROWSER_CHROME_HEIGHT = 86
+
 # GPU strings that are not possible on macOS. Firefox on a Mac reports Apple
 # Silicon as "Apple M1, or similar", and Intel Macs as an Intel Iris/UHD/HD
 # 4000-6000 part; ANGLE is Windows-only (Direct3D), and these two rows in
@@ -201,6 +215,33 @@ def _repair_device_pixel_ratio(config: Dict[str, Any], target_os: str) -> None:
     config['window.devicePixelRatio'] = min(allowed, key=lambda v: abs(float(v) - float(dpr)))
 
 
+def _check_window_chrome(config: Dict[str, Any], target_os: str) -> Optional[str]:
+    inner = config.get('window.innerHeight')
+    outer = config.get('window.outerHeight')
+    if not inner or not outer:
+        return None
+    if outer - inner < BROWSER_CHROME_HEIGHT:
+        return (f'window.outerHeight {outer} - innerHeight {inner} = {outer - inner}, less than the '
+                f'{BROWSER_CHROME_HEIGHT}px of chrome the window actually has; the bottom '
+                f'{BROWSER_CHROME_HEIGHT - (outer - inner)}px of the claimed viewport cannot receive input')
+    return None
+
+
+def _repair_window_chrome(config: Dict[str, Any], target_os: str) -> None:
+    inner = config.get('window.innerHeight')
+    outer = config.get('window.outerHeight')
+    if not inner or not outer:
+        return
+    avail = config.get('screen.availHeight') or config.get('screen.height')
+    # Prefer growing the window, which keeps the viewport the identity drew.
+    if not avail or inner + BROWSER_CHROME_HEIGHT <= avail:
+        config['window.outerHeight'] = inner + BROWSER_CHROME_HEIGHT
+        return
+    # No room on the claimed screen: shrink the viewport to what the window can
+    # hold instead, so the claim matches the surface either way.
+    config['window.innerHeight'] = max(outer - BROWSER_CHROME_HEIGHT, 1)
+
+
 def _check_screen_shape(config: Dict[str, Any], target_os: str) -> Optional[str]:
     width, height = config.get('screen.width'), config.get('screen.height')
     if not width or not height:
@@ -247,6 +288,7 @@ RULES: List[Rule] = [
     Rule('color-depth', _check_color_depth, _repair_color_depth),
     Rule('touch-points', _check_touch_points, _repair_touch_points),
     Rule('device-pixel-ratio', _check_device_pixel_ratio, _repair_device_pixel_ratio),
+    Rule('window-chrome', _check_window_chrome, _repair_window_chrome),
     Rule('screen-shape', _check_screen_shape, None),
     Rule('avail-bounds', _check_avail_bounds, _repair_avail_bounds),
     Rule('arch-agreement', _check_arch_agreement, None),

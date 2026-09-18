@@ -126,3 +126,24 @@ class TestHeadfulFitsOnDisplay:
             launch(headless=False)
 
         clamp.assert_not_called()
+
+class TestViewportOperationsDoNotDeadlock:
+    """The window's inner dimensions must stay real.
+
+    Playwright's setViewportSize resizes the window and then waits for the page
+    to report the size it asked for. A spoofed innerWidth/innerHeight never
+    changes, so that wait never ends -- the same trap no_viewport exists for
+    (#666), reached through an explicit call instead.
+
+    BrowserForge hid this: its Firefox samples carry innerWidth/innerHeight as 0
+    and the mapper skips falsy values, so they were never spoofed. fpgen reports
+    real numbers, and mapping them hung tests/patches/humanize-edge-deadlock.py
+    for the full 600s CI timeout.
+    """
+
+    def test_inner_dimensions_are_never_spoofed(self):
+        for os_name in ("linux", "windows", "macos"):
+            for _ in range(5):
+                config = launch(os=os_name)
+                assert "window.innerWidth" not in config, os_name
+                assert "window.innerHeight" not in config, os_name
