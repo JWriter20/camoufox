@@ -2278,6 +2278,41 @@ def test_the_native_inputs_cover_everything_that_can_change_the_binary():
     )
 
 
+def test_nothing_the_build_runs_is_excluded_from_the_native_hash():
+    """The exclusion list must not contain a script a build can reach.
+
+    NON_NATIVE_SCRIPTS exists so a tool that rewrites pythonlib's data files
+    does not invalidate a 665 MB cached browser and buy an hour of compiling
+    (measured: editing scripts/clean-fingerprint-data.py did exactly that).
+    Excluding a script the build DOES run is the dangerous direction -- the
+    cache would then serve a browser built from different sources, and every
+    suite downstream would pass against it. So each entry is checked against
+    the files a build enters through, rather than trusted.
+    """
+    from ci.browser_inputs import BUILD_ENTRY_POINTS, NON_NATIVE_SCRIPTS, REPO_ROOT
+
+    reachable = ""
+    for entry in BUILD_ENTRY_POINTS:
+        path = REPO_ROOT / entry
+        assert path.is_file(), f"{entry} is gone; the check below proves nothing"
+        reachable += path.read_text(encoding="utf-8", errors="ignore")
+
+    for script in sorted(NON_NATIVE_SCRIPTS):
+        name = pathlib.Path(script).name
+        assert name not in reachable, (
+            f"{script} is referenced from a build entry point but is excluded "
+            "from the native hash -- a change to it would be served a stale browser"
+        )
+
+
+def test_excluded_scripts_exist():
+    """A stale exclusion silently stops excluding anything; say so instead."""
+    from ci.browser_inputs import NON_NATIVE_SCRIPTS, REPO_ROOT
+
+    for script in sorted(NON_NATIVE_SCRIPTS):
+        assert (REPO_ROOT / script).is_file(), f"{script} no longer exists"
+
+
 def test_jar_mn_is_read_not_guessed():
     """Two files in one source directory land at different depths.
 

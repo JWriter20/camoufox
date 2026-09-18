@@ -64,6 +64,37 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BROWSER_DIRS = ("patches", "additions", "settings", "assets", "scripts")
 BROWSER_FILES = ("upstream.sh", "Makefile")
 
+# Scripts under scripts/ that cannot change compiled output, and so must not
+# invalidate a 665 MB cached browser.
+#
+# scripts/ holds the build machinery -- patch.py, copy-additions.sh, package.py
+# -- so hashing the directory wholesale is the right default. It also holds
+# tools that operate on the PYTHON package's data files and are never invoked
+# by a build, and those cost an hour each time they are touched: editing
+# clean-fingerprint-data.py, which rewrites pythonlib JSON, forced a full
+# rebuild of a browser whose sources had not moved (measured 2026-09-17).
+#
+# Nothing is excluded on the grounds that it "looks unrelated". An entry here
+# is checked by ci/tests/test_ci.py against the build's own entry points, so a
+# script that IS reachable from a build cannot sit in this list: getting that
+# wrong serves a stale binary to every suite downstream, which is far worse
+# than an unnecessary rebuild.
+NON_NATIVE_SCRIPTS = frozenset(
+    {
+        "scripts/clean-fingerprint-data.py",
+    }
+)
+
+# Where a build can reach a script from. Used by the test above, not here.
+BUILD_ENTRY_POINTS = (
+    "Makefile",
+    "multibuild.py",
+    "scripts/patch.py",
+    "scripts/package.py",
+    "scripts/copy-additions.sh",
+    "scripts/_mixin.py",
+)
+
 JUGGLER = Path("additions") / "juggler"
 JAR_MN = JUGGLER / "jar.mn"
 
@@ -124,7 +155,7 @@ def native_inputs(root: Optional[Path] = None) -> List[str]:
             if not path.is_file():
                 continue
             rel = str(path.relative_to(root))
-            if rel not in resources:
+            if rel not in resources and rel not in NON_NATIVE_SCRIPTS:
                 found.append(rel)
     for name in BROWSER_FILES:
         if (root / name).is_file():
