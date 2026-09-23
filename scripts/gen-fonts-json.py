@@ -150,16 +150,37 @@ REPORTABLE_EXTRA = {
 }
 
 
+
+def bundle_dirs_for(bundle, os_key, sub):
+    """The directories this OS renders from: its groups, else the old per-OS dir."""
+    groups = os.path.join(bundle, 'groups.json')
+    if os.path.exists(groups):
+        with open(groups, encoding='utf-8') as fh:
+            read_by = json.load(fh).get('readBy', {}).get(os_key, [])
+        dirs = [os.path.join(bundle, g) for g in read_by if os.path.isdir(os.path.join(bundle, g))]
+        if dirs:
+            return dirs
+    return [os.path.join(bundle, sub)]
+
+
 def scan_families(directory):
-    if not os.path.isdir(directory):
-        sys.exit(f'bundle dir missing: {directory}')
+    """Families fontconfig publishes from one directory, or several.
+
+    The bundle stores each face once, in a directory named for the set of OSes
+    that use it (bundle/fonts/groups.json), so an OS's renderable set is the
+    union of the groups its letter appears in -- not one per-OS directory.
+    """
+    directories = [directory] if isinstance(directory, str) else list(directory)
     files = []
-    for dp, _dn, fn in os.walk(directory):
-        for f in fn:
-            if f.lower().endswith(FONT_EXT):
-                files.append(os.path.join(dp, f))
+    for d in directories:
+        if not os.path.isdir(d):
+            sys.exit(f'bundle dir missing: {d}')
+        for dp, _dn, fn in os.walk(d):
+            for f in fn:
+                if f.lower().endswith(FONT_EXT):
+                    files.append(os.path.join(dp, f))
     if not files:
-        sys.exit(f'no font files under {directory} (is the bundle restored?)')
+        sys.exit(f'no font files under {directories} (is the bundle restored?)')
     fams = set()
     # fc-scan takes many files at once; chunk to keep argv bounded.
     for i in range(0, len(files), 200):
@@ -189,6 +210,19 @@ def manifest_names(man, os_key):
     return names
 
 
+
+def require_bundle(bundle):
+    """The font bundle is a release asset; fail with the fix, not a stack trace."""
+    if os.path.isdir(bundle) and os.listdir(bundle):
+        return
+    sys.exit(
+        f'font bundle not present at {bundle}.\n'
+        f'It ships as a release asset rather than repo content (~2.1 GB); run:\n'
+        f'    make fonts-extract\n'
+        f'See scripts/fetch-fonts.py for why it is not in git.'
+    )
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--bundle', default=os.path.join(REPO, 'bundle', 'fonts'))
@@ -198,12 +232,14 @@ def main():
     ap.add_argument('--print-bases', action='store_true', help='print OS base lists as Python literals')
     ap.add_argument('--dump-union', default=None, help='dir to write <os>-union.txt / <os>-unreported.txt')
     args = ap.parse_args()
+    require_bundle(os.path.join(args.bundle, "fonts")
+                   if not args.bundle.rstrip("/").endswith("fonts") else args.bundle)
 
     man = load_manifest(args)
     result = {}
     bases_out = {}
     for os_key, sub in OSDIRS.items():
-        union = scan_families(os.path.join(args.bundle, sub))
+        union = scan_families(bundle_dirs_for(args.bundle, os_key, sub))
         for src, added in SCAN_FAMILIES[os_key].items():
             if src in union:
                 union.update(added)
@@ -233,7 +269,8 @@ def main():
         unbundled = sorted(wanted - union)
         unreported = sorted(union - reportable)
         result[os_key] = sorted(reportable)
-        print(f'{os_key}: {len(union)} renderable families from {sub}/, '
+        print(f'{os_key}: {len(union)} renderable families from '
+              f'{"+".join(os.path.basename(d) for d in bundle_dirs_for(args.bundle, os_key, sub))}, '
               f'{len(result[os_key])} reportable, {len(unreported)} renderable-but-unreported, '
               f'{len(unbundled)} manifest names unbundled', file=sys.stderr)
         if args.dump_union:

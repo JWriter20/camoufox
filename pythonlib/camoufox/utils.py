@@ -76,15 +76,42 @@ def _generate_fontconfig(
 
     # Beside the caller's own binary when they supplied one; see get_env_vars.
     fonts_dir = str(path.parent / "fonts") if path else get_path("fonts")
-    # The Linux package ships every OS's font set under fonts/<os>/ so one
-    # artifact can claim any OS. fontconfig scans <dir> recursively, so
-    # pointing it at the parent makes the other two OSes' files reachable by
-    # the renderer -- hidden by the allowlist for direct lookups, but still
-    # candidates for glyph fallback (an emoji or CJK glyph from Segoe UI
-    # Emoji / PingFang on a machine claiming Linux). Scope the directory to
-    # the claimed OS whenever the package has that layout.
-    if os_dir and os.path.isdir(os.path.join(fonts_dir, os_dir)):
-        fonts_dir = os.path.join(fonts_dir, os_dir)
+
+    # Which directories this identity's OS may see.
+    #
+    # fontconfig scans <dir> RECURSIVELY, so the parent must never be named: it
+    # would make every other OS's files reachable by the renderer -- hidden by
+    # the allowlist for direct lookups, but still candidates for glyph fallback
+    # (an emoji or CJK glyph from Segoe UI Emoji / PingFang on a machine
+    # claiming Linux).
+    #
+    # The bundle stores each face ONCE, in a directory named for the set of
+    # OSes that use it (L, M, W, LM, LW, MW, LMW) -- see bundle/fonts/groups.json
+    # and scripts/gen-font-groups.py. Storing per-OS instead meant 41% of the
+    # bundle was byte-identical copies. An OS reads the four groups its letter
+    # appears in, so nothing has to be hidden after the fact: a face Windows
+    # must not see is simply not in a group Windows reads.
+    scan_dirs = []
+    groups_path = os.path.join(fonts_dir, "groups.json")
+    os_key = {'linux': 'lin', 'macos': 'mac', 'windows': 'win'}.get(os_dir or '')
+    if os_key and os.path.exists(groups_path):
+        try:
+            with open(groups_path, 'rb') as fh:
+                read_by = json.loads(fh.read()).get('readBy', {}).get(os_key, [])
+            scan_dirs = [
+                os.path.join(fonts_dir, g)
+                for g in read_by
+                if os.path.isdir(os.path.join(fonts_dir, g))
+            ]
+        except (OSError, ValueError):
+            scan_dirs = []
+    if not scan_dirs:
+        # Older bundles ship fonts/<os>/ with each OS's set duplicated in full.
+        if os_dir and os.path.isdir(os.path.join(fonts_dir, os_dir)):
+            scan_dirs = [os.path.join(fonts_dir, os_dir)]
+        else:
+            scan_dirs = [fonts_dir]
+
     fonts_conf_src = os.path.join(fontconfig_path, "fonts.conf")
 
     with open(fonts_conf_src, 'r') as f:
@@ -92,7 +119,7 @@ def _generate_fontconfig(
 
     conf_content = conf_content.replace(
         '<dir prefix="cwd">fonts</dir>',
-        f'<dir>{fonts_dir}</dir>',
+        "\n\t".join(f'<dir>{d}</dir>' for d in scan_dirs),
     )
 
     # INSTALL_DIR is platformdirs' user_cache_dir("camoufox"); see pkgman.

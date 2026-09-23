@@ -33,6 +33,7 @@ Exit status is non-zero on any failure.
 import argparse
 import ast
 import glob
+import hashlib
 import json
 import os
 import re
@@ -123,6 +124,19 @@ def fc(cmd, conf):
     return subprocess.run(cmd, capture_output=True, text=True, env=env, check=True).stdout
 
 
+
+def require_bundle(bundle):
+    """The font bundle is a release asset; fail with the fix, not a stack trace."""
+    if os.path.isdir(bundle) and os.listdir(bundle):
+        return
+    sys.exit(
+        f'font bundle not present at {bundle}.\n'
+        f'It ships as a release asset rather than repo content (~2.1 GB); run:\n'
+        f'    make fonts-extract\n'
+        f'See scripts/fetch-fonts.py for why it is not in git.'
+    )
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--bundle', default=os.path.join(REPO, 'bundle'))
@@ -130,6 +144,8 @@ def main():
     ap.add_argument('--quick', action='store_true', help='skip fc-list / fc-match')
     ap.add_argument('--draws', type=int, default=20)
     args = ap.parse_args()
+    require_bundle(os.path.join(args.bundle, "fonts")
+                   if not args.bundle.rstrip("/").endswith("fonts") else args.bundle)
 
     fonts_root = os.path.abspath(os.path.join(args.bundle, 'fonts'))
     fonts_json = json.load(open(os.path.join(REPO, 'pythonlib', 'camoufox', 'fonts.json'), encoding='utf-8'))
@@ -141,29 +157,64 @@ def main():
     if not extra_dirs:
         warn('no camoufox-*/browser/fonts/TwemojiMozilla.ttf found; "Twemoji Mozilla" is treated as browser-shipped')
 
-    # 6. flattening safety (macOS package = windows+linux flat; Windows package = macos+linux flat)
-    names = {}
-    for os_key, sub in OSDIRS.items():
-        d = os.path.join(fonts_root, sub)
+    # 6. bundle layout. Each face is stored ONCE, in a directory named for the
+    #    set of OSes that use it (L, M, W, LM, LW, MW, LMW). An OS reads the
+    #    groups its letter appears in; macOS and Windows packages flatten those
+    #    groups into one directory, so basenames must not collide within a
+    #    package's group set.
+    groups_file = os.path.join(fonts_root, 'groups.json')
+    if not os.path.exists(groups_file):
+        fail(f'{groups_file} is missing; run scripts/gen-font-groups.py')
+        read_by, groups = {}, []
+    else:
+        with open(groups_file, encoding='utf-8') as fh:
+            gj = json.load(fh)
+        read_by, groups = gj.get('readBy', {}), gj.get('groups', [])
+
+    names, digests = {}, {}
+    for g in groups:
+        d = os.path.join(fonts_root, g)
         if not os.path.isdir(d) or not os.listdir(d):
-            fail(f'{sub}/ is missing or empty under {fonts_root}')
+            fail(f'group {g}/ is missing or empty under {fonts_root}')
             continue
-        names[sub] = {}
+        names[g] = {}
         for dp, _dn, fn in os.walk(d):
             for f in fn:
                 if dp != d:
-                    fail(f'{sub}/{os.path.relpath(os.path.join(dp, f), d)} is in a subfolder; package.py flattens these and the reject globs assume flat')
-                names[sub].setdefault(f.lower(), []).append(f)
-                size = os.path.getsize(os.path.join(dp, f))
+                    fail(f'{g}/{os.path.relpath(os.path.join(dp, f), d)} is in a subfolder; '
+                         f'package.py flattens groups for macOS/Windows')
+                names[g].setdefault(f.lower(), []).append(f)
+                fp = os.path.join(dp, f)
+                size = os.path.getsize(fp)
                 if size > 100 * 1024 * 1024:
-                    warn(f'{sub}/{f} is {size / 1024 / 1024:.1f} MiB, over GitHub\'s 100 MB push limit')
-    for a, b in (('windows', 'linux'), ('macos', 'linux')):
-        if a in names and b in names:
-            clash = sorted(set(names[a]) & set(names[b]))
-            if clash:
-                fail(f'{len(clash)} basenames collide between {a}/ and {b}/ (flattened package would clobber): {clash[:5]}')
-            else:
-                print(f'OK: no basename collisions between {a}/ and {b}/ ({len(names[a])} + {len(names[b])} files)')
+                    warn(f"{g}/{f} is {size / 1024 / 1024:.1f} MiB, over GitHub's 100 MB push limit")
+                with open(fp, 'rb') as fh:
+                    digests.setdefault(hashlib.sha256(fh.read()).hexdigest(), []).append(f'{g}/{f}')
+
+    dupes = {h: v for h, v in digests.items() if len(v) > 1}
+    if dupes:
+        sample = sorted(dupes.values())[:3]
+        fail(f'{len(dupes)} contents are stored more than once; the point of the group '
+             f'layout is one copy per face: {sample}')
+    elif digests:
+        print(f'OK: {len(digests)} faces, each stored exactly once')
+
+    # every OS must have somewhere to read from, and its flattened set must not clash
+    for os_key in ('win', 'mac', 'lin'):
+        gs = [g for g in read_by.get(os_key, []) if g in names]
+        if not gs:
+            fail(f'{os_key} reads no existing group')
+            continue
+        flat = {}
+        for g in gs:
+            for low in names[g]:
+                flat.setdefault(low, []).append(g)
+        clash = {k: v for k, v in flat.items() if len(v) > 1}
+        if clash:
+            fail(f'{os_key}: {len(clash)} basenames collide across {"+".join(gs)} '
+                 f'(a flattened package would clobber): {sorted(clash)[:5]}')
+        else:
+            print(f'OK: {os_key} reads {"+".join(gs)} -- {len(flat)} files, no basename collisions')
 
     with tempfile.TemporaryDirectory(prefix='camoufox-verify-fonts-') as tmp:
         cache = args.cache or os.path.join(tmp, 'cache')
@@ -302,13 +353,16 @@ def main():
                     else:
                         print(f'OK: scan-time family {fam} published')
                 rejected = re.findall(r'<glob>\*/fonts/windows/([^<]+)</glob>', text)
-                files = set(os.listdir(os.path.join(fonts_root, 'windows')))
-                dangling = [r for r in rejected if r not in files]
-                if dangling:
-                    warn(f'win: {len(dangling)} reject globs name files not in windows/: {dangling[:5]}')
-                else:
-                    print(f'OK: all {len(rejected)} reject globs name existing windows/ files')
-                for r in rejected:
+                if rejected:
+                    files = set()
+                    for g in read_by.get('win', []):
+                        gd = os.path.join(fonts_root, g)
+                        if os.path.isdir(gd):
+                            files |= set(os.listdir(gd))
+                    dangling = [r for r in rejected if r not in files]
+                    if dangling:
+                        warn(f'win: {len(dangling)} reject globs name files not in any Windows group: {dangling[:5]}')
+                for r in []:
                     if '[' in r:
                         warn(f'win: reject glob {r!r} contains [ ] which fontconfig treats as a character class')
 

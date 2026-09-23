@@ -8,7 +8,7 @@ debs := python3 python3-dev python3-pip p7zip-full golang-go msitools wget aria2
 rpms := python3 python3-devel p7zip golang msitools wget aria2 sqlite-devel
 pacman := python python-pip p7zip go msitools wget aria2 sqlite
 
-.PHONY: help fetch setup setup-minimal clean set-target distclean build package \
+.PHONY: help fetch fetch-fonts fonts-extract fonts-check fonts-clean setup setup-minimal clean set-target distclean build package \
         build-launcher check-arch revert edits run bootstrap mozbootstrap dir \
         package-linux package-macos package-windows vcredist_arch patch unpatch \
         workspace check-arg edit-cfg ff-dbg tests update-ubo-assets generate-assets-car \
@@ -80,6 +80,23 @@ ff-dbg: setup
 
 revert:
 	cd $(cf_source_dir) && git reset --hard unpatched
+
+# The font bundle is a release asset, not repo content (see
+# scripts/fetch-fonts.py for why). fetch-fonts downloads and verifies the
+# archive; fonts-extract unpacks it to bundle/fonts/, which every font tool and
+# `make package-*` needs. Both are no-ops once satisfied, so they are cheap to
+# depend on.
+fetch-fonts:
+	python3 scripts/fetch-fonts.py
+
+fonts-extract:
+	python3 scripts/fetch-fonts.py --extract
+
+fonts-check:
+	python3 scripts/fetch-fonts.py --check
+
+fonts-clean:
+	python3 scripts/fetch-fonts.py --clean
 
 dir:
 	@if [ ! -d $(cf_source_dir) ]; then \
@@ -154,7 +171,7 @@ check-arch:
 build-launcher: check-arch
 	cd legacy/launcher && bash build.sh $(arch) $(os)
 
-package-linux:
+package-linux: fonts-extract
 	python3 scripts/package.py linux \
 		--includes \
 			settings/chrome.css \
@@ -166,7 +183,7 @@ package-linux:
 		--arch $(arch) \
 		--fonts windows macos linux
 
-package-macos:
+package-macos: fonts-extract
 	python3 scripts/package.py macos \
 		--includes \
 			settings/chrome.css \
@@ -175,9 +192,9 @@ package-macos:
 		--version $(version) \
 		--release $(release) \
 		--arch $(arch) \
-		--fonts windows linux
+		--fonts windows macos linux
 
-package-windows:
+package-windows: fonts-extract
 	python3 scripts/package.py windows \
 		--includes \
 			settings/chrome.css \
@@ -187,7 +204,7 @@ package-windows:
 		--version $(version) \
 		--release $(release) \
 		--arch $(arch) \
-		--fonts macos linux
+		--fonts windows macos linux
 
 run-launcher:
 	rm -rf $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch;

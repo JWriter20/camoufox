@@ -5,6 +5,10 @@ on:
   push:
     tags:
       - "*"
+      # The font bundle ships as its own release, in a separate tag namespace so
+      # it does not appear among the browser downloads. Those tags must not
+      # trigger a browser build (see scripts/fetch-fonts.py).
+      - "!font-bundle-*"
 
 jobs:
   build:

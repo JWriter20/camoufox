@@ -15,6 +15,16 @@ pythonlib/test*
 jsonvv/test*
 /.vscode
 /bundle/fonts/extra
+
+# The font bundle is a release asset, not repo content: ~2.1 GB extracted,
+# ~770 MB as .tar.xz, and an xz archive cannot be delta-compressed, so tracking
+# it would append the whole thing to history on every font change. It is pinned
+# by scripts/data/font-bundle.json (asset name + size + sha256) and fetched with
+# `make fetch-fonts`. Only the compressed archive is kept; bundle/fonts/ is
+# extracted on demand.
+/bundle/fonts/
+/bundle/fonts-bundle-*.tar.xz
+/bundle/*.tar.xz.part
 /bundle/langpacks/
 pythonlib/*.png
 scripts/*.png
