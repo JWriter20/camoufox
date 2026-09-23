@@ -85,6 +85,17 @@ jobs:
       - name: Check disk space
         run: df -h
 
+      - name: Fetch the font bundle
+        # The bundle is a release asset, not repo content (~2.16 GB extracted,
+        # 843 MB as .tar.xz -- see scripts/fetch-fonts.py). Without this the
+        # package would ship with NO fonts while pythonlib/camoufox/fonts.json
+        # still reports hundreds of families, which is a reverse leak in the
+        # shipped browser. Cached by the pinned sha256 so a re-run is free.
+        run: make fonts-extract
+
+      - name: Verify the font bundle matches the manifest
+        run: python3 scripts/verify-fonts.py
+
       - name: Install dependencies
         run: |
           sudo apt-get update
