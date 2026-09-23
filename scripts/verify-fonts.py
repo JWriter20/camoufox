@@ -189,7 +189,12 @@ def main():
                     fail(f'{os_key}: {label} names not in fonts.json: {missing}')
                 else:
                     print(f'OK: {len(lst)} {label} names all in fonts.json[{os_key}] ({len(reportable)})')
-            if set(essential) & set(variant):
+            # A variant drawn with probability < 1 is a tier ON TOP of the base,
+            # so it must be disjoint from it. At probability 1 there is only one
+            # OS version left to spoof (Windows 10 was dropped 2026-09-22), the
+            # variant IS part of that base, and the overlap is correct -- it is
+            # then only used to subtract on a native host that lacks it.
+            if prob < 1.0 and set(essential) & set(variant):
                 fail(f'{os_key}: essential and variant overlap: {sorted(set(essential) & set(variant))}')
             # An unconditional pattern rewrite whose TARGET is reportable makes the
             # alias renderable for every identity, so the alias must be reported by

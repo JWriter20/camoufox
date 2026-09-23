@@ -7,7 +7,7 @@ import unicodedata
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from random import Random, choice, randint, randrange, random, sample, shuffle
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from camoufox.pkgman import load_yaml
 from camoufox.webgl import sample_webgl
@@ -138,226 +138,167 @@ def _load_os_fonts() -> Dict[str, List[str]]:
 # bundled target unconditionally, so they MUST stay in this always-reported set
 # (an identity that did not report Helvetica would still render it otherwise).
 _ESSENTIAL_FONTS_MACOS = [
-    # PingFang HK/SC/TC ship with every macOS (measured 2026-09-14: present on a
-    # stock Mac mini in 5/5 runs, never drawn before).
-    'PingFang HK', 'PingFang SC', 'PingFang TC',
-    '.Al Bayan PUA', '.Al Nile PUA', '.Al Tarikh PUA', '.Apple Color Emoji UI',
-    '.Apple SD Gothic NeoI', '.Aqua Kana', '.Aqua Kana Bold', '.Aqua かな', '.Aqua かな ボールド',
-    '.Arial Hebrew Desk Interface', '.Baghdad PUA', '.Beirut PUA', '.Damascus PUA',
-    '.DecoType Naskh PUA', '.Diwan Kufi PUA', '.Farah PUA', '.Geeza Pro Interface',
-    '.Geeza Pro PUA', '.Hiragino Kaku Gothic Interface', '.Hiragino Sans GB Interface',
-    '.Keyboard', '.KufiStandardGK PUA', '.LastResort', '.Lucida Grande UI', '.Muna PUA',
-    '.Nadeem PUA', '.New York', '.Noto Nastaliq Urdu UI', '.SF Arabic', '.SF Arabic Rounded',
-    '.SF Compact', '.SF Compact Rounded', '.SF NS', '.SF NS Mono', '.SF NS Rounded',
-    '.Sana PUA', '.Savoye LET CC.', '.ThonburiUI', '.ThonburiUIWatch', 'Academy Engraved LET',
-    'Al Bayan', 'Al Nile', 'Al Tarikh', 'American Typewriter', 'American Typewriter Semibold',
-    'Andale Mono', 'Apple Braille', 'Apple Chancery', 'Apple Color Emoji',
-    'Apple SD Gothic Neo', 'Apple SD Gothic Neo ExtraBold', 'Apple SD 산돌고딕 Neo',
-    'Apple Symbols', 'AppleGothic', 'AppleMyungjo', 'Arial', 'Arial Black', 'Arial Hebrew',
-    'Arial Hebrew Scholar', 'Arial Narrow', 'Arial Rounded MT Bold', 'Arial Unicode MS',
-    'Athelas', 'Avenir', 'Avenir Black', 'Avenir Black Oblique', 'Avenir Book', 'Avenir Heavy',
-    'Avenir Light', 'Avenir Medium', 'Avenir Next', 'Avenir Next Condensed',
-    'Avenir Next Condensed Demi Bold', 'Avenir Next Condensed Heavy',
-    'Avenir Next Condensed Medium', 'Avenir Next Condensed Ultra Light',
-    'Avenir Next Demi Bold', 'Avenir Next Heavy', 'Avenir Next Medium',
-    'Avenir Next Ultra Light', 'Ayuthaya', 'Baghdad', 'Bangla MN', 'Bangla Sangam MN',
-    'Baskerville', 'Beirut', 'Big Caslon', 'Bodoni 72', 'Bodoni 72 Oldstyle',
+    'Academy Engraved LET', 'Al Bayan', 'Al Nile', 'Al Tarikh', 'American Typewriter', 'American Typewriter Semibold',
+    'Andale Mono', 'Apple Braille', 'Apple Chancery', 'Apple Color Emoji', 'Apple SD Gothic Neo',
+    'Apple SD Gothic Neo ExtraBold', 'Apple Symbols', 'AppleGothic', 'AppleMyungjo', 'Arial',
+    'Arial Black', 'Arial Hebrew', 'Arial Hebrew Scholar', 'Arial Narrow', 'Arial Rounded MT Bold',
+    'Arial Unicode MS', 'Athelas', 'Avenir', 'Avenir Black', 'Avenir Black Oblique', 'Avenir Book',
+    'Avenir Heavy', 'Avenir Light', 'Avenir Medium', 'Avenir Next', 'Avenir Next Demi Bold',
+    'Avenir Next Heavy', 'Avenir Next Medium', 'Avenir Next Ultra Light', 'Ayuthaya', 'Baghdad',
+    'Bangla MN', 'Bangla Sangam MN', 'Baskerville', 'Beirut', 'Big Caslon', 'Bodoni 72', 'Bodoni 72 Oldstyle',
     'Bodoni 72 Smallcaps', 'Bodoni Ornaments', 'Bradley Hand', 'Brush Script MT', 'Chalkboard',
     'Chalkboard SE', 'Chalkduster', 'Charter', 'Charter Black', 'Cochin', 'Comic Sans MS',
-    'Copperplate', 'Corsiva Hebrew', 'Courier', 'Courier New', 'Czcionka systemowa',
-    'DIN Alternate', 'DIN Condensed', 'Damascus', 'DecoType Naskh', 'Devanagari MT',
-    'Devanagari Sangam MN', 'Didot', 'Diwan Kufi', 'Diwan Thuluth', 'Euphemia UCAS', 'Farah',
-    'Farisi', 'Font Sistem', 'Font de sistem', 'Font di sistema', 'Font sustava',
-    'Fonte do Sistema', 'Futura', 'Futura Bold', 'GB18030 Bitmap', 'Galvji', 'Geeza Pro',
-    'Geneva', 'Georgia', 'Gill Sans', 'Grantha Sangam MN', 'Gujarati MT', 'Gujarati Sangam MN',
-    'Gurmukhi MN', 'Gurmukhi MT', 'Gurmukhi Sangam MN', 'Heiti SC', 'Heiti TC', 'Heiti-간체',
-    'Heiti-번체', 'Helvetica', 'Helvetica Neue', 'Herculanum', 'Hiragino Kaku Gothic Pro',
-    'Hiragino Kaku Gothic Pro W3', 'Hiragino Kaku Gothic Pro W6', 'Hiragino Kaku Gothic ProN',
-    'Hiragino Kaku Gothic ProN W3', 'Hiragino Kaku Gothic ProN W6', 'Hiragino Kaku Gothic Std',
-    'Hiragino Kaku Gothic Std W8', 'Hiragino Kaku Gothic StdN', 'Hiragino Kaku Gothic StdN W8',
-    'Hiragino Maru Gothic Pro', 'Hiragino Maru Gothic Pro W4', 'Hiragino Maru Gothic ProN',
-    'Hiragino Maru Gothic ProN W4', 'Hiragino Mincho Pro', 'Hiragino Mincho Pro W3',
-    'Hiragino Mincho Pro W6', 'Hiragino Mincho ProN', 'Hiragino Mincho ProN W3',
-    'Hiragino Mincho ProN W6', 'Hiragino Sans', 'Hiragino Sans GB', 'Hiragino Sans GB W3',
-    'Hiragino Sans GB W6', 'Hiragino Sans W0', 'Hiragino Sans W1', 'Hiragino Sans W2',
-    'Hiragino Sans W3', 'Hiragino Sans W4', 'Hiragino Sans W5', 'Hiragino Sans W6',
-    'Hiragino Sans W7', 'Hiragino Sans W8', 'Hiragino Sans W9', 'Hoefler Text',
+    'Copperplate', 'Corsiva Hebrew', 'Courier', 'Courier New', 'DIN Alternate', 'DIN Condensed',
+    'Damascus', 'DecoType Naskh', 'Devanagari MT', 'Devanagari Sangam MN', 'Didot', 'Diwan Kufi',
+    'Diwan Thuluth', 'Euphemia UCAS', 'Farah', 'Farisi', 'Futura', 'Futura Bold', 'GB18030 Bitmap',
+    'Galvji', 'Geeza Pro', 'Geneva', 'Georgia', 'Gill Sans', 'Grantha Sangam MN', 'Gujarati MT',
+    'Gujarati Sangam MN', 'Gurmukhi MN', 'Gurmukhi MT', 'Gurmukhi Sangam MN', 'Heiti SC', 'Heiti TC',
+    'Helvetica', 'Helvetica Neue', 'Hiragino Kaku Gothic Pro', 'Hiragino Kaku Gothic Std',
+    'Hiragino Kaku Gothic StdN', 'Hiragino Maru Gothic Pro', 'Hiragino Maru Gothic ProN', 'Hiragino Maru Gothic ProN W4',
+    'Hiragino Mincho Pro', 'Hiragino Mincho ProN', 'Hiragino Mincho ProN W3', 'Hiragino Mincho ProN W6',
+    'Hiragino Sans', 'Hiragino Sans GB', 'Hiragino Sans GB W3', 'Hiragino Sans GB W6', 'Hiragino Sans W0',
+    'Hiragino Sans W1', 'Hiragino Sans W2', 'Hiragino Sans W3', 'Hiragino Sans W4', 'Hiragino Sans W5',
+    'Hiragino Sans W6', 'Hiragino Sans W7', 'Hiragino Sans W8', 'Hiragino Sans W9', 'Hoefler Text',
     'Hoefler Text Ornaments', 'ITF Devanagari', 'ITF Devanagari Marathi', 'Impact', 'InaiMathi',
-    'InaiMathi Bold', 'Iowan Old Style', 'Iowan Old Style Black', 'Järjestelmäfontti',
-    'Kailasa', 'Kannada MN', 'Kannada Sangam MN', 'Khmer MN', 'Khmer Sangam MN',
-    'Kohinoor Bangla', 'Kohinoor Devanagari', 'Kohinoor Devanagari Medium', 'Kohinoor Gujarati',
-    'Kohinoor Telugu', 'Kokonor', 'Krungthep', 'KufiStandardGK', 'Lao MN', 'Lao Sangam MN',
-    'Lucida Grande', 'Luminari', 'Malayalam MN', 'Malayalam Sangam MN', 'Marion', 'Marker Felt',
-    'Menlo', 'Microsoft Sans Serif', 'Mishafi', 'Mishafi Gold', 'Monaco', 'Mshtakan',
-    'Mukta Mahee', 'MuktaMahee Bold', 'MuktaMahee ExtraBold', 'MuktaMahee ExtraLight',
-    'MuktaMahee Light', 'MuktaMahee Medium', 'MuktaMahee Regular', 'MuktaMahee SemiBold',
-    'Muna', 'Myanmar MN', 'Myanmar Sangam MN', 'Nadeem', 'New Peninim MT', 'Noteworthy',
-    'Noto Nastaliq Urdu', 'Noto Sans Adlam', 'Noto Sans Armenian', 'Noto Sans Armenian Blk',
-    'Noto Sans Armenian ExtBd', 'Noto Sans Armenian ExtLt', 'Noto Sans Armenian Light',
-    'Noto Sans Armenian Med', 'Noto Sans Armenian SemBd', 'Noto Sans Armenian Thin',
-    'Noto Sans Avestan', 'Noto Sans Bamum', 'Noto Sans Bassa Vah', 'Noto Sans Batak',
-    'Noto Sans Bhaiksuki', 'Noto Sans Brahmi', 'Noto Sans Buginese', 'Noto Sans Buhid',
-    'Noto Sans CanAborig', 'Noto Sans Canadian Aboriginal',
-    'Noto Sans Canadian Aboriginal Regular', 'Noto Sans Carian', 'Noto Sans CaucAlban',
-    'Noto Sans Caucasian Albanian', 'Noto Sans Chakma', 'Noto Sans Cham', 'Noto Sans Coptic',
-    'Noto Sans Cuneiform', 'Noto Sans Cypriot', 'Noto Sans Duployan', 'Noto Sans EgyptHiero',
-    'Noto Sans Egyptian Hieroglyphs', 'Noto Sans Elbasan', 'Noto Sans Glagolitic',
-    'Noto Sans Gothic', 'Noto Sans Gunjala Gondi', 'Noto Sans Hanifi Rohingya',
-    'Noto Sans HanifiRohg', 'Noto Sans Hanunoo', 'Noto Sans Hatran', 'Noto Sans ImpAramaic',
-    'Noto Sans Imperial Aramaic', 'Noto Sans InsPahlavi', 'Noto Sans InsParthi',
-    'Noto Sans Inscriptional Pahlavi', 'Noto Sans Inscriptional Parthian', 'Noto Sans Javanese',
-    'Noto Sans Kaithi', 'Noto Sans Kannada', 'Noto Sans Kannada Black',
+    'InaiMathi Bold', 'Iowan Old Style', 'Kailasa', 'Kannada MN', 'Kannada Sangam MN', 'Khmer MN',
+    'Khmer Sangam MN', 'Kohinoor Bangla', 'Kohinoor Devanagari', 'Kohinoor Devanagari Medium',
+    'Kohinoor Gujarati', 'Kohinoor Telugu', 'Kokonor', 'Krungthep', 'KufiStandardGK', 'Lao MN',
+    'Lao Sangam MN', 'Lucida Grande', 'Luminari', 'Malayalam MN', 'Malayalam Sangam MN', 'Marker Felt',
+    'Menlo', 'Microsoft Sans Serif', 'Mishafi', 'Mishafi Gold', 'Monaco', 'Mshtakan', 'MuktaMahee Bold',
+    'MuktaMahee ExtraBold', 'MuktaMahee ExtraLight', 'MuktaMahee Light', 'MuktaMahee Medium',
+    'MuktaMahee Regular', 'MuktaMahee SemiBold', 'Muna', 'Myanmar MN', 'Myanmar Sangam MN',
+    'Nadeem', 'New Peninim MT', 'Noteworthy', 'Noto Nastaliq Urdu', 'Noto Sans Adlam', 'Noto Sans Armenian',
+    'Noto Sans Armenian Blk', 'Noto Sans Armenian ExtBd', 'Noto Sans Armenian ExtLt', 'Noto Sans Armenian Light',
+    'Noto Sans Armenian Med', 'Noto Sans Armenian SemBd', 'Noto Sans Armenian Thin', 'Noto Sans Avestan',
+    'Noto Sans Bamum', 'Noto Sans Bassa Vah', 'Noto Sans Batak', 'Noto Sans Bhaiksuki', 'Noto Sans Buginese',
+    'Noto Sans Buhid', 'Noto Sans Canadian Aboriginal Regular', 'Noto Sans Carian', 'Noto Sans CaucAlban',
+    'Noto Sans Chakma', 'Noto Sans Cham', 'Noto Sans Coptic', 'Noto Sans Cuneiform', 'Noto Sans Cypriot',
+    'Noto Sans Duployan', 'Noto Sans EgyptHiero', 'Noto Sans Elbasan', 'Noto Sans Glagolitic',
+    'Noto Sans Gothic', 'Noto Sans Gunjala Gondi', 'Noto Sans HanifiRohg', 'Noto Sans Hanunoo',
+    'Noto Sans Hatran', 'Noto Sans ImpAramaic', 'Noto Sans InsPahlavi', 'Noto Sans InsParthi',
+    'Noto Sans Javanese', 'Noto Sans Kaithi', 'Noto Sans Kannada', 'Noto Sans Kannada Black',
     'Noto Sans Kannada ExtraBold', 'Noto Sans Kannada ExtraLight', 'Noto Sans Kannada Light',
-    'Noto Sans Kannada Medium', 'Noto Sans Kannada SemiBold', 'Noto Sans Kannada Thin',
-    'Noto Sans Kayah Li', 'Noto Sans Kharoshthi', 'Noto Sans Khojki', 'Noto Sans Khudawadi',
-    'Noto Sans Lepcha', 'Noto Sans Limbu', 'Noto Sans Linear A', 'Noto Sans Linear B',
-    'Noto Sans Lisu', 'Noto Sans Lycian', 'Noto Sans Lydian', 'Noto Sans Mahajani',
-    'Noto Sans Mandaic', 'Noto Sans Manichaean', 'Noto Sans Marchen', 'Noto Sans Masaram Gondi',
-    'Noto Sans Meetei Mayek', 'Noto Sans Mende Kikakui', 'Noto Sans Meroitic', 'Noto Sans Miao',
-    'Noto Sans Modi', 'Noto Sans Mongolian', 'Noto Sans Mro', 'Noto Sans Multani',
-    'Noto Sans Myanmar', 'Noto Sans Myanmar Blk', 'Noto Sans Myanmar ExtBd',
-    'Noto Sans Myanmar ExtLt', 'Noto Sans Myanmar Light', 'Noto Sans Myanmar Med',
-    'Noto Sans Myanmar SemBd', 'Noto Sans Myanmar Thin', 'Noto Sans NKo', 'Noto Sans Nabataean',
-    'Noto Sans New Tai Lue', 'Noto Sans Newa', 'Noto Sans Ol Chiki', 'Noto Sans Old Hungarian',
-    'Noto Sans Old Italic', 'Noto Sans Old North Arabian', 'Noto Sans Old Permic',
-    'Noto Sans Old Persian', 'Noto Sans Old South Arabian', 'Noto Sans Old Turkic',
-    'Noto Sans OldHung', 'Noto Sans OldNorArab', 'Noto Sans OldSouArab', 'Noto Sans Oriya',
-    'Noto Sans Osage', 'Noto Sans Osmanya', 'Noto Sans Pahawh Hmong', 'Noto Sans Palmyrene',
-    'Noto Sans Pau Cin Hau', 'Noto Sans PhagsPa', 'Noto Sans Phoenician',
-    'Noto Sans PsaPahlavi', 'Noto Sans Psalter Pahlavi', 'Noto Sans Rejang',
-    'Noto Sans Samaritan', 'Noto Sans Saurashtra', 'Noto Sans Sharada', 'Noto Sans Siddham',
-    'Noto Sans Sora Sompeng', 'Noto Sans SoraSomp', 'Noto Sans Sundanese',
-    'Noto Sans Syloti Nagri', 'Noto Sans Syriac', 'Noto Sans Tagalog', 'Noto Sans Tagbanwa',
-    'Noto Sans Tai Le', 'Noto Sans Tai Tham', 'Noto Sans Tai Viet', 'Noto Sans Takri',
-    'Noto Sans Thaana', 'Noto Sans Tifinagh', 'Noto Sans Tirhuta', 'Noto Sans Ugaritic',
-    'Noto Sans Vai', 'Noto Sans Wancho', 'Noto Sans Warang Citi', 'Noto Sans Yi',
-    'Noto Sans Zawgyi', 'Noto Sans Zawgyi Blk', 'Noto Sans Zawgyi ExtBd',
-    'Noto Sans Zawgyi ExtLt', 'Noto Sans Zawgyi Light', 'Noto Sans Zawgyi Med',
-    'Noto Sans Zawgyi SemBd', 'Noto Sans Zawgyi Thin', 'Noto Serif Ahom', 'Noto Serif Balinese',
-    'Noto Serif Hmong Nyiakeng', 'Noto Serif Myanmar', 'Noto Serif Myanmar Blk',
-    'Noto Serif Myanmar ExtBd', 'Noto Serif Myanmar ExtLt', 'Noto Serif Myanmar Light',
-    'Noto Serif Myanmar Med', 'Noto Serif Myanmar SemBd', 'Noto Serif Myanmar Thin',
-    'Noto Serif Yezidi', 'Optima', 'Oriya MN', 'Oriya Sangam MN', 'PT Mono', 'PT Sans',
-    'PT Sans Caption', 'PT Sans Narrow', 'PT Serif', 'PT Serif Caption', 'Palatino', 'Papyrus',
-    'Party LET', 'Phosphate', 'Phông chữ Hệ thống', 'Plantagenet Cherokee', 'Police système',
-    'Raanana', 'Rendszerbetűtípus', 'Rockwell', 'STIX Two Math', 'STIX Two Math Regular',
-    'STIX Two Text', 'STIX Two Text Regular', 'STIXGeneral', 'STIXIntegralsD',
-    'STIXIntegralsSm', 'STIXIntegralsUp', 'STIXIntegralsUpD', 'STIXIntegralsUpSm',
-    'STIXNonUnicode', 'STIXSizeFiveSym', 'STIXSizeFourSym', 'STIXSizeOneSym',
-    'STIXSizeThreeSym', 'STIXSizeTwoSym', 'STIXVariants', 'STSong', 'Sana', 'Sathu',
-    'Savoye LET', 'Seravek', 'Seravek ExtraLight', 'Seravek Light', 'Seravek Medium',
-    'Shree Devanagari 714', 'SignPainter', 'SignPainter-HouseScript', 'Silom', 'Sinhala MN',
-    'Sinhala Sangam MN', 'Sistem Fontu', 'Skia', 'Snell Roundhand', 'Songti SC', 'Songti TC',
-    'Sukhumvit Set', 'Superclarendon', 'Symbol', 'Systeemlettertype', 'System Font',
-    'Systemschrift', 'Systemskrift', 'Systemtypsnitt', 'Systémové písmo', 'Tahoma', 'Tamil MN',
-    'Tamil Sangam MN', 'Telugu MN', 'Telugu Sangam MN', 'Thonburi', 'Times', 'Times New Roman',
-    'Tipo de letra del sistema', 'Tipo de letra do sistema', 'Tipus de lletra del sistema',
-    'Trattatello', 'Trebuchet MS', 'Verdana', 'Waseem', 'Webdings', 'Wingdings', 'Wingdings 2',
-    'Wingdings 3', 'Zapf Dingbats', 'Zapfino', 'Γραμματοσειρά συστήματος', 'Системний шрифт',
-    'Системный шрифт', 'גופן מערכת', 'البيان', 'التاريخ', 'النيل', 'بغداد', 'بيروت', 'جيزة',
-    'خط النظام', 'دمشق', 'ديوان ثلث', 'ديوان كوفي', 'صنعاء', 'فارسي', 'فرح', 'كوفي', 'منى',
-    'مِصحفي', 'مِصحفي ذهبي', 'نديم', 'نسخ', 'وسيم', 'कोहिनूर देवनागरी', 'แบบอักษรระบบ',
-    'システムフォント', 'ヒラギノ丸ゴ Pro', 'ヒラギノ丸ゴ Pro W4', 'ヒラギノ丸ゴ ProN', 'ヒラギノ丸ゴ ProN W4', 'ヒラギノ明朝 Pro',
-    'ヒラギノ明朝 Pro W3', 'ヒラギノ明朝 Pro W6', 'ヒラギノ明朝 ProN', 'ヒラギノ明朝 ProN W3', 'ヒラギノ明朝 ProN W6',
-    'ヒラギノ角ゴ Pro', 'ヒラギノ角ゴ Pro W3', 'ヒラギノ角ゴ Pro W6', 'ヒラギノ角ゴ ProN', 'ヒラギノ角ゴ ProN W3',
-    'ヒラギノ角ゴ ProN W6', 'ヒラギノ角ゴ Std', 'ヒラギノ角ゴ Std W8', 'ヒラギノ角ゴ StdN', 'ヒラギノ角ゴ StdN W8',
-    'ヒラギノ角ゴ 簡体中文', 'ヒラギノ角ゴ 簡体中文 W3', 'ヒラギノ角ゴ 簡体中文 W6', 'ヒラギノ角ゴシック', 'ヒラギノ角ゴシック W0',
-    'ヒラギノ角ゴシック W1', 'ヒラギノ角ゴシック W2', 'ヒラギノ角ゴシック W3', 'ヒラギノ角ゴシック W4', 'ヒラギノ角ゴシック W5',
-    'ヒラギノ角ゴシック W6', 'ヒラギノ角ゴシック W7', 'ヒラギノ角ゴシック W8', 'ヒラギノ角ゴシック W9', '冬青黑体简体中文', '冬青黑体简体中文 W3',
-    '冬青黑体简体中文 W6', '冬青黑體簡體中文', '冬青黑體簡體中文 W3', '冬青黑體簡體中文 W6', '宋体-简', '宋体-繁', '宋體-簡', '宋體-繁',
-    '系統字體', '系统字体', '黑体-简', '黑体-繁', '黑體-簡', '黑體-繁', '黒体-簡', '黒体-繁', '시스템 서체',
+    'Noto Sans Kannada Medium', 'Noto Sans Kannada SemiBold', 'Noto Sans Kannada Thin', 'Noto Sans Kayah Li',
+    'Noto Sans Kharoshthi', 'Noto Sans Khojki', 'Noto Sans Khudawadi', 'Noto Sans Lepcha',
+    'Noto Sans Limbu', 'Noto Sans Linear A', 'Noto Sans Linear B', 'Noto Sans Lisu', 'Noto Sans Lycian',
+    'Noto Sans Lydian', 'Noto Sans Mahajani', 'Noto Sans Mandaic', 'Noto Sans Manichaean',
+    'Noto Sans Marchen', 'Noto Sans Masaram Gondi', 'Noto Sans Mende Kikakui', 'Noto Sans Meroitic',
+    'Noto Sans Miao', 'Noto Sans Modi', 'Noto Sans Mongolian', 'Noto Sans Mro', 'Noto Sans Multani',
+    'Noto Sans Myanmar', 'Noto Sans Myanmar Blk', 'Noto Sans Myanmar ExtBd', 'Noto Sans Myanmar ExtLt',
+    'Noto Sans Myanmar Light', 'Noto Sans Myanmar Med', 'Noto Sans Myanmar SemBd', 'Noto Sans Myanmar Thin',
+    'Noto Sans NKo', 'Noto Sans Nabataean', 'Noto Sans Newa', 'Noto Sans Ol Chiki', 'Noto Sans Old Italic',
+    'Noto Sans Old Permic', 'Noto Sans Old Turkic', 'Noto Sans OldHung', 'Noto Sans OldNorArab',
+    'Noto Sans OldSouArab', 'Noto Sans Oriya', 'Noto Sans Osage', 'Noto Sans Osmanya', 'Noto Sans Pahawh Hmong',
+    'Noto Sans Palmyrene', 'Noto Sans PhagsPa', 'Noto Sans Phoenician', 'Noto Sans PsaPahlavi',
+    'Noto Sans Rejang', 'Noto Sans Samaritan', 'Noto Sans Saurashtra', 'Noto Sans Sharada',
+    'Noto Sans Siddham', 'Noto Sans SoraSomp', 'Noto Sans Sundanese', 'Noto Sans Syloti Nagri',
+    'Noto Sans Syriac', 'Noto Sans Tagalog', 'Noto Sans Tagbanwa', 'Noto Sans Tai Le', 'Noto Sans Tai Tham',
+    'Noto Sans Tai Viet', 'Noto Sans Takri', 'Noto Sans Thaana', 'Noto Sans Tifinagh', 'Noto Sans Tirhuta',
+    'Noto Sans Ugaritic', 'Noto Sans Vai', 'Noto Sans Wancho', 'Noto Sans Yi', 'Noto Sans Zawgyi',
+    'Noto Sans Zawgyi Blk', 'Noto Sans Zawgyi ExtBd', 'Noto Sans Zawgyi ExtLt', 'Noto Sans Zawgyi Light',
+    'Noto Sans Zawgyi Med', 'Noto Sans Zawgyi SemBd', 'Noto Sans Zawgyi Thin', 'Noto Serif Ahom',
+    'Noto Serif Balinese', 'Noto Serif Hmong Nyiakeng', 'Noto Serif Myanmar', 'Noto Serif Myanmar Blk',
+    'Noto Serif Myanmar ExtBd', 'Noto Serif Myanmar ExtLt', 'Noto Serif Myanmar Light', 'Noto Serif Myanmar Med',
+    'Noto Serif Myanmar SemBd', 'Noto Serif Myanmar Thin', 'Noto Serif Yezidi', 'Optima', 'Oriya MN',
+    'Oriya Sangam MN', 'PT Mono', 'PT Sans', 'PT Sans Caption', 'PT Sans Narrow', 'PT Serif',
+    'PT Serif Caption', 'Palatino', 'Papyrus', 'Party LET', 'Phosphate', 'PingFang HK', 'PingFang SC',
+    'PingFang TC', 'Plantagenet Cherokee', 'Raanana', 'Rockwell', 'STIX Two Math', 'STIX Two Math Regular',
+    'STIX Two Text', 'STIX Two Text Regular', 'STIXGeneral', 'STIXIntegralsD', 'STIXIntegralsSm',
+    'STIXIntegralsUp', 'STIXIntegralsUpD', 'STIXIntegralsUpSm', 'STIXNonUnicode', 'STIXSizeFiveSym',
+    'STIXSizeFourSym', 'STIXSizeOneSym', 'STIXSizeThreeSym', 'STIXSizeTwoSym', 'STIXVariants',
+    'STSong', 'Sana', 'Sathu', 'Savoye LET', 'Shree Devanagari 714', 'SignPainter-HouseScript',
+    'Silom', 'Sinhala MN', 'Sinhala Sangam MN', 'Skia', 'Snell Roundhand', 'Songti SC', 'Songti TC',
+    'Sukhumvit Set', 'Superclarendon', 'Symbol', 'System Font', 'Tahoma', 'Tamil MN', 'Tamil Sangam MN',
+    'Telugu MN', 'Telugu Sangam MN', 'Thonburi', 'Times', 'Times New Roman', 'Trattatello',
+    'Trebuchet MS', 'Verdana', 'Waseem', 'Webdings', 'Wingdings', 'Wingdings 2', 'Wingdings 3',
+    'Zapf Dingbats', 'Zapfino',
 ]
 _ESSENTIAL_FONTS_WINDOWS = [
-    'Arial', 'Arial Black', 'Bahnschrift', 'Calibri', 'Calibri Light', 'Cambria',
-    'Cambria Math', 'Candara', 'Candara Light', 'Comic Sans MS', 'Consolas', 'Constantia',
-    'Corbel', 'Corbel Light', 'Courier', 'Courier New', 'Ebrima', 'Franklin Gothic Medium',
-    'Gabriola', 'Gadugi', 'Georgia', 'Helvetica', 'Impact', 'Ink Free', 'Javanese Text',
-    'Leelawadee UI', 'Leelawadee UI Semilight', 'Lucida Console', 'Lucida Sans Unicode',
-    'MS Gothic', 'MS PGothic', 'MS Sans Serif', 'MS Serif', 'MS UI Gothic', 'MV Boli',
-    'Malgun Gothic', 'Malgun Gothic Semilight', 'Marlett', 'Microsoft Himalaya',
-    'Microsoft JhengHei', 'Microsoft JhengHei Light', 'Microsoft JhengHei UI',
-    'Microsoft JhengHei UI Light', 'Microsoft New Tai Lue', 'Microsoft PhagsPa',
-    'Microsoft Sans Serif', 'Microsoft Tai Le', 'Microsoft YaHei', 'Microsoft YaHei Light',
-    'Microsoft YaHei UI', 'Microsoft YaHei UI Light', 'Microsoft Yi Baiti', 'MingLiU-ExtB',
-    'MingLiU_HKSCS-ExtB', 'MingLiU_MSCS-ExtB', 'Mongolian Baiti', 'Myanmar Text', 'NSimSun',
-    'Nirmala Text', 'Nirmala Text Semilight', 'Nirmala UI', 'Nirmala UI Semilight',
-    'PMingLiU-ExtB', 'Palatino Linotype', 'Roman', 'Segoe MDL2 Assets', 'Segoe Print',
-    'Segoe Script', 'Segoe UI', 'Segoe UI Black', 'Segoe UI Emoji', 'Segoe UI Historic',
-    'Segoe UI Light', 'Segoe UI Semibold', 'Segoe UI Semilight', 'Segoe UI Symbol', 'SimSun',
-    'SimSun-ExtB', 'Sitka Banner', 'Sitka Display', 'Sitka Heading', 'Sitka Small',
+    'Arial', 'Arial Black', 'Bahnschrift', 'Calibri', 'Calibri Light', 'Cambria', 'Cambria Math',
+    'Candara', 'Candara Light', 'Comic Sans MS', 'Consolas', 'Constantia', 'Corbel', 'Corbel Light',
+    'Courier', 'Courier New', 'Ebrima', 'Franklin Gothic Medium', 'Gabriola', 'Gadugi', 'Georgia',
+    'Helvetica', 'Impact', 'Ink Free', 'Javanese Text', 'Leelawadee UI', 'Leelawadee UI Semilight',
+    'Lucida Console', 'Lucida Sans Unicode', 'MS Gothic', 'MS PGothic', 'MS Sans Serif', 'MS Serif',
+    'MS UI Gothic', 'MV Boli', 'Malgun Gothic', 'Malgun Gothic Semilight', 'Marlett', 'Microsoft Himalaya',
+    'Microsoft JhengHei', 'Microsoft JhengHei Light', 'Microsoft JhengHei UI', 'Microsoft JhengHei UI Light',
+    'Microsoft New Tai Lue', 'Microsoft PhagsPa', 'Microsoft Sans Serif', 'Microsoft Tai Le',
+    'Microsoft YaHei', 'Microsoft YaHei Light', 'Microsoft YaHei UI', 'Microsoft YaHei UI Light',
+    'Microsoft Yi Baiti', 'MingLiU-ExtB', 'MingLiU_HKSCS-ExtB', 'MingLiU_MSCS-ExtB', 'Mongolian Baiti',
+    'Myanmar Text', 'NSimSun', 'Nirmala Text', 'Nirmala Text Semilight', 'Nirmala UI', 'Nirmala UI Semilight',
+    'PMingLiU-ExtB', 'Palatino Linotype', 'Roman', 'Sans Serif Collection', 'Segoe Fluent Icons',
+    'Segoe MDL2 Assets', 'Segoe Print', 'Segoe Script', 'Segoe UI', 'Segoe UI Black', 'Segoe UI Emoji',
+    'Segoe UI Historic', 'Segoe UI Light', 'Segoe UI Semibold', 'Segoe UI Semilight', 'Segoe UI Symbol',
+    'Segoe UI Variable', 'Segoe UI Variable Display', 'Segoe UI Variable Small', 'Segoe UI Variable Text',
+    'SimSun', 'SimSun-ExtB', 'Sitka Banner', 'Sitka Display', 'Sitka Heading', 'Sitka Small',
     'Sitka Subheading', 'Sitka Text', 'Small Fonts', 'Sylfaen', 'Symbol', 'Tahoma', 'Times',
     'Times New Roman', 'Trebuchet MS', 'Twemoji Mozilla', 'Verdana', 'Webdings', 'Wingdings',
     'Yu Gothic', 'Yu Gothic Light', 'Yu Gothic Medium', 'Yu Gothic UI', 'Yu Gothic UI Light',
     'Yu Gothic UI Semibold', 'Yu Gothic UI Semilight', '宋体', '微軟正黑體', '微軟正黑體 Light', '微软雅黑',
-    '微软雅黑 Light', '新宋体', '新細明體-ExtB', '游ゴシック', '游ゴシック Light', '游ゴシック Medium', '細明體-ExtB',
-    '細明體_HKSCS-ExtB', '細明體_MSCS-ExtB', '맑은 고딕', '맑은 고딕 Semilight', 'ＭＳ ゴシック', 'ＭＳ Ｐゴシック',
+    '微软雅黑 Light', '新宋体', '新細明體-ExtB', '游ゴシック', '游ゴシック Light', '游ゴシック Medium', '細明體-ExtB', '細明體_HKSCS-ExtB',
+    '細明體_MSCS-ExtB', '맑은 고딕', '맑은 고딕 Semilight', 'ＭＳ ゴシック', 'ＭＳ Ｐゴシック',
 ]
 _ESSENTIAL_FONTS_LINUX = [
-    # metric-compatible alias names a stock Linux fontconfig always resolves
-    'Arial', 'Arial Narrow', 'Helvetica', 'Helvetica Narrow', 'Times', 'Times New Roman',
-    'Courier', 'Courier New', 'Calibri', 'Cambria', 'Palatino', 'Palatino Linotype',
-    'Bookman Old Style', 'Century Schoolbook', 'Avant Garde', 'Zapf Chancery', 'Symbol',
-    'C059', 'D050000L', 'DejaVu Sans', 'DejaVu Sans Mono', 'DejaVu Serif',
-    'Droid Sans Fallback', 'FreeMono', 'FreeSans', 'FreeSerif', 'Liberation Mono',
-    'Liberation Sans', 'Liberation Serif', 'Nimbus Mono PS', 'Nimbus Roman', 'Nimbus Sans',
-    'Nimbus Sans Narrow', 'Noto Color Emoji', 'Noto Kufi Arabic', 'Noto Looped Lao',
-    'Noto Looped Thai', 'Noto Mono', 'Noto Music', 'Noto Naskh Arabic', 'Noto Nastaliq Urdu',
-    'Noto Rashi Hebrew', 'Noto Sans', 'Noto Sans Adlam', 'Noto Sans Adlam Unjoined',
-    'Noto Sans Anatolian Hieroglyphs', 'Noto Sans Arabic', 'Noto Sans Armenian',
-    'Noto Sans Avestan', 'Noto Sans Balinese', 'Noto Sans Bamum', 'Noto Sans Bassa Vah',
-    'Noto Sans Batak', 'Noto Sans Bengali', 'Noto Sans Bhaiksuki', 'Noto Sans Brahmi',
-    'Noto Sans Buginese', 'Noto Sans Buhid', 'Noto Sans CJK HK', 'Noto Sans CJK JP',
-    'Noto Sans CJK KR', 'Noto Sans CJK SC', 'Noto Sans CJK TC', 'Noto Sans Canadian Aboriginal',
-    'Noto Sans Carian', 'Noto Sans Caucasian Albanian', 'Noto Sans Chakma', 'Noto Sans Cham',
-    'Noto Sans Cherokee', 'Noto Sans Coptic', 'Noto Sans Cuneiform', 'Noto Sans Cypriot',
+    'AR PL UKai CN', 'AR PL UKai HK', 'AR PL UKai TW', 'AR PL UKai TW MBE', 'AR PL UMing CN',
+    'AR PL UMing HK', 'AR PL UMing TW', 'AR PL UMing TW MBE', 'Arial', 'Arial Narrow', 'Avant Garde',
+    'Bookman Old Style', 'C059', 'Calibri', 'Cambria', 'Century Schoolbook', 'Courier', 'Courier New',
+    'D050000L', 'DejaVu Sans', 'DejaVu Sans Mono', 'DejaVu Serif', 'Droid Sans Fallback', 'Helvetica',
+    'Helvetica Narrow', 'Liberation Mono', 'Liberation Sans', 'Liberation Sans Narrow', 'Liberation Serif',
+    'Nimbus Mono PS', 'Nimbus Roman', 'Nimbus Sans', 'Nimbus Sans Narrow', 'Noto Color Emoji',
+    'Noto Kufi Arabic', 'Noto Looped Lao', 'Noto Looped Lao Bold', 'Noto Looped Lao Regular',
+    'Noto Looped Thai', 'Noto Looped Thai Bold', 'Noto Looped Thai Regular', 'Noto Mono', 'Noto Music',
+    'Noto Naskh Arabic', 'Noto Nastaliq Urdu', 'Noto Rashi Hebrew', 'Noto Sans', 'Noto Sans Adlam',
+    'Noto Sans Adlam Unjoined', 'Noto Sans AnatoHiero', 'Noto Sans Anatolian Hieroglyphs',
+    'Noto Sans Arabic', 'Noto Sans Armenian', 'Noto Sans Avestan', 'Noto Sans Balinese', 'Noto Sans Bamum',
+    'Noto Sans Bassa Vah', 'Noto Sans Batak', 'Noto Sans Bengali', 'Noto Sans Bhaiksuki', 'Noto Sans Brahmi',
+    'Noto Sans Buginese', 'Noto Sans Buhid', 'Noto Sans CJK HK', 'Noto Sans CJK JP', 'Noto Sans CJK KR',
+    'Noto Sans CJK SC', 'Noto Sans CJK TC', 'Noto Sans CanAborig', 'Noto Sans Canadian Aboriginal',
+    'Noto Sans Carian', 'Noto Sans CaucAlban', 'Noto Sans Caucasian Albanian', 'Noto Sans Chakma',
+    'Noto Sans Cham', 'Noto Sans Cherokee', 'Noto Sans Coptic', 'Noto Sans Cuneiform', 'Noto Sans Cypriot',
     'Noto Sans Deseret', 'Noto Sans Devanagari', 'Noto Sans Display', 'Noto Sans Duployan',
-    'Noto Sans Egyptian Hieroglyphs', 'Noto Sans Elbasan', 'Noto Sans Elymaic',
+    'Noto Sans EgyptHiero', 'Noto Sans Egyptian Hieroglyphs', 'Noto Sans Elbasan', 'Noto Sans Elymaic',
     'Noto Sans Ethiopic', 'Noto Sans Georgian', 'Noto Sans Glagolitic', 'Noto Sans Gothic',
     'Noto Sans Grantha', 'Noto Sans Gujarati', 'Noto Sans Gunjala Gondi', 'Noto Sans Gurmukhi',
     'Noto Sans Hanifi Rohingya', 'Noto Sans Hanunoo', 'Noto Sans Hatran', 'Noto Sans Hebrew',
-    'Noto Sans Imperial Aramaic', 'Noto Sans Indic Siyaq Numbers',
-    'Noto Sans Inscriptional Pahlavi', 'Noto Sans Inscriptional Parthian', 'Noto Sans Javanese',
-    'Noto Sans Kaithi', 'Noto Sans Kannada', 'Noto Sans Kayah Li', 'Noto Sans Kharoshthi',
-    'Noto Sans Khmer', 'Noto Sans Khojki', 'Noto Sans Khudawadi', 'Noto Sans Lao',
-    'Noto Sans Lepcha', 'Noto Sans Limbu', 'Noto Sans Linear A', 'Noto Sans Linear B',
-    'Noto Sans Lisu', 'Noto Sans Lycian', 'Noto Sans Lydian', 'Noto Sans Mahajani',
-    'Noto Sans Malayalam', 'Noto Sans Mandaic', 'Noto Sans Manichaean', 'Noto Sans Marchen',
-    'Noto Sans Masaram Gondi', 'Noto Sans Math', 'Noto Sans Mayan Numerals',
-    'Noto Sans Medefaidrin', 'Noto Sans Meetei Mayek', 'Noto Sans Mende Kikakui',
-    'Noto Sans Meroitic', 'Noto Sans Miao', 'Noto Sans Modi', 'Noto Sans Mongolian',
-    'Noto Sans Mono', 'Noto Sans Mono CJK HK', 'Noto Sans Mono CJK JP', 'Noto Sans Mono CJK KR',
-    'Noto Sans Mono CJK SC', 'Noto Sans Mono CJK TC', 'Noto Sans Mro', 'Noto Sans Multani',
-    'Noto Sans Myanmar', 'Noto Sans NKo', 'Noto Sans Nabataean', 'Noto Sans New Tai Lue',
-    'Noto Sans Newa', 'Noto Sans Nushu', 'Noto Sans Ogham', 'Noto Sans Ol Chiki',
-    'Noto Sans Old Hungarian', 'Noto Sans Old Italic', 'Noto Sans Old North Arabian',
-    'Noto Sans Old Permic', 'Noto Sans Old Persian', 'Noto Sans Old Sogdian',
-    'Noto Sans Old South Arabian', 'Noto Sans Old Turkic', 'Noto Sans Oriya', 'Noto Sans Osage',
-    'Noto Sans Osmanya', 'Noto Sans Pahawh Hmong', 'Noto Sans Palmyrene',
-    'Noto Sans Pau Cin Hau', 'Noto Sans PhagsPa', 'Noto Sans Phoenician',
+    'Noto Sans ImpAramaic', 'Noto Sans Imperial Aramaic', 'Noto Sans Indic Siyaq Numbers',
+    'Noto Sans InsPahlavi', 'Noto Sans InsParthi', 'Noto Sans Inscriptional Pahlavi', 'Noto Sans Inscriptional Parthian',
+    'Noto Sans Javanese', 'Noto Sans Kaithi', 'Noto Sans Kannada', 'Noto Sans Kayah Li', 'Noto Sans Kharoshthi',
+    'Noto Sans Khmer', 'Noto Sans Khojki', 'Noto Sans Khudawadi', 'Noto Sans Lao', 'Noto Sans Lepcha',
+    'Noto Sans Limbu', 'Noto Sans Linear A', 'Noto Sans Linear B', 'Noto Sans Lisu', 'Noto Sans Lycian',
+    'Noto Sans Lydian', 'Noto Sans Mahajani', 'Noto Sans Malayalam', 'Noto Sans Mandaic', 'Noto Sans Manichaean',
+    'Noto Sans Marchen', 'Noto Sans Masaram Gondi', 'Noto Sans Math', 'Noto Sans Mayan Numerals',
+    'Noto Sans Medefaidrin', 'Noto Sans Meetei Mayek', 'Noto Sans Mende Kikakui', 'Noto Sans Meroitic',
+    'Noto Sans Miao', 'Noto Sans Modi', 'Noto Sans Mongolian', 'Noto Sans Mono', 'Noto Sans Mono CJK HK',
+    'Noto Sans Mono CJK JP', 'Noto Sans Mono CJK KR', 'Noto Sans Mono CJK SC', 'Noto Sans Mono CJK TC',
+    'Noto Sans Mro', 'Noto Sans Multani', 'Noto Sans Myanmar', 'Noto Sans NKo', 'Noto Sans Nabataean',
+    'Noto Sans New Tai Lue', 'Noto Sans Newa', 'Noto Sans Nushu', 'Noto Sans Ogham', 'Noto Sans Ol Chiki',
+    'Noto Sans Old Hungarian', 'Noto Sans Old Italic', 'Noto Sans Old North Arabian', 'Noto Sans Old Permic',
+    'Noto Sans Old Persian', 'Noto Sans Old Sogdian', 'Noto Sans Old South Arabian', 'Noto Sans Old Turkic',
+    'Noto Sans OldHung', 'Noto Sans OldNorArab', 'Noto Sans OldSouArab', 'Noto Sans Oriya',
+    'Noto Sans Osage', 'Noto Sans Osmanya', 'Noto Sans Pahawh Hmong', 'Noto Sans Palmyrene',
+    'Noto Sans Pau Cin Hau', 'Noto Sans PhagsPa', 'Noto Sans Phoenician', 'Noto Sans PsaPahlavi',
     'Noto Sans Psalter Pahlavi', 'Noto Sans Rejang', 'Noto Sans Runic', 'Noto Sans Samaritan',
     'Noto Sans Saurashtra', 'Noto Sans Sharada', 'Noto Sans Shavian', 'Noto Sans Siddham',
-    'Noto Sans SignWriting', 'Noto Sans Sinhala', 'Noto Sans Sogdian', 'Noto Sans Sora Sompeng',
-    'Noto Sans Soyombo', 'Noto Sans Sundanese', 'Noto Sans Syloti Nagri', 'Noto Sans Symbols',
-    'Noto Sans Symbols2', 'Noto Sans Syriac', 'Noto Sans Tagalog', 'Noto Sans Tagbanwa',
-    'Noto Sans Tai Le', 'Noto Sans Tai Tham', 'Noto Sans Tai Viet', 'Noto Sans Takri',
-    'Noto Sans Tamil', 'Noto Sans Tamil Supplement', 'Noto Sans Telugu', 'Noto Sans Thaana',
-    'Noto Sans Thai', 'Noto Sans Tifinagh', 'Noto Sans Tifinagh APT',
-    'Noto Sans Tifinagh Adrar', 'Noto Sans Tifinagh Agraw Imazighen',
-    'Noto Sans Tifinagh Ahaggar', 'Noto Sans Tifinagh Air', 'Noto Sans Tifinagh Azawagh',
-    'Noto Sans Tifinagh Ghat', 'Noto Sans Tifinagh Hawad', 'Noto Sans Tifinagh Rhissa Ixa',
-    'Noto Sans Tifinagh SIL', 'Noto Sans Tifinagh Tawellemmet', 'Noto Sans Tirhuta',
-    'Noto Sans Ugaritic', 'Noto Sans Vai', 'Noto Sans Wancho', 'Noto Sans Warang Citi',
-    'Noto Sans Yi', 'Noto Sans Zanabazar Square', 'Noto Serif', 'Noto Serif Ahom',
-    'Noto Serif Armenian', 'Noto Serif Balinese', 'Noto Serif Bengali', 'Noto Serif CJK HK',
-    'Noto Serif CJK JP', 'Noto Serif CJK KR', 'Noto Serif CJK SC', 'Noto Serif CJK TC',
+    'Noto Sans SignWrit', 'Noto Sans SignWriting', 'Noto Sans Sinhala', 'Noto Sans Sogdian',
+    'Noto Sans Sora Sompeng', 'Noto Sans Soyombo', 'Noto Sans Sundanese', 'Noto Sans Syloti Nagri',
+    'Noto Sans Symbols', 'Noto Sans Symbols2', 'Noto Sans Syriac', 'Noto Sans Tagalog', 'Noto Sans Tagbanwa',
+    'Noto Sans Tai Le', 'Noto Sans Tai Tham', 'Noto Sans Tai Viet', 'Noto Sans Takri', 'Noto Sans Tamil',
+    'Noto Sans Tamil Supplement', 'Noto Sans Telugu', 'Noto Sans Thaana', 'Noto Sans Thai',
+    'Noto Sans Tifinagh', 'Noto Sans Tifinagh APT', 'Noto Sans Tifinagh Adrar', 'Noto Sans Tifinagh Agraw Imazighen',
+    'Noto Sans Tifinagh Ahaggar', 'Noto Sans Tifinagh Air', 'Noto Sans Tifinagh Azawagh', 'Noto Sans Tifinagh Ghat',
+    'Noto Sans Tifinagh Hawad', 'Noto Sans Tifinagh Rhissa Ixa', 'Noto Sans Tifinagh SIL',
+    'Noto Sans Tifinagh Tawellemmet', 'Noto Sans Tirhuta', 'Noto Sans Ugaritic', 'Noto Sans Vai',
+    'Noto Sans Wancho', 'Noto Sans Warang Citi', 'Noto Sans Yi', 'Noto Sans Zanabazar', 'Noto Sans Zanabazar Square',
+    'Noto Serif', 'Noto Serif Ahom', 'Noto Serif Armenian', 'Noto Serif Balinese', 'Noto Serif Bengali',
+    'Noto Serif CJK HK', 'Noto Serif CJK JP', 'Noto Serif CJK KR', 'Noto Serif CJK SC', 'Noto Serif CJK TC',
     'Noto Serif Devanagari', 'Noto Serif Display', 'Noto Serif Dogra', 'Noto Serif Ethiopic',
     'Noto Serif Georgian', 'Noto Serif Grantha', 'Noto Serif Gujarati', 'Noto Serif Gurmukhi',
     'Noto Serif Hebrew', 'Noto Serif Hmong Nyiakeng', 'Noto Serif Kannada', 'Noto Serif Khmer',
-    'Noto Serif Khojki', 'Noto Serif Lao', 'Noto Serif Malayalam', 'Noto Serif Myanmar',
-    'Noto Serif Sinhala', 'Noto Serif Tamil', 'Noto Serif Tamil Slanted', 'Noto Serif Tangut',
-    'Noto Serif Telugu', 'Noto Serif Thai', 'Noto Serif Tibetan', 'Noto Serif Yezidi',
-    'Noto Traditional Nushu', 'OpenSymbol', 'P052', 'Standard Symbols PS', 'URW Bookman',
-    'URW Gothic', 'Ubuntu', 'Ubuntu Mono', 'Ubuntu Sans', 'Ubuntu Sans Mono', 'Z003',
+    'Noto Serif Khojki', 'Noto Serif Lao', 'Noto Serif Malayalam', 'Noto Serif Myanmar', 'Noto Serif Sinhala',
+    'Noto Serif Tamil', 'Noto Serif Tamil Slanted', 'Noto Serif Tangut', 'Noto Serif Telugu',
+    'Noto Serif Thai', 'Noto Serif Tibetan', 'Noto Serif Yezidi', 'Noto Traditional Nushu',
+    'OpenSymbol', 'P052', 'Palatino', 'Palatino Linotype', 'Standard Symbols PS', 'Symbol',
+    'Times', 'Times New Roman', 'URW Bookman', 'URW Gothic', 'Ubuntu', 'Ubuntu Mono', 'Ubuntu Sans',
+    'Ubuntu Sans Mono', 'Z003', 'Zapf Chancery',
 ]
 
 # OS-version variants of the base, drawn ALL-OR-NOTHING on top of the essential
@@ -366,11 +307,18 @@ _ESSENTIAL_FONTS_LINUX = [
 # machine none of them; Ubuntu (65%) ships Liberation Sans Narrow, Mint (35%)
 # does not. macOS has a single bundled base (Sonoma). Format: (probability, fonts).
 _BASE_VARIANT_FONTS_MACOS = (0.0, [])
-_BASE_VARIANT_FONTS_WINDOWS = (0.65, [
-    'Cascadia Code', 'Cascadia Mono', 'Sans Serif Collection', 'Segoe Fluent Icons',
+_BASE_VARIANT_FONTS_WINDOWS = (1.0, [
+    # Verified present on win-i9 (real Windows 11 build 26200.9457). Windows 10
+    # was dropped 2026-09-22 (end of support Oct 2025), so every Windows identity
+    # is Windows 11 and these are always drawn. Cascadia Code/Mono are NOT here:
+    # they are not on a stock Windows 11 and are modelled as an addition.
+    'Sans Serif Collection', 'Segoe Fluent Icons', 'Segoe UI Variable',
     'Segoe UI Variable Display', 'Segoe UI Variable Small', 'Segoe UI Variable Text',
 ])
-_BASE_VARIANT_FONTS_LINUX = (0.65, ['Liberation Sans Narrow'])
+# Linux needs no variant: both shipped bases are exact, whole font sets taken
+# from the official Ubuntu 24.04 / 26.04 desktop ISO manifests, and
+# fonts-liberation-sans-narrow is in both of them.
+_BASE_VARIANT_FONTS_LINUX = (0.0, [])
 
 # Fonts only a Windows 11 base has: a Windows identity whose font list contains
 # them presents Windows 11, and the rest of the identity (overlay scrollbars,
@@ -436,9 +384,15 @@ _FONT_GROUPS_CACHE: Optional[Dict[str, List[Dict[str, Any]]]] = None
 
 
 def _load_font_groups() -> Dict[str, List[Dict[str, Any]]]:
-    """Co-shipped font groups per OS (font-groups.json, derived from the
-    bundle-kind additions of scripts/data/font-manifests.json): each entry is
-    {"id": ..., "fonts": [...]} and is drawn all-or-nothing."""
+    """The addition units per OS (font-groups.json, generated from the manifest
+    by scripts/gen-font-groups.py). Each entry is
+
+        {"id", "kind", "prob", "fonts", ["requiresLocale"], ["sizes"]}
+
+    and carries its OWN real-world probability, because that is what makes a
+    drawn machine plausible: Office is on ~60% of Windows boxes and the
+    Pan-European supplemental pack on ~2.8%, and a draw that treated them alike
+    would put a font nobody has on a third of its identities."""
     global _FONT_GROUPS_CACHE
     if _FONT_GROUPS_CACHE is None:
         path = os.path.join(os.path.dirname(__file__), 'font-groups.json')
@@ -448,6 +402,82 @@ def _load_font_groups() -> Dict[str, List[Dict[str, Any]]]:
         except (OSError, ValueError):
             _FONT_GROUPS_CACHE = {}
     return _FONT_GROUPS_CACHE
+
+
+_FONT_BASES_CACHE: Optional[Dict[str, List[Dict[str, Any]]]] = None
+
+
+def _load_font_bases() -> Dict[str, List[Dict[str, Any]]]:
+    """The OS-VERSION bases per OS (font-bases.json, same generator).
+
+    One machine runs one OS version and has that version's whole default font
+    set, so a base is drawn entire, by weight, and never subsetted. Windows 11's
+    base happens to be Windows 10's plus a few families, but macOS 26's is not a
+    superset of Sonoma's -- Apple renamed Kefa to "Kefa III", added PingFang MO
+    and respelled several Noto families (measured on macOS 26.6.2, build 25G83)
+    -- so they are alternatives, not a core plus extras."""
+    global _FONT_BASES_CACHE
+    if _FONT_BASES_CACHE is None:
+        path = os.path.join(os.path.dirname(__file__), 'font-bases.json')
+        try:
+            with open(path, 'rb') as f:
+                _FONT_BASES_CACHE = json.loads(f.read())
+        except (OSError, ValueError):
+            _FONT_BASES_CACHE = {}
+    return _FONT_BASES_CACHE
+
+
+def _pick_base(os_key: str, rng: Any) -> List[str]:
+    """Draw one OS-version base by its real-world weight."""
+    bases = _load_font_bases().get(os_key) or []
+    if not bases:
+        return []
+    roll = rng.random()
+    cumulative = 0.0
+    for base in bases:
+        cumulative += base.get('weight', 0.0)
+        if roll < cumulative:
+            return list(base['fonts'])
+    return list(bases[-1]['fonts'])
+
+
+def _draw_units(os_key: str, rng: Any, exclude: Set[str],
+                locale: Optional[str] = None) -> List[str]:
+    """The additions this machine has, each unit judged on its own probability.
+
+    A "bundle" unit is all-or-nothing: the software either installed its fonts
+    or it did not. An "alacarte" unit is a category people install piecemeal, so
+    it first has to be present at all and then contributes `sizes` of its
+    members -- which is what stops a draw from reporting all 32 web fonts or
+    none, neither of which is what a real machine looks like.
+    """
+    out: List[str] = []
+    for unit in _load_font_groups().get(os_key, []):
+        required = unit.get('requiresLocale')
+        if required and not (locale or '').lower().startswith(required.lower()):
+            # e.g. the Traditional-Chinese supplemental pack is on ~90% of zh-TW
+            # machines and essentially no others; claiming it on an en-US
+            # identity is the kind of mismatch a WAF checks for.
+            continue
+        if rng.random() >= unit.get('prob', 0.0):
+            continue
+        members = [f for f in unit['fonts'] if f not in exclude]
+        if not members:
+            continue
+        if unit['kind'] == 'alacarte':
+            sizes = unit.get('sizes') or [{'n': len(members), 'w': 1.0}]
+            roll = rng.random() * sum(s['w'] for s in sizes)
+            cumulative = 0.0
+            count = sizes[-1]['n']
+            for size in sizes:
+                cumulative += size['w']
+                if roll < cumulative:
+                    count = size['n']
+                    break
+            count = max(1, min(count, len(members)))
+            members = rng.sample(members, count)
+        out.extend(members)
+    return out
 
 
 def _host_has_variant_fonts(target_os: str) -> bool:
@@ -461,15 +491,23 @@ def _host_has_variant_fonts(target_os: str) -> bool:
 
 
 def _generate_random_font_subset(
-    target_os: str, seed: Optional[int] = None, native: bool = False
+    target_os: str,
+    seed: Optional[int] = None,
+    native: bool = False,
+    locale: Optional[str] = None,
 ) -> List[str]:
     """
-    Generate a random subset of fonts for the given OS.
-    Always includes the essential fonts (the OS base, i.e. every family a real
-    machine of that OS ships), draws the OS-version variant of the base
-    all-or-nothing, then picks a random percentage between 30-78% of the
-    remaining fonts.json families (the additions), and finally ensures the
-    marker fonts are present.
+    Generate the font list of one plausible machine of the given OS.
+
+    A real machine is one OS-version base plus whatever software the owner
+    installed, so that is how this draws: one base by weight, in full and never
+    subsetted, then each addition unit independently at its own measured
+    probability (font-groups.json). The marker fonts are ensured last.
+
+    `locale` gates the units a manifest marks `requiresLocale` -- the
+    Traditional-Chinese supplemental pack is on ~90% of zh-TW machines and
+    almost no others, so claiming it on an en-US identity is a mismatch a WAF
+    can check.
 
     `native`: the identity is the host's own OS (macOS / Windows), where the
     browser uses the real system fonts and not the bundle. Only the OS base
@@ -496,56 +534,60 @@ def _generate_random_font_subset(
         variant_prob, variant_fonts = _BASE_VARIANT_FONTS_MACOS
     variant = set(variant_fonts)
 
-    # The base is always present in full. An essential family the bundle does
-    # not carry (PingFang is Apple's, never redistributed) is still claimed:
-    # on the host OS it is the real system font.
-    result = [f for f in full_list if f in essential]
     if native:
+        # The host's own OS: the browser is using the real system fonts, so the
+        # claim is the base and nothing else. An "addition" the host does not
+        # have would be listed and then fall back when measured, which a page
+        # can see (measured 2026-09-14 on a stock Mac mini: Fira Code / Lato
+        # claimed, rendered as Menlo).
+        result = [f for f in full_list if f in essential]
         result.extend(sorted(f for f in essential if f not in set(full_list)))
         # The OS-version variant is real system fonts too: claim it exactly when
         # the host has it. A Windows 11 host presented as Windows 10 hides Segoe UI
         # Variable etc. and, with the matching classic scrollbars, differs from the
         # stock Firefox on the same machine (Windows 11 test host, 2026-09-16:
         # 0 px overlay).
-        if variant and _host_has_variant_fonts(target_os):
-            result.extend(f for f in variant_fonts if f not in result)
+        # Windows 10 was dropped as a spoofing target on 2026-09-22 (end of
+        # support Oct 2025), so the drawn base IS Windows 11 and already carries
+        # the Win11-only families. A native identity is different: camoufox may
+        # be RUNNING on a Windows 10 host, and that host cannot render them, so
+        # they are removed when the host lacks them rather than added when it
+        # has them.
+        if variant and not _host_has_variant_fonts(target_os):
+            absent = set(variant_fonts)
+            result = [f for f in result if f not in absent]
         return result
 
-    # The OS-version variant of the base is all-or-nothing.
-    if variant and rng.random() < variant_prob:
-        result.extend(f for f in full_list if f in variant)
+    # One machine runs one OS version, and has that version's default font set
+    # in full -- so the base is drawn whole, by weight, and never subsetted.
+    base = _pick_base(os_key, rng)
+    if not base:
+        # No generated base data: fall back to the always-present core so a
+        # draw is still coherent rather than empty.
+        base = [f for f in full_list if f in essential]
+    result = list(base)
+    chosen = set(result)
 
-    # Everything else in fonts.json is an addition; draw a random subset of it.
-    # Families that install as ONE download (Office, LibreOffice, Adobe CC,
-    # Cascadia Code+Mono, Meslo LG S/M/L, ...) are drawn as a single unit so a
-    # draw never produces a partial group -- a partial group is a synthetic
-    # artifact no real machine shows (sundial "co-shipped families not split").
-    # The 30-78% rule is applied over these units, not over bare family names.
-    non_essential = [f for f in full_list if f not in essential and f not in variant]
-    grouped: Dict[str, List[str]] = {}
-    for group in _load_font_groups().get(os_key, []):
-        members = [f for f in group['fonts'] if f in non_essential]
-        for f in members:
-            grouped[f] = members
-    units: List[List[str]] = []
-    seen = set()
-    for f in non_essential:
-        if f in seen:
-            continue
-        members = grouped.get(f, [f])
-        seen.update(members)
-        units.append(members)
+    # _ESSENTIAL_FONTS_* is the guaranteed floor underneath whichever base was
+    # drawn: the GDI-substitution names on Windows and the alias names fonts.conf
+    # rewrites unconditionally have no file of their own, so they render for
+    # every identity and must be reported by every identity.
+    for font in full_list:
+        if font in essential and font not in chosen:
+            result.append(font)
+            chosen.add(font)
 
-    # Random percentage between 30-78%
-    pct = 30 + int(rng.random() * 49)
-    count = round((pct / 100) * len(units))
-
-    # Randomly select non-essential units
-    if count < len(units):
-        chosen = rng.sample(units, count)
-    else:
-        chosen = units
-    result.extend(f for unit in chosen for f in unit)
+    # Everything else is an addition, and each unit is judged on its own
+    # real-world probability rather than by a flat sample: Office lands on ~60%
+    # of Windows machines, the Pan-European pack on ~2.8%, msttcorefonts on
+    # ~13.9% of Linux ones (all measured against the fpgen corpus). Units are
+    # atomic, so a draw never produces a partial group -- a partial group is a
+    # synthetic artifact no real machine shows (sundial "co-shipped families
+    # not split").
+    for font in _draw_units(os_key, rng, exclude=chosen, locale=locale):
+        if font not in chosen:
+            result.append(font)
+            chosen.add(font)
 
     # Ensure marker fonts are present
     _ensure_marker_fonts(result, markers)

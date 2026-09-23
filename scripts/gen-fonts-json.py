@@ -276,6 +276,26 @@ def main():
                 base_all.update(b)
             print(f'# {os_key} additions pool (reportable minus every base): {len(set(result[os_key]) - base_all)}')
 
+        # _ESSENTIAL_FONTS_* is the floor UNDER whichever base was drawn, so it
+        # is the INTERSECTION of the bases, not any one of them. Making it a
+        # superset of one base silently forces that base's exclusive families
+        # onto every identity -- which is what made a macOS 26 identity keep
+        # claiming 131 Sonoma-only families -- and it must still carry the alias
+        # names fonts.conf rewrites unconditionally, which always render.
+        for os_key in OSDIRS:
+            bases = list(bases_out[os_key].values())
+            if not bases:
+                continue
+            common = set(bases[0])
+            for b in bases[1:]:
+                common &= set(b)
+            common |= set(ALIASES[os_key])
+            common &= set(result[os_key])
+            suffix = {'win': 'WINDOWS', 'mac': 'MACOS', 'lin': 'LINUX'}[os_key]
+            print(f'# _ESSENTIAL_FONTS_{suffix}: {len(common)} families '
+                  f'(intersection of {len(bases)} base(s) + aliases)')
+            print(json.dumps(sorted(common), ensure_ascii=False))
+
 
 if __name__ == '__main__':
     main()
