@@ -98,13 +98,21 @@ def conf_alias_elements(conf_text):
     return out
 
 
-def runtime_conf(os_key, fonts_dir, extra_dirs, cache_dir, tmpdir):
+def runtime_conf(os_key, scan_dirs, cache_dir, tmpdir):
+    """The conf this OS actually launches with.
+
+    `scan_dirs` must be the group directories this OS reads, NOT the bundle root:
+    fontconfig scans <dir> RECURSIVELY, so naming the root would let every OS
+    reach every other OS's faces and the per-OS gate would go unchecked -- which
+    is precisely what the group layout replaced the Windows reject globs with.
+    utils._generate_fontconfig emits one <dir> per group for the same reason.
+    """
     src = os.path.join(REPO, 'bundle', 'fontconfig', OSDIRS[os_key], 'fonts.conf')
     text = open(src, encoding='utf-8').read()
     marker = '<dir prefix="cwd">fonts</dir>'
     if marker not in text:
         fail(f'{os_key}: fonts.conf lacks {marker} (utils._generate_fontconfig rewrites exactly that)')
-    dirs = ''.join(f'<dir>{d}</dir>' for d in [fonts_dir, *extra_dirs])
+    dirs = ''.join(f'<dir>{d}</dir>' for d in scan_dirs)
     text = text.replace(marker, dirs)
     text = text.replace('<cachedir prefix="xdg">fontconfig</cachedir>', f'<cachedir>{cache_dir}</cachedir>')
     path = os.path.join(tmpdir, f'fonts-{os_key}.conf')
@@ -187,7 +195,12 @@ def main():
                 fp = os.path.join(dp, f)
                 size = os.path.getsize(fp)
                 if size > 100 * 1024 * 1024:
-                    warn(f"{g}/{f} is {size / 1024 / 1024:.1f} MiB, over GitHub's 100 MB push limit")
+                    # Not a defect: it is why the bundle ships as a release asset
+                    # (2 GB per file) instead of repo content (100 MiB per file).
+                    # Reported so the constraint stays visible to anyone who
+                    # proposes tracking the fonts in git again.
+                    print(f"note: {g}/{f} is {size / 1024 / 1024:.1f} MiB -- over GitHub's "
+                          f"100 MiB in-repo limit, within the 2 GB release-asset limit")
                 with open(fp, 'rb') as fh:
                     digests.setdefault(hashlib.sha256(fh.read()).hexdigest(), []).append(f'{g}/{f}')
 
@@ -225,7 +238,10 @@ def main():
             if reportable != sorted(reportable) or len(set(reportable)) != len(reportable):
                 fail(f'{os_key}: fonts.json list is not sorted/unique')
             rset = set(reportable)
-            conf, text = runtime_conf(os_key, fonts_root, extra_dirs, cache, tmp)
+            scan = [os.path.join(fonts_root, g) for g in read_by.get(os_key, []) if g in names]
+            if not scan:
+                scan = [fonts_root]  # pre-groups bundle; utils.py falls back the same way
+            conf, text = runtime_conf(os_key, [*scan, *extra_dirs], cache, tmp)
             aliases = conf_aliases(text)
             alias_elems = conf_alias_elements(text)
 
@@ -306,6 +322,27 @@ def main():
                         published.add(fam)
             pub_lower = {f.lower() for f in published}
             print(f'fc-list publishes {len(published)} families under the {os_key} conf')
+
+            # 2b. the group gate itself. Everything above only proves an OS can
+            #     render what it reports; this proves it CANNOT reach what it must
+            #     not. That direction is invisible to fonts.json and to the draw
+            #     tests, and it is the whole reason the groups exist: a face is
+            #     kept out of an identity's reach by not being in a group that
+            #     identity reads. If the root leaked in, an emoji or CJK glyph
+            #     could fall back to Segoe UI Emoji / PingFang on a machine
+            #     claiming Linux -- a leak no reported name would reveal.
+            allowed = {os.path.realpath(d) for d in [*scan, *extra_dirs]}
+            scanned = {line.strip() for line in
+                       fc(['fc-list', '--format', '%{file}\n'], conf).splitlines() if line.strip()}
+            stray = sorted(f for f in scanned
+                           if os.path.realpath(os.path.dirname(f)) not in allowed)
+            if stray:
+                fail(f'{os_key}: fontconfig reaches {len(stray)} faces outside the groups '
+                     f'{os_key} reads -- they are glyph-fallback candidates for this '
+                     f'identity: {[os.path.relpath(f, fonts_root) for f in stray[:5]]}')
+            else:
+                print(f'OK: {len(scanned)} faces reachable, all inside '
+                      f'{"+".join(g for g in read_by.get(os_key, []) if g in names) or "fonts/"}')
             unrenderable = [f for f in reportable if f.lower() not in pub_lower]
             resolved = []
             for name in list(unrenderable):
