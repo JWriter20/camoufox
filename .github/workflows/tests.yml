@@ -758,6 +758,13 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: |
           cd build-tester && npm install && pip install -r requirements.txt
+          # build-tester pulls pythonlib -- and so fpgen -- through its own
+          # requirements.txt (`-e ../pythonlib`) rather than `pip install -e
+          # pythonlib`, so the pin the other jobs get by matching that line has
+          # to be spelled out here. Without it this job was still downloading
+          # fpgen's model itself: TLS verification off, no checksum, and only
+          # ever the April-2025 release (observed in run 36050915401).
+          python3 "$GITHUB_WORKSPACE/scripts/pin-fpgen-model.py"
       - run: xvfb-run -a python3 -m ci.run_build_tester --binary "$CAMOUFOX_BINARY"
       - uses: actions/upload-artifact@v4
         if: always()
