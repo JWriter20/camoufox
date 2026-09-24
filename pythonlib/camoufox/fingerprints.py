@@ -1054,16 +1054,25 @@ def fix_screen_no_taskbar(config: Dict[str, Any], target_os: str) -> None:
     (screen.height == availHeight and screen.width == availWidth) doesn't flip.
 
     Every desktop OS keeps some chrome visible (Mac menu bar ~25px, Win taskbar
-    ~40px, Linux panel ~27px); the BrowserForge pool occasionally ships
-    fingerprints with identical screen/avail values which leak as a headless
-    tell. Also clamp window.outerHeight (and innerHeight) to the new avail so
-    the window isn't taller than the available area.
+    ~40px, Linux panel ~27px); the pool occasionally ships fingerprints with
+    identical screen/avail values which leak as a headless tell. Also clamp
+    window.outerHeight (and innerHeight) to the new avail so the window isn't
+    taller than the available area.
+
+    The trigger is the HEIGHT alone, not both axes. Requiring `aw == sw` too
+    missed the shape `availWidth < width, availHeight == height` -- a Windows
+    taskbar docked left or right. That is a real geometry, but a rare one, and
+    letting it through means claiming no vertical chrome at all: no menu bar on
+    a Mac, no bottom taskbar on Windows, no panel on Linux. Those defaults are
+    overwhelmingly more common than a side dock, so the vertical delta is worth
+    more than the handful of genuine side-docked machines it overwrites. fpgen's
+    2026 model surfaced this: conditioned on a small display it produced that
+    shape in ~30% of draws, where the unconditioned rate is under 1%.
     """
     sw = config.get('screen.width')
     sh = config.get('screen.height')
-    aw = config.get('screen.availWidth')
     ah = config.get('screen.availHeight')
-    if not (sw and sh and aw == sw and ah == sh):
+    if not (sw and sh and ah == sh):
         return
     taskbar = 40 if target_os == 'win' else 25 if target_os == 'mac' else 27
     new_avail = sh - taskbar
