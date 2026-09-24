@@ -33,6 +33,10 @@ it cannot draw. `make fonts-extract` stamps the unpacked tree with that sha256
 (`bundle/fonts/.bundle-sha256`), so re-running it is free — which is what lets
 `package-*` and `stage-fonts` depend on it unconditionally.
 
+The asset is hosted by this repository, never by a fork: a build input that
+lives in someone's personal account breaks the moment that account renames the
+repo or deletes the release.
+
 Publishing a new bundle: rebuild the archive, `python3 scripts/fetch-fonts.py
 --write-spec <archive> --tag font-bundle-vN`, then upload it under that tag.
 Font-bundle tags are excluded from `build.yml`, so they do not trigger a browser
@@ -259,6 +263,3 @@ and no basename collisions within a package's group set.
   verified at the fontconfig layer, which is the gate on Linux packages. On
   macOS and Windows hosts the gate is the allowlist patch instead, and that has
   not been exercised against the flattened group layout.
-- `scripts/data/font-bundle.json` points at a release on a **fork**
-  (`JWriter20/camoufox`). Merging upstream requires re-uploading the asset under
-  the upstream repo and re-pinning, or upstream builds will fetch from the fork.
