@@ -1,6 +1,7 @@
 import json
 import os
 import platform
+import shutil
 import sys
 from functools import wraps
 from os import environ
@@ -58,6 +59,57 @@ CACHE_PREFS = {
 def _host_os_key() -> Optional[str]:
     """The host OS in fonts.json / target_os terms ('mac', 'win', 'lin')."""
     return {'Darwin': 'mac', 'Windows': 'win', 'Linux': 'lin'}.get(platform.system())
+
+
+# navigator.storage.estimate().quota is not a constant: Gecko derives it from
+# the disk. GetTemporaryStorageLimit() (dom/quota/ActorsParent.cpp) takes
+# nsIFile::GetDiskCapacity() of the storage directory and halves it, then
+# QuotaManager::GetGroupLimitForLimit() reports min(that / 5, 10 GiB) to the
+# page -- so any disk of 100 GB or more reads back as exactly 10 GiB, and a
+# smaller one as its own capacity / 10.
+_QUOTA_FIXED_LIMIT_PREF = 'dom.quotaManager.temporaryStorage.fixedLimit'
+# The pref is a signed 32-bit int in KB. Any value above 50 GiB already reports
+# the 10 GiB group cap, so clamping a multi-terabyte disk changes nothing a page
+# can see.
+_INT32_MAX = 2**31 - 1
+
+
+def _stock_profile_disk_capacity_kb() -> Optional[int]:
+    """Half the capacity of the disk a stock Firefox profile would live on, in KB.
+
+    That is the number Gecko's own GetTemporaryStorageLimit() would compute on
+    this machine, and it is what `dom.quotaManager.temporaryStorage.fixedLimit`
+    takes. Capacity is always a multiple of the filesystem block size, so the
+    KB conversion is exact rather than a rounding of it.
+
+    The disk a stock profile lives on, not the one Playwright's throwaway
+    profile lands on: on a host whose temp directory is a tmpfs, that profile
+    sits on a RAM-sized volume no real Firefox profile would (measured here:
+    3 189 253 734 from a 29.7 GiB /tmp, where the same machine's own Firefox
+    reports 10 737 418 240).
+    """
+    home = Path.home()
+    if OS_NAME == 'win':
+        appdata = os.environ.get('APPDATA')
+        candidates = [Path(appdata) / 'Mozilla' if appdata else home, home]
+    elif OS_NAME == 'mac':
+        candidates = [home / 'Library' / 'Application Support' / 'Firefox', home]
+    else:
+        candidates = [home / '.mozilla', home]
+
+    for candidate in candidates:
+        # The directory only exists if Firefox has ever run here; walk up to
+        # the first path that does, which is on the same filesystem anyway.
+        probe = candidate
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        try:
+            total = shutil.disk_usage(probe).total
+        except OSError:
+            continue
+        if total > 0:
+            return min(total // 2 // 1024, _INT32_MAX)
+    return None
 
 
 def _generate_fontconfig(
@@ -598,6 +650,49 @@ def spoofs_window_dimensions(from_options: Dict[str, Any]) -> bool:
     return any(key in blob for key in _WINDOW_DIM_KEYS)
 
 
+# Playwright emulates four media features on every context it creates, whether
+# or not the caller asked: `colorScheme` defaults to "light" and reducedMotion /
+# forcedColors / contrast to their no-preference values. That is an override, not
+# a passthrough -- the page then reports it whatever the host is set to, so a
+# desktop in dark mode still reads `(prefers-color-scheme: light)`, where stock
+# Firefox on that machine reads dark (measured 2026-09-18, headed on a private
+# Xvfb with GTK_THEME=Adwaita:dark: stock dark, camoufox light, camoufox with
+# these defaults dark). "no-override" is Playwright's own opt-out: it sends no
+# emulation at all and the browser answers from the host.
+STOCK_MEDIA_DEFAULTS = {
+    'color_scheme': 'no-override',
+    'reduced_motion': 'no-override',
+    'forced_colors': 'no-override',
+    'contrast': 'no-override',
+}
+
+
+def attach_stock_media_defaults(target: Any) -> Any:
+    """Default new_page()/new_context() to the host's own media features.
+
+    Explicit color_scheme= / reduced_motion= / forced_colors= / contrast= from
+    the caller always wins; this only replaces Playwright's silent defaults.
+    """
+    for name in ('new_page', 'new_context'):
+        original = getattr(target, name, None)
+        if original is None:
+            continue
+
+        def wrap(original: Any) -> Any:
+            @wraps(original)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                for option, value in STOCK_MEDIA_DEFAULTS.items():
+                    kwargs.setdefault(option, value)
+                # Works for both sync and async: async returns the coroutine
+                # unawaited, and the caller awaits it as usual.
+                return original(*args, **kwargs)
+
+            return wrapper
+
+        setattr(target, name, wrap(original))
+    return target
+
+
 def attach_no_viewport_default(target: Any) -> Any:
     """
     Default new_page()/new_context() to no_viewport=True.
@@ -1106,6 +1201,19 @@ def launch_options(
     # regressed. Windows is untested until a Windows build exists.
     if target_os == 'lin':
         firefox_user_prefs.setdefault('gfx.font_rendering.fallback.async', False)
+
+    # Storage quota, from the host's own disk. A page reads the group limit
+    # through navigator.storage.estimate().quota; see
+    # _stock_profile_disk_capacity_kb for how Gecko derives it. Playwright's
+    # profile is a throwaway directory under the system temp dir, which on a
+    # tmpfs /tmp is a RAM-sized volume, so leaving Gecko to measure it reports a
+    # disk this machine does not have. Pinning the limit instead -- camoufox.cfg
+    # used to set 50 GiB, which is exactly nsRFPService::GetSpoofedStorageLimit()
+    # -- reports 10 GiB on every host, including hosts whose real disk is far
+    # smaller and whose stock Firefox therefore reports capacity / 10.
+    _quota_limit_kb = _stock_profile_disk_capacity_kb()
+    if _quota_limit_kb:
+        firefox_user_prefs.setdefault(_QUOTA_FIXED_LIMIT_PREF, _quota_limit_kb)
 
     # Bundled fonts: on macOS and Windows the package's font bundle is
     # registered on top of the system fonts, and a bundled face of a family

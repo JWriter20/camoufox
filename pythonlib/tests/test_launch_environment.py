@@ -252,3 +252,139 @@ class TestNativeWindowsVariantFonts:
         from camoufox import fingerprints as fp
         assert fp._host_has_variant_fonts("linux") is False
         assert fp._host_has_variant_fonts("macos") is False
+
+
+class _Usage:
+    """shutil.disk_usage's namedtuple, with only `total` filled in."""
+
+    def __init__(self, total):
+        self.total = total
+        self.used = 0
+        self.free = total
+
+
+class TestStorageQuotaFollowsHostDisk:
+    """The storage quota a page reads must be the host's, not a constant.
+
+    Gecko derives navigator.storage.estimate().quota from the disk: the
+    temporary-storage limit is GetDiskCapacity() / 2 and the group limit a page
+    reads is min(that / 5, 10 GiB). camoufox.cfg used to pin the limit to
+    52428800 KB -- 50 GiB, which is exactly nsRFPService::GetSpoofedStorageLimit()
+    and reports 10 GiB on every host whatever its disk holds.
+
+    Deriving it from the host keeps the shape Gecko produces (a 100 GB+ disk
+    reports the 10 GiB cap, a smaller one reports capacity / 10) while ignoring
+    the disk Playwright's throwaway profile happens to land on -- a tmpfs /tmp
+    is a RAM-sized volume no real profile lives on.
+    """
+
+    PREF = "dom.quotaManager.temporaryStorage.fixedLimit"
+    UA = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0"
+
+    def _prefs(self, **kwargs):
+        return utils.launch_options(
+            config={"navigator.userAgent": self.UA},
+            i_know_what_im_doing=True,
+            **kwargs,
+        )["firefox_user_prefs"]
+
+    def test_limit_is_half_the_host_disk(self, monkeypatch, isolated_launch_dependencies):
+        # 512 GiB, the way a filesystem reports it: a multiple of the block size.
+        capacity = 512 * 1024**3
+        monkeypatch.setattr(utils.shutil, "disk_usage", lambda _p: _Usage(capacity))
+        assert self._prefs()[self.PREF] == capacity // 2 // 1024
+
+    def test_small_disk_reports_less_than_the_cap(
+        self, monkeypatch, isolated_launch_dependencies
+    ):
+        # A 40 GB VPS: stock reports 4 GB, not the 10 GiB cap. The old pin
+        # claimed 10 GiB here, which that machine's own Firefox never says.
+        capacity = 40 * 1000**3
+        monkeypatch.setattr(utils.shutil, "disk_usage", lambda _p: _Usage(capacity))
+        limit_kb = self._prefs()[self.PREF]
+        group_limit = min(limit_kb * 1024 // 5, 10 * 1024**3)
+        assert group_limit == capacity // 2 // 5
+        assert group_limit < 10 * 1024**3
+
+    def test_multi_terabyte_disk_stays_in_int32(
+        self, monkeypatch, isolated_launch_dependencies
+    ):
+        monkeypatch.setattr(utils.shutil, "disk_usage", lambda _p: _Usage(16 * 1024**4))
+        limit_kb = self._prefs()[self.PREF]
+        assert limit_kb <= 2**31 - 1
+        # Still above 50 GiB, so the page reads the same 10 GiB cap stock does.
+        assert limit_kb * 1024 // 5 >= 10 * 1024**3
+
+    def test_unreadable_disk_leaves_gecko_to_measure(
+        self, monkeypatch, isolated_launch_dependencies
+    ):
+        def _raise(_p):
+            raise OSError("no such device")
+
+        monkeypatch.setattr(utils.shutil, "disk_usage", _raise)
+        assert self.PREF not in self._prefs()
+
+    def test_caller_pref_wins(self, monkeypatch, isolated_launch_dependencies):
+        monkeypatch.setattr(utils.shutil, "disk_usage", lambda _p: _Usage(512 * 1024**3))
+        prefs = self._prefs(firefox_user_prefs={self.PREF: 1234})
+        assert prefs[self.PREF] == 1234
+
+
+class TestStockMediaDefaults:
+    """The host's own media features, not Playwright's emulated ones.
+
+    Playwright emulates four media features on every context whether or not the
+    caller asked: colorScheme "light", and no-preference values for
+    reducedMotion / forcedColors / contrast. The page then reads those whatever
+    the machine is set to -- measured 2026-09-18, headed on an Xvfb with
+    GTK_THEME=Adwaita:dark: stock Firefox reported
+    `(prefers-color-scheme: dark)`, camoufox reported light.
+
+    "no-override" is Playwright's opt-out: no emulation is sent and the browser
+    answers from the host.
+    """
+
+    def test_defaults_are_no_override(self):
+        assert utils.STOCK_MEDIA_DEFAULTS == {
+            "color_scheme": "no-override",
+            "reduced_motion": "no-override",
+            "forced_colors": "no-override",
+            "contrast": "no-override",
+        }
+
+    def test_new_page_and_new_context_get_them(self):
+        class FakeBrowser:
+            def __init__(self):
+                self.calls = []
+
+            def new_page(self, **kwargs):
+                self.calls.append(("new_page", kwargs))
+
+            def new_context(self, **kwargs):
+                self.calls.append(("new_context", kwargs))
+
+        browser = FakeBrowser()
+        utils.attach_stock_media_defaults(browser)
+        browser.new_page()
+        browser.new_context()
+        for _, kwargs in browser.calls:
+            assert kwargs["color_scheme"] == "no-override"
+            assert kwargs["reduced_motion"] == "no-override"
+            assert kwargs["forced_colors"] == "no-override"
+            assert kwargs["contrast"] == "no-override"
+
+    def test_caller_value_wins(self):
+        class FakeBrowser:
+            def __init__(self):
+                self.kwargs = None
+
+            def new_context(self, **kwargs):
+                self.kwargs = kwargs
+
+        browser = FakeBrowser()
+        utils.attach_stock_media_defaults(browser)
+        browser.new_context(color_scheme="dark", forced_colors="active")
+        assert browser.kwargs["color_scheme"] == "dark"
+        assert browser.kwargs["forced_colors"] == "active"
+        # the ones the caller left alone still follow the host
+        assert browser.kwargs["reduced_motion"] == "no-override"

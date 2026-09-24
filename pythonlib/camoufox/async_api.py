@@ -19,7 +19,9 @@ from .fingerprints import generate_context_fingerprint
 from .utils import (
     async_attach_vd,
     attach_no_viewport_default,
+    attach_stock_media_defaults,
     launch_options,
+    STOCK_MEDIA_DEFAULTS,
     spoofs_window_dimensions,
 )
 
@@ -159,6 +161,12 @@ async def _launch(
     if persistent_context:
         if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
             from_options = {**from_options, 'no_viewport': True}
+        # The persistent context is created by the launch itself, so its media
+        # features come from these options rather than from new_context().
+        from_options = {
+            **{k: v for k, v in STOCK_MEDIA_DEFAULTS.items() if k not in from_options},
+            **from_options,
+        }
         context = await playwright.firefox.launch_persistent_context(**from_options)
         return await async_attach_vd(context, virtual_display)
 
@@ -166,6 +174,7 @@ async def _launch(
     browser = await playwright.firefox.launch(**from_options)
     if no_viewport_default:
         attach_no_viewport_default(browser)
+    attach_stock_media_defaults(browser)
     return await async_attach_vd(browser, virtual_display)
 
 
