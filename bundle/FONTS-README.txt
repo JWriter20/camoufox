@@ -16,7 +16,9 @@ scripts/data/font-bundle.json (asset name + size + sha256) so a given commit
 still names exactly one bundle. See scripts/fetch-fonts.py.
 
     make fetch-fonts     download + verify the archive (bundle/fonts-bundle-*.tar.xz)
-    make fonts-extract   unpack it to bundle/fonts/   (gitignored)
+    make fonts-extract   unpack it to bundle/fonts/   (gitignored; a no-op once
+                         unpacked -- the tree is stamped with the archive's sha256)
+    make fonts-check     verify the archive against the pin
     make fonts-clean     delete the unpacked copy, keep the archive
 
 Once extracted, each face is stored EXACTLY ONCE, in a directory named for the
@@ -57,11 +59,13 @@ SOURCES
 - Linux: the Tor Browser bundle set plus Ubuntu / Mint desktop defaults
   (Noto, DejaVu, Ubuntu, Liberation, URW base35, ...) and the open additions
   (LibreOffice, developer and web fonts) Holo's fonts-manifests.ts draws from.
-- Windows: Windows 11 22H2 / Windows 10 default families, the Office and
+- Windows: the Windows 11 default families (measured on real hardware; the
+  Windows 10 base was dropped from the model on 2026-09-23), the Office and
   Pan-European FOD sets, LibreOffice, and open developer/web fonts.
   The Windows CJK Feature-on-Demand fonts and third-party Adobe/Kozuka CJK
   are deliberately absent (Holo's CJK_EXCLUDE_WIN).
-- macOS: macOS Sonoma system fonts, including PingFang and Kefa, plus open
+- macOS: the Sonoma, Tahoe 26 and macOS 27 system fonts, including PingFang and
+  Kefa, plus Apple's optional "document support" families and open
   developer/web fonts. A few Devanagari families are still absent.
 
 Adobe's fonts (Minion Pro, Myriad Pro, the Adobe/Kozuka CJK and script

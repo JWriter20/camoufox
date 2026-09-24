@@ -6,10 +6,12 @@ fonts.json[os] is the pool the per-launch font draw reports from
 in for callers that pass their own `fonts=`. Every name in it MUST be a family
 the packaged browser can render under that OS's bundled fontconfig, or the
 browser reports a font it cannot draw (a reverse leak). So this script reads
-the real bundle dirs with fc-scan, and then keeps only the names the per-OS
+the group directories that OS reads with fc-scan (bundle/fonts/groups.json
+stores each face once, under the set of OSes that use it), and then keeps only
+the names the per-OS
 font manifest (scripts/data/font-manifests.json) can ever report:
 
-  reportable[os] = fc-scan(bundle/fonts/<os>)            # what fontconfig publishes
+  reportable[os] = fc-scan(the groups <os> reads)         # what fontconfig publishes
                  + SCAN_FAMILIES additions                 # opsz instance families
                  + ALIASES (rewritten by fonts.conf)       # Courier -> Courier New ...
                  + SHIPPED_BY_BROWSER                      # Twemoji Mozilla
@@ -31,8 +33,8 @@ Usage (build machine, after the bundle changed):
                                       [--print-bases] [--dump-union DIR]
 
 The manifest lists, per OS, the base font sets of each OS version (with their
-real-world share) and the optional additions (Office, LibreOffice, Adobe CC,
-developer and web fonts) with their install probability. --print-bases prints
+real-world share) and the optional additions (Office, LibreOffice, developer
+and web fonts) with their install probability, per OS. --print-bases prints
 the OS base lists (intersected with the result) as Python literals for the
 _ESSENTIAL_FONTS_* constants in pythonlib/camoufox/fingerprints.py, which must
 be kept in step with this file.

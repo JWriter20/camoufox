@@ -21,7 +21,7 @@ the whole point of the exercise is that the shipped set can be defended.
 This is a REPORT, not a filter: Camoufox ships the full bundle, and the buckets
 exist so the licence exposure of what ships is known and reviewable. Removing a
 bucket from the bundle is a deliberate, separate decision -- see
-bundle/fonts/000_README.txt for what is currently shipped and why.
+bundle/FONTS-README.txt for what is currently shipped and why.
 
 Usage:
     python3 scripts/font-metrics/licences.py [--bundle bundle/fonts]

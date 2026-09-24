@@ -592,13 +592,18 @@ Camoufox bundles OS-specific fontconfig configurations and font files so that fo
 bundle/
 ├── fontconfig/
 │   ├── macos/fonts.conf    ← sans-serif→Helvetica, monospace→Menlo, cursive→Apple Chancery
-│   ├── linux/fonts.conf    ← sans-serif→Arimo, monospace→Cousine
+│   ├── linux/fonts.conf    ← sans-serif→Noto Sans, monospace→DejaVu Sans Mono
 │   └── windows/fonts.conf  ← sans-serif→Arial, monospace→Consolas
-└── fonts/
-    ├── macos/              ← 355 font files (Helvetica, Menlo, PingFang, SF Pro, etc.)
-    ├── linux/              ← 143 font files (Noto Sans, Arimo, Cousine, Tinos, etc.)
-    └── windows/            ← 144 font files (Segoe UI, Tahoma, Cambria, etc.)
+└── fonts/                  ← a RELEASE ASSET, not tracked: `make fonts-extract`
+    ├── groups.json         ← which groups each OS reads
+    ├── LMW/                ← 328 faces all three OSes have
+    ├── LM/ LW/ MW/         ← 92 / 71 / 48 faces shared by exactly two
+    └── L/ M/ W/            ← 301 / 311 / 362 faces unique to one
 ```
+
+Each face is stored **once**, under the set of OSes that use it, rather than
+copied per OS — see [FONTS.md](FONTS.md). Every package ships all seven groups;
+what differs per identity is which of them are on the search path.
 
 **What each `fonts.conf` defines:**
 - **Generic family defaults** — `sans-serif`, `serif`, `monospace`, `cursive`, `fantasy`, `system-ui` mapped to OS-appropriate fonts
@@ -606,7 +611,7 @@ bundle/
 - **MONO redirect** — "MONO" is a Linux-only font. Redirected to the OS-appropriate monospace (Menlo on macOS, Cousine on Linux) to prevent host OS leakage.
 - **Rendering settings** — Standardized antialias, hinting, and lcdfilter across all configs.
 
-**Runtime path rewriting:** At launch time, `createRuntimeFontconfig()` reads the bundled `fonts.conf` and rewrites font directory paths to absolute paths pointing at the correct OS-specific font subdirectory (e.g. `fonts/macos/` for macOS profiles). This prevents cross-OS font leakage (e.g. Linux font Arimo appearing in a macOS profile) and avoids CWD-dependent path issues.
+**Runtime path rewriting:** At launch time, `utils._generate_fontconfig()` reads the bundled `fonts.conf` and replaces its single `<dir prefix="cwd">fonts</dir>` with one absolute `<dir>` per group the claimed OS reads (from `fonts/groups.json`). This is what prevents cross-OS font leakage — a face the claimed OS must not see is simply not on the search path — and it also avoids CWD-dependent path issues. The parent `fonts/` directory is never named: fontconfig scans `<dir>` **recursively**, so naming it would make every other OS's faces reachable for glyph fallback even though the allowlist hides them from direct lookup. `scripts/verify-fonts.py` asserts that no file outside an OS's own groups is reachable under its conf.
 
 **`FONTCONFIG_PATH` environment variable:** Must be set when launching Camoufox on Linux. Points to the correct OS-specific fontconfig directory (e.g. `camoufox/fontconfig/macos/`). The Go launcher sets this dynamically based on the target OS.
 
