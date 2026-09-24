@@ -780,6 +780,12 @@ async def _exercise_input(page) -> None:
         await asyncio.sleep(0.09)
         await page.mouse.up()
         await page.keyboard.press("Shift")
+        # Then a burst with no pause between moves. Paced moves look the same
+        # on every browser; only a pointer that outruns the compositor shows
+        # whether the events are being queued and coalesced the way real input
+        # is, which is what ls-pointer-move-rate judges.
+        for i in range(1, 61):
+            await page.mouse.move(cx + i, cy + (i % 4))
     except Exception as exc:  # noqa: BLE001 - never fail the scan on input
         log(f"input exercise skipped: {exc}", level="WARN")
 
