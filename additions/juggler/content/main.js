@@ -71,6 +71,18 @@ export function initialize(browsingContext, docShell) {
   // Enforce focused state for all top level documents.
   docShell.overrideHasFocus = true;
   docShell.forceActiveState = true;
+  // A page reads this back: after a scripted same-origin `location.href = ...`
+  // and `history.back()` -- no gesture, no permission -- stock Firefox 152.0.4
+  // fires pageshow with persisted=true and does not re-run the document's
+  // scripts, while camoufox fires persisted=false and rebuilds the document.
+  // It stays set anyway, because juggler cannot yet report a bfcache restore:
+  // with it removed (measured 2026-09-18) the document IS cached
+  // (SHIPBFCache logs `OnPageHide persisted=1`), but the restore emits no
+  // navigation, no lifecycle event and no execution context, so `page.go_back()`
+  // times out waiting for "load" and the next `page.evaluate` throws "The
+  // operation is insecure" against the stale context. Closing this needs
+  // FrameTree/PageAgent to treat a persisted pageshow as a navigation.
+  // See leak-sweep/LEAKS.md row 106 and leak-sweep/tools/bfcache-probe.py.
   docShell.disallowBFCache = true;
   data.frameTree = new FrameTree(browsingContext);
   for (const [name, value] of Object.entries(contextCrossProcessCookie.settings)) {
