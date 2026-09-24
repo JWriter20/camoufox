@@ -62,6 +62,39 @@ async ([urls]) => {
 """
 
 
+def loose_entries(base: Path) -> dict:
+    """Member -> size, for an UNPACKAGED build.
+
+    `mach build` leaves dist/bin without omni.ja: the same resources sit as
+    loose files, at exactly the paths they would have inside the jar, under
+    dist/bin/browser/ for browser/omni.ja and dist/bin/ for omni.ja. CI tests the
+    unpackaged tree (see tests.yml, "Package the binary for the test jobs" --
+    there is no omni.ja to rebuild there), so requiring the jar made this guard
+    unrunnable on exactly the builds it is meant to gate.
+    """
+    out = {}
+    for f in base.rglob('*'):
+        if f.is_file():
+            out[f.relative_to(base).as_posix()] = f.stat().st_size
+    return out
+
+
+def package_listing(root: Path, jar: str) -> dict:
+    """The file set of one jar, from the jar if packaged, else from the tree.
+
+    Returns None when neither is present, so the caller can say which.
+    """
+    path = root / jar
+    if path.exists():
+        return zip_entries(path)
+    base = root / 'browser' if jar == 'browser/omni.ja' else root
+    # chrome/ is the only part of dist/bin the manifest describes; walking all
+    # of dist/bin would also pull in the binary, the fonts and the libs.
+    if (base / 'chrome').is_dir():
+        return loose_entries(base)
+    return None
+
+
 def zip_entries(jar: Path) -> dict:
     """Member -> size. unzip, not zipfile: Firefox's optimized jars put the
     central directory at the front and zipfile cannot open them."""
@@ -92,11 +125,14 @@ def static_check(binary: Path, manifest: dict, failures: list) -> None:
 
     listings = {}
     for jar in ("browser/omni.ja", "omni.ja"):
-        path = root / jar
-        if not path.exists():
-            failures.append(f"{jar} not found next to the binary")
+        listing = package_listing(root, jar)
+        if listing is None:
+            failures.append(
+                f"{jar} not found next to the binary, and no loose chrome/ tree "
+                f"to read instead -- nothing to compare against stock"
+            )
             return
-        listings[jar] = zip_entries(path)
+        listings[jar] = listing
 
     for key, spec in sorted(manifest["packages"].items()):
         jar = key.split("|", 1)[0]
