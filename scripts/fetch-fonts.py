@@ -67,6 +67,27 @@ def archive_path(spec):
     return os.path.join(BUNDLE_DIR, spec['asset'])
 
 
+def stamp_path():
+    return os.path.join(BUNDLE_DIR, 'fonts', '.bundle-sha256')
+
+
+def already_extracted(spec):
+    """True when bundle/fonts/ was unpacked from exactly the pinned archive.
+
+    Lets `--extract` gate anything that needs the fonts present (scripts/stage-fonts.sh
+    runs before every `make run`) without re-decompressing 2.1 GB, or even
+    needing the archive to still be on disk. A bundle bump changes the sha256,
+    so the stale tree is replaced rather than trusted.
+    """
+    if not os.path.exists(os.path.join(BUNDLE_DIR, 'fonts', 'groups.json')):
+        return False
+    try:
+        with open(stamp_path(), encoding='utf-8') as fh:
+            return fh.read().strip() == spec['sha256']
+    except OSError:
+        return False
+
+
 def verify(spec, path, quiet=False):
     """True when `path` is the archive this commit expects."""
     if not os.path.exists(path):
@@ -127,6 +148,12 @@ def extract(spec, path):
         p = os.path.join(target, stray)
         if os.path.exists(p):
             os.remove(p)
+
+    # Records WHICH archive this tree came from, so a later --extract can skip
+    # the work instead of repeating it. Written last: a crash mid-extract leaves
+    # no stamp, so the partial tree is re-done rather than used.
+    with open(stamp_path(), 'w', encoding='utf-8') as fh:
+        fh.write(spec['sha256'] + '\n')
 
     n = sum(len(f) for _, _, f in os.walk(target))
     print(f'extracted {n} files', file=sys.stderr)
@@ -191,6 +218,10 @@ def main():
         print(f'font bundle missing or corrupt: run `make fetch-fonts` '
               f'(expected {spec["asset"]}, sha256 {spec["sha256"][:12]}...)', file=sys.stderr)
         return 1
+
+    if args.extract and not args.force and already_extracted(spec):
+        print(f'OK: bundle/fonts/ already unpacked from {spec["asset"]}', file=sys.stderr)
+        return 0
 
     if args.force or not verify(spec, path, quiet=True):
         download(spec, path)

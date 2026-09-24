@@ -470,7 +470,11 @@ jobs:
 
           # Fail here, once, rather than in five browser jobs with five
           # different confusing errors.
-          for required in camoufox-bin properties.json camoufox.cfg fonts/linux fontconfig/linux; do
+          # fonts/ holds the bundle's group directories (L, M, W, LM, ... --
+          # bundle/fonts/groups.json), not a copy per OS; groups.json is what
+          # utils._generate_fontconfig reads to decide which of them an identity
+          # may see, so its absence is the failure that matters.
+          for required in camoufox-bin properties.json camoufox.cfg fonts/groups.json fonts/LMW fontconfig/linux; do
             [ -e "$src/$required" ] || { echo "::error::artifact is missing $required"; exit 1; }
           done
 

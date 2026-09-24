@@ -271,7 +271,12 @@ tests:
 # Lets tests/patches/*.py run against an unpackaged build. Not needed by `run`
 # or `tests`, which launch without the Python wrapper and so fall back to the
 # system fontconfig.
-stage-fonts:
+#
+# Depends on fonts-extract because the bundle is a release asset: a fresh
+# checkout has no bundle/fonts/ to stage from. That is a no-op once the tree is
+# unpacked (fetch-fonts.py stamps it with the archive's sha256), so this stays
+# cheap enough to run before every launch.
+stage-fonts: fonts-extract
 	bash scripts/stage-fonts.sh $(version) $(release)
 
 unbusy:
