@@ -3,8 +3,8 @@
  "asset": "fonts-bundle-v1.tar.xz",
  "size": 842795560,
  "sha256": "8f345ce22a475c45eb9974d3e739fe1a2f5a742882c58727dbc55ab69cae8953",
- "url": "https://github.com/JWriter20/camoufox/releases/download/font-bundle-v1/fonts-bundle-v1.tar.xz",
- "repo": "JWriter20/camoufox",
+ "url": "https://github.com/daijro/camoufox/releases/download/font-bundle-v1/fonts-bundle-v1.tar.xz",
+ "repo": "daijro/camoufox",
  "urlTemplate": "https://github.com/{repo}/releases/download/{tag}/{asset}",
- "note": "The font bundle is a release asset, not repo content. See scripts/fetch-fonts.py. Regenerate with --write-spec after rebuilding it."
+ "note": "The font bundle is a release asset, not repo content, and it is hosted by the UPSTREAM repo so a build here never depends on a contributor's fork. See scripts/fetch-fonts.py. Regenerate with --write-spec after rebuilding it."
 }
