@@ -1,6 +1,6 @@
 /**
  * Test prerequisites that live outside the repository: the fpgen model, a
- * Python with pythonlib, fontTools, Xvfb, a directory of fonts.
+ * Python with pythonlib, and Xvfb.
  *
  * On a developer machine a missing one skips the tests that need it, with the
  * reason printed. In CI (GitHub sets CI=true) it FAILS instead: a skip reads as
