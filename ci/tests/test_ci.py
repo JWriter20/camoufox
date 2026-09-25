@@ -2579,3 +2579,47 @@ def test_group_timeout_is_shorter_than_the_job_timeout():
     # Four times the slowest healthy invocation measured (296s); below that it
     # starts cutting slow-but-working groups short.
     assert default >= 900
+
+
+# ---------------------------------------------------------------------------
+# build-tester agrees with the identities pythonlib can present
+# ---------------------------------------------------------------------------
+
+
+def test_build_tester_accepts_every_core_count_pythonlib_presents():
+    """A real identity must not fail build-tester's plausibility check.
+
+    build-tester's plausibleHWC list lacked 18 and 22 -- both real (Intel Meteor
+    Lake laptops) and both in the recorded presets -- so a run that drew one of
+    the two Linux presets reporting 22 failed. About one run in eleven, on any
+    pull request. The list follows the data, not the other way round.
+    """
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    source = (repo / "build-tester/src/lib/checks/extended.ts").read_text(encoding="utf-8")
+    block = source[source.index("plausibleHWC"):]
+    listed = re.search(r"const common = \[([^\]]*)\]", block)
+    assert listed, "plausibleHWC's list of common core counts was not found"
+    accepted = {int(n) for n in re.findall(r"\d+", listed.group(1))}
+
+    presented = set()
+    lib = repo / "pythonlib/camoufox"
+    for name in ("fingerprint-presets.json", "fingerprint-presets-v150.json"):
+        data = json.loads((lib / name).read_text(encoding="utf-8"))
+        for rows in data.get("presets", {}).values():
+            for row in rows:
+                hwc = row.get("navigator", {}).get("hardwareConcurrency")
+                if isinstance(hwc, int):
+                    presented.add(hwc)
+    table = re.search(
+        r"^PLAUSIBLE_CORE_COUNTS = \(([^)]*)\)",
+        (lib / "fingerprints.py").read_text(encoding="utf-8"),
+        re.M,
+    )
+    assert table, "PLAUSIBLE_CORE_COUNTS was not found in fingerprints.py"
+    presented |= {int(n) for n in re.findall(r"\d+", table.group(1))}
+
+    missing = sorted(presented - accepted)
+    assert not missing, (
+        f"build-tester's plausibleHWC rejects core counts pythonlib presents: {missing}. "
+        "Add them to the list in build-tester/src/lib/checks/extended.ts."
+    )
