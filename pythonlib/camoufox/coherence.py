@@ -43,10 +43,15 @@ APPLE_SILICON_CORES = frozenset({8, 10, 11, 12, 14, 16, 20, 24, 28, 32})
 # Linux reports 1, or 2 under HiDPI, with GNOME fractional scaling giving the
 # 1.25/1.5/1.75 steps. Values outside these (1.818, 1.09, 1.36) are scraped
 # artefacts -- a browser zoom level folded into the ratio, not a display mode.
+#
+# Ascending tuples, not sets: the repair keeps the first of two equally near
+# steps, and a frozenset literal iterates in a different order when compiled
+# than when loaded from a .pyc -- so a set made the first launch repair an
+# identity differently from every later one.
 PLAUSIBLE_DPR = {
-    'win': frozenset({1, 1.25, 1.5, 1.75, 2, 2.5, 3}),
-    'mac': frozenset({1, 2}),
-    'lin': frozenset({1, 1.25, 1.5, 1.75, 2}),
+    'win': (1, 1.25, 1.5, 1.75, 2, 2.5, 3),
+    'mac': (1, 2),
+    'lin': (1, 1.25, 1.5, 1.75, 2),
 }
 
 # colorDepth: Firefox reports 24, or 30 on a deep-colour display. macOS defaults
