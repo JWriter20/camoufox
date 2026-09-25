@@ -14,10 +14,6 @@ import {
 	type BrowserType,
 	firefox,
 } from "playwright-core";
-import {
-	type CaptchaOption,
-	configure as configureCaptcha,
-} from "./captcha.js";
 import { generateContextFingerprint, type Preset } from "./fingerprints.js";
 import { type ProxyConfig, ProxyHelper } from "./ip.js";
 import {
@@ -42,21 +38,6 @@ export interface NewBrowserOptions extends Omit<LaunchOptions, "headless"> {
 	persistent_context?: boolean;
 	/** Directory for the persistent profile. Implies `persistent_context`. */
 	user_data_dir?: string;
-	/**
-	 * Credentials for the optional CaptchaKraken solver, so a later
-	 * `solveCaptcha(page)` knows where to send work. A token uses the hosted
-	 * service; a URL uses your own server:
-	 *
-	 * ```ts
-	 * Camoufox({ captcha: "ck_live_..." })                     // hosted
-	 * Camoufox({ captcha: { url: "http://host:8000/v1" } })    // self-hosted
-	 * Camoufox({ captcha: true })                              // use the environment
-	 * ```
-	 *
-	 * Consumed at launch rather than forwarded: it configures the solver in THIS
-	 * process and has nothing to do with how the browser starts.
-	 */
-	captcha?: CaptchaOption;
 }
 
 /**
@@ -104,12 +85,9 @@ export async function NewBrowser(
 		persistent_context,
 		user_data_dir,
 		debug,
-		captcha,
 		...kwargs
 	}: NewBrowserOptions = {},
 ): Promise<Browser | BrowserContext> {
-	if (captcha !== undefined) configureCaptcha(captcha);
-
 	let virtualDisplay: VirtualDisplay | null = null;
 	let headlessBool: boolean | undefined;
 
