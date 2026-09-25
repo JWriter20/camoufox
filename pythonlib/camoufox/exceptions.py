@@ -141,7 +141,7 @@ class UnknownLanguage(InvalidLocale):
 
 class NotInstalledGeoIPExtra(ImportError):
     """
-    Raised when the geoip2 module is not installed.
+    Raised when the maxminddb module is not installed.
     """
 
     ...

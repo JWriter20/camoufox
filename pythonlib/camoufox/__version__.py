@@ -29,9 +29,3 @@ class CONSTRAINTS:
     # actually break get moved.
     PLAYWRIGHT_BROWSER_FLOORS = (((1, 61), 'beta.30'),)
 
-    @staticmethod
-    def as_range() -> str:
-        """
-        Returns the version range as a string.
-        """
-        return f">={CONSTRAINTS.MIN_VERSION}, <{CONSTRAINTS.MAX_VERSION}"

@@ -42,6 +42,7 @@ import {
 	getRandomPreset,
 	identitySalt,
 	identitySeed,
+	noiseSeedsFromIdentity,
 	raiseScreenToModernFloor,
 	Screen,
 	sampleWebglForScreen,
@@ -1516,14 +1517,12 @@ export async function launchOptions({
 	// audio/canvas noise seeds follow the identity: a returning "same device"
 	// must reproduce its audio and canvas hashes (#442/#765). Derived, not
 	// equal, so the two streams differ; never 0 (0 disables the noise).
-	const ident = BigInt(utilsDeps.identitySeed(config, salt));
+	const seeds = noiseSeedsFromIdentity(utilsDeps.identitySeed(config, salt));
 	if (!userSetNoiseSeeds.has("audio:seed")) {
-		config["audio:seed"] =
-			Number((ident * 2654435761n + 97n) & 0xffffffffn) || 1;
+		config["audio:seed"] = seeds.audio;
 	}
 	if (!userSetNoiseSeeds.has("canvas:seed")) {
-		config["canvas:seed"] =
-			Number((ident * 40503n + 12345n) & 0xffffffffn) || 1;
+		config["canvas:seed"] = seeds.canvas;
 	}
 
 	// Set geolocation

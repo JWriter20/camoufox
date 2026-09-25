@@ -127,11 +127,6 @@ export function comparePyStr(a: string, b: string): number {
 	return a.length - b.length;
 }
 
-/** sorted() over strings. */
-export function pySorted(items: Iterable<string>): string[] {
-	return [...items].sort(comparePyStr);
-}
-
 /** Python truthiness of a JSON-like value. */
 export function pyTruthy(value: unknown): boolean {
 	if (value === null || value === undefined) return false;

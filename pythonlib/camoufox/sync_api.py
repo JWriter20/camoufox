@@ -1,6 +1,6 @@
 import json as _json
 import urllib.request
-from typing import Any, Dict, List, Optional, Union, overload
+from typing import Any, Dict, Optional, Union, overload
 from urllib.parse import urlparse
 
 from playwright.sync_api import (

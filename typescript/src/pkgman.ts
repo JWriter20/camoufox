@@ -229,10 +229,6 @@ export class Version {
 		return new Version(build, data.version ?? undefined);
 	}
 
-	static isSupportedPath(dir: string): boolean {
-		return Version.fromPath(dir).compare(pkgmanDeps.versionMin()) >= 0;
-	}
-
 	static buildMinMax(): [Version, Version] {
 		return [
 			new Version(CONSTRAINTS.MIN_VERSION),
@@ -777,29 +773,6 @@ export class CamoufoxFetcher extends GitHubDownloader {
 	static async downloadFile(file: Writable, url: string): Promise<void> {
 		rprint(`Downloading package: ${url}`);
 		await webdl(url, undefined, true, file);
-	}
-
-	/** Extract a zip file to the installation directory. */
-	extractZip(zipFile: Buffer | string): void {
-		rprint(`Extracting Camoufox: ${INSTALL_DIR}`);
-		unzip(zipFile, INSTALL_DIR);
-	}
-
-	/** Write version.json to INSTALL_DIR. */
-	setVersion(): void {
-		fs.writeFileSync(
-			path.join(INSTALL_DIR, "version.json"),
-			JSON.stringify({ version: this.version, build: this.build }),
-		);
-	}
-
-	static cleanup(): boolean {
-		if (fs.existsSync(INSTALL_DIR)) {
-			rprint(`Cleaning up cache: ${INSTALL_DIR}`);
-			fs.rmSync(INSTALL_DIR, { recursive: true, force: true });
-			return true;
-		}
-		return false;
 	}
 
 	/**

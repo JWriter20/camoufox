@@ -1133,7 +1133,6 @@ class VersionInfo {
 		this.header("Packages");
 		this.pkg("Camoufox", LIBRARY_VERSION);
 		this.pkg("fpgen", await fpgenVersion());
-		this.pkg("Apify Fingerprints", pkgVersion("apify-fingerprint-datapoints"));
 		this.pkg("Playwright", pkgVersion("playwright-core"));
 	}
 

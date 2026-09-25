@@ -11,7 +11,7 @@ import { INSTALL_DIR, OS_NAME, rprint } from "./paths.js";
 // function-local imports are. Every use of these sits inside a function body,
 // so the ESM cycle resolves before any binding is read.
 import {
-	AvailableVersion,
+	type AvailableVersion,
 	type CamoufoxFetcher,
 	cmpStr,
 	formatAssetDate,
@@ -108,38 +108,6 @@ export function saveRepoCache(cache: RepoCache): void {
 }
 
 /**
- * Get cached available versions, optionally filtered by repo.
- */
-export function getCachedVersions(repoName?: string): AvailableVersion[] {
-	const cache = loadRepoCache();
-	if (!cache.repos?.length) return [];
-
-	const versions: AvailableVersion[] = [];
-	for (const repoData of cache.repos) {
-		if (repoName && repoData.name.toLowerCase() !== repoName.toLowerCase()) {
-			continue;
-		}
-		for (const v of repoData.versions ?? []) {
-			versions.push(
-				new AvailableVersion({
-					version: new Version(v.build, v.version),
-					url: v.url,
-					isPrerelease: v.is_prerelease ?? false,
-					assetId: v.asset_id,
-					assetSize: v.asset_size,
-					assetUpdatedAt: v.asset_updated_at,
-					sha256: v.sha256,
-					assetCreatedAt: v.created_at,
-				}),
-			);
-		}
-	}
-
-	versions.sort((a, b) => b.version.compare(a.version));
-	return versions;
-}
-
-/**
  * Keep one cache entry per version-build, the newest by created_at.
  */
 export function latestPerBuild(versions: CachedVersion[]): CachedVersion[] {
@@ -156,13 +124,6 @@ export function latestPerBuild(versions: CachedVersion[]): CachedVersion[] {
 		if (byVersion !== 0) return byVersion;
 		return cmpStr(b.created_at ?? "", a.created_at ?? "");
 	});
-}
-
-/**
- * Get the list of repo names in the cache.
- */
-export function getCachedRepoNames(): string[] {
-	return (loadRepoCache().repos ?? []).map((r) => r.name);
 }
 
 /**

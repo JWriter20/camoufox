@@ -2,7 +2,7 @@ import asyncio
 import json as _json
 import urllib.request
 from functools import partial
-from typing import Any, Dict, List, Optional, Union, overload
+from typing import Any, Dict, Optional, Union, overload
 from urllib.parse import urlparse
 
 from playwright.async_api import (

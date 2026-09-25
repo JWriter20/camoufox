@@ -2,7 +2,6 @@ import hashlib
 import os
 import platform
 import re
-import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -394,13 +393,6 @@ class Version:
             )
 
     @staticmethod
-    def is_supported_path(path: Path) -> bool:
-        """
-        Check if the version at the given path is supported
-        """
-        return Version.from_path(path) >= VERSION_MIN
-
-    @staticmethod
     def build_minmax() -> Tuple['Version', 'Version']:
         return Version(build=CONSTRAINTS.MIN_VERSION), Version(build=CONSTRAINTS.MAX_VERSION)
 
@@ -628,31 +620,6 @@ class CamoufoxFetcher(GitHubDownloader):
         """
         rprint(f'Downloading package: {url}')
         return webdl(url, buffer=file)
-
-    def extract_zip(self, zip_file: DownloadBuffer) -> None:
-        """
-        Extract a zip file to the installation directory
-        """
-        rprint(f'Extracting Camoufox: {INSTALL_DIR}')
-        unzip(zip_file, str(INSTALL_DIR))
-
-    @staticmethod
-    def cleanup() -> bool:
-        """
-        Clean up the old installation
-        """
-        if INSTALL_DIR.exists():
-            rprint(f'Cleaning up cache: {INSTALL_DIR}')
-            shutil.rmtree(INSTALL_DIR)
-            return True
-        return False
-
-    def set_version(self) -> None:
-        """
-        Write version.json to INSTALL_DIR
-        """
-        with open(INSTALL_DIR / 'version.json', 'wb') as f:
-            f.write(orjson.dumps({'version': self.version, 'build': self.build}))
 
     def install(self, replace: bool = False) -> None:
         """

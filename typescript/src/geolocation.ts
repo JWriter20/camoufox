@@ -261,18 +261,6 @@ function findFirstMmdb(dir: string): string | null {
 }
 
 /**
- * Removes the GeoIP database and config.
- */
-export function removeMmdb(): void {
-	if (!fs.existsSync(GEOIP_DIR)) {
-		rprint("GeoIP database not found.");
-		return;
-	}
-	fs.rmSync(GEOIP_DIR, { recursive: true, force: true });
-	rprint("GeoIP database removed.");
-}
-
-/**
  * Check if the GeoIP database needs an update (older than 30 days).
  */
 export function needsUpdate(config?: GeoIPRepo): boolean {
