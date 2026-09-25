@@ -390,10 +390,6 @@ jobs:
         if: steps.prebuilt.outputs.cache-hit != 'true'
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - uses: actions/setup-go@v5
-        if: steps.prebuilt.outputs.cache-hit != 'true'
-        with:
-          go-version: "1.23"
 
       - name: Install build dependencies
         if: steps.prebuilt.outputs.cache-hit != 'true'
@@ -432,8 +428,6 @@ jobs:
 
       - name: Prepare the source tree
         if: steps.prebuilt.outputs.cache-hit != 'true'
-        env:
-          CAMOUFOX_PASSWD: ${{ secrets.CAMOUFOX_PASSWD }}
         run: |
           ccache -M 8G && ccache -z
           echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
@@ -476,7 +470,7 @@ jobs:
           #                            FileNotFoundError without it. That breaks
           #                            patch-guards, the leak suite and sundial.
           make stage-fonts
-          for f in properties.json chrome.css camoucfg.jvv; do
+          for f in properties.json chrome.css; do
             [ -f "$src/$f" ] || cp -v "settings/$f" "$src/$f"
           done
 

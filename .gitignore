@@ -4,15 +4,12 @@
 /mozilla-unified
 dist/
 bin/
-launch
-launch.exe
 
 
 # Internal testing
 /extra-docs
 pythonlib/test*
 !pythonlib/tests/
-jsonvv/test*
 /.vscode
 /bundle/fonts/extra
 
@@ -52,7 +49,6 @@ __pycache__/
 *.pyc
 *.mmdb
 pythonlib-dev/
-run-pw-dev.py
 
 # Closed source patches
 private
@@ -72,7 +68,6 @@ closedsrc
 /application.ini
 /platform.ini
 /camoufox.cfg
-/camoucfg.jvv
 /chrome.css
 /properties.json
 /removed-files

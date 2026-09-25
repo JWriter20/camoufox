@@ -1,7 +1,7 @@
 # The Dockerfile does `COPY . /app` and then runs `make setup-minimal` inside
 # the image, so everything the build system itself needs (Makefile, upstream.sh,
 # multibuild.py, scripts/, patches/, additions/, settings/, assets/, bundle/,
-# pythonlib/, jsonvv/, legacy/) must stay in the context. This file only drops
+# pythonlib/) must stay in the context. This file only drops
 # things the in-image build never reads. See #698.
 
 # Git history -- by far the largest single item, and the build only needs the

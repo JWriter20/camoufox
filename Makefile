@@ -4,13 +4,13 @@ export
 cf_source_dir := camoufox-$(version)-$(release)
 ff_source_tarball := firefox-$(version).source.tar.xz
 
-debs := python3 python3-dev python3-pip p7zip-full golang-go msitools wget aria2 libsqlite3-dev
-rpms := python3 python3-devel p7zip golang msitools wget aria2 sqlite-devel
-pacman := python python-pip p7zip go msitools wget aria2 sqlite
+debs := python3 python3-dev python3-pip p7zip-full msitools wget aria2 libsqlite3-dev
+rpms := python3 python3-devel p7zip msitools wget aria2 sqlite-devel
+pacman := python python-pip p7zip msitools wget aria2 sqlite
 
 .PHONY: help fetch fetch-fonts fonts-extract fonts-check fonts-clean setup setup-minimal clean set-target distclean build package \
-        build-launcher check-arch revert edits run bootstrap mozbootstrap dir \
-        package-linux package-macos package-windows vcredist_arch patch unpatch \
+        revert run bootstrap mozbootstrap dir \
+        package-linux package-macos package-windows patch unpatch diff \
         workspace check-arg edit-cfg ff-dbg tests update-ubo-assets generate-assets-car \
         setup-macos-sdk
 
@@ -22,8 +22,6 @@ help:
 	@echo "  mozbootstrap    - Sets up mach"
 	@echo "  dir             - Prepare Camoufox source directory with BUILD_TARGET"
 	@echo "  revert          - Kill all working changes"
-	@echo "  edits           - Camoufox developer UI"
-	@echo "  build-launcher  - Build launcher"
 	@echo "  clean           - Remove build artifacts"
 	@echo "  distclean       - Remove everything including downloads"
 	@echo "  build           - Build Camoufox"
@@ -159,23 +157,10 @@ build: unbusy
 	fi
 	cd $(cf_source_dir) && ./mach build $(_ARGS)
 
-edits:
-	python3 ./scripts/developer.py $(version) $(release)
-
-check-arch:
-	@if ! echo "x86_64 i686 arm64" | grep -qw "$(arch)"; then \
-		echo "Error: Invalid arch value. Must be x86_64, i686, or arm64."; \
-		exit 1; \
-	fi
-
-build-launcher: check-arch
-	cd legacy/launcher && bash build.sh $(arch) $(os)
-
 package-linux: fonts-extract
 	python3 scripts/package.py linux \
 		--includes \
 			settings/chrome.css \
-			settings/camoucfg.jvv \
 			settings/properties.json \
 			bundle/fontconfig \
 		--version $(version) \
@@ -187,7 +172,6 @@ package-macos: fonts-extract
 	python3 scripts/package.py macos \
 		--includes \
 			settings/chrome.css \
-			settings/camoucfg.jvv \
 			settings/properties.json \
 		--version $(version) \
 		--release $(release) \
@@ -198,26 +182,12 @@ package-windows: fonts-extract
 	python3 scripts/package.py windows \
 		--includes \
 			settings/chrome.css \
-			settings/camoucfg.jvv \
 			settings/properties.json \
 			~/.mozbuild/vs/VC/Redist/MSVC/*/$(vcredist_arch)/Microsoft.VC*.CRT/*.dll \
 		--version $(version) \
 		--release $(release) \
 		--arch $(arch) \
 		--fonts windows macos linux
-
-run-launcher:
-	rm -rf $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch;
-	make build-launcher arch=x86_64 os=linux;
-	cp legacy/launcher/dist/launch $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch;
-	$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch
-
-run-pw:
-	rm -rf $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch;
-	make build-launcher arch=x86_64 os=linux;
-	python3 scripts/run-pw.py \
-		--version $(version) \
-		--release $(release)
 
 run:
 	cd $(cf_source_dir) \
@@ -281,8 +251,7 @@ stage-fonts: fonts-extract
 
 unbusy:
 	rm -rf $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox-bin \
-		$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox \
-		$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch
+		$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox
 
 path:
 	@realpath $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox-bin

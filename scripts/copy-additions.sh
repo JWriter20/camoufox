@@ -58,7 +58,6 @@ fi
 run 'cp -r ../additions/* .'
 
 # Provide a script that fetches and bootstraps Nightly and some mozconfigs
-run 'cp -v ../scripts/mozfetch.sh lw/'
 
 # Override the firefox version
 for file in "browser/config/version.txt" "browser/config/version_display.txt"; do

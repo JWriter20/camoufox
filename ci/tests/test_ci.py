@@ -237,11 +237,11 @@ def test_version_parsing():
 
 def test_upstream_sh_roundtrip_preserves_comments(tmp_path):
     path = tmp_path / "upstream.sh"
-    path.write_text("# a comment\nversion=152.0.4\nrelease=beta.31\nclosedsrc_rev=1.0.0\n")
+    path.write_text("# a comment\nversion=152.0.4\nrelease=beta.31\nextra=1\n")
     write_upstream_sh({"version": "153.0.4", "release": "beta.32"}, path)
     text = path.read_text()
     assert "# a comment" in text
-    assert "closedsrc_rev=1.0.0" in text
+    assert "extra=1" in text
     assert read_upstream_sh(path)["version"] == "153.0.4"
 
 
