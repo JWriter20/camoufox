@@ -7,6 +7,15 @@
  * VirtualDisplayError -- is preserved.
  */
 
+/** The Python twin relies on the builtin FileNotFoundError; JS has no such
+ *  class, so version-lookup misses raise this instead. */
+export class FileNotFoundError extends Error {
+	constructor(message?: string) {
+		super(message ?? "File couldn't be found.");
+		this.name = "FileNotFoundError";
+	}
+}
+
 export class UnsupportedVersion extends Error {
 	constructor(message?: string) {
 		super(message ?? "The Camoufox executable is outdated.");
@@ -18,6 +27,17 @@ export class MissingRelease extends Error {
 	constructor(message?: string) {
 		super(message ?? "A required GitHub release asset is missing.");
 		this.name = "MissingRelease";
+	}
+}
+
+/** Raised when a downloaded asset does not match its expected sha256 digest. */
+export class CorruptedDownload extends Error {
+	constructor(message?: string) {
+		super(
+			message ??
+				"A downloaded asset does not match its expected sha256 digest.",
+		);
+		this.name = "CorruptedDownload";
 	}
 }
 
@@ -49,7 +69,7 @@ export class InvalidPropertyType extends Error {
 	}
 }
 
-export class InvalidAddonPath extends Error {
+export class InvalidAddonPath extends FileNotFoundError {
 	constructor(message?: string) {
 		super(message ?? "The addon path is invalid.");
 		this.name = "InvalidAddonPath";
@@ -176,7 +196,7 @@ export class VirtualDisplayNotSupported extends VirtualDisplayError {
 	}
 }
 
-export class CamoufoxNotInstalled extends Error {
+export class CamoufoxNotInstalled extends FileNotFoundError {
 	constructor(message?: string) {
 		super(message ?? "Camoufox is not installed.");
 		this.name = "CamoufoxNotInstalled";
@@ -191,14 +211,5 @@ export class ProfileDirectoryError extends Error {
 			options,
 		);
 		this.name = "ProfileDirectoryError";
-	}
-}
-
-/** The Python twin relies on the builtin FileNotFoundError; JS has no such
- *  class, so version-lookup misses raise this instead. */
-export class FileNotFoundError extends Error {
-	constructor(message?: string) {
-		super(message ?? "File couldn't be found.");
-		this.name = "FileNotFoundError";
 	}
 }

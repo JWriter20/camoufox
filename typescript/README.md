@@ -1,28 +1,33 @@
 # camoufox (TypeScript)
 
 This is the JavaScript/TypeScript client for Camoufox. It is a port of the
-Python wrapper in [`../python`](../python) — it does **not** shell out to
-the Python scripts.
+Python wrapper in [`../pythonlib`](../pythonlib) — it does **not** shell out
+to Python.
 
 The two launchers are twins: they read the same `properties.json`, write the
 same chunked `CAMOU_CONFIG`, share the same browser install directory, and
 ship the same fingerprint presets, font/voice lists, WebGL catalogue, and
-GeoIP configuration.
+GeoIP configuration. They draw the same identities too: fingerprints come from a
+TypeScript port of [fpgen](https://github.com/scrapfly/fingerprint-generator)
+using the same pinned model, and the per-identity draws (fonts, voices, GPU,
+media devices, noise seeds) use a bit-exact port of CPython's `random`, so a
+pinned identity presents identically from either language.
 
 ## Installation
 
 ```bash
-npm install camoufox playwright-core
+npm install @camoufox/camoufox playwright-core
 # then download the browser
 npx camoufox fetch
 ```
 
-`playwright-core` is a peer dependency — bring your own version.
+`playwright-core` is a peer dependency — bring your own version (`<1.63`,
+the same ceiling as the Python package). Node 22.15 or newer is required.
 
 ## Usage
 
 ```javascript
-import { Camoufox } from "camoufox";
+import { Camoufox } from "@camoufox/camoufox";
 
 const browser = await Camoufox({
     // any Camoufox option, plus any Playwright Firefox launch option
@@ -46,12 +51,12 @@ const page = await context.newPage();
 ### Per-context identities
 
 `NewContext()` gives each context its own fingerprint — real preset or
-BrowserForge-synthesised — with unique audio/canvas/font-spacing seeds. The
+fpgen-synthesised — with unique audio/canvas/font-spacing seeds. The
 values are applied through `addInitScript`, so the setters self-destruct before
 any page script runs.
 
 ```javascript
-import { Camoufox, NewContext } from "camoufox";
+import { Camoufox, NewContext } from "@camoufox/camoufox";
 
 const browser = await Camoufox({ headless: true });
 const context = await NewContext(browser, {
@@ -66,7 +71,7 @@ from the proxy's exit IP.
 ### Server mode
 
 ```javascript
-import { launchServer } from "camoufox";
+import { launchServer } from "@camoufox/camoufox";
 
 const server = await launchServer({ headless: true, port: 9222 });
 console.log(server.wsEndpoint());
@@ -78,7 +83,7 @@ expose a pre-launched `Browser`.
 ### Building launch options yourself
 
 ```javascript
-import { launchOptions } from "camoufox";
+import { launchOptions } from "@camoufox/camoufox";
 import { firefox } from "playwright-core";
 
 const browser = await firefox.launch(await launchOptions({ os: "linux" }));
@@ -134,14 +139,37 @@ pnpm check       # biome lint + format
 pnpm typecheck   # tsc --noEmit
 ```
 
-`src/data-files/` is generated from the Python package's data:
+`src/data-files/` holds copies of the Python package's data, kept
+byte-identical by `scripts/sync-identity-data.py` (and `webgl_data.json` is
+exported from `webgl_data.db`); a test fails if any copy drifts.
 
-| TS file | Source |
-| --- | --- |
-| `fonts.json`, `voices.json`, `territoryInfo.xml`, `fingerprint-presets*.json` | copied verbatim from `python/src/` |
-| `webgl_data.json` | converted from `python/src/webgl/webgl_data.db` (SQLite) |
+### Parity with pythonlib
 
-The YAML data files become type-checked modules under `src/mappings/`:
-`browserforge.yml` → `browserforge.config.ts`, `warnings.yml` →
-`warnings.config.ts`, `repos.yml` → `repos.config.ts`. Keep them in step with
-the Python originals.
+The golden tests are what keep the two launchers twins. Scripts under
+`scripts/golden/` run the Python code over hundreds of fixed inputs and record
+its output in `tests/fixtures/`; the TS tests must reproduce it exactly —
+`launch_options()` byte for byte, including the `CAMOU_CONFIG` blob. After a
+pythonlib change, mirror it here and regenerate:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e pythonlib   # repo root
+.venv/bin/python scripts/pin-fpgen-model.py
+.venv/bin/python typescript/scripts/golden/identity_golden.py
+.venv/bin/python typescript/scripts/golden/launch_golden.py
+.venv/bin/python typescript/scripts/golden/fpgen_golden.py
+```
+
+The end-to-end suite launches a real browser through both launchers and compares
+what a page sees:
+
+```bash
+CAMOUFOX_E2E=1 CAMOUFOX_EXECUTABLE=/path/to/camoufox-bin pnpm test tests/e2e.test.ts
+```
+
+## Releasing
+
+`.github/workflows/publish-npm.yml` is dispatched by hand, like the PyPI
+workflow. It type-checks, lints, tests, builds, runs `scripts/check-pack.mjs`
+(the version must equal pythonlib's; every data file must be in the tarball;
+the tarball must install and import in an empty project), then publishes with
+npm trusted publishing -- no token is stored.

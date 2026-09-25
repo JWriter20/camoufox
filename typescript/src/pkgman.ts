@@ -2,20 +2,23 @@
  * Browser package management: version resolution, GitHub release discovery,
  * download/extract, and path lookup.
  *
- * TypeScript twin of python/src/pkgman.py.
+ * TypeScript twin of pythonlib/camoufox/pkgman.py.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Writable } from "node:stream";
-import { setTimeout as sleep } from "node:timers/promises";
 import AdmZip from "adm-zip";
 import cliProgress, { type Options as BarOptions } from "cli-progress";
 import prettyBytes from "pretty-bytes";
+import { parse as parseYaml } from "yaml";
 import { CONSTRAINTS, LIBRARY_VERSION } from "./__version__.js";
 import {
 	CamoufoxNotInstalled,
+	CorruptedDownload,
 	FileNotFoundError,
 	MissingRelease,
 	ProfileDirectoryError,
@@ -23,10 +26,6 @@ import {
 	UnsupportedOS,
 	UnsupportedVersion,
 } from "./exceptions.js";
-import REPOS, {
-	type BrowserRepoEntry,
-	type BrowserVersionConstraint,
-} from "./mappings/repos.config.js";
 // pkgman and multiversion are mutually dependent, exactly as the Python twin's
 // function-local imports are. Every use below sits inside a function body, so
 // the ESM cycle resolves before any binding is read.
@@ -41,6 +40,7 @@ import {
 	ARCH_MAP,
 	INSTALL_DIR,
 	LAUNCH_FILE,
+	LOCAL_DATA,
 	OS_ARCH_MATRIX,
 	OS_MAP,
 	OS_NAME,
@@ -62,14 +62,23 @@ export {
 	userCacheDir,
 } from "./paths.js";
 
+/** GITHUB_TOKEN, as the Python twin reads it: once, at import. */
+const GITHUB_TOKEN: string | undefined = process.env.GITHUB_TOKEN;
+
+/** Bearer auth for GitHub API calls only (never for asset downloads). */
 function githubHeaders(url: string): Record<string, string> {
-	const token = process.env.GITHUB_TOKEN;
-	if (!token) return {};
-	const host = new URL(url).hostname;
-	if (host === "api.github.com" || host === "github.com") {
-		return { Authorization: `Bearer ${token}` };
-	}
-	return {};
+	return url.includes("api.github") && GITHUB_TOKEN
+		? { Authorization: `Bearer ${GITHUB_TOKEN}` }
+		: {};
+}
+
+/** requests' raise_for_status() message, so callers can match "404". */
+function raiseForStatus(response: Response, url: string): void {
+	if (response.ok) return;
+	const kind = response.status < 500 ? "Client Error" : "Server Error";
+	throw new Error(
+		`${response.status} ${kind}: ${response.statusText} for url: ${url}`,
+	);
 }
 
 /**
@@ -87,8 +96,11 @@ export function ensureBrowserProfileDir(
 ): string | undefined {
 	if (OS_NAME !== "lin") return undefined;
 
-	const configuredHome = env?.HOME ?? process.env.HOME;
-	const home = configuredHome ? String(configuredHome) : os.homedir();
+	const environment = env ?? process.env;
+	const configuredHome = environment.HOME;
+	const home = configuredHome
+		? expandUser(String(configuredHome))
+		: os.homedir();
 	const profileDir = path.join(home, ".camoufox");
 	if (fs.existsSync(profileDir) && fs.statSync(profileDir).isDirectory()) {
 		return profileDir;
@@ -113,15 +125,22 @@ export function ensureBrowserProfileDir(
 	return profileDir;
 }
 
+/** os.path.expanduser for the forms a HOME value can take. */
+function expandUser(p: string): string {
+	if (p === "~") return os.homedir();
+	if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+	return p;
+}
+
 /**
  * Parse a semver string into a comparable tuple.
  */
 function parseSemver(version: string): number[] {
-	const parts = version.replace(/^[\^~]/, "").split(".");
-	const out = parts.map((part) => {
-		const n = Number.parseInt(part, 10);
-		return Number.isNaN(n) ? 0 : n;
-	});
+	const parts = version.replace(/^[\^~]+/, "").split(".");
+	// int() semantics: the whole part must be an integer ("1a" -> 0).
+	const out = parts.map((part) =>
+		/^\s*[+-]?\d+\s*$/.test(part) ? Number.parseInt(part, 10) : 0,
+	);
 	while (out.length < 3) out.push(0);
 	return out;
 }
@@ -179,8 +198,14 @@ export class Version {
 		return this.compare(other) < 0;
 	}
 
+	greaterOrEqual(other: Version): boolean {
+		return this.compare(other) >= 0;
+	}
+
 	isSupported(): boolean {
-		return this.compare(VERSION_MIN) >= 0 && this.compare(VERSION_MAX) < 0;
+		return (
+			this.compare(effectiveVersionMin()) >= 0 && this.compare(VERSION_MAX) < 0
+		);
 	}
 
 	/**
@@ -195,12 +220,17 @@ export class Version {
 			);
 		}
 		const data = JSON.parse(fs.readFileSync(versionPath, "utf-8"));
-		const build = data.build ?? data.release ?? data.tag;
-		return new Version(build, data.version);
+		// "release" and then "tag" win over "build", as the Python twin's pops do.
+		const build =
+			"release" in data ? data.release : "tag" in data ? data.tag : data.build;
+		if (build === undefined) {
+			throw new Error(`KeyError: 'build' (in ${versionPath})`);
+		}
+		return new Version(build, data.version ?? undefined);
 	}
 
 	static isSupportedPath(dir: string): boolean {
-		return Version.fromPath(dir).compare(VERSION_MIN) >= 0;
+		return Version.fromPath(dir).compare(pkgmanDeps.versionMin()) >= 0;
 	}
 
 	static buildMinMax(): [Version, Version] {
@@ -212,6 +242,107 @@ export class Version {
 }
 
 export const [VERSION_MIN, VERSION_MAX] = Version.buildMinMax();
+
+/**
+ * Seams the Python tests reach with monkeypatch (VERSION_MIN,
+ * _resolved_playwright_version, CamoufoxFetcher). Production code never
+ * reassigns these.
+ */
+export const pkgmanDeps = {
+	versionMin: (): Version => VERSION_MIN,
+	resolvedPlaywrightVersion: (): number[] | null => resolvedPlaywrightVersion(),
+	/** The fetcher the auto-install path runs `install()` on. */
+	newFetcher: async (): Promise<{ install(): Promise<unknown> }> =>
+		new CamoufoxFetcher().init(),
+};
+
+/**
+ * The resolved playwright-core version string, or null when it cannot be read.
+ * The Python twin asks importlib.metadata for `playwright`; the npm package
+ * that plays that role here is playwright-core.
+ */
+function resolvedPlaywrightVersionRaw(): string | null {
+	try {
+		const require = createRequire(import.meta.url);
+		const pkg = JSON.parse(
+			fs.readFileSync(require.resolve("playwright-core/package.json"), "utf-8"),
+		);
+		return typeof pkg.version === "string" ? pkg.version : null;
+	} catch {
+		return null;
+	}
+}
+
+/** The installed Playwright version, or null if it cannot be determined. */
+export function resolvedPlaywrightVersion(): number[] | null {
+	const raw = resolvedPlaywrightVersionRaw();
+	return raw === null ? null : parseSemver(raw);
+}
+
+/** The installed Playwright version for messages ("the installed version"
+ *  when it cannot be read). */
+export function resolvedPlaywrightVersionStr(): string {
+	return resolvedPlaywrightVersionRaw() ?? "the installed version";
+}
+
+/**
+ * The lowest browser build this install can actually talk to.
+ *
+ * VERSION_MIN, raised by whatever the resolved Playwright requires. When the
+ * Playwright version cannot be read we fall back to VERSION_MIN rather than
+ * assuming the worst: a spurious forced re-download is worse than leaving a
+ * working install alone, and package.json caps Playwright anyway.
+ */
+export function effectiveVersionMin(): Version {
+	let floor = pkgmanDeps.versionMin();
+	const playwrightVersion = pkgmanDeps.resolvedPlaywrightVersion();
+	if (playwrightVersion === null) return floor;
+	for (const [
+		requiredPlaywright,
+		build,
+	] of CONSTRAINTS.PLAYWRIGHT_BROWSER_FLOORS) {
+		if (
+			compareTuples(playwrightVersion, [...requiredPlaywright]) >= 0 &&
+			floor.lessThan(new Version(build))
+		) {
+			floor = new Version(build);
+		}
+	}
+	return floor;
+}
+
+/** One `versions:` entry of a browser repo in repos.yml. */
+export interface BrowserVersionConstraint {
+	python_library?: { min?: string; max?: string };
+	/** Absent means "assume every build is supported". */
+	browser?: {
+		stable?: { min?: string; max?: string };
+		prerelease?: { min?: string; max?: string };
+		min?: string;
+		max?: string;
+	} | null;
+}
+
+/** One `browsers:` entry of repos.yml. */
+export interface BrowserRepoEntry {
+	/** Primary repo first, then fallbacks: a comma-separated string or a list. */
+	repo: string | string[];
+	name: string;
+	pattern?: string;
+	versions?: BrowserVersionConstraint[];
+}
+
+/**
+ * Load a bundled YAML data file (repos.yml, warnings.yml, ...).
+ */
+export function loadYaml(file: string): Record<string, any> {
+	return (
+		(parseYaml(fs.readFileSync(path.join(LOCAL_DATA, file), "utf-8")) as Record<
+			string,
+			any
+		>) ?? {}
+	);
+}
 
 /**
  * Find the browser build constraint for the current library version.
@@ -293,20 +424,21 @@ export class RepoConfig {
 	}
 
 	static loadRepos(spoofLibraryVersion?: string): RepoConfig[] {
-		return REPOS.browsers.map((r) =>
+		const data = loadYaml("repos.yml");
+		return ((data.browsers ?? []) as BrowserRepoEntry[]).map((r) =>
 			RepoConfig.fromEntry(r, spoofLibraryVersion),
 		);
 	}
 
 	static getDefaultName(): string {
-		return REPOS.default?.browser ?? "Official";
+		return loadYaml("repos.yml").default?.browser ?? "Official";
 	}
 
 	static fromEntry(
 		entry: BrowserRepoEntry,
 		spoofLibraryVersion?: string,
 	): RepoConfig {
-		if (!entry.pattern) {
+		if (!("pattern" in entry) || entry.pattern == null) {
 			throw new Error(
 				`Repo '${entry.name ?? "unknown"}' missing required pattern`,
 			);
@@ -316,19 +448,22 @@ export class RepoConfig {
 		if (entry.versions?.length) {
 			browser = findVersionConstraints(
 				entry.versions,
-				spoofLibraryVersion ?? LIBRARY_VERSION,
+				spoofLibraryVersion || LIBRARY_VERSION,
 			);
 		}
 		const [stableMin, stableMax] = channelBounds(browser, "stable");
 		const [prereleaseMin, prereleaseMax] = channelBounds(browser, "prerelease");
 
 		// Parse comma separated repos list (primary + fallbacks)
-		const repos = entry.repo.split(",").map((r) => r.trim());
+		const repos =
+			typeof entry.repo === "string"
+				? entry.repo.split(",").map((r) => r.trim())
+				: entry.repo;
 
 		return new RepoConfig({
 			repos,
 			name: entry.name,
-			pattern: entry.pattern,
+			pattern: String(entry.pattern),
 			stableMin,
 			stableMax,
 			prereleaseMin,
@@ -392,7 +527,7 @@ export class RepoConfig {
 	isVersionSupported(version: Version, isPrerelease: boolean = false): boolean {
 		const buildMin = isPrerelease ? this.prereleaseMin : this.stableMin;
 		const buildMax = isPrerelease ? this.prereleaseMax : this.stableMax;
-		if (buildMin === undefined || buildMax === undefined) {
+		if (buildMin == null || buildMax == null) {
 			return true;
 		}
 		return (
@@ -400,6 +535,11 @@ export class RepoConfig {
 			version.compare(new Version(buildMax)) <= 0
 		);
 	}
+}
+
+/** Python's str ordering (code points), not localeCompare's collation. */
+export function cmpStr(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function escapeRegExp(value: string): string {
@@ -452,11 +592,7 @@ export class GitHubDownloader {
 			headers: githubHeaders(apiUrl),
 			signal: AbortSignal.timeout(20_000),
 		});
-		if (!response.ok) {
-			throw new Error(
-				`Failed to fetch releases from ${apiUrl}: ${response.status} ${response.statusText}`,
-			);
-		}
+		raiseForStatus(response, apiUrl);
 		return (await response.json()) as GitHubRelease[];
 	}
 
@@ -529,14 +665,14 @@ export class AvailableVersion {
 
 	toMetadata(): Record<string, any> {
 		return {
-			version: this.version.version,
+			version: this.version.version ?? null,
 			build: this.version.build,
 			prerelease: this.isPrerelease,
-			asset_id: this.assetId,
-			asset_size: this.assetSize,
-			asset_updated_at: this.assetUpdatedAt,
-			sha256: this.sha256,
-			created_at: this.assetCreatedAt,
+			asset_id: this.assetId ?? null,
+			asset_size: this.assetSize ?? null,
+			asset_updated_at: this.assetUpdatedAt ?? null,
+			sha256: this.sha256 ?? null,
+			created_at: this.assetCreatedAt ?? null,
 		};
 	}
 }
@@ -615,7 +751,7 @@ export class CamoufoxFetcher extends GitHubDownloader {
 	missingAssetError(): never {
 		throw new MissingRelease(
 			`No matching release found for ${OS_NAME} ${this.arch} in the ` +
-				"supported range. Please update the library.",
+				"supported range. Please update the Python library.",
 		);
 	}
 
@@ -640,7 +776,21 @@ export class CamoufoxFetcher extends GitHubDownloader {
 
 	static async downloadFile(file: Writable, url: string): Promise<void> {
 		rprint(`Downloading package: ${url}`);
-		await webdl(url, "Downloading Camoufox", true, file);
+		await webdl(url, undefined, true, file);
+	}
+
+	/** Extract a zip file to the installation directory. */
+	extractZip(zipFile: Buffer | string): void {
+		rprint(`Extracting Camoufox: ${INSTALL_DIR}`);
+		unzip(zipFile, INSTALL_DIR);
+	}
+
+	/** Write version.json to INSTALL_DIR. */
+	setVersion(): void {
+		fs.writeFileSync(
+			path.join(INSTALL_DIR, "version.json"),
+			JSON.stringify({ version: this.version, build: this.build }),
+		);
 	}
 
 	static cleanup(): boolean {
@@ -725,9 +875,7 @@ export async function listAvailableVersions(
 				headers: githubHeaders(apiUrl),
 				signal: AbortSignal.timeout(20_000),
 			});
-			if (!resp.ok) {
-				throw new Error(`${resp.status} ${resp.statusText}`);
-			}
+			raiseForStatus(resp, apiUrl);
 			releases = (await resp.json()) as GitHubRelease[];
 			break;
 		} catch (error) {
@@ -774,7 +922,7 @@ export async function listAvailableVersions(
 	versions.sort((a, b) => {
 		const byVersion = b.version.compare(a.version);
 		if (byVersion !== 0) return byVersion;
-		return (b.assetCreatedAt ?? "").localeCompare(a.assetCreatedAt ?? "");
+		return cmpStr(b.assetCreatedAt ?? "", a.assetCreatedAt ?? "");
 	});
 	return versions;
 }
@@ -803,7 +951,7 @@ export function installedVerStr(fromDir?: string): string {
 	if (active === null) {
 		const config = loadConfig();
 		const pinned = config.pinned;
-		const channel = config.channel ?? getDefaultChannel();
+		const channel = config.channel || getDefaultChannel();
 		const activeDisplay = pinned ? `${channel}/${pinned}` : channel;
 		throw new CamoufoxNotInstalled(
 			`${activeDisplay} is not installed. Please run \`camoufox fetch\` to install.`,
@@ -813,14 +961,39 @@ export function installedVerStr(fromDir?: string): string {
 }
 
 /**
- * Full path to the active camoufox folder.
+ * Whether INSTALL_DIR's root holds a supported build.
  *
- * Unlike the Python twin this never downloads: the fetch is asynchronous in JS
- * and this is called from synchronous path helpers. `ensureCamoufoxInstalled()`
- * is the async entry point that installs on demand; `launchOptions()` awaits it
- * before any path lookup, so first-run auto-download behaviour is preserved.
+ * Only the pre-multiversion flat layout wrote version.json at the root; the
+ * versioned layout keeps it under browsers/<repo>/<version>/. A missing root
+ * version.json means "no legacy install here", so the caller should fall
+ * through to a fetch rather than raise. The alpha.1 floor masked this: no
+ * install was ever unsupported, so this branch was never reached.
  */
-export function camoufoxPath(): string {
+export function rootInstallSupported(): boolean {
+	try {
+		return Version.fromPath().isSupported();
+	} catch (error) {
+		if (error instanceof FileNotFoundError) return false;
+		throw error;
+	}
+}
+
+function notInstalledError(): CamoufoxNotInstalled {
+	const config = loadConfig();
+	const pinned = config.pinned;
+	const channel = config.channel || getDefaultChannel();
+	const activeDisplay = pinned ? `${channel}/${pinned}` : channel;
+	return new CamoufoxNotInstalled(
+		`${activeDisplay} is not installed. Please run \`camoufox fetch\` to install.`,
+	);
+}
+
+/**
+ * The part of the Python twin's camoufox_path() that runs before it would
+ * download: returns the install to use, or null when a fetch is needed (only
+ * possible with `downloadIfMissing`; otherwise the Python errors are raised).
+ */
+function resolveInstalledPath(downloadIfMissing: boolean): string | null {
 	// Clean up incompatible old data directory
 	if (
 		fs.existsSync(INSTALL_DIR) &&
@@ -836,44 +1009,59 @@ export function camoufoxPath(): string {
 		return active;
 	}
 
-	if (fs.existsSync(INSTALL_DIR) && fs.readdirSync(INSTALL_DIR).length > 0) {
-		try {
-			if (Version.fromPath().isSupported()) {
-				return INSTALL_DIR;
-			}
-		} catch {
-			// No version.json at the top level: fall through to "not installed".
-		}
+	if (!fs.existsSync(INSTALL_DIR) || fs.readdirSync(INSTALL_DIR).length === 0) {
+		if (!downloadIfMissing) throw notInstalledError();
+	} else if (rootInstallSupported()) {
+		return INSTALL_DIR;
+	} else if (!downloadIfMissing) {
 		throw new UnsupportedVersion("Camoufox executable is outdated.");
 	}
-
-	const config = loadConfig();
-	const pinned = config.pinned;
-	const channel = config.channel ?? getDefaultChannel();
-	const activeDisplay = pinned ? `${channel}/${pinned}` : channel;
-	throw new CamoufoxNotInstalled(
-		`${activeDisplay} is not installed. Please run \`camoufox fetch\` to install.`,
-	);
+	return null;
 }
 
 /**
- * Resolve the active browser, downloading it first when nothing is installed.
- * The async counterpart to the Python twin's auto-installing camoufox_path().
+ * Full path to the active camoufox folder.
+ *
+ * This is the Python twin's camoufox_path(download_if_missing=False): it is
+ * called from synchronous path helpers, and a download is asynchronous in JS.
+ * `ensureCamoufoxInstalled()` is the download_if_missing=True half;
+ * `launchOptions()` awaits it before any path lookup, so first-run
+ * auto-download behaviour is preserved.
+ */
+export function camoufoxPath(): string {
+	return resolveInstalledPath(false) as string;
+}
+
+/**
+ * Resolve the active browser, downloading it first when nothing usable is
+ * installed. The async counterpart to the Python twin's camoufox_path().
  */
 export async function ensureCamoufoxInstalled(): Promise<string> {
-	try {
-		return camoufoxPath();
-	} catch (error) {
-		if (
-			!(error instanceof CamoufoxNotInstalled) &&
-			!(error instanceof UnsupportedVersion)
-		) {
-			throw error;
-		}
-	}
-	const fetcher = await new CamoufoxFetcher().init();
+	const found = resolveInstalledPath(true);
+	if (found !== null) return found;
+
+	const fetcher = await pkgmanDeps.newFetcher();
 	await fetcher.install();
-	return camoufoxPath();
+
+	// Re-check rather than recurse.
+	//
+	// If the newest published build is still below the floor -- a library
+	// published ahead of its browser release, or a repos source that does not
+	// carry it -- install() is a no-op ("already installed") and recursing here
+	// spun ~1000 fetch attempts into a stack overflow, having hammered the
+	// GitHub API into a rate limit on the way. Say what is actually wrong.
+	const active = getActivePath();
+	if (active && Version.fromPath(active).isSupported()) {
+		return active;
+	}
+	if (fs.existsSync(INSTALL_DIR) && rootInstallSupported()) {
+		return INSTALL_DIR;
+	}
+	throw new UnsupportedVersion(
+		"No available Camoufox build satisfies this library's minimum " +
+			`(${CONSTRAINTS.MIN_VERSION}). The matching browser release may not be ` +
+			"published yet; wait for it, or install an older camoufox release.",
+	);
 }
 
 /**
@@ -941,44 +1129,29 @@ export type ProgressCallback = (downloaded: number, total: number) => void;
 /**
  * Download a file from the given URL. Streams into `buffer` when one is given,
  * otherwise accumulates and returns the bytes.
+ *
+ * One attempt, like the Python twin's requests.get(): an HTTP error raises
+ * requests' "<status> Client Error: ... for url: ..." message.
  */
 export async function webdl(
 	url: string,
-	desc: string = "",
+	desc?: string,
 	bar: boolean = true,
 	buffer: Writable | null = null,
-	{
-		retries = 5,
-		progressCallback,
-	}: { retries?: number; progressCallback?: ProgressCallback } = {},
+	{ progressCallback }: { progressCallback?: ProgressCallback } = {},
 ): Promise<Buffer> {
-	let attempts = 0;
-	let response: Response | undefined;
-
-	while (attempts < retries) {
-		try {
-			response = await fetch(url, { headers: githubHeaders(url) });
-			if (response.ok) break;
-		} catch (e) {
-			console.error(e, `retrying (${attempts + 1}/${retries})...`);
-			await sleep(5e3);
-		}
-		attempts++;
-	}
-
-	if (!response?.ok) {
-		throw new Error(`Failed to download from ${url} after ${retries} attempts`);
-	}
+	const response = await fetch(url, { headers: githubHeaders(url) });
+	raiseForStatus(response, url);
 
 	const totalSize = Number.parseInt(
 		response.headers.get("content-length") || "0",
 		10,
 	);
 	let progressBar: cliProgress.SingleBar | null = null;
-	if (bar && !progressCallback && totalSize > 0) {
+	if (!progressCallback && bar) {
 		progressBar = new cliProgress.SingleBar(
 			{
-				format: `${desc} [{bar}] {percentage}% | ETA: {eta_formatted} | {value}/{total}`,
+				format: `${desc || "Downloading"} [{bar}] {percentage}% | ETA: {eta_formatted} | {value}/{total}`,
 				formatValue: formatBytes,
 				noTTYOutput: true,
 			},
@@ -989,6 +1162,7 @@ export async function webdl(
 
 	const chunks: Uint8Array[] = [];
 	let downloaded = 0;
+	let lastUpdate = 0;
 	try {
 		if (!response.body) {
 			throw new Error(`Response from ${url} had no body`);
@@ -1000,14 +1174,74 @@ export async function webdl(
 				chunks.push(chunk);
 			}
 			downloaded += chunk.length;
-			progressBar?.increment(chunk.length);
-			progressCallback?.(downloaded, totalSize);
+			if (progressCallback) {
+				if (downloaded - lastUpdate >= 65536 || downloaded === totalSize) {
+					progressCallback(downloaded, totalSize);
+					lastUpdate = downloaded;
+				}
+			} else if (progressBar) {
+				progressBar.increment(chunk.length);
+			} else if (totalSize) {
+				const pct = (downloaded / totalSize) * 100;
+				process.stdout.write(`\r${desc}: ${pct.toFixed(0)}%`);
+			}
 		}
 	} finally {
 		progressBar?.stop();
 	}
+	if (!progressCallback && !bar) {
+		process.stdout.write(desc ? `\r${desc}: Complete\n` : "\n");
+	}
 
 	return Buffer.concat(chunks);
+}
+
+/**
+ * Check a downloaded file against its expected sha256 digest.
+ *
+ * Takes the downloaded bytes or the path of the file they were written to.
+ * Raises CorruptedDownload on mismatch. Skips (with a warning) when no digest
+ * is known, so installs from sources that publish no digest still work.
+ */
+export function verifySha256(
+	buffer: Buffer | Uint8Array | string,
+	expected: string | null | undefined,
+	desc: string = "asset",
+): void {
+	if (!expected) {
+		rprint(
+			`Warning: no sha256 published for ${desc}; skipping verification.`,
+			"yellow",
+		);
+		return;
+	}
+
+	const digest = createHash("sha256");
+	if (typeof buffer === "string") {
+		const fd = fs.openSync(buffer, "r");
+		try {
+			const block = Buffer.alloc(1024 * 1024);
+			let read = fs.readSync(fd, block, 0, block.length, null);
+			while (read > 0) {
+				digest.update(block.subarray(0, read));
+				read = fs.readSync(fd, block, 0, block.length, null);
+			}
+		} finally {
+			fs.closeSync(fd);
+		}
+	} else {
+		digest.update(buffer);
+	}
+
+	const actual = digest.digest("hex");
+	if (actual !== expected.toLowerCase()) {
+		throw new CorruptedDownload(
+			`Checksum mismatch for ${desc}.\n` +
+				`  expected sha256: ${expected.toLowerCase()}\n` +
+				`  actual   sha256: ${actual}\n` +
+				"The download was corrupted or tampered with. Installation aborted.",
+		);
+	}
 }
 
 /**
@@ -1022,13 +1256,22 @@ export function unzip(
 	const zip = new AdmZip(zipFile);
 	const entries = zip.getEntries();
 
-	if (bar && desc) {
-		rprint(desc);
+	if (bar) {
+		rprint(desc || "Extracting");
+		for (const entry of entries) {
+			zip.extractEntryTo(entry, extractPath, true, true);
+		}
+		return;
 	}
 
-	for (const entry of entries) {
+	entries.forEach((entry, i) => {
 		zip.extractEntryTo(entry, extractPath, true, true);
-	}
+		if (desc) {
+			const pct = ((i + 1) / entries.length) * 100;
+			process.stdout.write(`\r${desc}: ${pct.toFixed(0)}%`);
+		}
+	});
+	if (desc) process.stdout.write(`\r${desc}: Complete\n`);
 }
 
 /**

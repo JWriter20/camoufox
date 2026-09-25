@@ -1,7 +1,12 @@
 /**
- * Mirrors python/tests/test_virtdisplay.py: the screen-geometry resolution
- * and the Xvfb argument vector, neither of which needs an X server.
+ * Mirrors pythonlib/tests/test_virtdisplay.py: the screen-geometry
+ * resolution and the Xvfb argument vector (no X server needed), plus the real
+ * Xvfb lifecycle when Xvfb is installed (Linux only).
+ *
+ * VIRTDISPLAY_TEST_N controls the concurrent-launch count (default 50).
  */
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { VirtualDisplayNotSupported } from "../src/exceptions.js";
 import {
@@ -85,5 +90,105 @@ describe("xvfbArgs", () => {
 describe("kill", () => {
 	it("is safe to call on a display that was never started", () => {
 		expect(() => new VirtualDisplay().kill()).not.toThrow();
+	});
+});
+
+function hasXvfb(): boolean {
+	if (process.platform !== "linux") return false;
+	try {
+		execFileSync("which", ["Xvfb"], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+const DISPLAY_RE = /^:\d+$/;
+const N = Number.parseInt(process.env.VIRTDISPLAY_TEST_N ?? "50", 10);
+
+describe.skipIf(!hasXvfb())("Xvfb lifecycle", () => {
+	const tracked: VirtualDisplay[] = [];
+	const track = (vd: VirtualDisplay) => {
+		tracked.push(vd);
+		return vd;
+	};
+	afterEach(() => {
+		for (const vd of tracked.splice(0)) {
+			try {
+				vd.kill();
+			} catch {}
+		}
+	});
+
+	async function waitForExit(
+		proc: import("node:child_process").ChildProcess,
+		timeoutMs = 5000,
+	) {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			if (proc.exitCode !== null || proc.signalCode !== null) return;
+			await new Promise((r) => setTimeout(r, 25));
+		}
+	}
+
+	it("single launch returns a valid display and kill terminates Xvfb", async () => {
+		const vd = track(new VirtualDisplay());
+		const display = await vd.get();
+		expect(display).toMatch(DISPLAY_RE);
+		const proc = vd.proc;
+		expect(proc).not.toBeNull();
+		expect(proc?.exitCode).toBeNull();
+
+		vd.kill();
+		expect(vd.proc).toBeNull();
+		if (proc) await waitForExit(proc);
+		expect(proc?.exitCode !== null || proc?.signalCode !== null).toBe(true);
+	});
+
+	it("get() is idempotent within one VirtualDisplay", async () => {
+		const vd = track(new VirtualDisplay());
+		expect(await vd.get()).toBe(await vd.get());
+	});
+
+	it("concurrent reservations all get unique displays", async () => {
+		const vds = Array.from({ length: N }, () => track(new VirtualDisplay()));
+		const displays = await Promise.all(vds.map((vd) => vd.get()));
+		for (const d of displays) expect(d).toMatch(DISPLAY_RE);
+		expect(new Set(displays).size).toBe(displays.length);
+		for (const vd of vds) expect(vd.proc?.exitCode).toBeNull();
+		const procs = vds.map((vd) => vd.proc);
+		for (const vd of vds) vd.kill();
+		for (const p of procs) if (p) await waitForExit(p);
+		for (const p of procs) {
+			expect(p?.exitCode !== null || p?.signalCode !== null).toBe(true);
+		}
+	}, 60_000);
+
+	it("released display numbers can be reused on the next launch", async () => {
+		const a = track(new VirtualDisplay());
+		const aDisplay = await a.get();
+		const aProc = a.proc;
+		a.kill();
+		if (aProc) await waitForExit(aProc);
+
+		const b = track(new VirtualDisplay());
+		expect(await b.get()).toMatch(DISPLAY_RE);
+		b.kill();
+		expect(aDisplay).toMatch(DISPLAY_RE);
+	});
+
+	it("kill() removes the lock and socket even when Xvfb already died", async () => {
+		const vd = track(new VirtualDisplay());
+		const display = (await vd.get()).slice(1);
+		const proc = vd.proc;
+		// SIGKILL behind the wrapper's back: Xvfb never gets to clean up.
+		proc?.kill("SIGKILL");
+		if (proc) await waitForExit(proc);
+		expect(fs.existsSync(`/tmp/.X11-unix/X${display}`)).toBe(true);
+
+		vd.kill();
+		expect(vd.proc).toBeNull();
+		expect(fs.existsSync(`/tmp/.X${display}-lock`)).toBe(false);
+		expect(fs.existsSync(`/tmp/.X11-unix/X${display}`)).toBe(false);
 	});
 });

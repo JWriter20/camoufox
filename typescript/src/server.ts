@@ -1,13 +1,15 @@
 /**
  * Playwright server mode.
  *
- * TypeScript twin of python/src/server.py. Python has to shell out to
+ * TypeScript twin of pythonlib/camoufox/server.py. Python has to shell out to
  * the Node runtime bundled with its Playwright driver (and hand it a base64
  * config frame over stdin, via launchServer.js) because there is no Python
  * binding for BrowserServer. Here we already are that runtime, so this calls
- * playwright-core's launchServer() directly.
+ * playwright-core's launchServer() directly with the same options Python
+ * would send: launchOptions() with every top-level key camelCased.
  */
 import { type BrowserServer, firefox } from "playwright-core";
+import { camelCase } from "./sync_api.js";
 import { type LaunchOptions, launchOptions } from "./utils.js";
 import { VirtualDisplay } from "./virtdisplay.js";
 
@@ -16,8 +18,23 @@ export interface LaunchServerOptions extends Omit<LaunchOptions, "headless"> {
 	port?: number;
 	/** Path of the websocket endpoint. Defaults to a random path. */
 	ws_path?: string;
-	/** Whether to run the browser headless. `"virtual"` spawns an Xvfb display. */
+	/** Whether to run the browser headless. `"virtual"` spawns an Xvfb display
+	 * (a TS extension: Python's launch_server passes headless through). */
 	headless?: boolean | "virtual";
+}
+
+/**
+ * Convert a dictionary's keys to camelCase (server.to_camel_case_dict). Keys
+ * without an underscore are already JS names and are kept as they are.
+ */
+export function toCamelCaseDict(
+	data: Record<string, any>,
+): Record<string, any> {
+	const out: Record<string, any> = {};
+	for (const [key, value] of Object.entries(data)) {
+		out[key.includes("_") ? camelCase(key) : key] = value;
+	}
+	return out;
 }
 
 /**
@@ -30,17 +47,15 @@ export interface LaunchServerOptions extends Omit<LaunchOptions, "headless"> {
  * rather than accepting them and silently launching a throwaway profile.
  */
 export async function launchServer({
-	port,
-	ws_path,
 	headless,
 	...options
 }: LaunchServerOptions = {}): Promise<BrowserServer> {
 	for (const unsupported of ["persistent_context", "user_data_dir"] as const) {
 		if (options[unsupported]) {
 			throw new Error(
-				`launchServer() does not support '${unsupported}': Playwright cannot ` +
+				`launch_server() does not support '${unsupported}': Playwright cannot ` +
 					"serve a persistent context over a websocket endpoint. Use " +
-					"Camoufox({ persistent_context: true, ... }) in-process instead.",
+					"Camoufox(persistent_context=True, ...) in-process instead.",
 			);
 		}
 		delete options[unsupported];
@@ -57,11 +72,8 @@ export async function launchServer({
 	}
 
 	try {
-		const server = await firefox.launchServer({
-			...(await launchOptions({ ...options, headless: headlessBool })),
-			port,
-			wsPath: ws_path,
-		});
+		const config = await launchOptions({ ...options, headless: headlessBool });
+		const server = await firefox.launchServer(toCamelCaseDict(config));
 
 		if (virtualDisplay) {
 			// BrowserServer has no "disconnected" event; "close" fires on shutdown.

@@ -57,9 +57,9 @@ export function userCacheDir(appName: string): string {
 	if (OS_NAME === "mac") {
 		return path.join(os.homedir(), "Library", "Caches", appName);
 	}
-	const xdg = process.env.XDG_CACHE_HOME;
-	const base =
-		xdg && path.isAbsolute(xdg) ? xdg : path.join(os.homedir(), ".cache");
+	// platformdirs: any non-blank XDG_CACHE_HOME is taken as-is.
+	const xdg = process.env.XDG_CACHE_HOME ?? "";
+	const base = xdg.trim() ? xdg : path.join(os.homedir(), ".cache");
 	return path.join(base, appName);
 }
 

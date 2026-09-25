@@ -1,13 +1,12 @@
 /**
  * Default Firefox addon download/extraction.
  *
- * TypeScript twin of python/src/addons.py.
+ * TypeScript twin of pythonlib/camoufox/addons.py.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { InvalidAddonPath } from "./exceptions.js";
 import { INSTALL_DIR, unzip, webdl } from "./pkgman.js";
-import { getAsBooleanFromENV } from "./utils.js";
 
 /**
  * Default addons to be downloaded.
@@ -72,6 +71,12 @@ export function getAddonPath(addonName: string): string {
 	return path.join(ADDONS_DIR, addonName);
 }
 
+/** Seams the Python tests reach with monkeypatch. */
+export const addonsDeps = {
+	downloadAndExtract: (url: string, extractPath: string, name: string) =>
+		downloadAndExtract(url, extractPath, name),
+};
+
 /**
  * Downloads and extracts addons from a given map into the given list.
  * Skips downloading if the addon is already downloaded.
@@ -80,27 +85,25 @@ export async function maybeDownloadAddons(
 	addons: Record<string, string>,
 	addonsList?: string[],
 ): Promise<void> {
-	if (getAsBooleanFromENV("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", false)) {
-		console.log(
-			"Skipping addon download due to PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD set!",
-		);
-		return;
-	}
-
 	for (const [addonName, url] of Object.entries(addons)) {
 		const addonPath = getAddonPath(addonName);
 
-		if (fs.existsSync(addonPath)) {
+		// Check if the addon is already extracted. A bare directory is not
+		// enough: a failed download leaves an empty dir behind, so require the
+		// manifest that confirmPaths() looks for.
+		if (fs.existsSync(path.join(addonPath, "manifest.json"))) {
 			addonsList?.push(addonPath);
 			continue;
 		}
 
 		try {
 			fs.mkdirSync(addonPath, { recursive: true });
-			await downloadAndExtract(url, addonPath, addonName);
+			await addonsDeps.downloadAndExtract(url, addonPath, addonName);
 			addonsList?.push(addonPath);
 		} catch (e) {
-			console.error(`Failed to download and extract ${addonName}: ${e}`);
+			// Drop the partial directory so the next run re-downloads.
+			fs.rmSync(addonPath, { recursive: true, force: true });
+			console.log(`Failed to download and extract ${addonName}: ${e}`);
 		}
 	}
 }

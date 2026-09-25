@@ -1,7 +1,7 @@
 /**
  * Host display geometry, in the units Firefox lays its windows out in.
  *
- * TypeScript twin of python/src/display.py.
+ * TypeScript twin of pythonlib/camoufox/display.py.
  *
  * Firefox sizes windows in **CSS pixels**. Python uses `screeninfo`, which
  * marks the process per-monitor DPI aware and therefore reports **physical**
@@ -140,8 +140,9 @@ export function largestDisplay(): DisplaySize | null {
 	}
 	if (!monitors.length) return null;
 
+	// max() keeps the FIRST of equally large monitors, as Python's max() does.
 	const monitor = monitors.reduce((prev, curr) =>
-		prev.width * prev.height > curr.width * curr.height ? prev : curr,
+		curr.width * curr.height > prev.width * prev.height ? curr : prev,
 	);
 	return {
 		width: Math.max(1, Math.trunc(monitor.width)),

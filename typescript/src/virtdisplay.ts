@@ -1,7 +1,7 @@
 /**
  * A minimal virtual display implementation for Linux.
  *
- * TypeScript twin of python/src/virtdisplay.py.
+ * TypeScript twin of pythonlib/camoufox/virtdisplay.py.
  */
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -78,12 +78,10 @@ export class VirtualDisplay {
 
 	constructor(debug: boolean = false, screen?: string, composite?: boolean) {
 		this.debug = debug;
-		this.screen = screen ?? resolveScreen();
+		this.screen = screen || resolveScreen();
 		this.composite =
 			composite ??
-			["1", "true"].includes(
-				(process.env[COMPOSITE_ENV_VAR] ?? "0").trim().toLowerCase(),
-			);
+			["1", "true"].includes((process.env[COMPOSITE_ENV_VAR] ?? "0").trim());
 	}
 
 	get xvfbArgs(): string[] {
@@ -246,12 +244,28 @@ export class VirtualDisplay {
 		});
 	}
 
+	/**
+	 * Stop Xvfb if it is running, and remove its lock and socket either way.
+	 *
+	 * The cleanup deliberately does NOT depend on whether we did the killing.
+	 * It used to: the whole body sat behind "is the process still running", so
+	 * a display whose Xvfb had already died -- crashed, OOM-killed, or reaped
+	 * with the browser's process group -- was never cleaned up at all.
+	 *
+	 * That is backwards. A SIGKILLed Xvfb never gets to remove its own socket,
+	 * so the crash path is precisely the one where /tmp/.X11-unix/X<n> is left
+	 * behind. Those accumulate, and because -displayfd scans upward for a free
+	 * number, every stranded socket pushes the next display higher until a
+	 * long-running host stops being able to allocate one.
+	 *
+	 * Python waits for the killed process before unlinking; kill() is
+	 * synchronous here, but a SIGKILLed Xvfb can no longer recreate either
+	 * file, so unlinking right after the signal leaves the same end state.
+	 */
 	kill(): void {
-		if (
-			this.proc &&
-			this.proc.exitCode === null &&
-			this.proc.signalCode === null
-		) {
+		if (!this.proc) return;
+
+		if (this.proc.exitCode === null && this.proc.signalCode === null) {
 			if (this.debug) {
 				console.log("Terminating virtual display:", this._display);
 			}
@@ -260,18 +274,24 @@ export class VirtualDisplay {
 			} catch {
 				// Already gone.
 			}
-			for (const stale of [
-				`/tmp/.X${this._display}-lock`,
-				`/tmp/.X11-unix/X${this._display}`,
-			]) {
-				try {
-					fs.unlinkSync(stale);
-				} catch {
-					// Xvfb already cleaned it up.
-				}
-			}
-			this.proc = null;
+		} else if (this.debug) {
+			console.log("Virtual display already exited:", this._display);
 		}
+
+		for (const stale of [
+			`/tmp/.X${this._display}-lock`,
+			`/tmp/.X11-unix/X${this._display}`,
+		]) {
+			try {
+				fs.unlinkSync(stale);
+			} catch {
+				// Missing is the normal case; anything else (a permission error
+				// from a number another user has since claimed) must not take
+				// down a teardown path.
+			}
+		}
+
+		this.proc = null;
 	}
 
 	static assertLinux(): void {

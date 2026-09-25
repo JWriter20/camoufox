@@ -1,8 +1,15 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { FileNotFoundError } from "../src/exceptions.js";
 import {
+	AvailableVersion,
 	formatAssetDate,
+	loadYaml,
 	OS_ARCH_MATRIX,
 	OS_NAME,
+	pkgmanDeps,
 	RepoConfig,
 	Version,
 } from "../src/pkgman.js";
@@ -36,9 +43,38 @@ describe("Version ordering", () => {
 	});
 
 	it("accepts builds inside the supported range", () => {
-		// CONSTRAINTS is alpha.1 <= v < 1
-		expect(new Version("beta.28").isSupported()).toBe(true);
-		expect(new Version("alpha.1").isSupported()).toBe(true);
+		// CONSTRAINTS is alpha.1 <= v < 1, raised by the Playwright floor
+		// (beta.30 from Playwright 1.61).
+		const saved = pkgmanDeps.resolvedPlaywrightVersion;
+		try {
+			pkgmanDeps.resolvedPlaywrightVersion = () => [1, 60, 0];
+			expect(new Version("beta.28").isSupported()).toBe(true);
+			expect(new Version("alpha.1").isSupported()).toBe(true);
+			pkgmanDeps.resolvedPlaywrightVersion = () => [1, 62, 0];
+			expect(new Version("beta.28").isSupported()).toBe(false);
+			expect(new Version("beta.30").isSupported()).toBe(true);
+			expect(new Version("1").isSupported()).toBe(false);
+		} finally {
+			pkgmanDeps.resolvedPlaywrightVersion = saved;
+		}
+	});
+
+	it("reads version.json like the Python twin (release/tag win over build)", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-vj-"));
+		try {
+			const write = (data: object) =>
+				fs.writeFileSync(path.join(dir, "version.json"), JSON.stringify(data));
+			write({ version: "1.0", build: "beta.1" });
+			expect(Version.fromPath(dir).fullString).toBe("1.0-beta.1");
+			write({ version: "1.0", build: "beta.1", release: "beta.2" });
+			expect(Version.fromPath(dir).build).toBe("beta.2");
+			write({ version: "1.0", tag: "beta.3" });
+			expect(Version.fromPath(dir).build).toBe("beta.3");
+			fs.rmSync(path.join(dir, "version.json"));
+			expect(() => Version.fromPath(dir)).toThrow(FileNotFoundError);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -112,5 +148,33 @@ describe("formatAssetDate", () => {
 	it("returns empty for missing or unparseable input", () => {
 		expect(formatAssetDate(undefined)).toBe("");
 		expect(formatAssetDate("not-a-date")).toBe("");
+	});
+});
+
+describe("repos.yml", () => {
+	it("is the file the Python package ships", () => {
+		const shipped = fs.readFileSync(
+			path.join(import.meta.dirname, "../../pythonlib/camoufox/repos.yml"),
+			"utf-8",
+		);
+		const ours = fs.readFileSync(
+			path.join(import.meta.dirname, "../src/data-files/repos.yml"),
+			"utf-8",
+		);
+		expect(ours).toBe(shipped);
+		expect(loadYaml("repos.yml").default.browser).toBe("Official");
+	});
+});
+
+describe("AvailableVersion.toMetadata", () => {
+	it("writes unknown fields as null, as orjson does for None", () => {
+		const v = new AvailableVersion({
+			version: new Version("beta.30", "152.0.4"),
+			url: "u",
+			isPrerelease: false,
+		});
+		expect(JSON.stringify(v.toMetadata())).toBe(
+			'{"version":"152.0.4","build":"beta.30","prerelease":false,"asset_id":null,"asset_size":null,"asset_updated_at":null,"sha256":null,"created_at":null}',
+		);
 	});
 });

@@ -1,7 +1,7 @@
 /**
  * Helpers to find the user's public IP address for geolocation.
  *
- * TypeScript twin of python/src/ip.py.
+ * TypeScript twin of pythonlib/camoufox/ip.py.
  */
 import { Impit } from "impit";
 import { InvalidIP, InvalidProxy } from "./exceptions.js";
@@ -88,7 +88,13 @@ function getImpit(proxy?: string): Impit {
 		impitCache.set(key, cached);
 		return cached;
 	}
-	const impit = new Impit({ proxyUrl: proxy, timeout: 5000 });
+	// Certificates are verified (the Python twin's verify=True): an IP lookup
+	// is what geoip trusts for the whole identity, so a MITM must not pick it.
+	const impit = new Impit({
+		proxyUrl: proxy,
+		timeout: 5000,
+		ignoreTlsErrors: false,
+	});
 	impitCache.set(key, impit);
 	if (impitCache.size > IMPIT_CACHE_MAX) {
 		impitCache.delete(impitCache.keys().next().value as string);
@@ -130,19 +136,22 @@ export function publicIP(proxy?: string): Promise<string> {
 }
 
 async function resolvePublicIP(proxy?: string): Promise<string> {
-	const errors: unknown[] = [];
+	let endException: unknown;
 
 	for (const url of PUBLIC_IP_URLS) {
 		try {
 			const response = await getImpit(proxy).fetch(url);
 			if (!response.ok) {
-				continue;
+				// requests' raise_for_status()
+				throw new Error(
+					`${response.status} Error: ${response.statusText} for url: ${url}`,
+				);
 			}
 			const ip = (await response.text()).trim();
 			validateIP(ip);
 			return ip;
 		} catch (error) {
-			errors.push(error);
+			endException = error;
 			if (process.env.CAMOUFOX_DEBUG) {
 				console.warn(
 					new InvalidProxy(
@@ -154,8 +163,9 @@ async function resolvePublicIP(proxy?: string): Promise<string> {
 		}
 	}
 
-	throw new InvalidIP(
-		"Failed to get a public IP address from any API endpoint.",
-		{ cause: errors },
-	);
+	const detail =
+		endException instanceof Error ? endException.message : String(endException);
+	throw new InvalidIP(`Failed to get IP address: ${detail}`, {
+		cause: endException,
+	});
 }

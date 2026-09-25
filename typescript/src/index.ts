@@ -1,12 +1,20 @@
+/**
+ * Public API. Mirrors pythonlib/camoufox/__init__.py (Camoufox, NewBrowser,
+ * NewContext, their Async* twins, DefaultAddons, launch_options), plus the
+ * package-management and server helpers the TS port has always exported.
+ */
 export type { DefaultAddon } from "./addons.js";
 export { DefaultAddons } from "./addons.js";
+export {
+	AsyncCamoufox,
+	AsyncNewBrowser,
+	AsyncNewContext,
+} from "./async_api.js";
 export {
 	generateContextFingerprint,
 	getRandomPreset,
 	loadPresets,
-	type Preset,
-	SUPPORTED_OS,
-	type SupportedOS,
+	Screen,
 } from "./fingerprints.js";
 export {
 	findInstalledVersion,
@@ -23,10 +31,16 @@ export {
 export { type LaunchServerOptions, launchServer } from "./server.js";
 export {
 	Camoufox,
+	type Headless,
 	NewBrowser,
 	type NewBrowserOptions,
 	NewContext,
 	type NewContextOptions,
 } from "./sync_api.js";
-export { type LaunchOptions, launchOptions } from "./utils.js";
+export {
+	type LaunchOptions,
+	launchOptions,
+	launchOptions as launch_options,
+} from "./utils.js";
 export { VirtualDisplay } from "./virtdisplay.js";
+export { LeakWarning } from "./warnings.js";

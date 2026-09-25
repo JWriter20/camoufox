@@ -1,7 +1,7 @@
 /**
  * Manager for handling multiple Camoufox versions side by side.
  *
- * TypeScript twin of python/src/multiversion.py.
+ * TypeScript twin of pythonlib/camoufox/multiversion.py.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -13,12 +13,13 @@ import { INSTALL_DIR, OS_NAME, rprint } from "./paths.js";
 import {
 	AvailableVersion,
 	type CamoufoxFetcher,
+	cmpStr,
 	formatAssetDate,
 	makeExecutable,
 	RepoConfig,
 	unzip,
 	Version,
-	webdl,
+	verifySha256,
 } from "./pkgman.js";
 
 export const BROWSERS_DIR: string = path.join(INSTALL_DIR, "browsers");
@@ -151,9 +152,9 @@ export function latestPerBuild(versions: CachedVersion[]): CachedVersion[] {
 		}
 	}
 	return [...best.values()].sort((a, b) => {
-		const byVersion = b.version.localeCompare(a.version);
+		const byVersion = cmpStr(b.version, a.version);
 		if (byVersion !== 0) return byVersion;
-		return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+		return cmpStr(b.created_at ?? "", a.created_at ?? "");
 	});
 }
 
@@ -406,7 +407,7 @@ export function listInstalled(): InstalledVersion[] {
 	}
 
 	installed.sort((a, b) => {
-		const byRepo = b.repoName.localeCompare(a.repoName);
+		const byRepo = cmpStr(b.repoName, a.repoName);
 		if (byRepo !== 0) return byRepo;
 		return b.version.compare(a.version);
 	});
@@ -535,11 +536,24 @@ export async function installVersioned(
 		fs.mkdirSync(installPath, { recursive: true });
 
 		const tempFileStream = fs.createWriteStream(tempFilePath);
-		await webdl(fetcher.url, "Downloading Camoufox", true, tempFileStream);
-		await new Promise<void>((resolve) => tempFileStream.close(() => resolve()));
+		try {
+			// Through the instance's class, as Python's fetcher.download_file(),
+			// so a subclass can override it.
+			await (fetcher.constructor as typeof CamoufoxFetcher).downloadFile(
+				tempFileStream,
+				fetcher.url,
+			);
+		} finally {
+			await new Promise<void>((resolve) => tempFileStream.end(() => resolve()));
+		}
+
+		const expectedSha = fetcher._selectedVersion
+			? fetcher._selectedVersion.sha256
+			: fetcher.installedSha256;
+		verifySha256(tempFilePath, expectedSha, `Camoufox v${fetcher.verstr}`);
 
 		rprint(`Extracting Camoufox: ${installPath}`);
-		unzip(tempFilePath, installPath, "Extracting Camoufox", false);
+		unzip(tempFilePath, installPath);
 
 		const metadata = fetcher._selectedVersion
 			? fetcher._selectedVersion.toMetadata()
