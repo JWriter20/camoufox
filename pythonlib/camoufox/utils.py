@@ -308,7 +308,7 @@ def get_env_vars(
         }
         os_dir = directory_map.get(user_agent_os, user_agent_os)
 
-        # v150+ uses "fontconfig/" (matching the Go launcher); older bundles shipped "fontconfigs/".
+        # v150+ uses "fontconfig/"; older bundles shipped "fontconfigs/".
         def _bundle_path(*parts: str) -> str:
             if path:
                 return str(path.parent.joinpath(*parts))
@@ -884,9 +884,9 @@ def launch_options(
             If not provided, a random fingerprint will be generated based on the provided
             `os` & `screen` constraints.
         fingerprint_preset (Optional[Union[bool, Dict[str, Any]]]):
-            Opt into using real fingerprint presets instead of BrowserForge.
+            Opt into using real fingerprint presets instead of fpgen.
             Pass `True` to use a random bundled preset, or pass a preset dict directly.
-            By default (None), BrowserForge is used for infinite unique fingerprints.
+            By default (None), fpgen generates a unique fingerprint.
         ff_version (Optional[int]):
             Firefox version to use. Defaults to the current Camoufox version.
             To prevent leaks, only use this for special cases.
@@ -1035,7 +1035,7 @@ def launch_options(
     # Generate a fingerprint
     _used_preset = False
     if fingerprint is not None:
-        # User passed a custom BrowserForge fingerprint
+        # User passed a custom fingerprint
         if not i_know_what_im_doing:
             check_custom_fingerprint(fingerprint)
     elif fingerprint_preset is not None:

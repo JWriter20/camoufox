@@ -149,7 +149,7 @@ class NotInstalledGeoIPExtra(ImportError):
 
 class NonFirefoxFingerprint(Exception):
     """
-    Raised when a passed Browserforge fingerprint is invalid.
+    Raised when a passed fingerprint is not a Firefox fingerprint.
     """
 
     ...
