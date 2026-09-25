@@ -613,7 +613,8 @@ whole pull request. `ci.run_prepare` runs `setup-minimal` → `dir` →
 text reads as transient. A failed patch hunk or a compile error still fails on
 the first attempt — retrying a broken tree only spends a runner to reach the
 same answer, and a retry loop that swallows a real breakage turns a red build
-into a slow red build.
+into a slow red build. The release workflow (`build.yml`) prepares its tree the same
+way, so a tagged build gets the same hardening.
 
 > One consequence of `cancel-in-progress`: pushing to a branch cancels its
 > running build. That is right while iterating, but a 70-minute build will not
