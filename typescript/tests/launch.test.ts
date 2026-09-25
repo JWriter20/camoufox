@@ -729,6 +729,17 @@ describe.skipIf(!modelReady)(
 			expect(first.fonts).toEqual(second.fonts);
 		});
 
+		it.each([
+			undefined,
+			false,
+		])("fingerprint_preset=%s never draws a preset", async (off) => {
+			// False used to be checked with `!= null`, so it drew a random preset.
+			deps.getRandomPreset = () => {
+				throw new Error("preset drawn");
+			};
+			await launchConfig({ os: "linux", fingerprint_preset: off });
+		});
+
 		it("keeps the caller's seeds", async () => {
 			const config = await launchConfig({
 				os: "linux",

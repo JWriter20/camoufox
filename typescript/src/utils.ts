@@ -1336,7 +1336,7 @@ export async function launchOptions({
 		if (!i_know_what_im_doing) {
 			checkCustomFingerprint(fingerprint);
 		}
-	} else if (fingerprint_preset != null) {
+	} else if (isTruthy(fingerprint_preset)) {
 		// User opted into real fingerprint presets
 		const preset = isPlainObject(fingerprint_preset)
 			? fingerprint_preset
