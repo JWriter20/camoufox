@@ -150,22 +150,48 @@ jobs:
         # Only a change that can alter the binary justifies compiling one. A
         # pull request that touches pythonlib/ or ci/ is a driver change: it
         # still gets the full browser suite, but against the published build its
-        # users are running, which takes a minute instead of seventy.
+        # users are running, which takes a minute instead of seventy -- as long
+        # as that build matches this tree's browser sources (see below).
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "browser_changed=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Not a pull request -- building, which also refreshes the shared ccache."
             exit 0
           fi
+          sources='^(patches/|additions/|settings/|assets/|upstream\.sh|Makefile|scripts/)'
           base="${{ github.event.pull_request.base.sha }}"
           changed=$(git diff --name-only "$base"...HEAD || echo "")
           echo "changed files:"; echo "$changed" | sed 's/^/  /'
-          if echo "$changed" | grep -qE '^(patches/|additions/|settings/|assets/|upstream\.sh|Makefile|scripts/)'; then
+          if echo "$changed" | grep -qE "$sources"; then
             echo "browser_changed=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Browser sources changed -- rebuilding from source."
+            exit 0
+          fi
+          # The pull request leaves the browser alone -- but the published
+          # release is only the right browser to test it on if it was built from
+          # the SAME browser sources as this tree. The patch guards and suites
+          # come from this checkout, so when the base branch has moved past the
+          # release (a merged browser change that is not published yet), testing
+          # the release pairs new guards with an old browser, and every guard for
+          # the unreleased change fails on a pull request that never touched it.
+          # Compare against the tag the release was cut from; if they differ,
+          # build -- which restores the base branch's cached browser when its
+          # compiled half matches, so it costs minutes, not the full build.
+          . ./upstream.sh
+          tag="v${version}-${release}"
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "browser_changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::No release tag $tag -- the release this tree targets is not published; building."
+            exit 0
+          fi
+          ahead=$(git diff --name-only "$tag" HEAD | grep -E "$sources" || true)
+          if [ -n "$ahead" ]; then
+            echo "browser sources that differ from $tag:"; echo "$ahead" | sed 's/^/  /'
+            echo "browser_changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::The base branch's browser sources are ahead of the published $tag ($(echo "$ahead" | wc -l) files) -- building (a cache hit when the base branch already built it)."
           else
             echo "browser_changed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No browser sources changed -- testing against the published release."
+            echo "::notice::No browser sources differ from the published $tag -- testing against it."
           fi
 
       - name: May the stealth check run?
