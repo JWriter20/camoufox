@@ -553,6 +553,11 @@ describe.runIf(ENABLED)("e2e: the TS launcher drives a real Camoufox", () => {
 							"virtual: newPage",
 							(browser as any).newPage(),
 						);
+						// Firefox defers enumerateDevices() until the document has
+						// focus (LEAKS row 57). Headless fakes focus; a headful window
+						// on a bare Xvfb only sometimes gets it, so the probe hung on
+						// some runs. A user's window has focus: give it one.
+						await step("virtual: bringToFront", page.bringToFront());
 						probe = await step("virtual: probe the page", probePage(page));
 					} finally {
 						await step("virtual: close", (browser as any).close());
