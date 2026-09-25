@@ -28,6 +28,7 @@ import {
 	NonFirefoxFingerprint,
 } from "./exceptions.js";
 import {
+	audioSeedFromIdentity,
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
@@ -42,7 +43,6 @@ import {
 	getRandomPreset,
 	identitySalt,
 	identitySeed,
-	noiseSeedsFromIdentity,
 	raiseScreenToModernFloor,
 	Screen,
 	sampleWebglForScreen,
@@ -1278,9 +1278,7 @@ export async function launchOptions({
 	const userSetDnt = "navigator.doNotTrack" in config;
 	const userSetGpc = "navigator.globalPrivacyControl" in config;
 	const userSetAcceptEncoding = "headers.Accept-Encoding" in config;
-	const userSetNoiseSeeds = new Set(
-		["audio:seed", "canvas:seed"].filter((k) => k in (config as object)),
-	);
+	const userSetAudioSeed = "audio:seed" in config;
 
 	// The salt that makes every seeded draw belong to this identity (see
 	// fingerprints.identitySalt): stable when the caller pinned the identity --
@@ -1336,7 +1334,7 @@ export async function launchOptions({
 		if (!i_know_what_im_doing) {
 			checkCustomFingerprint(fingerprint);
 		}
-	} else if (fingerprint_preset != null) {
+	} else if (isTruthy(fingerprint_preset)) {
 		// User opted into real fingerprint presets
 		const preset = isPlainObject(fingerprint_preset)
 			? fingerprint_preset
@@ -1514,15 +1512,13 @@ export async function launchOptions({
 	// measured text width off the value the same font produces on a real
 	// machine. Pass fonts:spacing_seed explicitly to opt back in.
 	setInto(config, "fonts:spacing_seed", 0);
-	// audio/canvas noise seeds follow the identity: a returning "same device"
-	// must reproduce its audio and canvas hashes (#442/#765). Derived, not
-	// equal, so the two streams differ; never 0 (0 disables the noise).
-	const seeds = noiseSeedsFromIdentity(utilsDeps.identitySeed(config, salt));
-	if (!userSetNoiseSeeds.has("audio:seed")) {
-		config["audio:seed"] = seeds.audio;
-	}
-	if (!userSetNoiseSeeds.has("canvas:seed")) {
-		config["canvas:seed"] = seeds.canvas;
+	// The audio noise seed follows the identity: a returning "same device" must
+	// reproduce its audio hash (#442/#765). Never 0 (0 disables the noise).
+	// There is no canvas seed: the browser adds no canvas noise (#528).
+	if (!userSetAudioSeed) {
+		config["audio:seed"] = audioSeedFromIdentity(
+			utilsDeps.identitySeed(config, salt),
+		);
 	}
 
 	// Set geolocation

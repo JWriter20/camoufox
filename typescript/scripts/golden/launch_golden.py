@@ -30,6 +30,7 @@ import copy
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import types
@@ -228,7 +229,9 @@ def mask(value):
     if isinstance(value, str):
         for real, ph in PLACEHOLDERS:
             value = value.replace(real, ph)
-        return value
+        # The name hashes the fonts.conf content, which embeds the checkout path;
+        # the TS test masks it the same way and checks the hash itself.
+        return re.sub(r'fonts-[0-9a-f]{12}\.conf', 'fonts-<HASH>.conf', value)
     if isinstance(value, dict):
         return {mask(k): mask(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -363,7 +366,7 @@ scenario('config_touch', fingerprint=FP['windows'], os='windows', config={'navig
 scenario('config_dnt_gpc', fingerprint=FP['windows'], os='windows',
          config={'navigator.doNotTrack': '1', 'navigator.globalPrivacyControl': True})
 scenario('config_accept_encoding', fingerprint=FP['linux'], os='linux', config={'headers.Accept-Encoding': 'gzip'})
-scenario('config_seeds', fingerprint=FP['linux'], os='linux', config={'audio:seed': 42, 'canvas:seed': 7,
+scenario('config_seeds', fingerprint=FP['linux'], os='linux', config={'audio:seed': 42,
                                                                       'fonts:spacing_seed': 3})
 scenario('config_media_devices', fingerprint=FP['linux'], os='linux', config={'mediaDevices:micros': 0})
 scenario('config_webgl_pair', fingerprint=FP['linux'], os='linux',

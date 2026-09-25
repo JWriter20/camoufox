@@ -102,6 +102,42 @@ function getImpit(proxy?: string): Impit {
 	return impit;
 }
 
+export const PROXY_LOOKUP_FAILED =
+	"Could not look up the proxy's exit IP and timezone. Pass webrtc_ip and " +
+	"timezone_id explicitly to skip the lookup";
+
+/**
+ * The exit IP of `proxy` and that IP's timezone, looked up through the proxy.
+ * Throws InvalidIP when the lookup fails: a context that silently kept the
+ * host's WebRTC IP and timezone behind a proxy would be a leak.
+ */
+export async function proxyExitGeo(proxy: string): Promise<[string, string]> {
+	let data: {
+		status?: string;
+		message?: string;
+		query?: string;
+		timezone?: string;
+	};
+	try {
+		const response = await getImpit(proxy).fetch(
+			"http://ip-api.com/json?fields=status,message,query,timezone",
+		);
+		if (!response.ok) {
+			throw new Error(`${response.status} Error: ${response.statusText}`);
+		}
+		data = await response.json();
+	} catch (error) {
+		throw new InvalidIP(`${PROXY_LOOKUP_FAILED}: ${error}`);
+	}
+	if (data.status !== "success" || !data.query || !data.timezone) {
+		throw new InvalidIP(
+			`${PROXY_LOOKUP_FAILED}: ${data.message ?? JSON.stringify(data)}`,
+		);
+	}
+	validateIP(data.query);
+	return [data.query, data.timezone];
+}
+
 const PUBLIC_IP_URLS = [
 	// Prefers IPv4
 	"https://api.ipify.org",

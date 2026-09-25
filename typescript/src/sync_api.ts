@@ -16,7 +16,7 @@ import {
 } from "playwright-core";
 import * as cpuAffinity from "./cpu_affinity.js";
 import { generateContextFingerprint } from "./fingerprints.js";
-import type { ProxyConfig } from "./ip.js";
+import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
 import {
 	applyNoViewport,
 	attachNoViewportDefault,
@@ -210,42 +210,10 @@ export interface NewContextOptions extends Record<string, any> {
 	geolocation?: { latitude: number; longitude: number; accuracy?: number };
 }
 
-/** Builds a proxy URL string with embedded credentials. */
-export function proxyUrlWithCreds(proxy: ProxyConfig): string {
-	const server = proxy.server ?? "";
-	const user = proxy.username ?? "";
-	const pwd = proxy.password ?? "";
-	if (user && pwd) {
-		// urlparse(): scheme is everything before "://" (when it looks like one),
-		// netloc the authority after it.
-		const match = server.match(/^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)/);
-		const scheme = match ? match[1] : "";
-		const netloc = match ? match[2] : "";
-		return `${scheme}://${user}:${pwd}@${netloc}`;
-	}
-	return server;
-}
-
 /** Injection point for the proxy exit-IP lookup (tests replace it). */
 export const contextDeps = {
-	async resolveProxyGeo(
-		proxy: ProxyConfig,
-	): Promise<{ ip: string | null; timezone: string | null }> {
-		try {
-			const { Impit } = await import("impit");
-			const impit = new Impit({
-				proxyUrl: proxyUrlWithCreds(proxy),
-				timeout: 10_000,
-			});
-			const resp = await impit.fetch(
-				"http://ip-api.com/json?fields=query,timezone",
-			);
-			const data = (await resp.json()) as { query?: string; timezone?: string };
-			return { ip: data.query || null, timezone: data.timezone || null };
-		} catch {
-			return { ip: null, timezone: null };
-		}
-	},
+	resolveProxyGeo: (proxy: ProxyConfig) =>
+		proxyExitGeo(ProxyHelper.asString(proxy)),
 };
 
 /** snake_case -> camelCase, as camoufox.server.camel_case does. */
@@ -263,9 +231,9 @@ export function camelCase(snake: string): string {
 /**
  * Creates a new browser context with a unique fingerprint identity.
  *
- * Each context gets its own fingerprint with unique seeds for audio, canvas,
- * and font-spacing noise. All values are applied via addInitScript so they
- * self-destruct before page scripts can detect them.
+ * Each context gets its own fingerprint with its own audio noise seed. All
+ * values are applied via addInitScript so they self-destruct before page
+ * scripts can detect them.
  */
 export async function NewContext(
 	browser: Browser,
@@ -283,11 +251,9 @@ export async function NewContext(
 	// aren't explicitly provided.
 	let webrtcIp = webrtc_ip;
 	if (proxy && (!webrtcIp || !("timezoneId" in contextOptions))) {
-		const geo = await contextDeps.resolveProxyGeo(proxy);
-		if (!webrtcIp) webrtcIp = geo.ip ?? undefined;
-		if (!("timezoneId" in contextOptions) && geo.timezone) {
-			contextOptions.timezoneId = geo.timezone;
-		}
+		const [exitIp, timezone] = await contextDeps.resolveProxyGeo(proxy);
+		webrtcIp ||= exitIp;
+		if (!("timezoneId" in contextOptions)) contextOptions.timezoneId = timezone;
 	}
 
 	const fp = generateContextFingerprint({

@@ -19,15 +19,14 @@ export const APPLE_SILICON_CORES: ReadonlySet<number> = new Set([
 ]);
 
 /**
- * devicePixelRatio by platform. The arrays keep CPython 3.12+'s iteration
- * order of the frozensets in coherence.py, because the nearest-step repair
- * breaks ties by that order (3.10/3.11 iterate them differently, so an exact
- * midpoint such as 1.125 repairs differently there).
+ * devicePixelRatio by platform, ascending as in coherence.py: the
+ * nearest-step repair keeps the first of two equally near steps, so a tie
+ * goes to the lower one.
  */
 export const PLAUSIBLE_DPR: Readonly<Record<string, readonly number[]>> = {
-	win: [1.25, 2.5, 1, 1.5, 1.75, 2, 3],
+	win: [1, 1.25, 1.5, 1.75, 2, 2.5, 3],
 	mac: [1, 2],
-	lin: [1.25, 2, 1, 1.5, 1.75],
+	lin: [1, 1.25, 1.5, 1.75, 2],
 };
 
 /** colorDepth: Firefox reports 24, or 30 on a deep-colour display. */

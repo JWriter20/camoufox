@@ -154,7 +154,7 @@ export class NotInstalledGeoIPExtra extends Error {
 
 export class NonFirefoxFingerprint extends Error {
 	constructor(message?: string) {
-		super(message ?? "A passed Browserforge fingerprint is invalid.");
+		super(message ?? "A passed fingerprint is not a Firefox fingerprint.");
 		this.name = "NonFirefoxFingerprint";
 	}
 }

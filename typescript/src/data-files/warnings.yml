@@ -17,12 +17,11 @@ header-ua: >-
 viewport: >-
     Manually setting screen & window properties is not recommended.
     Screen dimensions are randomly generated within Camoufox
-    based on the provided screen constraints. See here:
-    https://github.com/daijro/camoufox/tree/main/pythonlib#browserforge-integration.
+    based on the provided screen constraints.
 
 custom_fingerprint: >-
     Passing your own fingerprint is not recommended.
-    BrowserForge fingerprints are automatically generated within Camoufox
+    Fingerprints are automatically generated within Camoufox
     based on the provided `os` and `screen` constraints.
 
 proxy_without_geoip: >-
