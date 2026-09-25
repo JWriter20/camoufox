@@ -80,7 +80,7 @@
 
 Processing tens of billions of requests per month for thousands of customers, Byteful powers browser-based AI agents, automation systems, and data workflows. It is a member of the Internet Watch Foundation and the Ethical Web Data Collection Initiative.
 
-Get 10% off Byteful Residential Bandwidth with the code: CAMOUFOX10
+Get 10% off Byteful Residential Proxies with the code: CAMOUFOX10
     </td>
   </tr>
   <tr>
