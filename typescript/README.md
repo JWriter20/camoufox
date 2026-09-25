@@ -101,13 +101,10 @@ snake_case names: `os`, `config`, `block_images`, `block_webrtc`,
 `i_know_what_im_doing`, `debug`, `virtual_display`, `pin_cpu_cores`. Anything else is passed
 straight through to Playwright.
 
-Two things differ from the Python signatures, both because of the runtime:
-
-- The returned launch options use Playwright's camelCase keys
-  (`executablePath`, `firefoxUserPrefs`) rather than Python's snake_case.
-- `headless: "virtual"` is handled by `Camoufox()`, `NewBrowser()` and
-  `launchServer()`, not by `launchOptions()`. Python's `launch_server()` does
-  not handle it yet.
+The returned launch options use Playwright's camelCase keys
+(`executablePath`, `firefoxUserPrefs`) rather than Python's snake_case. As in
+Python, `headless: "virtual"` is handled by `Camoufox()`, `NewBrowser()` and
+`launchServer()`, not by `launchOptions()`.
 
 ## CLI
 

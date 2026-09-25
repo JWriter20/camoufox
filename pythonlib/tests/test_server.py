@@ -275,3 +275,79 @@ def test_launch_server_surfaces_child_exit_instead_of_pipe_error(monkeypatch, tm
         server.launch_server()
 
     assert "3" in str(excinfo.value), str(excinfo.value)
+
+
+class _FakeVirtualDisplay:
+    instances = []
+
+    def __init__(self, debug=None):
+        self.debug = debug
+        self.killed = False
+        _FakeVirtualDisplay.instances.append(self)
+
+    def get(self):
+        return ":99"
+
+    def kill(self):
+        self.killed = True
+
+
+class _ExitedProcess:
+    def __init__(self):
+        self.stdin = open(os.devnull, "w")
+        self.returncode = 0
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+@pytest.fixture
+def fake_virtual_display(monkeypatch):
+    _FakeVirtualDisplay.instances = []
+    monkeypatch.setattr(server, "VirtualDisplay", _FakeVirtualDisplay, raising=False)
+    monkeypatch.setattr(server, "get_nodejs", lambda: "/node")
+    return _FakeVirtualDisplay.instances
+
+
+def test_launch_server_runs_virtual_headless_on_a_virtual_display(
+    monkeypatch, fake_virtual_display
+):
+    # headless='virtual' is a Camoufox() option, not a Playwright one: the
+    # server must start Xvfb, launch headful on it, and kill it when the
+    # server process exits.
+    launched = {}
+
+    def fake_launch_options(**kwargs):
+        launched.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(server, "launch_options", fake_launch_options)
+    monkeypatch.setattr(
+        server.subprocess, "Popen", lambda *args, **kwargs: _ExitedProcess()
+    )
+
+    with pytest.raises(RuntimeError):
+        server.launch_server(headless="virtual")
+
+    assert len(fake_virtual_display) == 1
+    assert launched["headless"] is False
+    assert launched["virtual_display"] == ":99"
+    assert fake_virtual_display[0].killed
+
+
+def test_launch_server_kills_virtual_display_when_launch_fails(
+    monkeypatch, fake_virtual_display
+):
+    def failing_launch_options(**kwargs):
+        raise ValueError("invalid options")
+
+    monkeypatch.setattr(server, "launch_options", failing_launch_options)
+
+    with pytest.raises(ValueError, match="invalid options"):
+        server.launch_server(headless="virtual")
+
+    assert len(fake_virtual_display) == 1
+    assert fake_virtual_display[0].killed
