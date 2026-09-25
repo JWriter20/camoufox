@@ -123,14 +123,6 @@ def latest_per_build(versions: List[Dict]) -> List[Dict]:
     )
 
 
-def get_cached_repo_names() -> List[str]:
-    """
-    Get list of repo names in cache
-    """
-    cache = load_repo_cache()
-    return [r['name'] for r in cache.get('repos', [])]
-
-
 def get_repo_name(github_repo: str) -> str:
     """
     Get display name for a repo from repos.yml, lowercased

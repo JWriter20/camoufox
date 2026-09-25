@@ -6,7 +6,7 @@ import secrets
 import unicodedata
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from random import Random, choice, randint, randrange, random, sample, shuffle
+from random import Random, choice, randint, randrange
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from camoufox.pkgman import load_yaml
@@ -593,44 +593,6 @@ def _generate_random_font_subset(
     _ensure_marker_fonts(result, markers)
 
     return result
-
-
-# OS voice lists loaded from voices.json, parsed into "Name:lang:type" tuples.
-_OS_VOICES_CACHE: Optional[Dict[str, List[Tuple[str, str, str]]]] = None
-
-
-def _load_os_voices() -> Dict[str, List[Tuple[str, str, str]]]:
-    """Load OS voice lists from voices.json as (name, lang, type) tuples.
-
-    Each entry is "Name:lang:type" (type is "local" or "remote"). Voice names
-    may contain parens/commas but not colons, so a last-two-colons split is
-    safe.
-    """
-    global _OS_VOICES_CACHE
-    if _OS_VOICES_CACHE is not None:
-        return _OS_VOICES_CACHE
-    voices_path = os.path.join(os.path.dirname(__file__), 'voices.json')
-    with open(voices_path, 'rb') as f:
-        import orjson
-        raw = orjson.loads(f.read())
-    _OS_VOICES_CACHE = {}
-    for os_key, entries in raw.items():
-        parsed: List[Tuple[str, str, str]] = []
-        for entry in entries:
-            last = entry.rfind(':')
-            if last < 0:
-                continue
-            vtype = entry[last + 1:]
-            before = entry[:last]
-            langsep = before.rfind(':')
-            if langsep < 0:
-                continue
-            lang = before[langsep + 1:]
-            name = before[:langsep]
-            if name and lang:
-                parsed.append((name, lang, vtype))
-        _OS_VOICES_CACHE[os_key] = parsed
-    return _OS_VOICES_CACHE
 
 
 # Essential speech voices per OS that must always be included in subsets

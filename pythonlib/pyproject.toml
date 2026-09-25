@@ -45,15 +45,14 @@ numpy = "*"
 ua_parser = "*"
 typing_extensions = "*"
 screeninfo = "*"
-lxml = "*"
 language-tags = "*"
 pysocks = "*"
 inquirer = "*"
-geoip2 = {version = "*", optional = true}
+maxminddb = {version = "*", optional = true}
 PySide6 = {version = "*", optional = true}
 
 [tool.poetry.extras]
-geoip = ["geoip2"]
+geoip = ["maxminddb"]
 gui = ["PySide6"]
 
 [tool.poetry.scripts]

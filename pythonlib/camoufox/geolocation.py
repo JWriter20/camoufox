@@ -119,7 +119,7 @@ def get_mmdb_path(ip_version: str = 'ipv4', config: Optional[Dict] = None) -> Pa
 
 def geoip_allowed() -> None:
     """
-    Checks if the geoip2 module is available
+    Checks if the maxminddb module is available
     """
     if not ALLOW_GEOIP:
         raise NotInstalledGeoIPExtra(

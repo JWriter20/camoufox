@@ -8,7 +8,6 @@ from os import environ
 from os.path import abspath
 from pathlib import Path
 from pprint import pprint
-from random import randint
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -513,15 +512,6 @@ def check_valid_os(os: ListOrString) -> None:
     # Assert that the OS is supported by Camoufox
     if os not in ('windows', 'macos', 'linux'):
         raise InvalidOS(f"Camoufox does not support the OS: '{os}'")
-
-
-def _clean_locals(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Gets the launch options from the locals of the function.
-    """
-    del data['playwright']
-    del data['persistent_context']
-    return data
 
 
 def merge_into(target: Dict[str, Any], source: Dict[str, Any]) -> None:
