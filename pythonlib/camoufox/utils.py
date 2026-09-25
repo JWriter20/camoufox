@@ -1038,7 +1038,7 @@ def launch_options(
         # User passed a custom fingerprint
         if not i_know_what_im_doing:
             check_custom_fingerprint(fingerprint)
-    elif fingerprint_preset is not None:
+    elif fingerprint_preset:
         # User opted into real fingerprint presets
         if isinstance(fingerprint_preset, dict):
             preset = fingerprint_preset

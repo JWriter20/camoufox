@@ -162,3 +162,11 @@ class TestPrefsEnvIsAscii:
         joined = "".join(env[f"CAMOU_PREFS_{i}"] for i in range(1, len(env) + 1))
         assert joined.isascii()
         assert orjson.loads(joined) == prefs
+
+
+@pytest.mark.parametrize("off", [None, False])
+def test_fingerprint_preset_off_never_draws_a_preset(off):
+    """`fingerprint_preset=False` means off, the same as None. It used to be
+    checked with `is not None`, so False drew a random bundled preset."""
+    with mock.patch.object(utils, "get_random_preset", side_effect=AssertionError("preset drawn")):
+        launch(fingerprint_preset=off)
