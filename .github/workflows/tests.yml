@@ -329,7 +329,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install -r ci/requirements.txt
+      - run: |
+          # A venv at the repo root, where the tests that check TS against live
+          # pythonlib look for it (fontprobe's shared cache, fonttools). Without
+          # it they skip, and a skip is not a pass.
+          python3 -m venv .venv
+          .venv/bin/pip install -r ci/requirements.txt -e pythonlib
+          # fpgen downloads its model on first import with TLS verification
+          # OFF and no checksum, and its release picker can only ever reach the
+          # April-2025 model. Install the pinned one first: see
+          # scripts/pin-fpgen-model.py.
+          .venv/bin/python scripts/pin-fpgen-model.py
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: typescript/package.json
@@ -345,7 +355,7 @@ jobs:
       - name: Run
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python3 -m ci.run_typescript
+        run: .venv/bin/python -m ci.run_typescript
       - uses: actions/upload-artifact@v4
         if: always()
         with:
