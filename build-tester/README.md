@@ -4,7 +4,7 @@ Tests a raw Camoufox binary (Firefox) directly against the same antibot-detectio
 
 ## Prerequisites
 
-- Python 3.9+
+- Python 3.10+ (what `pythonlib/` requires)
 - Node.js (for building the TypeScript checks bundle via `esbuild`, first run only)
 
 ## Setup
@@ -28,6 +28,13 @@ python scripts/run_tests.py <binary_path> [options]
 python scripts/run_tests.py /path/to/camoufox-bin/camoufox
 ```
 
+`./run_tests.sh <binary_path> [options]` does the setup for you: it installs the
+npm dependencies and creates `.venv/` with this tree's `pythonlib/` on first
+run, then calls `run_tests.py`. It forwards every option below except `--json`.
+
+In CI the suite runs through `python3 -m ci.run_build_tester --binary <path>`
+from the repository root (see [`ci/README.md`](../ci/README.md)).
+
 ## Options
 
 ```
@@ -36,6 +43,7 @@ python scripts/run_tests.py /path/to/camoufox-bin/camoufox
   --secret KEY          HMAC signing key for certificate
   --save-cert PATH      Save certificate text to a file
   --no-cert             Skip certificate generation
+  --json PATH           Write the full machine-readable result tree to PATH
 ```
 
 ## What It Tests
@@ -56,7 +64,7 @@ Each profile is scored across:
 | Firefox APIs | Firefox-specific API presence |
 | Cross-Signal | Consistency across navigator, screen, etc. |
 | CSS Fingerprint | CSS rendering fingerprint |
-| Canvas Noise | Canvas hash uniqueness and stability |
+| Canvas Noise | Canvas output is identical across renders (no random noise) |
 | WebGL Render | WebGL rendering hash |
 | Audio Integrity | AudioContext fingerprint |
 | Font Platform | OS-consistent font availability |

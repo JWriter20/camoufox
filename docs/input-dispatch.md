@@ -75,7 +75,7 @@ reachable from the same slot (`apz-repaints-flushed`, `TabSwitchDone`, the drag
 path's waits), none of which has failed yet.
 
 **The static check.** `scripts/check-input-dispatch.py`, wired into
-`.github/workflows/lint.yml`. Two exemptions, both content-process:
+the `static` job of `.github/workflows/tests.yml`. Two exemptions, both content-process:
 `PageAgent.js` (drag events, already content-relative, no ack) and
 `FrameTree.js` (the ack *producer*).
 

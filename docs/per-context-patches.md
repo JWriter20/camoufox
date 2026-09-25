@@ -2,24 +2,24 @@
 
 Camoufox spoofs fingerprints globally via `CAMOU_CONFIG` — every browser context shares the same identity. These patches add **per-context isolation**, so each Playwright context can have a unique, deterministic fingerprint. This lets you run multiple concurrent sessions from a single Camoufox process without cross-context correlation.
 
-### What's New
+### The Patches
 
-**New patches (8):**
+**Per-context patches (with a `window.setXxx()` API):**
+- `anti-font-fingerprinting.patch` — per-context `measureText()` spacing seed; also adds `RoverfoxStorageManager` (the shared per-context store) and puts the userContextId in `WordCacheKey` so the glyph cache never serves one context's result to another
 - `audio-fingerprint-manager.patch` — per-context audio fingerprint seeding (all 6 AudioBuffer + AnalyserNode methods)
 - `timezone-spoofing.patch` — true per-realm timezone isolation via SpiderMonkey DateTimeInfo
+- `screen-spoofing.patch` — per-context screen dimensions and color depth via `ScreenDimensionManager`
 - `navigator-spoofing.patch` — per-context platform, oscpu, hardwareConcurrency, userAgent
+- `webrtc-ip-spoofing.patch` — per-context WebRTC IP, including `getStats()` sanitization and IPv6
 - `webgl-spoofing.patch` — per-context UNMASKED_VENDOR/RENDERER_WEBGL
-- `canvas-spoofing.patch` — per-context canvas 2D fingerprint noise
 - `font-list-spoofing.patch` — per-context installed font list filtering via thread-local propagation
 - `speech-voices-spoofing.patch` — per-context `speechSynthesis.getVoices()` filtering
-- `cross-process-storage.patch` — IPDL message for content-to-parent pref writes, enabling cross-process fingerprint storage
 
-**Enhanced existing patches (5):**
-- `anti-font-fingerprinting.patch` — added `RoverfoxStorageManager` (cross-process Preferences-based storage), `WordCacheKey` fix (userContextId in glyph cache to prevent cross-context cache hits), random font subset generation
-- `screen-spoofing.patch` — replaces old `screen-hijacker.patch` with full per-context support via `ScreenDimensionManager`
-- `webrtc-ip-spoofing.patch` — added `getStats()` API sanitization, per-context IP storage, comprehensive IPv6 regex
-- `geolocation-spoofing.patch` — updated for Firefox 146, fixed malformed hunks and moz.build line offsets
-- `locale-spoofing.patch` — updated for Firefox 146 compatibility
+**Infrastructure:**
+- `cross-process-storage.patch` — IPDL messages for content-to-parent storage writes, so per-context values reach every process
+
+There is no canvas pixel noise: Camoufox leaves `toDataURL()`/`getImageData()`
+output as the GPU and fonts produce it.
 
 ## Quick Reference
 
@@ -38,11 +38,10 @@ Camoufox spoofs fingerprints globally via `CAMOU_CONFIG` — every browser conte
 | `window.setWebRTCIPv6(ip)` | `webrtc-ip-spoofing.patch` | WebRTC IPv6 addresses |
 | `window.setWebGLVendor(vendor)` | `webgl-spoofing.patch` | `UNMASKED_VENDOR_WEBGL` parameter |
 | `window.setWebGLRenderer(renderer)` | `webgl-spoofing.patch` | `UNMASKED_RENDERER_WEBGL` parameter |
-| `window.setCanvasSeed(seed)` | `canvas-spoofing.patch` | Canvas 2D `toDataURL()`/`getImageData()` hash |
 | `window.setFontList(fonts)` | `font-list-spoofing.patch` | Which fonts appear "installed" to fingerprinters |
 | `window.setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` filtering |
 
-All 16 functions **self-destruct after the first call** — page JavaScript cannot detect them via `typeof window.setTimezone`.
+All 15 functions **self-destruct after the first call** — page JavaScript cannot detect them via `typeof window.setTimezone`.
 
 ---
 
@@ -101,9 +100,6 @@ await context.addInitScript((values) => {
   if (typeof w.setWebGLRenderer === 'function') {
     w.setWebGLRenderer(values.webglRenderer);
   }
-  if (typeof w.setCanvasSeed === 'function') {
-    w.setCanvasSeed(values.canvasSeed);
-  }
   if (values.fontList && values.fontList.length > 0 && typeof w.setFontList === 'function') {
     w.setFontList(values.fontList.join(','));
   }
@@ -121,10 +117,9 @@ await context.addInitScript((values) => {
   navigatorPlatform: 'MacIntel',
   navigatorOscpu: 'Intel Mac OS X 10.15',
   hardwareConcurrency: 8,
-  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:146.0) Gecko/20100101 Firefox/146.0',
+  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0',
   webglVendor: 'Intel Inc.',
   webglRenderer: 'Intel Iris OpenGL Engine',
-  canvasSeed: 55555555,
   fontList: ['Arial', 'Helvetica', 'Georgia', 'Courier New', 'Verdana', 'Times New Roman'],
   speechVoices: 'Microsoft David,Microsoft Zira,Google US English',
 });
@@ -147,9 +142,8 @@ await ctxA.addInitScript((v) => {
   if (typeof window.setTimezone === 'function') window.setTimezone(v.tz);
   if (typeof window.setAudioFingerprintSeed === 'function') window.setAudioFingerprintSeed(v.audio);
   if (typeof window.setScreenDimensions === 'function') window.setScreenDimensions(v.sw, v.sh);
-  if (typeof window.setCanvasSeed === 'function') window.setCanvasSeed(v.canvas);
   if (typeof window.setWebGLRenderer === 'function') window.setWebGLRenderer(v.gpu);
-}, { tz: 'America/New_York', audio: 11111, sw: 1920, sh: 1080, canvas: 44444, gpu: 'Intel Iris OpenGL Engine' });
+}, { tz: 'America/New_York', audio: 11111, sw: 1920, sh: 1080, gpu: 'Intel Iris OpenGL Engine' });
 
 // Context B — appears as a Tokyo user with Apple GPU (fully isolated from A)
 const ctxB = await browser.newContext();
@@ -157,9 +151,8 @@ await ctxB.addInitScript((v) => {
   if (typeof window.setTimezone === 'function') window.setTimezone(v.tz);
   if (typeof window.setAudioFingerprintSeed === 'function') window.setAudioFingerprintSeed(v.audio);
   if (typeof window.setScreenDimensions === 'function') window.setScreenDimensions(v.sw, v.sh);
-  if (typeof window.setCanvasSeed === 'function') window.setCanvasSeed(v.canvas);
   if (typeof window.setWebGLRenderer === 'function') window.setWebGLRenderer(v.gpu);
-}, { tz: 'Asia/Tokyo', audio: 99999, sw: 2560, sh: 1440, canvas: 88888, gpu: 'Apple M1' });
+}, { tz: 'Asia/Tokyo', audio: 99999, sw: 2560, sh: 1440, gpu: 'Apple M1' });
 ```
 
 ---
@@ -176,7 +169,7 @@ All patches share `RoverfoxStorageManager`, a thread-safe C++ key-value store ke
 3. The value is stored in RoverfoxStorageManager's local HashMap cache (thread-safe `nsTHashMap` protected by `Mutex`)
 4. The value is also written to Firefox Preferences (`Preferences::SetCString`) with a `roverfox.s.` prefix — all value types (uint32, bool, string) are serialized as CString internally
 5. In content processes, values are sent to the parent (browser) process via sync IPC (`SendRoverfoxStoragePut`)
-6. Some patches also store the value under ucid=0 as a global fallback — this ensures workers that cannot resolve a specific `userContextId` can still read the value. Patches with ucid=0 fallback: **audio**, **canvas**, **navigator** (all 4 functions), **timezone**, **webgl**. Patches without: font-spacing, screen, font-list, speech-voices, webrtc-ip
+6. Some patches also store the value under ucid=0 as a global fallback — this ensures workers that cannot resolve a specific `userContextId` can still read the value. Patches with ucid=0 fallback: **audio**, **navigator** (all 4 functions), **screen**, **timezone**, **webgl**. Patches without: font-spacing, font-list, speech-voices, webrtc-ip
 
 **Read path (3-tier fallback):**
 1. **Local cache** — in-process `nsTHashMap` protected by `Mutex` (fastest, same-process reads)
@@ -229,7 +222,7 @@ Workers resolve `userContextId` via `WorkerPrivate::GetOriginAttributes()`, whic
 The `camoufox.cfg` file sets Firefox preferences at startup (before `prefs.js` is loaded). Key settings:
 
 - `fission.autostart = true` — keeps Fission (site isolation) enabled. Some WAFs can detect disabled Fission. With the cross-process storage patch, Fission works correctly because values are synced across all content processes.
-- `fission.webContentIsolationStrategy = 1` — standard isolation strategy.
+- `fission.webContentIsolationStrategy = 0` — no site isolation: cross-site iframes stay in their parent's process (no out-of-process iframes); COOP handling and BFCache-in-parent stay active.
 - `dom.ipc.processPrelaunch.enabled = false` — prevents Firefox from reusing pre-launched content processes that may have stale overridden values (locale, timezone). Ensures each new content process starts clean.
 - No `dom.ipc.processCount` override — Firefox uses its default multi-process behavior. The cross-process storage patch eliminates the need for `processCount=1`.
 
@@ -239,7 +232,7 @@ The `camoufox.cfg` file sets Firefox preferences at startup (before `prefs.js` i
 
 ### 1. anti-font-fingerprinting.patch
 
-**Controls:** Canvas `measureText()` letter spacing — makes text width measurements unique per context.
+**Controls:** Canvas `measureText()` letter spacing — makes text width measurements unique per context. The Python library sets the seed to 0 (off) by default: perturbed widths are something no stock Firefox produces. Pass `fonts:spacing_seed` to opt in.
 
 **How it works:** Stores a seed per context, then applies a deterministic spacing transformation in HarfBuzz (the text shaping engine). The seed is propagated through the entire text rendering pipeline: `nsTextFrame` → `gfxFont` → `gfxTextRun` → `gfxHarfBuzzShaper`.
 
@@ -322,7 +315,7 @@ window.setTimezone('America/New_York'); // IANA timezone ID
 
 Also hooks `nsMediaFeatures.cpp` so CSS media queries like `matchMedia('(device-width: 1920px)')` return results consistent with `screen.width`. Without this, fingerprinters can detect a mismatch between the JavaScript API and CSS media queries.
 
-This replaces the old `screen-hijacker.patch` (which only supported global config). It includes the same global `CAMOU_CONFIG` fallback, so it works for both single-context and multi-context use cases.
+The global `CAMOU_CONFIG` fallback means it works for both single-context and multi-context use cases.
 
 **API:**
 ```javascript
@@ -389,7 +382,7 @@ window.setWebRTCIPv6('2001:db8::1');   // proxy exit IPv6 (optional)
 window.setNavigatorPlatform('Win32');              // navigator.platform
 window.setNavigatorOscpu('Windows NT 10.0; Win64; x64');  // navigator.oscpu
 window.setNavigatorHardwareConcurrency(8);         // navigator.hardwareConcurrency
-window.setNavigatorUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:146.0) Gecko/20100101 Firefox/146.0');
+window.setNavigatorUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0');
 ```
 
 **Global config fallback (no JavaScript needed):**
@@ -427,35 +420,7 @@ window.setWebGLRenderer('Intel Iris OpenGL Engine');  // UNMASKED_RENDERER_WEBGL
 
 ---
 
-### 8. canvas-spoofing.patch
-
-**Controls:** Canvas 2D fingerprint hash — websites draw text, shapes, and gradients on a canvas, then call `toDataURL()` or `getImageData()` to hash the pixel output. GPU, driver, and font rendering differences make this hash highly unique.
-
-**How it works:** Stores a seed per context via `CanvasFingerprintManager`, then hooks both canvas data extraction paths in `CanvasRenderingContext2D.cpp`:
-- `GetImageBuffer()` — used by `toDataURL()` and `toBlob()`, returns pixels in **BGRA** format
-- `GetImageData()` — used by `ctx.getImageData()`, returns pixels in **RGBA** format
-
-The noise algorithm is **format-agnostic**: for each selected pixel, it iterates RGB channels (skipping alpha) and modifies the first non-zero channel by +/-1. This works correctly regardless of whether byte 0 is Red (RGBA) or Blue (BGRA).
-
-**Zero-pixel preservation:** Channels with value 0 are skipped. This means `clearRect()` followed by `getImageData()` returns all zeros — no false noise on transparent pixels. This is important because CreepJS specifically tests for noise in cleared canvas regions as a detection vector.
-
-**Noise is deterministic, not random:** Same seed always produces the same pixel modifications, so fingerprinters calling `toDataURL()` multiple times get identical results. This is critical — random noise is trivially detected by calling the API twice and comparing outputs.
-
-**Worker support:** Includes a `WorkerPrivate` fallback for resolving `userContextId` when canvas operations happen in a Web Worker via OffscreenCanvas.
-
-**MaskConfig fallback:** If no per-context seed is set, checks `MaskConfig::GetUint32("canvas:seed")` from `CAMOU_CONFIG`.
-
-**API:**
-```javascript
-window.setCanvasSeed(55555555); // uint32 seed
-```
-
-**New C++ files:** `CanvasFingerprintManager.h/cpp`
-**Modified Firefox files:** `nsGlobalWindowInner.cpp/h`, `CanvasRenderingContext2D.cpp`, `Window.webidl`, `moz.build`
-
----
-
-### 9. font-list-spoofing.patch
+### 8. font-list-spoofing.patch
 
 **Controls:** Which fonts appear "installed" to fingerprinting scripts. Websites detect fonts by measuring text widths (canvas `measureText()`) — if the width changes compared to a fallback font, the font is present. Each context can have a different subset of fonts.
 
@@ -493,7 +458,7 @@ window.setFontList('Arial,Helvetica,Georgia,Courier New,Verdana');
 
 ---
 
-### 10. speech-voices-spoofing.patch
+### 9. speech-voices-spoofing.patch
 
 **Controls:** `speechSynthesis.getVoices()` — the list of installed text-to-speech voices. This varies by OS and installed language packs, making it a fingerprinting vector. Each context can expose a different subset of voices.
 
@@ -512,7 +477,7 @@ window.setSpeechVoices('Microsoft David,Samantha,Alex');
 
 ---
 
-### 11. cross-process-storage.patch
+### 10. cross-process-storage.patch
 
 **Controls:** Cross-process synchronization of all per-context fingerprint values. This is an infrastructure patch — it has no JavaScript API of its own. It enables all other per-context patches to work correctly when Firefox runs content in multiple processes (Fission).
 
@@ -570,7 +535,7 @@ For per-context geolocation, use Playwright's built-in `context.setGeolocation()
 
 ## Build Notes
 
-**SOURCES vs UNIFIED_SOURCES:** Most new `.cpp` manager files use `SOURCES` (separate compilation) in `moz.build` to avoid namespace pollution (`mozilla::dom::mozilla::dom::`) that occurs when files including `RoverfoxStorageManager.h` are concatenated in unified builds. Currently in `SOURCES`: `AudioFingerprintManager.cpp`, `WebRTCIPManager.cpp`, `NavigatorManager.cpp`, `WebGLParamsManager.cpp`, `CanvasFingerprintManager.cpp`, `FontListManager.cpp`, `SpeechVoicesManager.cpp`. Four files use `UNIFIED_SOURCES` instead: `FontSpacingSeedManager.cpp`, `RoverfoxStorageManager.cpp` (both from `anti-font-fingerprinting.patch`), `TimezoneManager.cpp` (from `timezone-spoofing.patch`), and `ScreenDimensionManager.cpp` (from `screen-spoofing.patch`) — these were written before the SOURCES pattern was established and happen to compile without namespace issues in their alphabetical position.
+**SOURCES vs UNIFIED_SOURCES:** Most new `.cpp` manager files use `SOURCES` (separate compilation) in `moz.build` to avoid namespace pollution (`mozilla::dom::mozilla::dom::`) that occurs when files including `RoverfoxStorageManager.h` are concatenated in unified builds. Currently in `SOURCES`: `AudioFingerprintManager.cpp`, `WebRTCIPManager.cpp`, `NavigatorManager.cpp`, `WebGLParamsManager.cpp`, `FontListManager.cpp`, `SpeechVoicesManager.cpp`, `ScreenDimensionManager.cpp`. Three files use `UNIFIED_SOURCES` and compile without namespace issues in their alphabetical position: `FontSpacingSeedManager.cpp`, `RoverfoxStorageManager.cpp` (both from `anti-font-fingerprinting.patch`) and `TimezoneManager.cpp` (from `timezone-spoofing.patch`).
 
 **EXPORTS sort conflicts:** Each patch uses a separate `EXPORTS.mozilla.dom += ["Header.h"]` statement near its `SOURCES` block, rather than inserting into the main sorted EXPORTS list. This avoids sort conflicts when multiple patches add headers at similar alphabetical positions.
 
@@ -578,7 +543,7 @@ For per-context geolocation, use Playwright's built-in `context.setGeolocation()
 
 **Patch independence:** All patches apply independently to vanilla Firefox. Context lines in hunks reference unpatched source files. Patches apply alphabetically and use fuzzy matching for line shifts caused by other patches.
 
-**camoufox.cfg:** The `settings/camoufox.cfg` file sets `fission.autostart=true`, `fission.webContentIsolationStrategy=1`, and `dom.ipc.processPrelaunch.enabled=false`. No `dom.ipc.processCount` override is needed — the cross-process storage patch enables all per-context values to sync across Firefox's default multi-process architecture.
+**camoufox.cfg:** The `settings/camoufox.cfg` file sets `fission.autostart=true`, `fission.webContentIsolationStrategy=0`, and `dom.ipc.processPrelaunch.enabled=false`. No `dom.ipc.processCount` override is needed — the cross-process storage patch enables all per-context values to sync across Firefox's default multi-process architecture.
 
 ---
 
@@ -608,16 +573,16 @@ what differs per identity is which of them are on the search path.
 **What each `fonts.conf` defines:**
 - **Generic family defaults** — `sans-serif`, `serif`, `monospace`, `cursive`, `fantasy`, `system-ui` mapped to OS-appropriate fonts
 - **TTC weight-variant aliases** — macOS TrueType Collections register with weight suffixes ("PingFang HK Light") but Linux fontconfig only sees the base name. Aliases rewrite queries so CreepJS marker font detection works cross-platform.
-- **MONO redirect** — "MONO" is a Linux-only font. Redirected to the OS-appropriate monospace (Menlo on macOS, Cousine on Linux) to prevent host OS leakage.
+- **MONO redirect** — "MONO" is a Linux marker font. The Linux and Windows configs redirect it to `monospace` so it measures like the monospace baseline; the macOS config leaves it unmatched, so it falls through to Menlo as on a real Mac.
 - **Rendering settings** — Standardized antialias, hinting, and lcdfilter across all configs.
 
 **Runtime path rewriting:** At launch time, `utils._generate_fontconfig()` reads the bundled `fonts.conf` and replaces its single `<dir prefix="cwd">fonts</dir>` with one absolute `<dir>` per group the claimed OS reads (from `fonts/groups.json`). This is what prevents cross-OS font leakage — a face the claimed OS must not see is simply not on the search path — and it also avoids CWD-dependent path issues. The parent `fonts/` directory is never named: fontconfig scans `<dir>` **recursively**, so naming it would make every other OS's faces reachable for glyph fallback even though the allowlist hides them from direct lookup. `scripts/verify-fonts.py` asserts that no file outside an OS's own groups is reachable under its conf.
 
-**`FONTCONFIG_PATH` environment variable:** Must be set when launching Camoufox on Linux. Points to the correct OS-specific fontconfig directory (e.g. `camoufox/fontconfig/macos/`). The Go launcher sets this dynamically based on the target OS.
+**`FONTCONFIG_FILE` environment variable:** On a Linux host, `utils.get_env_vars()` points `FONTCONFIG_FILE` at the generated `fonts.conf` for the claimed OS. A browser launched without the Python (or TypeScript) wrapper does not get it and uses the system fontconfig.
 
 ---
 
-## Python Library Changes
+## Python Library
 
 The Camoufox Python package (`pythonlib/`) generates fingerprints for both `NewBrowser` (global CAMOU_CONFIG) and `NewContext` (per-context init script). **fpgen is the default for both paths.** Real fingerprint presets are available as an opt-in alternative.
 
@@ -630,9 +595,9 @@ The Camoufox Python package (`pythonlib/`) generates fingerprints for both `NewB
 
 **Recommended for v149+ binaries:** opt into bundled real fingerprints via
 `fingerprint_preset=True`. The library auto-selects the v150 preset bundle
-(`fingerprint-presets-v150.json`, 312 real fingerprints scraped from v149–v152
+(`fingerprint-presets-v150.json`, 288 real fingerprints scraped from v149–v152
 browsers) for any binary at Firefox ≥ 149, and falls back to the original
-bundle (`fingerprint-presets.json`, 123 presets) for older binaries. UA strings
+bundle (`fingerprint-presets.json`, 109 presets) for older binaries. UA strings
 are rewritten to match the active binary's Firefox version, so opting in costs
 nothing for compatibility.
 
@@ -659,13 +624,12 @@ bundles are shipped in the wheel.
 |----------|--------|-------|
 | UA, platform, HWC, oscpu | fpgen or preset | UA version patched to match Camoufox Firefox version |
 | Screen dims, colorDepth | fpgen or preset | Viewport adjusted by -28px for browser chrome |
-| WebGL vendor/renderer | `sample_webgl()` from `webgl_data.db` | OS-weighted probability sampling. The generator's own GPU fields are not mapped in `fpgen.yml` yet, so both paths call `sample_webgl()` for WebGL. fpgen does carry a full WebGL set (999 renderers against webgl_data.db's 33) -- wiring it through is the follow-up. |
-| Font list | `_generate_random_font_subset()` | Random 30-78% of OS fonts. Essential + marker fonts always included. NOT from presets — generated fresh per call. |
-| Font spacing seed | `randint(1, 2^32-1)` | Excludes 0 (0 = no-op in C++) |
-| Audio seed | `randint(1, 2^32-1)` | Excludes 0 |
-| Canvas seed | `randint(1, 2^32-1)` | Excludes 0 |
-| Timezone | From preset, or Intl.DateTimeFormat fallback in init script | NewBrowser: from preset or geolocation detection. NewContext: preset or browser default. |
-| Speech voices | `_generate_random_voice_subset()` | Random 40-80% of OS voices. Essential voices always included. macOS: 6 essentials + random subset of ~184. Windows: all voices (too few to subset). Linux: empty (no native voices). NOT from presets — generated fresh per call. |
+| WebGL vendor/renderer | `sample_webgl()` from `webgl_data.db` | OS-weighted probability sampling. fpgen's own WebGL fields are not mapped in `fpgen.yml` yet, so both paths call `sample_webgl()`. |
+| Font list | `_generate_random_font_subset()` | One weighted OS-version base in full, plus each addition unit at its measured probability; marker fonts always included. See [FONTS.md](FONTS.md). NOT from presets. |
+| Font spacing seed | `0` | Off by default (0 = no-op in C++); pass `fonts:spacing_seed` to opt in |
+| Audio seed | Derived from the identity (NewBrowser) or `randint(1, 2^32-1)` (NewContext) | Never 0 |
+| Timezone | From preset, or `timezone` in `CAMOU_CONFIG` | The init script calls `setTimezone()` only for an explicit value; otherwise the C++ side falls back to `CAMOU_CONFIG` (set from geoip at launch) or the browser default. |
+| Speech voices | `_generate_random_voice_subset()` | Follows the measured model in `voice-manifests.json`: Windows gets the display language's OneCore pack plus its legacy Desktop voices at their measured rate; macOS the compact + Eloquence base plus rare downloads; Linux speech-dispatcher's espeak-ng list. Seeded by the identity. NOT from presets. |
 | WebRTC IP | Not set by default | User sets via `window.setWebRTCIPv4()`. NewContext init script defaults to empty string `""` |
 | Geolocation | User parameter or geoip detection | Via Playwright `context.setGeolocation()` |
 
@@ -675,9 +639,9 @@ bundles are shipped in the wheel.
 - `generate_context_fingerprint()` — main API. Returns `{init_script, context_options, config, preset}`
 - `from_preset()` — converts real preset to CAMOU_CONFIG format
 - `from_fpgen()` — converts an fpgen fingerprint dict to CAMOU_CONFIG using `fpgen.yml` mappings
-- `_build_init_script()` — generates JavaScript IIFE calling 15 `window.setXxx()` functions with `typeof` guards (`setWebRTCIPv6` is not included — IPv6 is optional and rarely set)
-- `_generate_random_font_subset()` — unique random font subset per call (Fisher-Yates, essential + marker fonts always included)
-- `_generate_random_voice_subset()` — unique random voice subset per call (essential voices always included, OS-aware)
+- `_build_init_script()` — generates a JavaScript IIFE calling the `window.setXxx()` functions with `typeof` guards (every setter except `setWebRTCIPv6` — IPv6 is optional and rarely set)
+- `_generate_random_font_subset()` — the font list of one plausible machine of the OS (weighted base + per-unit draws, marker fonts always included)
+- `_generate_random_voice_subset()` — the voice list of one plausible machine of the OS, as MaskConfig voice objects
 
 **`utils.py`** — Global browser launch configuration:
 - `launch_options()` — builds CAMOU_CONFIG env var, Playwright args, and Firefox prefs
@@ -686,15 +650,15 @@ bundles are shipped in the wheel.
 - WebGL sampled via same `sample_webgl()` function
 - Config validated against `properties.json` before serialization
 
-**`fingerprint-presets.json`** — Original bundled real fingerprints organized by OS (macOS 30, Windows 75, Linux 18). Each preset includes navigator properties, screen dimensions, WebGL params, and speech voices. Used for Firefox < 149 binaries. Font and voice data not used from presets — generated fresh per launch.
+**`fingerprint-presets.json`** — Original bundled real fingerprints organized by OS (macOS 18, Windows 73, Linux 18). Each preset includes navigator properties, screen dimensions, WebGL params, and speech voices. Used for Firefox < 149 binaries. Font and voice data not used from presets — generated fresh per launch.
 
-**`fingerprint-presets-v150.json`** — Newer bundle covering Firefox v149–v152 (macOS 67, Windows 180, Linux 65; 312 total). Same schema as the original. Auto-selected by `load_presets()` when the active binary reports Firefox ≥ 149.
+**`fingerprint-presets-v150.json`** — Newer bundle covering Firefox v149–v152 (macOS 45, Windows 178, Linux 65; 288 total). Same schema as the original. Auto-selected by `load_presets()` when the active binary reports Firefox ≥ 149.
 
-**`fonts.json`** — Complete OS-specific font lists for random font subset generation.
+**`fonts.json`, `font-bases.json`, `font-groups.json`** — OS font lists, the OS-version bases and the addition units with their probabilities (see [FONTS.md](FONTS.md)).
 
-**`voices.json`** — Complete OS-specific speech voice lists for random voice subset generation. macOS: 190 voices, Windows: 53 voices, Linux: empty. Format: `"Name:locale:type"` — names extracted at load time.
+**`voices.json`** — OS-specific speech voice lists (macOS 190, Windows 53, Linux 131). Format: `"Name:locale:type"`. **`voice-manifests.json`** holds the per-OS model the voice draw follows.
 
-**`properties.json`** — Includes `audio:seed` and `canvas:seed` as `CAMOU_CONFIG` properties (uint type). These enable the MaskConfig fallback in the audio and canvas patches when using global config without per-context JavaScript.
+**`properties.json`** — Includes `audio:seed` as a `CAMOU_CONFIG` property (uint type), the MaskConfig fallback for the audio patch when using global config without per-context JavaScript.
 
 **`camoufox.cfg`** — Sets `fission.autostart=true` and `dom.ipc.processPrelaunch.enabled=false`. No `dom.ipc.processCount` override needed with cross-process storage.
 

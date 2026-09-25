@@ -98,26 +98,26 @@ snake_case names: `os`, `config`, `block_images`, `block_webrtc`,
 `window`, `fingerprint`, `fingerprint_preset`, `ff_version`, `headless`,
 `main_world_eval`, `allow_addon_new_tab`, `executable_path`, `browser`,
 `firefox_user_prefs`, `proxy`, `enable_cache`, `args`, `env`,
-`i_know_what_im_doing`, `debug`, `virtual_display`. Anything else is passed
+`i_know_what_im_doing`, `debug`, `virtual_display`, `pin_cpu_cores`. Anything else is passed
 straight through to Playwright.
 
 Two things differ from the Python signatures, both because of the runtime:
 
 - The returned launch options use Playwright's camelCase keys
   (`executablePath`, `firefoxUserPrefs`) rather than Python's snake_case.
-- `headless: "virtual"` is handled by `Camoufox()` / `NewBrowser()` /
-  `launchServer()`, not by `launchOptions()` — same as in Python.
+- `headless: "virtual"` is handled by `Camoufox()`, `NewBrowser()` and
+  `launchServer()`, not by `launchOptions()`. Python's `launch_server()` does
+  not handle it yet.
 
 ## CLI
 
 ```
 camoufox sync                     # refresh the version catalogue
 camoufox fetch [version]          # install the active or a specific version
-camoufox set <specifier>          # pin a version, or set a repo/channel
-camoufox set --geoip <name>       # choose a GeoIP source
+camoufox set [specifier]          # pin a version or channel; no specifier opens a picker
+camoufox set --geoip              # pick a GeoIP source
 camoufox list [installed|all]     # list versions
-camoufox remove [version]         # remove one version, or everything
-camoufox remove-geoip             # remove the GeoIP database
+camoufox remove [version]         # remove one version, or everything (--select to pick)
 camoufox active                   # print the active version
 camoufox path                     # print the install directory
 camoufox version                  # version / storage info
@@ -125,9 +125,8 @@ camoufox test [url]               # open the Playwright inspector
 camoufox server                   # launch a Playwright server
 ```
 
-The Python CLI's `gui` command (a PySide6 desktop app) has no Node equivalent
-and is not provided. Where the Python CLI opens an interactive picker, this one
-takes the same specifier as an argument instead.
+The commands and pickers match the Python CLI. The one exception is `gui`, a
+PySide6 desktop app that only the Python package provides.
 
 ## Development
 

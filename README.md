@@ -338,7 +338,7 @@ Camoufox is a Firefox fork engineered for web scraping and AI agents. It is head
 
 * **Built for AI agents** 🤖
   * Minimal, debloated Firefox - fast to launch, cheap to run
-  * Drop-in Playwright compatibility via Python interface
+  * Drop-in Playwright compatibility from Python and JavaScript/TypeScript
   * Invisible to anti-bot systems so you can run your agent cluster locally or in the cloud without being flagged
 
 - **Undetectable by design** 🎭
@@ -362,7 +362,7 @@ Camoufox is a Firefox fork engineered for web scraping and AI agents. It is head
   * No CSS animations 💨
 
 - Debloated & optimized for memory efficiency ⚡
-- [PyPi package](https://pypi.org/project/camoufox/) for updates & auto fingerprint injection 📦
+- [PyPI](https://pypi.org/project/camoufox/) and npm packages for updates & auto fingerprint injection 📦
 - Stays up to date with the latest Firefox version 🕓
 
 ---
@@ -371,23 +371,23 @@ Camoufox is a Firefox fork engineered for web scraping and AI agents. It is head
 
 In Camoufox, data is intercepted at the C++ implementation level, making the changes undetectable through JavaScript inspection.
 
-To spoof individual fingerprint properties, pass a JSON containing properties to spoof to the [Python interface](https://github.com/daijro/camoufox/tree/main/pythonlib#camoufox-python-interface):
+To spoof individual fingerprint properties, pass a JSON containing properties to spoof to the [Python](pythonlib/) or [TypeScript](typescript/) interface:
 
 ```py
 >>> with Camoufox(config={"property": "value"}) as browser:
 ```
 
-Config data not set by the user will be automatically populated using [BrowserForge](https://github.com/daijro/browserforge) fingerprints, which mimic the statistical distribution of device characteristics in real-world traffic.
+Config data not set by the user is populated from [fpgen](https://github.com/scrapfly/fingerprint-generator), a model of the statistical distribution of device characteristics in real-world traffic. The assembled identity is then checked for coherence, so parts that are each plausible cannot combine into a machine that does not exist.
 
 [[See implemented properties](https://camoufox.com/fingerprint/)]
 
 ---
 
-## Python Usage
+## Usage
 
 Camoufox is compatible with your existing Playwright code. You only have to change your browser initialization.
 
-**Sync API**
+**Python, sync API**
 
 ```python
 from camoufox.sync_api import Camoufox
@@ -397,7 +397,7 @@ with Camoufox() as browser:
     page.goto("https://example.com")
 ```
 
-**Async API**
+**Python, async API**
 
 ```python
 from camoufox.async_api import AsyncCamoufox
@@ -407,7 +407,18 @@ async with AsyncCamoufox() as browser:
     await page.goto("https://example.com")
 ```
 
-[[Installation & usage](https://camoufox.com/python/)]
+**JavaScript / TypeScript**
+
+```javascript
+import { Camoufox } from "@camoufox/camoufox";
+
+const browser = await Camoufox({ headless: true });
+const page = await browser.newPage();
+await page.goto("https://example.com");
+await browser.close();
+```
+
+[[Python installation & usage](https://camoufox.com/python/)] · [[TypeScript package](typescript/README.md)]
 
 ---
 
@@ -447,7 +458,7 @@ Below is a list of patches and features implemented in Camoufox.
 
 - Automatically uses the correct system fonts for your User Agent
 - Bundled with Windows, Mac, and Linux system fonts
-- Prevents font metrics fingerprinting by randomly offsetting letter spacing
+- Letter-spacing noise is available (`fonts:spacing_seed`) but off by default, because no real machine produces it
 
 ### Playwright support
 
@@ -473,7 +484,7 @@ Below is a list of patches and features implemented in Camoufox.
 - Addons are automatically pinned to the toolbar
 - Fixes DNS leaks with uBO prefetching
 
-### Python Interface
+### Python & TypeScript Interfaces
 
 - Automatically generates & injects unique device characteristics into Camoufox based on their real-world distribution
 - WebGL fingerprint injection & rotation
@@ -508,7 +519,9 @@ However, even with hiding its automation library, Camoufox is not immune to inco
 
 Anti-bot systems also run client-side scripts to monitor your behavior. For example, they look for patterns in mouse movements, clicks, scrolling, and the timing between actions.
 
-<video src="https://github.com/user-attachments/assets/6d33d6af-3537-4603-bf24-6bd3f4f8f455" width="200px" autoplay loop muted></video>
+<img src="assets/humanize-cursor.svg" alt="Cursor paths Camoufox produced with humanize=True, replayed at their recorded speed" width="900">
+
+Every dot above is a `mousemove` event the page received from six `page.mouse.move()` calls, replayed at the speed it arrived. Close dots mean the hand slowed down. `scripts/cursor-demo.py` regenerates the figure from a build.
 
 Camoufox does not draw its cursor paths. With `humanize=True` it uses [**Cursory**](https://github.com/Vinyzu/cursory) by [Vinyzu](https://github.com/Vinyzu), which holds 2357 mouse movements recorded from real people: it picks a recording whose direction, distance and wander suit the move being made, morphs it onto the requested start and end points, and replays it with that recording's own timing — pauses, overshoots and all.
 
@@ -528,13 +541,13 @@ AI agents need to operate across many sessions without getting flagged or rate-l
 
 Even if you are rotating your IP for each running bot instance, web access firewalls can still use machine learning to analyze incoming web traffic to detect if it's abnormal. If the Linux market share was 5%, then suddenly it's 20%, it's a red flag. They will unconditionally require all Linux users to complete a captcha.
 
-Camoufox uses [BrowserForge](https://github.com/daijro/browserforge)'s fingerprint generator to mimic the statistical distribution of device data in real-world traffic. For example, Camoufox will make your browser look like a Linux user 5% of the time. Of that 5%, it will spoof a 2560x1440 screen resolution 9.5% of the time and an Intel HD GPU 27.5% of the time.
+Camoufox draws identities from [fpgen](https://github.com/scrapfly/fingerprint-generator), a Bayesian network trained on live traffic, so each device characteristic appears about as often as it does in the real world, and in the combinations real devices produce.
 
 ### How can Camoufox be detected?
 
 Camoufox can spoof fingerprints with a correct market share. However, **fingerprints must also be internally consistent.** A Windows user agent with an Apple M1 GPU, a MacOS user agent with a Windows DirectX renderer, and a mobile device with a desktop screen resolution are all impossible, and will be flagged for being suspicious.
 
-Of the thousands of possible datapoints that must be changed to create a believable spoofed fingerprint, where each change must be consistent with the others, Camoufox doesn't always succeed. Anti-bot providers test Camoufox over and over again to find even 1 unique inconsistency, then they immediately update their background scripts to test for it.
+Every drawn identity passes a coherence check (`pythonlib/camoufox/coherence.py`) that rejects impossible combinations before launch. But of the thousands of datapoints that must agree with each other, Camoufox doesn't always get every one right. Anti-bot providers test Camoufox over and over again to find even 1 unique inconsistency, then they immediately update their background scripts to test for it.
 
 ---
 
@@ -550,7 +563,7 @@ Additionally, all injected JavaScript is detectable in some way. Anti-bot system
 
 Since Camoufox intercepts calls in the browser's C++ implementation level, all of the hijacked objects and properties appear native. There is no JavaScript hijacking to be detected.
 
-Camoufox also attempts to generate consistent and believable fingerprints with Browserforge as well. However, this can still be detected by complex fingerprint detection methods like mismatching data (as described earlier).
+Camoufox also generates consistent and believable fingerprints with fpgen and its coherence check. However, this can still be detected by complex fingerprint detection methods like mismatching data (as described earlier).
 
 <hr width=50>
 
@@ -571,7 +584,7 @@ Additionally, Juggler sends its inputs directly through the Firefox's original u
 <h1 align="center">Build System</h1>
 
 > [!WARNING]
-> The content below is intended for those interested in building & debugging Camoufox. For Playwright usage instructions, see [here](https://github.com/daijro/camoufox/tree/main/pythonlib#camoufox-python-interface).
+> The content below is intended for those interested in building & debugging Camoufox. For usage instructions, see [pythonlib](pythonlib/) or [typescript](typescript/).
 
 ### Overview
 
@@ -583,7 +596,7 @@ graph TD
 
     subgraph REPO[Camoufox Repository]
         PATCHES[Fingerprint masking patches]
-        ADDONS[uBlock & B.P.C.]
+        ADDONS[uBlock Origin]
         DEBLOAT[Debloat/optimizations]
         SYSTEM_FONTS[Win, Mac, Linux fonts]
         JUGGLER[Patched Juggler]
@@ -620,7 +633,7 @@ make dir
 
 Before bootstrapping, install the system build dependencies with the helper
 script. It detects your platform and installs everything the build needs
-(Python ≥ 3.11, Rust, `aria2`, `p7zip`, `go`, `msitools`, `wget`, `sqlite`, and
+(Python ≥ 3.11, Rust, `aria2`, `p7zip`, `msitools`, `wget`, `sqlite`, and
 the core build tools) using the appropriate package manager — Homebrew on macOS,
 or `apt`/`dnf`/`pacman` on Linux:
 
@@ -725,29 +738,27 @@ Build artifacts will now appear written under the `dist/` folder.
 
 ---
 
-## Development Tools
+## Working on patches
 
-This repo comes with a developer UI under scripts/developer.py:
+`make dir` leaves `camoufox-<version>-<release>/` as a git repository with every patch applied. A patch is a diff against a checkpoint in that repository:
 
+```bash
+# A new patch
+make dir                 # apply every existing patch
+make first-checkpoint    # mark the starting point
+# ...edit files in camoufox-*/, test with `make build` and `make run`...
+make diff > patches/my-change.patch
+
+# An existing patch
+make dir
+make workspace ./patches/x.patch   # unapply x, checkpoint, reapply x
+# ...edit...
+make diff > patches/x.patch
 ```
-make edits
-```
 
-Patches can be edited, created, removed, and managed through here.
+`make diff` shows only tracked files, so `git add -N <file>` any new file first. `make workspace` needs every later patch to leave the hunks of `x.patch` alone. `make patch` and `make unpatch` apply or reverse one patch, and `make revert` resets the tree to unpatched Firefox.
 
-<img src="https://i.imgur.com/BYAN5J0.png">
-
-### How to make a patch
-
-1. In the developer UI, click **Reset workspace**.
-2. Make changes in the `camoufox-*/` folder as needed. You can test your changes with `make build` and `make run`.
-3. After you're done making changes, click **Write workspace to patch** and save the patch file.
-
-### How to work on an existing patch
-
-1. In the developer UI, click **Edit a patch**.
-2. Select the patch you'd like to edit. Your workspace will be reset to the state of the selected patch.
-3. After you're done making changes, hit **Write workspace to patch** and overwrite the existing patch file.
+Then run the suites that cover what you changed. [`CONTRIBUTING.md`](CONTRIBUTING.md) says which ones, and [`ci/README.md`](ci/README.md) has the whole pipeline.
 
 ---
 
@@ -768,12 +779,12 @@ flowchart TD
     B -->|Yes| C[Likely bad IP/rate-limiting. If the website fails on both headless and headful mode on the official Firefox distribution, the issue is not with the browser.]
     B -->|No| D["Run make ff-dbg(1) and build(2) a clean distribution of Firefox. Does the website flag in Firefox **headless** mode(4)?"]
     D -->|Yes| E["Does the website flag in headful mode(3) AND headless mode(4)?"]
-    D -->|No| F["Open the developer UI(5), apply config.patch, then rebuild(2). Does the website still flag(3)?"]
+    D -->|No| F["Apply config.patch(5), then rebuild(2). Does the website still flag(3)?"]
     E -->|No| G["Enable privacy.resistFingerprinting in the config(6). Does the website still flag(3)?"]
     E -->|Yes| C
     G -->|No| H["In the config(6), enable FPP and start omitting overrides until you find the one that fixed the leak."]
     G -->|Yes| I[If you get to this point, you may need to deobfuscate the Javascript behind the website to identify what it's testing.]
-    F -->|Yes| K["Open the developer UI, apply the playwright bootstrap patch, then rebuild. Does it still flag?"]
+    F -->|Yes| K["Apply playwright/0-playwright.patch(5), then rebuild. Does it still flag?"]
     F -->|No| J["Omit options from camoufox.cfg(6) and rerun(3) until you find the one causing the leak."]
     K -->|No| M[Juggler needs to be debugged to locate the leak.]
     K -->|Yes| L[The issue has nothing to do with Playwright. Apply the rest of the Camoufox patches one by one until the one causing the leak is found.]
@@ -788,7 +799,7 @@ flowchart TD
 | (2) | `make build`                                  | Build the source code.                                                                                      |
 | (3) | `make run`                                    | Runs the built browser.                                                                                     |
 | (4) | `make run args="--headless https://test.com"` | Run a URL in headless mode. All redirects will be printed to the console to determine if the test passed.   |
-| (5) | `make edits`                                  | Opens the developer UI. Allows the user to apply/undo patches, and see which patches are currently applied. |
+| (5) | `make patch ./patches/<name>.patch`           | Apply one patch. `make unpatch` reverses it.                                                                |
 | (6) | `make edit-cfg`                               | Edit camoufox.cfg in the default system editor.                                                             |
 
 </details>
@@ -807,6 +818,7 @@ Web scraping & testing:
 
 - [Vinyzu/cursory](https://github.com/Vinyzu/cursory): The recorded human mouse trajectories behind `humanize=True`, vendored via [cursory-js](https://github.com/JWriter20/cursory-js) (LGPLv3-or-later — see `additions/juggler/input/cursory/NOTICE`)
 - [riflosnake/HumanCursor](https://github.com/riflosnake/HumanCursor): The Bézier cursor algorithm Camoufox used before Cursory
+- [scrapfly/fingerprint-generator](https://github.com/scrapfly/fingerprint-generator) (fpgen): The device distribution identities are drawn from
 - [CreepJS](https://github.com/abrahamjuliot/creepjs), [Browserleaks](https://browserleaks.com), [BrowserScan](https://www.browserscan.net/) - Valuable leak testing sites
 
 UI theming:

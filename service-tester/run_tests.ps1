@@ -8,7 +8,7 @@
 
 .PARAMETER BrowserVersion
     Camoufox version specifier (default: official/stable)
-    e.g. official/prerelease/146.0.1-beta.50
+    e.g. official/stable/152.0.4-beta.31
 
 .PARAMETER ProfileCount
     Number of profiles to test (1-6, default: 6)
@@ -30,7 +30,7 @@
 
 .EXAMPLE
     .\run_tests.ps1
-    .\run_tests.ps1 -BrowserVersion official/prerelease/146.0.1-beta.50 -Headful
+    .\run_tests.ps1 -BrowserVersion official/stable/152.0.4-beta.31 -Headful
     .\run_tests.ps1 -Binary local
     .\run_tests.ps1 -Binary fetched -ProfileCount 3
 #>

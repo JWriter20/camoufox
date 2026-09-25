@@ -11,7 +11,7 @@ Usage:
 
 Options:
   --browser-version VER   Camoufox version specifier (default: official/stable)
-                          e.g. official/prerelease/146.0.1-beta.50
+                          e.g. official/stable/152.0.4-beta.31
   --profile-count N       Number of profiles to test (1-6, default: 6)
   --headful               Run with visible browser window
   --proxies PATH          Path to proxies file (default: proxies.txt next to this script)

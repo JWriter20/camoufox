@@ -16,7 +16,7 @@ failures that look transient: a compile error or a patch that will not apply
 must still fail on the first try, because retrying those only wastes a runner.
 
 The retry lives here rather than in the Makefile so the Makefile diff stays
-clean against upstream (see CLAUDE.md) and so the auto-update harness gets the
+clean against upstream (see AGENTS.md) and so the auto-update harness gets the
 same behaviour without duplicating it in a workflow.
 
 Run:

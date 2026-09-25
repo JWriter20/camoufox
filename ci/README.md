@@ -6,16 +6,19 @@ to test a specific browser version, so there is one definition of "the tests
 pass", not two.
 
 ```
-resolve ──┬─ static ────────── tribal rules, skiplist, self-tests   (seconds)
-          ├─ pythonlib ─────── the package's own tests               (a minute)
-          └─ build ──┬─ playwright × 6 shards        (conformance + our own)
-                     ├─ skiplist audit ───── every skip must still fail
-                     ├─ native ───────────── leaks, contexts         (ours)
-                     ├─ patch guards ─────── one per spoofing patch
-                     ├─ build-tester ─────── 8 fingerprint profiles
-                     └─ sundial ──────────── stealth grade  (off: see below)
-                                    │
-                                 summary ──► one comment on the PR
+resolve ── static ─────────────── lint, tribal rules, skiplist, self-tests  (seconds)
+             ├─ typescript ────── type check, lint, vitest, golden parity
+             └─ pythonlib ─────── the package's own tests                   (a minute)
+                  └─ build or fetch ─┬─ patch guards ─────── one per spoofing patch, + skiplist audit
+                                     ├─ build-tester ─────── 8 fingerprint profiles
+                                     ├─ typescript-browser ─ the npm launcher end to end
+                                     └─ once guards and build-tester pass:
+                                          ├─ playwright × 6 shards   (conformance + our own)
+                                          ├─ native ───────── leaks, contexts, crash recovery
+                                          ├─ sundial ──────── stealth grade
+                                          └─ growth ───────── memory growth  (scheduled only)
+                                  │
+                               summary ──► one comment on the PR
 ```
 
 ## Which browser, which suite
@@ -260,7 +263,7 @@ isolation itself regresses.
 entry has to claim a test cannot pass in *either* world, or the suite would have
 counted it as a fallback rather than a failure.
 
-Ten tests are deselected outright by [`ci/skiplist.yml`](skiplist.yml), which
+Fourteen tests are deselected outright by [`ci/skiplist.yml`](skiplist.yml), which
 requires a stated reason per entry — `ci/summarize.py` fails the run on an
 unreasoned one.
 
@@ -273,19 +276,22 @@ leaving them bare.
 
 `ci/run_skiplist_audit.py` now runs every entry with the skiplist disabled and
 **fails the build if a skipped test passes**. It is cheap precisely because a
-correct skiplist is short — ten tests, a few seconds — and it is what keeps the
+correct skiplist is short — fourteen tests, a few seconds — and it is what keeps the
 list from drifting back into a place failing tests go to disappear.
 
 ```bash
 python3 -m ci.run_skiplist_audit --binary /path/to/camoufox-bin
 ```
 
-What remains after the audit, 10 tests: two `test_click.py` tests where
-Playwright's stable-position wait races the humanized travel time; six
-client-certificate tests (async and sync) that need the **browser** to present a
-certificate during the TLS handshake — the two that go through the Node driver's
-own request context instead pass, and are not skipped; and the two upstream
-expectations that encode a stock-Firefox quirk, replaced by `tests/camoufox/`.
+What remains, 14 tests: two `test_click.py` tests where Playwright's
+stable-position wait races the humanized travel time; two `test_keyboard.py`
+tests that assert a shifted character arrives without Shift, which Camoufox
+presses as a real keyboard would; six client-certificate tests (async and sync)
+that need the **browser** to present a certificate during the TLS handshake —
+the two that go through the Node driver's own request context instead pass, and
+are not skipped; two upstream expectations that encode a stock-Firefox quirk,
+replaced by `tests/camoufox/`; and two popup tests that rely on Playwright
+shipping Firefox's popup blocker off, which Camoufox keeps on.
 
 That client-certificate split is the audit earning its place. The entry was
 first written as a whole module, because on a local machine all five fail —
@@ -308,6 +314,14 @@ authority for what fails; a local run is a hypothesis.**
   and per-context injection silently degrades to process-global — which passes
   every single-context test there is. It has happened here before (commit
   `d17c887`, "fix screen size leak in contexts").
+- **Crashes.** Kill the browser, the X server, a content process or the driver
+  mid-run, then check that teardown does not hang, nothing leaks, and a fresh
+  launch still works (`test_crash_recovery.py`).
+- **Memory growth.** Drive one mechanism (iframes, canvas readback, WebGL
+  contexts, workers, script compilation, font measurement) N and 4N times and
+  compare the growth: a bounded cost stays flat, a per-iteration leak scales
+  (`test_memory_growth.py`). It takes over half an hour, so it runs on the
+  schedule and on demand (the `growth` job, `--subset growth`), not in the gate.
 - **Settled decisions.** `ci/tribal-rules.yml` lists choices this project already
   made, each with the issue or PR that made it, and
   `native-tests/test_tribal_rules.py` asserts them. A comment explaining a
@@ -526,11 +540,12 @@ Each tier gates the next, so a two-second lint failure never reaches the build:
 
 ```
 0  static    lint, self-tests, settled decisions        seconds
-1  unit      pythonlib                                  ~1 min
+1  unit      pythonlib, typescript                      ~1 min
 2  browser   build  (patches/additions/settings/assets/upstream.sh/Makefile/scripts changed)
              fetch  (anything else -- driver changes test against the published release)
-3a smoke     patch guards, build-tester                 ~15 min
-3b full      Playwright x2, leaks, stealth              ~40 min
+3a smoke     patch guards, skiplist audit, build-tester,
+             typescript-browser                         ~15 min
+3b full      Playwright x6, leaks, stealth              ~40 min
 4  gate      the required check
 ```
 
@@ -607,16 +622,25 @@ into a slow red build.
 ## Running a piece by hand
 
 ```bash
-python3 -m ci.run_playwright --binary path/to/camoufox-bin
-python3 -m ci.run_playwright --binary path/to/camoufox-bin --shard 3/6
-python3 -m ci.run_native     --subset rules            # no browser needed
-python3 -m ci.run_native     --subset browser --binary path/to/camoufox-bin
-python3 -m ci.run_sundial    --binary path/to/camoufox-bin
-python3 -m ci.summarize      --results-dir .ci-work/results
+python3 -m ci.run_prepare                                # make setup-minimal, dir, mozbootstrap
+python3 -m ci.run_build
+python3 -m ci.run_pythonlib                              # no browser needed
+python3 -m ci.run_typescript                             # no browser needed
+python3 -m ci.run_typescript     --browser path/to/camoufox-bin
+python3 -m ci.run_patch_guards   --binary path/to/camoufox-bin
+python3 -m ci.run_build_tester   --binary path/to/camoufox-bin
+python3 -m ci.run_skiplist_audit --binary path/to/camoufox-bin
+python3 -m ci.run_playwright     --binary path/to/camoufox-bin
+python3 -m ci.run_playwright     --binary path/to/camoufox-bin --shard 3/6
+python3 -m ci.run_native         --subset rules          # no browser needed
+python3 -m ci.run_native         --subset browser --binary path/to/camoufox-bin
+python3 -m ci.run_native         --subset growth  --binary path/to/camoufox-bin
+python3 -m ci.run_sundial        --binary path/to/camoufox-bin
+python3 -m ci.summarize          --results-dir .ci-work/results
 ```
 
-Each writes one result file to `.ci-work/results/`. `ci/summarize.py` folds the
-shards, decides, and renders the table. A required suite that produced no result
+Each suite runner writes one result file to `.ci-work/results/` (`run_prepare`
+writes none). `ci/summarize.py` folds the shards, decides, and renders the table. A required suite that produced no result
 file is a **failure**, never a skip — otherwise deleting a job would be the
 cheapest way to a green tick.
 
