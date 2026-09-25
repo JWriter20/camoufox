@@ -149,3 +149,37 @@ class TestEveryIdentityIsCoherent:
         for i, preset in enumerate(fp.load_presets("150")["presets"][os_name]):
             config = launch(os=os_name, fingerprint_preset=preset)
             assert coherence.validate(config, get_target_os(config)) == [], (os_name, i)
+
+
+_MIDPOINT_REPAIRS = """
+from camoufox import coherence
+out = []
+for os_key, steps in sorted(coherence.PLAUSIBLE_DPR.items()):
+    steps = sorted(steps)
+    for low, high in zip(steps, steps[1:]):
+        config = {"window.devicePixelRatio": (low + high) / 2}
+        coherence.apply(config, os_key)
+        out.append(config["window.devicePixelRatio"])
+print(out)
+"""
+
+
+def test_a_midpoint_repairs_to_the_lower_step_whether_or_not_bytecode_is_cached(tmp_path):
+    """The steps were frozensets, and min() keeps the first of equal distances.
+    A frozenset literal iterates in one order when compiled from source and in
+    another when loaded back from a .pyc, so the same identity repaired
+    differently on its first launch than on later ones."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    env = {"PYTHONPYCACHEPREFIX": str(tmp_path), "PYTHONPATH": str(Path(coherence.__file__).parents[1])}
+    runs = [
+        subprocess.run([sys.executable, "-c", _MIDPOINT_REPAIRS], env=env, capture_output=True,
+                       text=True, check=True).stdout
+        for _ in range(2)  # the first compiles and writes the .pyc, the second loads it
+    ]
+    assert runs[0] == runs[1]
+    lower = [low for _, steps in sorted(coherence.PLAUSIBLE_DPR.items())
+             for low in sorted(steps)[:-1]]
+    assert runs[0].strip() == str(lower)
