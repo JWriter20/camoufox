@@ -32,7 +32,9 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import AdmZip from "adm-zip";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { prerequisite } from "./prereq.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -79,6 +81,34 @@ function unknownToBinary(config: Record<string, any>): string[] {
 		JSON.parse(fs.readFileSync(file, "utf-8")).map((p: any) => p.property),
 	);
 	return Object.keys(config).filter((k) => !known.has(k));
+}
+
+/**
+ * The locales the binary under test packages (res/multilocale.txt): loose in
+ * an unpackaged dist/bin, inside omni.ja in a packaged build. A spoofed locale
+ * the binary does not package falls back to en-US -- scripts/package.py adds the
+ * langpacks, so a packaged release has them and CI's unpackaged dist/bin does
+ * not. null when it cannot be read.
+ */
+function packagedLocales(): string[] | null {
+	const dir = path.dirname(EXECUTABLE);
+	try {
+		const loose = path.join(dir, "res", "multilocale.txt");
+		const text = fs.existsSync(loose)
+			? fs.readFileSync(loose, "utf-8")
+			: new AdmZip(path.join(dir, "omni.ja"))
+					.getEntry("res/multilocale.txt")
+					?.getData()
+					.toString("utf-8");
+		return text
+			? text
+					.split(",")
+					.map((l) => l.trim())
+					.filter(Boolean)
+			: null;
+	} catch {
+		return null;
+	}
 }
 
 let server: http.Server;
@@ -232,8 +262,21 @@ function expectMatchesConfig(
 	}
 	expect(probe.intl.timeZone).toBe(config.timezone);
 	const lang = [config["locale:language"], config["locale:region"]].join("-");
-	expect(probe.navigator.language).toBe(lang);
-	expect(probe.intl.locale).toBe(lang);
+	const packaged = packagedLocales();
+	const hasLocale =
+		packaged === null ||
+		packaged.includes(lang) ||
+		packaged.includes(config["locale:language"]);
+	if (
+		prerequisite(
+			"packaged-locales",
+			hasLocale,
+			`the binary packages ${packaged?.join(",")}, not ${lang}`,
+		)
+	) {
+		expect(probe.navigator.language).toBe(lang);
+		expect(probe.intl.locale).toBe(lang);
+	}
 	// Fonts: every probed family the identity claims resolves; the others don't.
 	const claimed = new Set<string>(config.fonts);
 	for (const [family, present] of Object.entries(probe.fonts)) {

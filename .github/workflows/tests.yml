@@ -951,6 +951,13 @@ jobs:
       contents: read
     env:
       CAMOUFOX_FPGEN_DATA: ${{ github.workspace }}/.ci-work/fpgen
+      # The browser under test is the build job's unpackaged dist/bin, which
+      # packages en-US only: scripts/package.py adds the langpacks, and CI never
+      # runs it. A de-DE/fr-FR identity therefore presents en-US here though a
+      # packaged release presents de-DE. The e2e locale assertions skip on that
+      # (named) gap; everything else in the page-vs-config checks still runs.
+      # Remove this once the test artifact carries the langpacks.
+      CAMOUFOX_TEST_ALLOW_MISSING: packaged-locales
     steps:
       - uses: actions/checkout@v4
         with:
