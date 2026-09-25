@@ -1,39 +1,177 @@
 /**
- * Fingerprint generation: BrowserForge synthesis, real presets, per-context
- * identities, and the geometry/arch corrections applied on top of both.
+ * The identity layer: fpgen fingerprints and real presets turned into a
+ * Camoufox config, the per-identity draws (fonts, voices, media devices, GPU)
+ * and the geometry / arch corrections applied on top of both.
  *
- * TypeScript twin of python/src/fingerprints.py.
+ * TypeScript twin of pythonlib/camoufox/fingerprints.py. Every seeded draw is
+ * bit-for-bit the Python one -- `random.Random(seed)` is ./pyrandom.ts,
+ * numpy's default_rng is ./webgl/nprandom.ts, and identitySalt() hashes the
+ * same orjson bytes -- so one config and salt present one identity whichever
+ * launcher built it. Unseeded Python draws (`random.randint`, `random.choice`)
+ * go through the shared `pyRandom` instance, the twin of Python's module-level
+ * generator.
  */
+import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
+import * as nodeOs from "node:os";
 import * as path from "node:path";
-import {
-	type Fingerprint,
-	FingerprintGenerator,
-	type FingerprintGeneratorOptions,
-	type ScreenFingerprint,
-} from "fingerprint-generator";
+import { supported as cpuAffinitySupported } from "./cpu_affinity.js";
+import { Generator, InvalidConstraints } from "./fpgen/index.js";
 import { normalizeLocale } from "./locale.js";
-import BROWSERFORGE_DATA from "./mappings/browserforge.config.js";
 import { LOCAL_DATA } from "./pkgman.js";
-import { sampleWebGL, type TargetOS } from "./webgl/sample.js";
+import {
+	comparePyStr,
+	crc32,
+	num,
+	orjsonDumps,
+	pyStr,
+	pySum,
+	pySumFloats,
+	pyTruthy,
+} from "./pycompat.js";
+import { PyRandom, pyRandom } from "./pyrandom.js";
+import { sampleWebGL, type TargetOS, type WebGLData } from "./webgl/sample.js";
+
+export type { TargetOS } from "./webgl/sample.js";
+
+type Config = Record<string, any>;
 
 export const SUPPORTED_OS = ["linux", "macos", "windows"] as const;
 export type SupportedOS = (typeof SUPPORTED_OS)[number];
 
-const FP_GENERATOR = new FingerprintGenerator({
-	browsers: ["firefox"],
-	operatingSystems: [...SUPPORTED_OS] as any,
-});
+/**
+ * The fpgen -> Camoufox config mapping (pythonlib/camoufox/fpgen.yml; the
+ * golden fixtures assert the two stay equal).
+ */
+export const FPGEN_DATA: Readonly<Record<string, Record<string, string>>> = {
+	navigator: {
+		userAgent: "navigator.userAgent",
+		appCodeName: "navigator.appCodeName",
+		appName: "navigator.appName",
+		appVersion: "navigator.appVersion",
+		oscpu: "navigator.oscpu",
+		platform: "navigator.platform",
+		hardwareConcurrency: "navigator.hardwareConcurrency",
+		product: "navigator.product",
+		maxTouchPoints: "navigator.maxTouchPoints",
+	},
+	screen: {
+		availLeft: "screen.availLeft",
+		availTop: "screen.availTop",
+		availWidth: "screen.availWidth",
+		availHeight: "screen.availHeight",
+		height: "screen.height",
+		width: "screen.width",
+		colorDepth: "screen.colorDepth",
+		pixelDepth: "screen.pixelDepth",
+	},
+	window: {
+		outerHeight: "window.outerHeight",
+		outerWidth: "window.outerWidth",
+		screenX: "window.screenX",
+		screenY: "window.screenY",
+		pageYOffset: "screen.pageYOffset",
+	},
+	headers: {
+		"accept-encoding": "headers.Accept-Encoding",
+	},
+};
 
-// Bundled real fingerprint presets
-const PRESETS_FILE = path.join(LOCAL_DATA, "fingerprint-presets.json");
-const PRESETS_V150_FILE = path.join(
-	LOCAL_DATA,
-	"fingerprint-presets-v150.json",
-);
-// Firefox major version at which the v150 preset bundle becomes preferred.
-const PRESETS_V150_MIN_FF = 149;
-const PRESETS_CACHE = new Map<string, PresetBundle | null>();
+// fpgen's OS names, from Camoufox's.
+const FPGEN_OS: Readonly<Record<string, string>> = {
+	lin: "Linux",
+	linux: "Linux",
+	mac: "macOS",
+	macos: "macOS",
+	win: "Windows",
+	windows: "Windows",
+};
+
+// fpgen unpacks its model on first use, so the generator is built on demand.
+let FP_GENERATOR: Generator | null = null;
+
+function generator(): Generator {
+	FP_GENERATOR ??= new Generator();
+	return FP_GENERATOR;
+}
+
+/** Python dict.get(key, default): the default only when the key is absent. */
+function get(config: Config, key: string, dflt: any = undefined): any {
+	return Object.hasOwn(config, key) ? config[key] : dflt;
+}
+
+function isNone(value: unknown): boolean {
+	return value === null || value === undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
+
+export interface ScreenBounds {
+	minWidth?: number | null;
+	maxWidth?: number | null;
+	minHeight?: number | null;
+	maxHeight?: number | null;
+}
+
+/**
+ * A bound on the screen a generated fingerprint may claim (the twin of the
+ * Python dataclass that replaced browserforge's Screen).
+ */
+export class Screen {
+	minWidth: number | null;
+	maxWidth: number | null;
+	minHeight: number | null;
+	maxHeight: number | null;
+
+	constructor({
+		minWidth = null,
+		maxWidth = null,
+		minHeight = null,
+		maxHeight = null,
+	}: ScreenBounds = {}) {
+		this.minWidth = minWidth;
+		this.maxWidth = maxWidth;
+		this.minHeight = minHeight;
+		this.maxHeight = maxHeight;
+	}
+
+	/** The bound as fpgen conditions: a predicate per field. */
+	asConditions(): Record<string, (value: unknown) => boolean> {
+		const conditions: Record<string, (value: unknown) => boolean> = {};
+		const {
+			minWidth: loW,
+			maxWidth: hiW,
+			minHeight: loH,
+			maxHeight: hiH,
+		} = this;
+		const within = (v: unknown, lo: number | null, hi: number | null) =>
+			typeof v === "number" &&
+			Number.isInteger(v) &&
+			(lo === null || v >= lo) &&
+			(hi === null || v <= hi);
+		if (loW !== null || hiW !== null)
+			conditions["screen.width"] = (w) => within(w, loW, hiW);
+		if (loH !== null || hiH !== null)
+			conditions["screen.height"] = (h) => within(h, loH, hiH);
+		return conditions;
+	}
+
+	/** dataclasses.asdict(), with the Python field names (for identitySalt). */
+	toPyDict(): Record<string, number | null> {
+		return {
+			min_width: this.minWidth,
+			max_width: this.maxWidth,
+			min_height: this.minHeight,
+			max_height: this.maxHeight,
+		};
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Presets
+// ---------------------------------------------------------------------------
 
 export interface Preset {
 	navigator?: Record<string, any>;
@@ -45,10 +183,1134 @@ export interface Preset {
 	[key: string]: any;
 }
 
-interface PresetBundle {
+export interface PresetBundle {
 	presets?: Partial<Record<SupportedOS, Preset[]>>;
 	[key: string]: any;
 }
+
+export const PRESETS_FILE = path.join(LOCAL_DATA, "fingerprint-presets.json");
+export const PRESETS_V150_FILE = path.join(
+	LOCAL_DATA,
+	"fingerprint-presets-v150.json",
+);
+/** Firefox major version at which the v150 preset bundle becomes preferred. */
+export const PRESETS_V150_MIN_FF = 149;
+const PRESETS_CACHE = new Map<string, PresetBundle>();
+
+// ---------------------------------------------------------------------------
+// Fonts
+// ---------------------------------------------------------------------------
+
+// CreepJS OS marker fonts used for OS detection (see fingerprints.py).
+export const MACOS_MARKER_FONTS: readonly string[] = ["Helvetica Neue"];
+export const LINUX_MARKER_FONTS: readonly string[] = [
+	"Noto Sans",
+	"Noto Serif",
+	"DejaVu Sans Mono",
+	"Arimo",
+	"Cousine",
+	"Tinos",
+	"Twemoji Mozilla",
+];
+export const WINDOWS_MARKER_FONTS: readonly string[] = [
+	"Segoe UI",
+	"Tahoma",
+	"Cambria Math",
+	"Nirmala UI",
+];
+
+/** Add any missing marker fonts to the font list (in place). */
+function ensureMarkerFonts(fonts: string[], markers: readonly string[]): void {
+	const existing = new Set(fonts);
+	for (const m of markers) {
+		if (!existing.has(m)) fonts.push(m);
+	}
+}
+
+function readJson<T>(file: string): T {
+	return JSON.parse(fs.readFileSync(path.join(LOCAL_DATA, file), "utf-8")) as T;
+}
+
+let osFontsCache: Record<string, string[]> | null = null;
+
+/** The full OS font lists (fonts.json). */
+function loadOsFonts(): Record<string, string[]> {
+	osFontsCache ??= readJson<Record<string, string[]>>("fonts.json");
+	return osFontsCache;
+}
+
+// The OS BASE font sets that must always be reported: every family a real
+// machine of that OS ships by default, intersected with fonts.json (see
+// fingerprints.py for the sources). The golden fixtures assert these equal the
+// Python lists.
+export const ESSENTIAL_FONTS_MACOS: readonly string[] = [
+	"Academy Engraved LET",
+	"Al Bayan",
+	"Al Nile",
+	"Al Tarikh",
+	"American Typewriter",
+	"American Typewriter Semibold",
+	"Andale Mono",
+	"Apple Braille",
+	"Apple Chancery",
+	"Apple Color Emoji",
+	"Apple SD Gothic Neo",
+	"Apple SD Gothic Neo ExtraBold",
+	"Apple Symbols",
+	"AppleGothic",
+	"AppleMyungjo",
+	"Arial",
+	"Arial Black",
+	"Arial Hebrew",
+	"Arial Hebrew Scholar",
+	"Arial Narrow",
+	"Arial Rounded MT Bold",
+	"Arial Unicode MS",
+	"Athelas",
+	"Avenir",
+	"Avenir Black",
+	"Avenir Black Oblique",
+	"Avenir Book",
+	"Avenir Heavy",
+	"Avenir Light",
+	"Avenir Medium",
+	"Avenir Next",
+	"Avenir Next Demi Bold",
+	"Avenir Next Heavy",
+	"Avenir Next Medium",
+	"Avenir Next Ultra Light",
+	"Ayuthaya",
+	"Baghdad",
+	"Bangla MN",
+	"Bangla Sangam MN",
+	"Baskerville",
+	"Beirut",
+	"Big Caslon",
+	"Bodoni 72",
+	"Bodoni 72 Oldstyle",
+	"Bodoni 72 Smallcaps",
+	"Bodoni Ornaments",
+	"Bradley Hand",
+	"Brush Script MT",
+	"Chalkboard",
+	"Chalkboard SE",
+	"Chalkduster",
+	"Charter",
+	"Charter Black",
+	"Cochin",
+	"Comic Sans MS",
+	"Copperplate",
+	"Corsiva Hebrew",
+	"Courier",
+	"Courier New",
+	"DIN Alternate",
+	"DIN Condensed",
+	"Damascus",
+	"DecoType Naskh",
+	"Devanagari MT",
+	"Devanagari Sangam MN",
+	"Didot",
+	"Diwan Kufi",
+	"Diwan Thuluth",
+	"Euphemia UCAS",
+	"Farah",
+	"Farisi",
+	"Futura",
+	"Futura Bold",
+	"GB18030 Bitmap",
+	"Galvji",
+	"Geeza Pro",
+	"Geneva",
+	"Georgia",
+	"Gill Sans",
+	"Grantha Sangam MN",
+	"Gujarati MT",
+	"Gujarati Sangam MN",
+	"Gurmukhi MN",
+	"Gurmukhi MT",
+	"Gurmukhi Sangam MN",
+	"Heiti SC",
+	"Heiti TC",
+	"Helvetica",
+	"Helvetica Neue",
+	"Hiragino Kaku Gothic Pro",
+	"Hiragino Kaku Gothic Std",
+	"Hiragino Kaku Gothic StdN",
+	"Hiragino Maru Gothic Pro",
+	"Hiragino Maru Gothic ProN",
+	"Hiragino Maru Gothic ProN W4",
+	"Hiragino Mincho Pro",
+	"Hiragino Mincho ProN",
+	"Hiragino Mincho ProN W3",
+	"Hiragino Mincho ProN W6",
+	"Hiragino Sans",
+	"Hiragino Sans GB",
+	"Hiragino Sans GB W3",
+	"Hiragino Sans GB W6",
+	"Hiragino Sans W0",
+	"Hiragino Sans W1",
+	"Hiragino Sans W2",
+	"Hiragino Sans W3",
+	"Hiragino Sans W4",
+	"Hiragino Sans W5",
+	"Hiragino Sans W6",
+	"Hiragino Sans W7",
+	"Hiragino Sans W8",
+	"Hiragino Sans W9",
+	"Hoefler Text",
+	"Hoefler Text Ornaments",
+	"ITF Devanagari",
+	"ITF Devanagari Marathi",
+	"Impact",
+	"InaiMathi",
+	"InaiMathi Bold",
+	"Iowan Old Style",
+	"Kailasa",
+	"Kannada MN",
+	"Kannada Sangam MN",
+	"Khmer MN",
+	"Khmer Sangam MN",
+	"Kohinoor Bangla",
+	"Kohinoor Devanagari",
+	"Kohinoor Devanagari Medium",
+	"Kohinoor Gujarati",
+	"Kohinoor Telugu",
+	"Kokonor",
+	"Krungthep",
+	"KufiStandardGK",
+	"Lao MN",
+	"Lao Sangam MN",
+	"Lucida Grande",
+	"Luminari",
+	"Malayalam MN",
+	"Malayalam Sangam MN",
+	"Marker Felt",
+	"Menlo",
+	"Microsoft Sans Serif",
+	"Mishafi",
+	"Mishafi Gold",
+	"Monaco",
+	"Mshtakan",
+	"MuktaMahee Bold",
+	"MuktaMahee ExtraBold",
+	"MuktaMahee ExtraLight",
+	"MuktaMahee Light",
+	"MuktaMahee Medium",
+	"MuktaMahee Regular",
+	"MuktaMahee SemiBold",
+	"Muna",
+	"Myanmar MN",
+	"Myanmar Sangam MN",
+	"Nadeem",
+	"New Peninim MT",
+	"Noteworthy",
+	"Noto Nastaliq Urdu",
+	"Noto Sans Adlam",
+	"Noto Sans Armenian",
+	"Noto Sans Armenian Blk",
+	"Noto Sans Armenian ExtBd",
+	"Noto Sans Armenian ExtLt",
+	"Noto Sans Armenian Light",
+	"Noto Sans Armenian Med",
+	"Noto Sans Armenian SemBd",
+	"Noto Sans Armenian Thin",
+	"Noto Sans Avestan",
+	"Noto Sans Bamum",
+	"Noto Sans Bassa Vah",
+	"Noto Sans Batak",
+	"Noto Sans Bhaiksuki",
+	"Noto Sans Buginese",
+	"Noto Sans Buhid",
+	"Noto Sans Canadian Aboriginal Regular",
+	"Noto Sans Carian",
+	"Noto Sans CaucAlban",
+	"Noto Sans Chakma",
+	"Noto Sans Cham",
+	"Noto Sans Coptic",
+	"Noto Sans Cuneiform",
+	"Noto Sans Cypriot",
+	"Noto Sans Duployan",
+	"Noto Sans EgyptHiero",
+	"Noto Sans Elbasan",
+	"Noto Sans Glagolitic",
+	"Noto Sans Gothic",
+	"Noto Sans Gunjala Gondi",
+	"Noto Sans HanifiRohg",
+	"Noto Sans Hanunoo",
+	"Noto Sans Hatran",
+	"Noto Sans ImpAramaic",
+	"Noto Sans InsPahlavi",
+	"Noto Sans InsParthi",
+	"Noto Sans Javanese",
+	"Noto Sans Kaithi",
+	"Noto Sans Kannada",
+	"Noto Sans Kannada Black",
+	"Noto Sans Kannada ExtraBold",
+	"Noto Sans Kannada ExtraLight",
+	"Noto Sans Kannada Light",
+	"Noto Sans Kannada Medium",
+	"Noto Sans Kannada SemiBold",
+	"Noto Sans Kannada Thin",
+	"Noto Sans Kayah Li",
+	"Noto Sans Kharoshthi",
+	"Noto Sans Khojki",
+	"Noto Sans Khudawadi",
+	"Noto Sans Lepcha",
+	"Noto Sans Limbu",
+	"Noto Sans Linear A",
+	"Noto Sans Linear B",
+	"Noto Sans Lisu",
+	"Noto Sans Lycian",
+	"Noto Sans Lydian",
+	"Noto Sans Mahajani",
+	"Noto Sans Mandaic",
+	"Noto Sans Manichaean",
+	"Noto Sans Marchen",
+	"Noto Sans Masaram Gondi",
+	"Noto Sans Mende Kikakui",
+	"Noto Sans Meroitic",
+	"Noto Sans Miao",
+	"Noto Sans Modi",
+	"Noto Sans Mongolian",
+	"Noto Sans Mro",
+	"Noto Sans Multani",
+	"Noto Sans Myanmar",
+	"Noto Sans Myanmar Blk",
+	"Noto Sans Myanmar ExtBd",
+	"Noto Sans Myanmar ExtLt",
+	"Noto Sans Myanmar Light",
+	"Noto Sans Myanmar Med",
+	"Noto Sans Myanmar SemBd",
+	"Noto Sans Myanmar Thin",
+	"Noto Sans NKo",
+	"Noto Sans Nabataean",
+	"Noto Sans Newa",
+	"Noto Sans Ol Chiki",
+	"Noto Sans Old Italic",
+	"Noto Sans Old Permic",
+	"Noto Sans Old Turkic",
+	"Noto Sans OldHung",
+	"Noto Sans OldNorArab",
+	"Noto Sans OldSouArab",
+	"Noto Sans Oriya",
+	"Noto Sans Osage",
+	"Noto Sans Osmanya",
+	"Noto Sans Pahawh Hmong",
+	"Noto Sans Palmyrene",
+	"Noto Sans PhagsPa",
+	"Noto Sans Phoenician",
+	"Noto Sans PsaPahlavi",
+	"Noto Sans Rejang",
+	"Noto Sans Samaritan",
+	"Noto Sans Saurashtra",
+	"Noto Sans Sharada",
+	"Noto Sans Siddham",
+	"Noto Sans SoraSomp",
+	"Noto Sans Sundanese",
+	"Noto Sans Syloti Nagri",
+	"Noto Sans Syriac",
+	"Noto Sans Tagalog",
+	"Noto Sans Tagbanwa",
+	"Noto Sans Tai Le",
+	"Noto Sans Tai Tham",
+	"Noto Sans Tai Viet",
+	"Noto Sans Takri",
+	"Noto Sans Thaana",
+	"Noto Sans Tifinagh",
+	"Noto Sans Tirhuta",
+	"Noto Sans Ugaritic",
+	"Noto Sans Vai",
+	"Noto Sans Wancho",
+	"Noto Sans Yi",
+	"Noto Sans Zawgyi",
+	"Noto Sans Zawgyi Blk",
+	"Noto Sans Zawgyi ExtBd",
+	"Noto Sans Zawgyi ExtLt",
+	"Noto Sans Zawgyi Light",
+	"Noto Sans Zawgyi Med",
+	"Noto Sans Zawgyi SemBd",
+	"Noto Sans Zawgyi Thin",
+	"Noto Serif Ahom",
+	"Noto Serif Balinese",
+	"Noto Serif Hmong Nyiakeng",
+	"Noto Serif Myanmar",
+	"Noto Serif Myanmar Blk",
+	"Noto Serif Myanmar ExtBd",
+	"Noto Serif Myanmar ExtLt",
+	"Noto Serif Myanmar Light",
+	"Noto Serif Myanmar Med",
+	"Noto Serif Myanmar SemBd",
+	"Noto Serif Myanmar Thin",
+	"Noto Serif Yezidi",
+	"Optima",
+	"Oriya MN",
+	"Oriya Sangam MN",
+	"PT Mono",
+	"PT Sans",
+	"PT Sans Caption",
+	"PT Sans Narrow",
+	"PT Serif",
+	"PT Serif Caption",
+	"Palatino",
+	"Papyrus",
+	"Party LET",
+	"Phosphate",
+	"PingFang HK",
+	"PingFang SC",
+	"PingFang TC",
+	"Plantagenet Cherokee",
+	"Raanana",
+	"Rockwell",
+	"STIX Two Math",
+	"STIX Two Math Regular",
+	"STIX Two Text",
+	"STIX Two Text Regular",
+	"STIXGeneral",
+	"STIXIntegralsD",
+	"STIXIntegralsSm",
+	"STIXIntegralsUp",
+	"STIXIntegralsUpD",
+	"STIXIntegralsUpSm",
+	"STIXNonUnicode",
+	"STIXSizeFiveSym",
+	"STIXSizeFourSym",
+	"STIXSizeOneSym",
+	"STIXSizeThreeSym",
+	"STIXSizeTwoSym",
+	"STIXVariants",
+	"STSong",
+	"Sana",
+	"Sathu",
+	"Savoye LET",
+	"Shree Devanagari 714",
+	"SignPainter-HouseScript",
+	"Silom",
+	"Sinhala MN",
+	"Sinhala Sangam MN",
+	"Skia",
+	"Snell Roundhand",
+	"Songti SC",
+	"Songti TC",
+	"Sukhumvit Set",
+	"Superclarendon",
+	"Symbol",
+	"System Font",
+	"Tahoma",
+	"Tamil MN",
+	"Tamil Sangam MN",
+	"Telugu MN",
+	"Telugu Sangam MN",
+	"Thonburi",
+	"Times",
+	"Times New Roman",
+	"Trattatello",
+	"Trebuchet MS",
+	"Verdana",
+	"Waseem",
+	"Webdings",
+	"Wingdings",
+	"Wingdings 2",
+	"Wingdings 3",
+	"Zapf Dingbats",
+	"Zapfino",
+];
+
+export const ESSENTIAL_FONTS_WINDOWS: readonly string[] = [
+	"Arial",
+	"Arial Black",
+	"Bahnschrift",
+	"Calibri",
+	"Calibri Light",
+	"Cambria",
+	"Cambria Math",
+	"Candara",
+	"Candara Light",
+	"Comic Sans MS",
+	"Consolas",
+	"Constantia",
+	"Corbel",
+	"Corbel Light",
+	"Courier",
+	"Courier New",
+	"Ebrima",
+	"Franklin Gothic Medium",
+	"Gabriola",
+	"Gadugi",
+	"Georgia",
+	"Helvetica",
+	"Impact",
+	"Ink Free",
+	"Javanese Text",
+	"Leelawadee UI",
+	"Leelawadee UI Semilight",
+	"Lucida Console",
+	"Lucida Sans Unicode",
+	"MS Gothic",
+	"MS PGothic",
+	"MS Sans Serif",
+	"MS Serif",
+	"MS UI Gothic",
+	"MV Boli",
+	"Malgun Gothic",
+	"Malgun Gothic Semilight",
+	"Marlett",
+	"Microsoft Himalaya",
+	"Microsoft JhengHei",
+	"Microsoft JhengHei Light",
+	"Microsoft JhengHei UI",
+	"Microsoft JhengHei UI Light",
+	"Microsoft New Tai Lue",
+	"Microsoft PhagsPa",
+	"Microsoft Sans Serif",
+	"Microsoft Tai Le",
+	"Microsoft YaHei",
+	"Microsoft YaHei Light",
+	"Microsoft YaHei UI",
+	"Microsoft YaHei UI Light",
+	"Microsoft Yi Baiti",
+	"MingLiU-ExtB",
+	"MingLiU_HKSCS-ExtB",
+	"MingLiU_MSCS-ExtB",
+	"Mongolian Baiti",
+	"Myanmar Text",
+	"NSimSun",
+	"Nirmala Text",
+	"Nirmala Text Semilight",
+	"Nirmala UI",
+	"Nirmala UI Semilight",
+	"PMingLiU-ExtB",
+	"Palatino Linotype",
+	"Roman",
+	"Sans Serif Collection",
+	"Segoe Fluent Icons",
+	"Segoe MDL2 Assets",
+	"Segoe Print",
+	"Segoe Script",
+	"Segoe UI",
+	"Segoe UI Black",
+	"Segoe UI Emoji",
+	"Segoe UI Historic",
+	"Segoe UI Light",
+	"Segoe UI Semibold",
+	"Segoe UI Semilight",
+	"Segoe UI Symbol",
+	"Segoe UI Variable",
+	"Segoe UI Variable Display",
+	"Segoe UI Variable Small",
+	"Segoe UI Variable Text",
+	"SimSun",
+	"SimSun-ExtB",
+	"Sitka Banner",
+	"Sitka Display",
+	"Sitka Heading",
+	"Sitka Small",
+	"Sitka Subheading",
+	"Sitka Text",
+	"Small Fonts",
+	"Sylfaen",
+	"Symbol",
+	"Tahoma",
+	"Times",
+	"Times New Roman",
+	"Trebuchet MS",
+	"Twemoji Mozilla",
+	"Verdana",
+	"Webdings",
+	"Wingdings",
+	"Yu Gothic",
+	"Yu Gothic Light",
+	"Yu Gothic Medium",
+	"Yu Gothic UI",
+	"Yu Gothic UI Light",
+	"Yu Gothic UI Semibold",
+	"Yu Gothic UI Semilight",
+	"宋体",
+	"微軟正黑體",
+	"微軟正黑體 Light",
+	"微软雅黑",
+	"微软雅黑 Light",
+	"新宋体",
+	"新細明體-ExtB",
+	"游ゴシック",
+	"游ゴシック Light",
+	"游ゴシック Medium",
+	"細明體-ExtB",
+	"細明體_HKSCS-ExtB",
+	"細明體_MSCS-ExtB",
+	"맑은 고딕",
+	"맑은 고딕 Semilight",
+	"ＭＳ ゴシック",
+	"ＭＳ Ｐゴシック",
+];
+
+export const ESSENTIAL_FONTS_LINUX: readonly string[] = [
+	"AR PL UKai CN",
+	"AR PL UKai HK",
+	"AR PL UKai TW",
+	"AR PL UKai TW MBE",
+	"AR PL UMing CN",
+	"AR PL UMing HK",
+	"AR PL UMing TW",
+	"AR PL UMing TW MBE",
+	"Arial",
+	"Arial Narrow",
+	"Avant Garde",
+	"Bookman Old Style",
+	"C059",
+	"Calibri",
+	"Cambria",
+	"Century Schoolbook",
+	"Courier",
+	"Courier New",
+	"D050000L",
+	"DejaVu Sans",
+	"DejaVu Sans Mono",
+	"DejaVu Serif",
+	"Droid Sans Fallback",
+	"Helvetica",
+	"Helvetica Narrow",
+	"Liberation Mono",
+	"Liberation Sans",
+	"Liberation Sans Narrow",
+	"Liberation Serif",
+	"Nimbus Mono PS",
+	"Nimbus Roman",
+	"Nimbus Sans",
+	"Nimbus Sans Narrow",
+	"Noto Color Emoji",
+	"Noto Kufi Arabic",
+	"Noto Looped Lao",
+	"Noto Looped Lao Bold",
+	"Noto Looped Lao Regular",
+	"Noto Looped Thai",
+	"Noto Looped Thai Bold",
+	"Noto Looped Thai Regular",
+	"Noto Mono",
+	"Noto Music",
+	"Noto Naskh Arabic",
+	"Noto Nastaliq Urdu",
+	"Noto Rashi Hebrew",
+	"Noto Sans",
+	"Noto Sans Adlam",
+	"Noto Sans Adlam Unjoined",
+	"Noto Sans AnatoHiero",
+	"Noto Sans Anatolian Hieroglyphs",
+	"Noto Sans Arabic",
+	"Noto Sans Armenian",
+	"Noto Sans Avestan",
+	"Noto Sans Balinese",
+	"Noto Sans Bamum",
+	"Noto Sans Bassa Vah",
+	"Noto Sans Batak",
+	"Noto Sans Bengali",
+	"Noto Sans Bhaiksuki",
+	"Noto Sans Brahmi",
+	"Noto Sans Buginese",
+	"Noto Sans Buhid",
+	"Noto Sans CJK HK",
+	"Noto Sans CJK JP",
+	"Noto Sans CJK KR",
+	"Noto Sans CJK SC",
+	"Noto Sans CJK TC",
+	"Noto Sans CanAborig",
+	"Noto Sans Canadian Aboriginal",
+	"Noto Sans Carian",
+	"Noto Sans CaucAlban",
+	"Noto Sans Caucasian Albanian",
+	"Noto Sans Chakma",
+	"Noto Sans Cham",
+	"Noto Sans Cherokee",
+	"Noto Sans Coptic",
+	"Noto Sans Cuneiform",
+	"Noto Sans Cypriot",
+	"Noto Sans Deseret",
+	"Noto Sans Devanagari",
+	"Noto Sans Display",
+	"Noto Sans Duployan",
+	"Noto Sans EgyptHiero",
+	"Noto Sans Egyptian Hieroglyphs",
+	"Noto Sans Elbasan",
+	"Noto Sans Elymaic",
+	"Noto Sans Ethiopic",
+	"Noto Sans Georgian",
+	"Noto Sans Glagolitic",
+	"Noto Sans Gothic",
+	"Noto Sans Grantha",
+	"Noto Sans Gujarati",
+	"Noto Sans Gunjala Gondi",
+	"Noto Sans Gurmukhi",
+	"Noto Sans Hanifi Rohingya",
+	"Noto Sans Hanunoo",
+	"Noto Sans Hatran",
+	"Noto Sans Hebrew",
+	"Noto Sans ImpAramaic",
+	"Noto Sans Imperial Aramaic",
+	"Noto Sans Indic Siyaq Numbers",
+	"Noto Sans InsPahlavi",
+	"Noto Sans InsParthi",
+	"Noto Sans Inscriptional Pahlavi",
+	"Noto Sans Inscriptional Parthian",
+	"Noto Sans Javanese",
+	"Noto Sans Kaithi",
+	"Noto Sans Kannada",
+	"Noto Sans Kayah Li",
+	"Noto Sans Kharoshthi",
+	"Noto Sans Khmer",
+	"Noto Sans Khojki",
+	"Noto Sans Khudawadi",
+	"Noto Sans Lao",
+	"Noto Sans Lepcha",
+	"Noto Sans Limbu",
+	"Noto Sans Linear A",
+	"Noto Sans Linear B",
+	"Noto Sans Lisu",
+	"Noto Sans Lycian",
+	"Noto Sans Lydian",
+	"Noto Sans Mahajani",
+	"Noto Sans Malayalam",
+	"Noto Sans Mandaic",
+	"Noto Sans Manichaean",
+	"Noto Sans Marchen",
+	"Noto Sans Masaram Gondi",
+	"Noto Sans Math",
+	"Noto Sans Mayan Numerals",
+	"Noto Sans Medefaidrin",
+	"Noto Sans Meetei Mayek",
+	"Noto Sans Mende Kikakui",
+	"Noto Sans Meroitic",
+	"Noto Sans Miao",
+	"Noto Sans Modi",
+	"Noto Sans Mongolian",
+	"Noto Sans Mono",
+	"Noto Sans Mono CJK HK",
+	"Noto Sans Mono CJK JP",
+	"Noto Sans Mono CJK KR",
+	"Noto Sans Mono CJK SC",
+	"Noto Sans Mono CJK TC",
+	"Noto Sans Mro",
+	"Noto Sans Multani",
+	"Noto Sans Myanmar",
+	"Noto Sans NKo",
+	"Noto Sans Nabataean",
+	"Noto Sans New Tai Lue",
+	"Noto Sans Newa",
+	"Noto Sans Nushu",
+	"Noto Sans Ogham",
+	"Noto Sans Ol Chiki",
+	"Noto Sans Old Hungarian",
+	"Noto Sans Old Italic",
+	"Noto Sans Old North Arabian",
+	"Noto Sans Old Permic",
+	"Noto Sans Old Persian",
+	"Noto Sans Old Sogdian",
+	"Noto Sans Old South Arabian",
+	"Noto Sans Old Turkic",
+	"Noto Sans OldHung",
+	"Noto Sans OldNorArab",
+	"Noto Sans OldSouArab",
+	"Noto Sans Oriya",
+	"Noto Sans Osage",
+	"Noto Sans Osmanya",
+	"Noto Sans Pahawh Hmong",
+	"Noto Sans Palmyrene",
+	"Noto Sans Pau Cin Hau",
+	"Noto Sans PhagsPa",
+	"Noto Sans Phoenician",
+	"Noto Sans PsaPahlavi",
+	"Noto Sans Psalter Pahlavi",
+	"Noto Sans Rejang",
+	"Noto Sans Runic",
+	"Noto Sans Samaritan",
+	"Noto Sans Saurashtra",
+	"Noto Sans Sharada",
+	"Noto Sans Shavian",
+	"Noto Sans Siddham",
+	"Noto Sans SignWrit",
+	"Noto Sans SignWriting",
+	"Noto Sans Sinhala",
+	"Noto Sans Sogdian",
+	"Noto Sans Sora Sompeng",
+	"Noto Sans Soyombo",
+	"Noto Sans Sundanese",
+	"Noto Sans Syloti Nagri",
+	"Noto Sans Symbols",
+	"Noto Sans Symbols2",
+	"Noto Sans Syriac",
+	"Noto Sans Tagalog",
+	"Noto Sans Tagbanwa",
+	"Noto Sans Tai Le",
+	"Noto Sans Tai Tham",
+	"Noto Sans Tai Viet",
+	"Noto Sans Takri",
+	"Noto Sans Tamil",
+	"Noto Sans Tamil Supplement",
+	"Noto Sans Telugu",
+	"Noto Sans Thaana",
+	"Noto Sans Thai",
+	"Noto Sans Tifinagh",
+	"Noto Sans Tifinagh APT",
+	"Noto Sans Tifinagh Adrar",
+	"Noto Sans Tifinagh Agraw Imazighen",
+	"Noto Sans Tifinagh Ahaggar",
+	"Noto Sans Tifinagh Air",
+	"Noto Sans Tifinagh Azawagh",
+	"Noto Sans Tifinagh Ghat",
+	"Noto Sans Tifinagh Hawad",
+	"Noto Sans Tifinagh Rhissa Ixa",
+	"Noto Sans Tifinagh SIL",
+	"Noto Sans Tifinagh Tawellemmet",
+	"Noto Sans Tirhuta",
+	"Noto Sans Ugaritic",
+	"Noto Sans Vai",
+	"Noto Sans Wancho",
+	"Noto Sans Warang Citi",
+	"Noto Sans Yi",
+	"Noto Sans Zanabazar",
+	"Noto Sans Zanabazar Square",
+	"Noto Serif",
+	"Noto Serif Ahom",
+	"Noto Serif Armenian",
+	"Noto Serif Balinese",
+	"Noto Serif Bengali",
+	"Noto Serif CJK HK",
+	"Noto Serif CJK JP",
+	"Noto Serif CJK KR",
+	"Noto Serif CJK SC",
+	"Noto Serif CJK TC",
+	"Noto Serif Devanagari",
+	"Noto Serif Display",
+	"Noto Serif Dogra",
+	"Noto Serif Ethiopic",
+	"Noto Serif Georgian",
+	"Noto Serif Grantha",
+	"Noto Serif Gujarati",
+	"Noto Serif Gurmukhi",
+	"Noto Serif Hebrew",
+	"Noto Serif Hmong Nyiakeng",
+	"Noto Serif Kannada",
+	"Noto Serif Khmer",
+	"Noto Serif Khojki",
+	"Noto Serif Lao",
+	"Noto Serif Malayalam",
+	"Noto Serif Myanmar",
+	"Noto Serif Sinhala",
+	"Noto Serif Tamil",
+	"Noto Serif Tamil Slanted",
+	"Noto Serif Tangut",
+	"Noto Serif Telugu",
+	"Noto Serif Thai",
+	"Noto Serif Tibetan",
+	"Noto Serif Yezidi",
+	"Noto Traditional Nushu",
+	"OpenSymbol",
+	"P052",
+	"Palatino",
+	"Palatino Linotype",
+	"Standard Symbols PS",
+	"Symbol",
+	"Times",
+	"Times New Roman",
+	"URW Bookman",
+	"URW Gothic",
+	"Ubuntu",
+	"Ubuntu Mono",
+	"Ubuntu Sans",
+	"Ubuntu Sans Mono",
+	"Z003",
+	"Zapf Chancery",
+];
+
+/**
+ * OS-version variant of the Windows base: drawn with probability 1 since
+ * Windows 10 was dropped as a target (2026-09-22). Format: [probability, fonts].
+ */
+const BASE_VARIANT_FONTS_MACOS: readonly [number, readonly string[]] = [
+	0.0,
+	[],
+];
+const BASE_VARIANT_FONTS_WINDOWS: readonly [number, readonly string[]] = [
+	1.0,
+	[
+		"Sans Serif Collection",
+		"Segoe Fluent Icons",
+		"Segoe UI Variable",
+		"Segoe UI Variable Display",
+		"Segoe UI Variable Small",
+		"Segoe UI Variable Text",
+	],
+];
+const BASE_VARIANT_FONTS_LINUX: readonly [number, readonly string[]] = [
+	0.0,
+	[],
+];
+
+/**
+ * Fonts only a Windows 11 base has: a Windows identity whose font list
+ * contains them presents Windows 11, and the rest of the identity must agree.
+ */
+export const WINDOWS_11_MARKER_FONTS: ReadonlySet<string> = new Set(
+	BASE_VARIANT_FONTS_WINDOWS[1],
+);
+
+/**
+ * The entropy that makes identitySeed() belong to ONE identity.
+ *
+ * Pass whatever the caller pinned the identity with -- an fpgen fingerprint,
+ * a preset, the caller's own config -- for a salt that is stable across
+ * launches of that identity; pass nothing for a fresh, random one. The salt
+ * is the first 8 bytes (big-endian) of the SHA-256 of the orjson
+ * serialization with sorted keys, exactly as Python computes it, so a pinned
+ * identity draws the same fonts, voices, GPU and noise seeds in both
+ * launchers. (Integral floats and integers above 2**53 only hash like
+ * Python's when they arrive as PyFloat / bigint -- see pycompat.parsePyJson.)
+ */
+export function identitySalt(pinned?: unknown): bigint {
+	if (pinned === null || pinned === undefined) {
+		return randomBytes(8).readBigUInt64BE(0);
+	}
+	const blob = Buffer.from(orjsonDumps(pinned), "utf-8");
+	return createHash("sha256").update(blob).digest().readBigUInt64BE(0);
+}
+
+/**
+ * A seed for the per-identity draws: a pure function of the presented
+ * identity (UA, platform, screen, cores) and its salt -- zlib.crc32 of the
+ * values' Python str() joined by "|".
+ */
+export function identitySeed(
+	config: Config,
+	salt: number | bigint = 0,
+): number {
+	const parts = [
+		pyStr(get(config, "navigator.userAgent", "")),
+		pyStr(get(config, "navigator.platform", "")),
+		pyStr(get(config, "screen.width", "")),
+		pyStr(get(config, "screen.height", "")),
+		pyStr(get(config, "navigator.hardwareConcurrency", "")),
+		// not the GPU: it is sampled after the font draw in launchOptions
+		pyStr(salt),
+	];
+	return crc32(parts.join("|"));
+}
+
+/**
+ * The audio / canvas noise seeds launchOptions derives from identitySeed()
+ * (utils.py: `(ident * 2654435761 + 97) & 0xFFFFFFFF or 1` and
+ * `(ident * 40503 + 12345) & 0xFFFFFFFF or 1`), computed without losing
+ * precision past 2**53.
+ */
+export function noiseSeedsFromIdentity(ident: number): {
+	audio: number;
+	canvas: number;
+} {
+	const i = BigInt(ident);
+	const audio = Number((i * 2654435761n + 97n) & 0xffffffffn) || 1;
+	const canvas = Number((i * 40503n + 12345n) & 0xffffffffn) || 1;
+	return { audio, canvas };
+}
+
+/** A seeded generator for a draw, or a fresh OS-seeded one when unseeded. */
+function rng(seed: number | bigint | null | undefined): PyRandom {
+	return new PyRandom(seed ?? null);
+}
+
+export interface FontUnit {
+	id: string;
+	kind: "bundle" | "alacarte" | string;
+	prob?: number;
+	fonts: string[];
+	requiresLocale?: string;
+	sizes?: Array<{ n: number; w: number }>;
+}
+
+export interface FontBase {
+	id: string;
+	weight?: number;
+	fonts: string[];
+}
+
+let fontGroupsCache: Record<string, FontUnit[]> | null = null;
+
+/** The addition units per OS (font-groups.json), each with its own probability. */
+function loadFontGroups(): Record<string, FontUnit[]> {
+	if (!fontGroupsCache) {
+		try {
+			fontGroupsCache =
+				readJson<Record<string, FontUnit[]>>("font-groups.json");
+		} catch {
+			fontGroupsCache = {};
+		}
+	}
+	return fontGroupsCache;
+}
+
+let fontBasesCache: Record<string, FontBase[]> | null = null;
+
+/** The OS-version bases per OS (font-bases.json), drawn entire by weight. */
+function loadFontBases(): Record<string, FontBase[]> {
+	if (!fontBasesCache) {
+		try {
+			fontBasesCache = readJson<Record<string, FontBase[]>>("font-bases.json");
+		} catch {
+			fontBasesCache = {};
+		}
+	}
+	return fontBasesCache;
+}
+
+/** Draw one OS-version base by its real-world weight. */
+function pickBase(osKey: string, r: PyRandom): string[] {
+	const bases = loadFontBases()[osKey] ?? [];
+	if (!bases.length) return [];
+	const roll = r.random();
+	let cumulative = 0.0;
+	for (const base of bases) {
+		cumulative += base.weight ?? 0.0;
+		if (roll < cumulative) return [...base.fonts];
+	}
+	return [...bases[bases.length - 1].fonts];
+}
+
+function localeMatches(
+	locale: string | null | undefined,
+	required: string,
+): boolean {
+	return (locale ?? "").toLowerCase().startsWith(required.toLowerCase());
+}
+
+/** The additions this machine has, each unit judged on its own probability. */
+function drawUnits(
+	osKey: string,
+	r: PyRandom,
+	exclude: Set<string>,
+	locale?: string | null,
+): string[] {
+	const out: string[] = [];
+	for (const unit of loadFontGroups()[osKey] ?? []) {
+		const required = unit.requiresLocale;
+		if (required && !localeMatches(locale, required)) continue;
+		if (r.random() >= (unit.prob ?? 0.0)) continue;
+		let members = unit.fonts.filter((f) => !exclude.has(f));
+		if (!members.length) continue;
+		if (unit.kind === "alacarte") {
+			const sizes = unit.sizes?.length
+				? unit.sizes
+				: [{ n: members.length, w: 1.0 }];
+			const roll = r.random() * pySumFloats(sizes.map((s) => s.w));
+			let cumulative = 0.0;
+			let count = sizes[sizes.length - 1].n;
+			for (const size of sizes) {
+				cumulative += size.w;
+				if (roll < cumulative) {
+					count = size.n;
+					break;
+				}
+			}
+			count = Math.max(1, Math.min(count, members.length));
+			members = r.sample(members, count);
+		}
+		out.push(...members);
+	}
+	return out;
+}
+
+/** Whether the host itself ships the OS-version font variant (native identities only). */
+function hostHasVariantFonts(targetOs: string): boolean {
+	if (targetOs !== "windows") return false;
+	const fontsDir = path.join(process.env.WINDIR || "C:\\Windows", "Fonts");
+	// SegUIVar.ttf is Segoe UI Variable: on every Windows 11 and on no Windows 10.
+	return fs.existsSync(path.join(fontsDir, "SegUIVar.ttf"));
+}
+
+const OS_TO_KEY: Readonly<Record<string, TargetOS>> = {
+	macos: "mac",
+	windows: "win",
+	linux: "lin",
+};
+
+function osKeyOf(targetOs: string): TargetOS {
+	return OS_TO_KEY[targetOs] ?? "mac";
+}
+
+/**
+ * The font list of one plausible machine of the given OS
+ * (`_generate_random_font_subset`): one OS-version base by weight, never
+ * subsetted, then each addition unit at its own measured probability, then
+ * the marker fonts.
+ *
+ * @param locale gates the units the manifest marks `requiresLocale`.
+ * @param native the identity is the host's own OS (macOS / Windows), where the
+ *   real system fonts are used: only the OS base is claimed.
+ */
+export function generateRandomFontSubset(
+	targetOs: string,
+	seed?: number | bigint | null,
+	native = false,
+	locale?: string | null,
+): string[] {
+	const r = rng(seed);
+	const osFontsData = loadOsFonts();
+	const osKey = osKeyOf(targetOs);
+	const fullList = osFontsData[osKey] ?? osFontsData.mac ?? [];
+
+	let essential: Set<string>;
+	let markers: readonly string[];
+	let variantFonts: readonly string[];
+	if (targetOs === "windows") {
+		essential = new Set(ESSENTIAL_FONTS_WINDOWS);
+		markers = WINDOWS_MARKER_FONTS;
+		variantFonts = BASE_VARIANT_FONTS_WINDOWS[1];
+	} else if (targetOs === "linux") {
+		essential = new Set(ESSENTIAL_FONTS_LINUX);
+		markers = LINUX_MARKER_FONTS;
+		variantFonts = BASE_VARIANT_FONTS_LINUX[1];
+	} else {
+		essential = new Set(ESSENTIAL_FONTS_MACOS);
+		markers = MACOS_MARKER_FONTS;
+		variantFonts = BASE_VARIANT_FONTS_MACOS[1];
+	}
+
+	if (native) {
+		let result = fullList.filter((f) => essential.has(f));
+		const full = new Set(fullList);
+		result.push(
+			...[...essential].filter((f) => !full.has(f)).sort(comparePyStr),
+		);
+		if (variantFonts.length && !hostHasVariantFonts(targetOs)) {
+			const absent = new Set(variantFonts);
+			result = result.filter((f) => !absent.has(f));
+		}
+		return result;
+	}
+
+	let base = pickBase(osKey, r);
+	if (!base.length) base = fullList.filter((f) => essential.has(f));
+	const result = [...base];
+	const chosen = new Set(result);
+
+	// The guaranteed floor underneath whichever base was drawn.
+	for (const font of fullList) {
+		if (essential.has(font) && !chosen.has(font)) {
+			result.push(font);
+			chosen.add(font);
+		}
+	}
+
+	// Every addition unit on its own real-world probability, atomically.
+	for (const font of drawUnits(osKey, r, chosen, locale)) {
+		if (!chosen.has(font)) {
+			result.push(font);
+			chosen.add(font);
+		}
+	}
+
+	ensureMarkerFonts(result, markers);
+	return result;
+}
+
+// ---------------------------------------------------------------------------
+// Voices
+// ---------------------------------------------------------------------------
 
 export interface VoiceObject {
 	name: string;
@@ -58,215 +1320,77 @@ export interface VoiceObject {
 	isLocalService: boolean;
 }
 
-// CreepJS OS marker fonts used for OS detection
-const MACOS_MARKER_FONTS = [
-	"Helvetica Neue",
-	"PingFang HK",
-	"PingFang SC",
-	"PingFang TC",
-];
-const LINUX_MARKER_FONTS = ["Arimo", "Cousine", "Tinos", "Twemoji Mozilla"];
-const WINDOWS_MARKER_FONTS = [
-	"Segoe UI",
-	"Tahoma",
-	"Cambria Math",
-	"Nirmala UI",
-];
-
-/** Add any missing marker fonts to the font list (in-place). */
-function ensureMarkerFonts(fonts: string[], markers: string[]): void {
-	const existing = new Set(fonts);
-	for (const m of markers) {
-		if (!existing.has(m)) fonts.push(m);
-	}
-}
-
-// OS font lists loaded from fonts.json
-let osFontsCache: Record<string, string[]> | null = null;
-
-function loadOsFonts(): Record<string, string[]> {
-	if (osFontsCache) return osFontsCache;
-	osFontsCache = JSON.parse(
-		fs.readFileSync(path.join(LOCAL_DATA, "fonts.json"), "utf-8"),
-	);
-	return osFontsCache as Record<string, string[]>;
-}
-
-// Essential fonts per OS that must always be included in subsets
-const ESSENTIAL_FONTS_MACOS = [
-	"Arial",
-	"Helvetica",
-	"Times New Roman",
-	"Courier New",
-	"Verdana",
-	"Georgia",
-	"Trebuchet MS",
-	"Tahoma",
-	"Helvetica Neue",
-	"Lucida Grande",
-	"Menlo",
-	"Monaco",
-	"Geneva",
-	"PingFang HK",
-	"PingFang SC",
-	"PingFang TC",
-];
-const ESSENTIAL_FONTS_WINDOWS = [
-	"Arial",
-	"Times New Roman",
-	"Courier New",
-	"Verdana",
-	"Georgia",
-	"Trebuchet MS",
-	"Tahoma",
-	"Segoe UI",
-	"Calibri",
-	"Cambria Math",
-	"Nirmala UI",
-	"Consolas",
-];
-const ESSENTIAL_FONTS_LINUX = [
-	"Arimo",
-	"Cousine",
-	"Tinos",
-	"Twemoji Mozilla",
-	"Noto Sans Devanagari",
-	"Noto Sans JP",
-	"Noto Sans KR",
-	"Noto Sans SC",
-	"Noto Sans TC",
-];
-
-const OS_TO_SHORT: Record<string, TargetOS> = {
-	macos: "mac",
-	windows: "win",
-	linux: "lin",
-	mac: "mac",
-	win: "win",
-	lin: "lin",
-};
-
-/** Fisher-Yates sample of `count` items, the analogue of random.sample. */
-function sample<T>(items: T[], count: number): T[] {
-	const pool = [...items];
-	const picked: T[] = [];
-	for (let i = 0; i < count && pool.length; i++) {
-		const idx = Math.floor(Math.random() * pool.length);
-		picked.push(pool.splice(idx, 1)[0]);
-	}
-	return picked;
-}
-
-function randint(min: number, max: number): number {
-	return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function randrange(start: number, stop: number): number {
-	// Python's randrange(start, stop) excludes stop.
-	return Math.floor(Math.random() * (stop - start)) + start;
-}
-
-/**
- * Generate a random subset of fonts for the given OS. Picks a random
- * percentage between 30-78% of non-essential fonts, always including the
- * essential + marker fonts.
- */
-export function generateRandomFontSubset(targetOs: string): string[] {
-	const osFontsData = loadOsFonts();
-	const osKey = OS_TO_SHORT[targetOs] ?? "mac";
-	const fullList = osFontsData[osKey] ?? osFontsData.mac ?? [];
-
-	let essential: Set<string>;
-	let markers: string[];
-	if (targetOs === "windows") {
-		essential = new Set(ESSENTIAL_FONTS_WINDOWS);
-		markers = WINDOWS_MARKER_FONTS;
-	} else if (targetOs === "linux") {
-		essential = new Set(ESSENTIAL_FONTS_LINUX);
-		markers = LINUX_MARKER_FONTS;
-	} else {
-		essential = new Set(ESSENTIAL_FONTS_MACOS);
-		markers = MACOS_MARKER_FONTS;
-	}
-
-	// Split into essential and non-essential
-	const result = fullList.filter((f) => essential.has(f));
-	const nonEssential = fullList.filter((f) => !essential.has(f));
-
-	// Random percentage between 30-78%
-	const pct = 30 + Math.floor(Math.random() * 49);
-	const count = Math.round((pct / 100) * nonEssential.length);
-
-	result.push(
-		...(count < nonEssential.length
-			? sample(nonEssential, count)
-			: nonEssential),
-	);
-
-	ensureMarkerFonts(result, markers);
-
-	return result;
-}
-
-// OS voice lists loaded from voices.json, parsed into [name, lang, type].
-let osVoicesCache: Record<string, Array<[string, string, string]>> | null =
-	null;
-
-/**
- * Load OS voice lists from voices.json as [name, lang, type] tuples.
- *
- * Each entry is "Name:lang:type" (type is "local" or "remote"). Voice names
- * may contain parens/commas but not colons, so a last-two-colons split is safe.
- */
-function loadOsVoices(): Record<string, Array<[string, string, string]>> {
-	if (osVoicesCache) return osVoicesCache;
-	const raw: Record<string, string[]> = JSON.parse(
-		fs.readFileSync(path.join(LOCAL_DATA, "voices.json"), "utf-8"),
-	);
-	osVoicesCache = {};
-	for (const [osKey, entries] of Object.entries(raw)) {
-		const parsed: Array<[string, string, string]> = [];
-		for (const entry of entries) {
-			const parsedEntry = splitVoiceEntry(entry);
-			if (parsedEntry) parsed.push(parsedEntry);
-		}
-		osVoicesCache[osKey] = parsed;
-	}
-	return osVoicesCache;
-}
-
-function splitVoiceEntry(entry: string): [string, string, string] | null {
-	const last = entry.lastIndexOf(":");
-	if (last < 0) return null;
-	const vtype = entry.slice(last + 1);
-	const before = entry.slice(0, last);
-	const langsep = before.lastIndexOf(":");
-	if (langsep < 0) return null;
-	const lang = before.slice(langsep + 1);
-	const name = before.slice(0, langsep);
-	if (!name || !lang) return null;
-	return [name, lang, vtype];
-}
-
-// Essential speech voices per OS that must always be included in subsets
-const ESSENTIAL_VOICES_MACOS = [
-	"Samantha",
-	"Alex",
-	"Fred",
-	"Victoria",
-	"Karen",
-	"Daniel",
-];
-
 // Real Firefox speechSynthesis URI prefixes per backend.
-//   macOS NSSpeechSynthesizer -> "urn:moz-tts:osx:<dotted-slug>"
-//   Windows SAPI              -> "urn:moz-tts:sapi:<dotted-slug>"
-//   Linux speech-dispatcher   -> "urn:moz-tts:speechd:<escaped-name>?<lang>"
-const VOICE_URI_PREFIX: Record<string, string> = {
+const VOICE_URI_PREFIX: Readonly<Record<string, string>> = {
 	mac: "urn:moz-tts:osx:",
 	win: "urn:moz-tts:sapi:",
 	lin: "urn:moz-tts:speechd:",
 };
+
+export const MAC_NOVELTY_VOICES: ReadonlySet<string> = new Set([
+	"Albert",
+	"Bad News",
+	"Bahh",
+	"Bells",
+	"Boing",
+	"Bubbles",
+	"Cellos",
+	"Wobble",
+	"Good News",
+	"Jester",
+	"Organ",
+	"Superstar",
+	"Trinoids",
+	"Whisper",
+	"Zarvox",
+	"Fred",
+	"Junior",
+	"Kathy",
+	"Ralph",
+	"Bruce",
+	"Vicki",
+	"Victoria",
+	"Agnes",
+	"Princess",
+	"Hysterical",
+	"Pipe Organ",
+	"Deranged",
+	// not a novelty voice, but the same MacinTalk identifier family
+	"Alex",
+]);
+export const MAC_ELOQUENCE_VOICES: ReadonlySet<string> = new Set([
+	"Eddy",
+	"Flo",
+	"Grandma",
+	"Grandpa",
+	"Reed",
+	"Rocko",
+	"Sandy",
+	"Shelley",
+]);
+
+let voiceUrisCache: Record<string, Record<string, string>> | null = null;
+
+/** Real voiceURI per "Name|lang" as a stock browser reports it (voice-uris.json). */
+function loadVoiceUris(): Record<string, Record<string, string>> {
+	if (!voiceUrisCache) {
+		try {
+			voiceUrisCache =
+				readJson<Record<string, Record<string, string>>>("voice-uris.json");
+		} catch {
+			voiceUrisCache = {};
+		}
+	}
+	return voiceUrisCache;
+}
+
+let voiceManifestsCache: Record<string, any> | null = null;
+
+/** The per-OS installed-voice model (voice-manifests.json). */
+function loadVoiceManifests(): Record<string, any> {
+	voiceManifestsCache ??= readJson<Record<string, any>>("voice-manifests.json");
+	return voiceManifestsCache;
+}
 
 /** Stable dotted slug for mac/win URIs (shape-plausible, not catalog-exact). */
 function voiceUriSlug(name: string): string {
@@ -276,121 +1400,255 @@ function voiceUriSlug(name: string): string {
 		.replace(/^\.|\.$/g, "");
 }
 
-/** Build a voiceUri matching what real Firefox emits for the OS backend. */
-function voiceUri(osKey: string, name: string, lang: string): string {
+/** A voiceUri matching what real Firefox emits for the OS backend. */
+export function voiceUri(osKey: string, name: string, lang: string): string {
 	if (osKey === "lin") {
-		// Firefox's SpeechDispatcherService.cpp builds:
-		//   "urn:moz-tts:speechd:" + NS_EscapeURL(name, OnlyNonASCII|Spaces) + "?" + lang
-		// i.e. spaces -> %20 and non-ASCII bytes -> %XX, ASCII punctuation intact.
+		// SpeechDispatcherService.cpp: NS_EscapeURL(name, OnlyNonASCII|Spaces)
 		let escaped = "";
 		for (const ch of name) {
-			if (ch === " ") {
-				escaped += "%20";
-			} else if (ch.charCodeAt(0) <= 0x7f) {
-				escaped += ch;
-			} else {
-				for (const byte of new TextEncoder().encode(ch)) {
-					escaped += `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+			if (ch === " ") escaped += "%20";
+			else if ((ch.codePointAt(0) as number) <= 0x7f) escaped += ch;
+			else {
+				for (const b of Buffer.from(ch, "utf-8")) {
+					escaped += `%${b.toString(16).toUpperCase().padStart(2, "0")}`;
 				}
 			}
 		}
 		return `${VOICE_URI_PREFIX.lin}${escaped}?${lang}`;
 	}
+	if (osKey === "win") {
+		// SapiService.cpp: the name and lang, verbatim.
+		return `${VOICE_URI_PREFIX.win}${name}?${lang}`;
+	}
+	if (osKey === "mac") {
+		const uri = loadVoiceUris().mac?.[`${name}|${lang}`];
+		if (uri) return uri;
+		const asciiName = name.normalize("NFKD").replace(/[^A-Za-z0-9]/g, "");
+		if (MAC_NOVELTY_VOICES.has(name)) {
+			return `${VOICE_URI_PREFIX.mac}com.apple.speech.synthesis.voice.${asciiName}`;
+		}
+		if (MAC_ELOQUENCE_VOICES.has(name)) {
+			return `${VOICE_URI_PREFIX.mac}com.apple.eloquence.${lang}.${asciiName}`;
+		}
+		return `${VOICE_URI_PREFIX.mac}com.apple.voice.compact.${lang}.${asciiName}`;
+	}
 	return `${VOICE_URI_PREFIX[osKey] ?? ""}${voiceUriSlug(name)}`;
 }
 
+/** "Name:lang:type" -> [name, lang, type] (str.rsplit(':', 2)). */
+function splitVoiceEntry(entry: string): [string, string, string] {
+	const last = entry.lastIndexOf(":");
+	const langsep = last < 0 ? -1 : entry.lastIndexOf(":", last - 1);
+	if (last < 0 || langsep < 0) {
+		throw new Error(
+			`not enough values to unpack (voice entry ${JSON.stringify(entry)})`,
+		);
+	}
+	return [
+		entry.slice(0, langsep),
+		entry.slice(langsep + 1, last),
+		entry.slice(last + 1),
+	];
+}
+
+function weightedPick<T extends Record<string, any>>(
+	r: PyRandom,
+	items: T[],
+	wkey = "w",
+): T {
+	const total = pySumFloats(items.map((i) => Number(i[wkey] ?? 0)));
+	let x = r.random() * total;
+	for (const i of items) {
+		x -= Number(i[wkey] ?? 0);
+		if (x <= 0) return i;
+	}
+	return items[items.length - 1];
+}
+
+function weightedSample<T>(
+	r: PyRandom,
+	items: T[],
+	k: number,
+	weight: (x: T) => number,
+): T[] {
+	const pool = [...items];
+	const out: T[] = [];
+	while (pool.length && out.length < k) {
+		const total = pySumFloats(pool.map(weight));
+		let x = r.random() * total;
+		let picked = false;
+		for (const item of pool) {
+			x -= weight(item);
+			if (x <= 0) {
+				out.push(item);
+				pool.splice(pool.indexOf(item), 1);
+				picked = true;
+				break;
+			}
+		}
+		if (!picked) out.push(pool.pop() as T);
+	}
+	return out;
+}
+
+function resolveDisplayPack(
+	packs: Record<string, any>,
+	fallback: string,
+	locale?: string | null,
+): string {
+	const keys = Object.keys(packs);
+	if (locale) {
+		if (Object.hasOwn(packs, locale)) return locale;
+		const lang = locale.split("-")[0].toLowerCase();
+		for (const key of keys) {
+			if (key.split("-")[0].toLowerCase() === lang) return key;
+		}
+	}
+	return Object.hasOwn(packs, fallback) ? fallback : keys[0];
+}
+
+function codePointGreater(a: string, b: string): boolean {
+	return comparePyStr(a, b) > 0;
+}
+
 /**
- * Generate the speech voice list for the given OS as MaskConfig objects.
- *
- * Returns {lang, name, voiceUri, isDefault, isLocalService} entries, the shape
- * MaskConfig::MVoices() requires (it silently drops any entry missing a field,
- * so raw name strings would register nothing).
- *
- * Without this override, Firefox registers the HOST machine's
- * speech-dispatcher / SAPI / NSSpeech voices, leaking the OS the wrapper
- * actually runs on. We therefore emit a list for EVERY target OS:
- *   macOS:   essential voices + a random 40-80% of the rest.
- *   Windows: full SAPI set (subsetting a fixed list reads as suspicious).
- *   Linux:   full espeak-ng base-language set as enumerated by
- *            speech-dispatcher -- the fixed list a Linux Firefox exposes.
+ * The speech voice list for the given OS as MaskConfig voice objects
+ * (`_generate_random_voice_subset`), following the measured per-OS model in
+ * voice-manifests.json. Seeded by the identity so it always reports the same
+ * list. No voice is marked default: stock Firefox marks none.
  */
 export function generateRandomVoiceSubset(
 	targetOs: string,
-	locale?: string,
+	locale?: string | null,
+	seed?: number | bigint | null,
 ): VoiceObject[] {
-	const osVoicesData = loadOsVoices();
-	const osKey = OS_TO_SHORT[targetOs] ?? "mac";
-	const fullList = osVoicesData[osKey] ?? [];
+	const r = rng(seed);
+	const osKey = osKeyOf(targetOs);
+	const manifests = loadVoiceManifests();
+	const manifest = pyTruthy(manifests[osKey])
+		? manifests[osKey]
+		: manifests.mac;
 
-	if (!fullList.length) return [];
+	const out: string[] = [];
+	const seen = new Set<string>();
+	const add = (entries: string[] | null | undefined) => {
+		for (const e of entries ?? []) {
+			if (!seen.has(e)) {
+				seen.add(e);
+				out.push(e);
+			}
+		}
+	};
 
-	let selected: Array<[string, string, string]>;
-	if (osKey === "win" || osKey === "lin") {
-		// Fixed lists across installs (SAPI / espeak-ng) -- ship the whole set.
-		selected = [...fullList];
-	} else {
-		// macOS: essential voices + random 40-80% of the rest.
-		const essential = new Set(ESSENTIAL_VOICES_MACOS);
-		const result = fullList.filter((v) => essential.has(v[0]));
-		const nonEssential = fullList.filter((v) => !essential.has(v[0]));
-		const pct = 40 + Math.floor(Math.random() * 41); // 40-80%
-		const count = Math.round((pct / 100) * nonEssential.length);
-		result.push(
-			...(count < nonEssential.length
-				? sample(nonEssential, count)
-				: nonEssential),
+	const legacy: string[] = [];
+	const packs: Record<string, any> = pyTruthy(manifest.langPacks)
+		? manifest.langPacks
+		: {};
+
+	const takePack = (pack: Record<string, any>) => {
+		add(pack.oneCore);
+		if (
+			pyTruthy(pack.desktop) &&
+			r.random() < Number(pyTruthy(pack.desktopProb) ? pack.desktopProb : 0)
+		) {
+			for (const e of pack.desktop as string[]) {
+				if (!legacy.includes(e)) legacy.push(e);
+			}
+		}
+	};
+
+	add(manifest.base);
+	const chosen = new Set<string>();
+	if (Object.keys(packs).length) {
+		const key = resolveDisplayPack(
+			packs,
+			pyTruthy(manifest.fallbackLocale) ? manifest.fallbackLocale : "en-US",
+			locale,
 		);
-		selected = result;
+		chosen.add(key);
+		takePack(packs[key]);
 	}
 
-	const voices: VoiceObject[] = selected.map(([name, lang, vtype]) => ({
+	for (const addition of manifest.additions ?? []) {
+		if (pyTruthy(addition.deferred)) continue;
+		const req = addition.requiresLocale;
+		if (pyTruthy(req) && !localeMatches(locale, req)) continue;
+		if (r.random() >= Number(pyTruthy(addition.prob) ? addition.prob : 0))
+			continue;
+		const kind = addition.kind;
+		if (kind === "bundle") {
+			add(addition.voices);
+		} else if (kind === "alacarte") {
+			const sizes = pyTruthy(addition.sizes)
+				? addition.sizes
+				: [{ n: 1, w: 1 }];
+			const k = Math.trunc(Number(weightedPick(r, sizes).n));
+			for (const e of weightedSample<string>(
+				r,
+				addition.voices ?? [],
+				k,
+				() => 1.0,
+			)) {
+				if (!seen.has(e)) {
+					seen.add(e);
+					// a downloaded voice sits in its alphabetical place
+					const el = e.toLowerCase();
+					let idx = out.findIndex((v) => codePointGreater(v.toLowerCase(), el));
+					if (idx < 0) idx = out.length;
+					out.splice(idx, 0, e);
+				}
+			}
+		} else if (kind === "groups" && Object.keys(packs).length) {
+			const eligible = ((addition.groups ?? []) as string[]).filter(
+				(g) => Object.hasOwn(packs, g) && !chosen.has(g),
+			);
+			if (!eligible.length) continue;
+			const k = pyTruthy(addition.sizes)
+				? Math.trunc(Number(weightedPick(r, addition.sizes).n))
+				: eligible.length;
+			const weight = (g: string) =>
+				Number(pyTruthy(packs[g].weight) ? packs[g].weight : 0.01);
+			for (const g of weightedSample(r, eligible, k, weight)) {
+				chosen.add(g);
+				takePack(packs[g]);
+			}
+		}
+	}
+
+	const selected = [...out, ...legacy].map(splitVoiceEntry);
+	return selected.map(([name, lang, vtype]) => ({
 		name,
 		lang,
 		voiceUri: voiceUri(osKey, name, lang),
 		isDefault: false,
 		isLocalService: vtype === "local",
 	}));
-
-	// Mark a default voice matching the spoofed locale prefix so it lines up
-	// with Intl.DateTimeFormat().resolvedOptions().locale (CreepJS flags a
-	// voiceLangMismatch otherwise).
-	if (voices.length) {
-		const prefix = locale ? locale.split("-")[0].toLowerCase() : "en";
-		let idx = locale
-			? voices.findIndex((v) => v.lang.toLowerCase() === locale.toLowerCase())
-			: -1;
-		if (idx < 0) {
-			idx = voices.findIndex(
-				(v) => v.lang.split("-")[0].toLowerCase() === prefix,
-			);
-		}
-		if (idx < 0) idx = 0;
-		voices[idx].isDefault = true;
-	}
-
-	return voices;
 }
 
 /**
- * Coerce a preset's `speechVoices` into MaskConfig voice objects.
- *
- * Presets historically store voices as "Name:lang:type" strings, which the C++
- * MaskConfig::MVoices() silently drops (it needs full objects).
+ * Coerce a preset's `speechVoices` into MaskConfig voice objects: presets
+ * store "Name:lang:type" strings, which MaskConfig drops. Objects pass through.
  */
 export function normalizePresetVoices(
 	voices: Array<string | VoiceObject>,
 	targetOs: string,
 ): VoiceObject[] {
-	const osKey = OS_TO_SHORT[targetOs] ?? "mac";
+	const osKey = osKeyOf(targetOs);
 	const result: VoiceObject[] = [];
 	for (const entry of voices) {
-		if (typeof entry === "object") {
+		if (entry !== null && typeof entry === "object") {
 			result.push(entry);
 			continue;
 		}
-		const parsed = splitVoiceEntry(entry);
-		if (!parsed) continue;
-		const [name, lang, vtype] = parsed;
+		const last = entry.lastIndexOf(":");
+		if (last < 0) continue;
+		const vtype = entry.slice(last + 1);
+		const before = entry.slice(0, last);
+		const langsep = before.lastIndexOf(":");
+		if (langsep < 0) continue;
+		const lang = before.slice(langsep + 1);
+		const name = before.slice(0, langsep);
+		if (!name || !lang) continue;
 		result.push({
 			name,
 			lang,
@@ -399,158 +1657,190 @@ export function normalizePresetVoices(
 			isLocalService: vtype === "local",
 		});
 	}
-	if (result.length && !result.some((v) => v.isDefault)) {
+	if (result.length && !result.some((v) => v.isDefault))
 		result[0].isDefault = true;
-	}
 	return result;
 }
 
+// ---------------------------------------------------------------------------
+// Hardware concurrency and navigator arch
+// ---------------------------------------------------------------------------
+
+/** Logical CPUs this process may actually run on (affinity aware). */
+export function hostCpuCount(): number | null {
+	try {
+		return nodeOs.availableParallelism() || null;
+	} catch {
+		return nodeOs.cpus().length || null;
+	}
+}
+
 /**
- * Force navigator.platform AND navigator.oscpu to match the UA's arch.
- *
- * ~8% of Linux Firefox fingerprints in the BrowserForge pool report
- * "Linux armv81" for platform/oscpu while the UA says "Linux x86_64". That arch
- * mismatch is itself a CreepJS lie signal (CreepJS cross-checks oscpu,
- * platform, and the UA arch). Mac/Windows pools are consistent and need no
- * correction.
+ * Core counts real desktop machines ship with, from the recorded fingerprint
+ * corpus. 2 is excluded: no Apple Silicon part has 2 cores, and 85% of macOS
+ * identities draw an Apple GPU (see fingerprints.py).
  */
-export function fixNavigatorArch(
-	config: Record<string, any>,
-	targetOs: string,
+export const PLAUSIBLE_CORE_COUNTS: readonly number[] = [
+	4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32,
+];
+
+export interface HostCpu {
+	/** Logical CPUs of the host (default: hostCpuCount()). */
+	cpuCount?: number | null;
+	/** Whether the host can pin processes to cores (default: cpu_affinity.supported()). */
+	canPinHost?: boolean;
+}
+
+/**
+ * navigator.hardwareConcurrency = the host's parallelism, snapped DOWN into
+ * PLAUSIBLE_CORE_COUNTS -- or the fingerprint's own value (snapped, capped by
+ * the host) when the browser can be pinned to that many cores.
+ *
+ * @param canPin false when nothing will pin the browser (launchServer, or
+ *   launchOptions used directly); undefined/null: whatever the host supports.
+ * @param host overrides for the host probes (tests).
+ */
+export function fixHardwareConcurrency(
+	config: Config,
+	canPin?: boolean | null,
+	host: HostCpu = {},
 ): void {
+	const n = "cpuCount" in host ? host.cpuCount : hostCpuCount();
+	if (!n) return;
+	const pinnable =
+		(host.canPinHost ?? cpuAffinitySupported()) && canPin !== false;
+
+	const cap = Math.trunc(n);
+	const hostAllowed = PLAUSIBLE_CORE_COUNTS.filter((c) => c <= cap);
+	const hostValue = hostAllowed.length
+		? hostAllowed[hostAllowed.length - 1]
+		: PLAUSIBLE_CORE_COUNTS[0];
+
+	let drawn = config["navigator.hardwareConcurrency"];
+	if (typeof drawn === "boolean") drawn = Number(drawn); // a Python bool is an int
+	if (
+		pinnable &&
+		typeof drawn === "number" &&
+		Number.isInteger(drawn) &&
+		drawn >= 1
+	) {
+		const target = Math.min(drawn, cap);
+		const allowed = PLAUSIBLE_CORE_COUNTS.filter((c) => c <= target);
+		config["navigator.hardwareConcurrency"] = allowed.length
+			? allowed[allowed.length - 1]
+			: PLAUSIBLE_CORE_COUNTS[0];
+		return;
+	}
+	config["navigator.hardwareConcurrency"] = hostValue;
+}
+
+/** Force navigator.platform AND navigator.oscpu to match the UA's arch (Linux). */
+export function fixNavigatorArch(config: Config, targetOs: string): void {
 	if (targetOs !== "lin") return;
 	const ua = config["navigator.userAgent"];
-	if (!ua) return;
-
+	if (!pyTruthy(ua)) return;
 	let target = "";
 	if (ua.includes("Linux x86_64")) target = "Linux x86_64";
 	else if (ua.includes("Linux i686")) target = "Linux i686";
 	if (!target) return;
-
-	if (config["navigator.platform"] !== target) {
+	if (config["navigator.platform"] !== target)
 		config["navigator.platform"] = target;
-	}
-	if (config["navigator.oscpu"] !== target) {
-		config["navigator.oscpu"] = target;
-	}
+	if (config["navigator.oscpu"] !== target) config["navigator.oscpu"] = target;
 }
 
+// ---------------------------------------------------------------------------
+// Screen / window geometry
+// ---------------------------------------------------------------------------
+
 /**
- * Ensure screen.availHeight < screen.height so CreepJS's noTaskbar flag
- * (screen.height === availHeight and screen.width === availWidth) doesn't flip.
- *
- * Every desktop OS keeps some chrome visible (Mac menu bar ~25px, Win taskbar
- * ~40px, Linux panel ~27px); the BrowserForge pool occasionally ships
- * fingerprints with identical screen/avail values which leak as a headless
- * tell. Also clamps window.outerHeight (and innerHeight) to the new avail so
- * the window isn't taller than the available area.
+ * Ensure screen.availHeight < screen.height (CreepJS's noTaskbar flag), and
+ * clamp the window's outer/inner height to the new avail.
  */
-export function fixScreenNoTaskbar(
-	config: Record<string, any>,
-	targetOs: string,
-): void {
+export function fixScreenNoTaskbar(config: Config, targetOs: string): void {
 	const sw = config["screen.width"];
 	const sh = config["screen.height"];
-	const aw = config["screen.availWidth"];
 	const ah = config["screen.availHeight"];
-	if (!(sw && sh && aw === sw && ah === sh)) return;
-
+	if (!(pyTruthy(sw) && pyTruthy(sh) && num(ah) === num(sh) && !isNone(ah)))
+		return;
 	const taskbar = targetOs === "win" ? 40 : targetOs === "mac" ? 25 : 27;
-	const newAvail = sh - taskbar;
+	const newAvail = num(sh) - taskbar;
 	config["screen.availHeight"] = newAvail;
-
 	const oh = config["window.outerHeight"];
-	if (oh && oh > newAvail) {
+	if (pyTruthy(oh) && num(oh) > newAvail) {
 		const ih = config["window.innerHeight"];
-		const chrome = ih ? oh - ih : 0;
+		const chrome = pyTruthy(ih) ? num(oh) - num(ih) : 0;
 		config["window.outerHeight"] = newAvail;
-		if (ih) config["window.innerHeight"] = newAvail - chrome;
+		if (pyTruthy(ih)) config["window.innerHeight"] = newAvail - chrome;
 	}
 }
 
-/**
- * Enforce inner <= outer <= avail <= screen on BOTH axes.
- *
- * The browser faithfully reports whatever we inject, so a BrowserForge
- * fingerprint that ships e.g. outerWidth > screen.width leaks as an impossible
- * geometry. Shrink each level down to its container, preserving the chrome
- * delta between outer and inner where possible.
- */
-export function clampWindowDimensions(config: Record<string, any>): void {
-	for (const axis of ["Width", "Height"] as const) {
+/** Enforce inner <= outer <= avail <= screen on both axes. */
+export function clampWindowDimensions(config: Config): void {
+	for (const axis of ["Width", "Height"]) {
 		const screen = config[`screen.${axis.toLowerCase()}`];
 		const avail = config[`screen.avail${axis}`];
 		const outer = config[`window.outer${axis}`];
 		const inner = config[`window.inner${axis}`];
 
 		// avail must not exceed screen
-		if (screen && avail && avail > screen) {
+		if (pyTruthy(screen) && pyTruthy(avail) && num(avail) > num(screen)) {
 			config[`screen.avail${axis}`] = screen;
 		}
-		const availClamped = config[`screen.avail${axis}`] ?? screen;
+		const availClamped = get(config, `screen.avail${axis}`, screen);
 
 		// outer must not exceed avail (or screen if avail is unknown)
-		const outerCap = availClamped ?? screen;
-		if (outer && outerCap && outer > outerCap) {
-			const chrome = inner ? Math.max(0, outer - inner) : 0;
+		const outerCap = !isNone(availClamped) ? availClamped : screen;
+		if (pyTruthy(outer) && pyTruthy(outerCap) && num(outer) > num(outerCap)) {
+			const chrome = pyTruthy(inner) ? Math.max(0, num(outer) - num(inner)) : 0;
 			config[`window.outer${axis}`] = outerCap;
-			if (inner) {
-				config[`window.inner${axis}`] = Math.max(1, outerCap - chrome);
-			}
+			if (pyTruthy(inner))
+				config[`window.inner${axis}`] = Math.max(1, num(outerCap) - chrome);
 		}
 
 		// inner must not exceed outer
-		const outerClamped = config[`window.outer${axis}`] ?? outer;
+		const outerClamped = get(config, `window.outer${axis}`, outer);
 		const innerNow = config[`window.inner${axis}`];
-		if (innerNow && outerClamped && innerNow > outerClamped) {
+		if (
+			pyTruthy(innerNow) &&
+			pyTruthy(outerClamped) &&
+			num(innerNow) > num(outerClamped)
+		) {
 			config[`window.inner${axis}`] = outerClamped;
 		}
 	}
 }
 
 /**
- * Shrink screen.width/height down to the bounds of the real display.
- *
- * BrowserForge takes a Screen constraint but drops it silently whenever it
- * filters the fingerprint pool too far, so the bound from getScreenCons() is
- * best-effort only and a 1366x768 laptop routinely gets a 2560x1440
- * fingerprint. browser-init.patch resizes the real chrome window to
- * window.outerWidth/outerHeight, so an unbounded value renders past the edge of
- * the monitor (daijro/camoufox#499).
- *
- * Keeps the taskbar delta (screen - avail) intact so fixScreenNoTaskbar's
- * invariant survives. Callers must run clampWindowDimensions afterwards to
- * cascade the new bounds down to avail/outer/inner.
+ * Shrink screen.width/height down to the bounds of the real display, keeping
+ * the taskbar delta. Run clampWindowDimensions afterwards.
  */
 export function clampScreenToDisplay(
-	config: Record<string, any>,
-	maxWidth?: number,
-	maxHeight?: number,
+	config: Config,
+	maxWidth: number | null | undefined,
+	maxHeight: number | null | undefined,
 ): void {
 	for (const [axis, cap] of [
 		["width", maxWidth],
 		["height", maxHeight],
 	] as const) {
 		const screen = config[`screen.${axis}`];
-		if (!(screen && cap) || screen <= cap) continue;
+		if (!(pyTruthy(screen) && pyTruthy(cap)) || num(screen) <= (cap as number))
+			continue;
 		const availKey =
 			axis === "width" ? "screen.availWidth" : "screen.availHeight";
 		const avail = config[availKey];
 		config[`screen.${axis}`] = cap;
-		if (avail) {
-			config[availKey] = Math.max(1, cap - Math.max(0, screen - avail));
+		if (pyTruthy(avail)) {
+			config[availKey] = Math.max(
+				1,
+				(cap as number) - Math.max(0, num(screen) - num(avail)),
+			);
 		}
 	}
 }
 
-/**
- * Keep the window box inside the screen: 0 <= screenX/Y <= screen - outer.
- *
- * BrowserForge's screenX/screenY are consistent with the screen it generated
- * them against, so clampScreenToDisplay invalidates them. A window positioned
- * partly off its own reported screen is an impossible geometry.
- */
-export function clampWindowPosition(config: Record<string, any>): void {
+/** Keep the window box inside the screen: 0 <= screenX/Y <= screen - outer. */
+export function clampWindowPosition(config: Config): void {
 	for (const [axis, posKey] of [
 		["Width", "window.screenX"],
 		["Height", "window.screenY"],
@@ -558,66 +1848,317 @@ export function clampWindowPosition(config: Record<string, any>): void {
 		const screen = config[`screen.${axis.toLowerCase()}`];
 		const outer = config[`window.outer${axis}`];
 		const pos = config[posKey];
-		if (pos === undefined || pos === null || !screen || !outer) continue;
-		config[posKey] = Math.max(0, Math.min(pos, screen - outer));
+		if (isNone(pos) || !(pyTruthy(screen) && pyTruthy(outer))) continue;
+		config[posKey] = Math.max(0, Math.min(num(pos), num(screen) - num(outer)));
 	}
 }
 
+/** The smallest screen mainstream hardware still ships. */
+export const MODERN_SCREEN_FLOOR: readonly [number, number] = [1366, 768];
+
 /**
- * Spoof navigator.mediaDevices.enumerateDevices() so headless contexts expose a
- * plausible device list.
- *
- * A real desktop browser without explicit mic permission reports one
- * audioinput + one videoinput; an empty list is a headless tell. The patched
- * MediaDevices::FilterExposedDevices reads
- * mediaDevices:{enabled,micros,webcams,speakers}.
+ * Lift netbook-era screen geometry to the modern floor, keeping the
+ * screen-to-avail gaps. Call BEFORE clampScreenToDisplay.
  */
-export function setMediaDevicesDefaults(config: Record<string, any>): void {
+export function raiseScreenToModernFloor(config: Config): void {
+	const [minW, minH] = MODERN_SCREEN_FLOOR;
+	const sw = config["screen.width"];
+	const sh = config["screen.height"];
+	if (!(pyTruthy(sw) && pyTruthy(sh)) || (num(sw) >= minW && num(sh) >= minH))
+		return;
+
+	const aw = config["screen.availWidth"];
+	const ah = config["screen.availHeight"];
+	const gapW = pyTruthy(aw) ? num(sw) - num(aw) : null;
+	const gapH = pyTruthy(ah) ? num(sh) - num(ah) : null;
+
+	const newW = Math.max(num(sw), minW);
+	const newH = Math.max(num(sh), minH);
+	config["screen.width"] = newW;
+	config["screen.height"] = newH;
+	if (gapW !== null)
+		config["screen.availWidth"] = Math.max(1, newW - Math.max(0, gapW));
+	if (gapH !== null)
+		config["screen.availHeight"] = Math.max(1, newH - Math.max(0, gapH));
+}
+
+// ---------------------------------------------------------------------------
+// Media devices
+// ---------------------------------------------------------------------------
+
+let mediaDevicesCache: Record<string, any> | null = null;
+
+/** Per-OS catalogue of common sound cards / headsets / displays / cameras. */
+function loadMediaDevices(): Record<string, any> {
+	mediaDevicesCache ??= readJson<Record<string, any>>("media-devices.json");
+	return mediaDevicesCache;
+}
+
+function weightedChoice<T extends Record<string, any>>(
+	r: PyRandom,
+	items: T[],
+): T {
+	const w = (item: T) => (Object.hasOwn(item, "w") ? item.w : 1);
+	const total = Number(pySum(items.map(w)));
+	let x = r.random() * total;
+	for (const item of items) {
+		x -= w(item);
+		if (x < 0) return item;
+	}
+	return items[items.length - 1];
+}
+
+// Share of machines with no microphone at all, and with a built-in camera.
+const MEDIA_P_NO_MIC: Readonly<Record<string, number>> = {
+	win: 0.08,
+	mac: 0.0,
+	lin: 0.2,
+};
+const MEDIA_P_BUILTIN_CAM: Readonly<Record<string, number>> = {
+	win: 0.78,
+	mac: 0.0,
+	lin: 0.45,
+};
+
+/**
+ * Draw one machine's media devices for `osKey` ('win'|'mac'|'lin'): the
+ * mediaDevices:* config keys, counts plus aligned label and group lists.
+ */
+export function drawMediaDevices(
+	osKey: string,
+	seed: number | bigint | null | undefined,
+): Config {
+	const r = rng(seed);
+	const catalogue = loadMediaDevices();
+	const cat = pyTruthy(catalogue[osKey]) ? catalogue[osKey] : catalogue.win;
+	const mics: Array<[string, string]> = [];
+	const outs: Array<[string, string]> = [];
+	const cams: Array<[string, string]> = [];
+	let counter = 0;
+	const group = () => {
+		counter += 1;
+		return `hw-${counter}`;
+	};
+	const add = (item: Record<string, any>, grp: string) => {
+		for (const m of item.mics ?? []) mics.push([m, grp]);
+		for (const o of item.outs ?? []) outs.push([o, grp]);
+		if (pyTruthy(item.cam)) cams.push([item.cam, group()]);
+	};
+
+	// 1. the machine's own sound card (+ built-in camera on macOS models)
+	const card = weightedChoice(r, cat.cards);
+	const noMic = r.random() < (MEDIA_P_NO_MIC[osKey] ?? 0.0);
+	const cardGrp = group();
+	add(noMic ? { ...card, mics: [] } : card, cardGrp);
+	// 2. a built-in laptop camera (Windows/Linux); rare on a mic-less tower
+	const pCam = MEDIA_P_BUILTIN_CAM[osKey] ?? 0.0;
+	if (r.random() < (noMic ? pCam * 0.3 : pCam)) {
+		const builtin = (cat.cameras as any[]).filter((c) => !pyTruthy(c.mic));
+		if (builtin.length) cams.push([weightedChoice(r, builtin).cam, group()]);
+	}
+	// 3. a headset / USB microphone
+	if (r.random() < (cat.p_headset ?? 0.0))
+		add(weightedChoice(r, cat.headsets), group());
+	// 4. display audio (HDMI/DP)
+	if (r.random() < (cat.p_display ?? 0.0))
+		add(weightedChoice(r, cat.displays), group());
+	// 5. an external webcam, usually with its own microphone
+	if (r.random() < (cat.p_extra_camera ?? 0.0)) {
+		const withMic = (cat.cameras as any[]).filter((c) => pyTruthy(c.mic));
+		const external = withMic.length ? withMic : cat.cameras;
+		const cam = weightedChoice(r, external);
+		const grp = group();
+		cams.push([cam.cam, grp]);
+		if (pyTruthy(cam.mic)) mics.push([cam.mic, grp]);
+	}
+	// 6. PulseAudio exposes a monitor source per output as a capture device
+	if (pyTruthy(cat.monitor_sources)) {
+		for (const [label, grp] of [...outs])
+			mics.push([`Monitor of ${label}`, grp]);
+	}
+
+	return {
+		"mediaDevices:enabled": true,
+		"mediaDevices:micros": mics.length,
+		"mediaDevices:webcams": cams.length,
+		"mediaDevices:speakers": outs.length,
+		"mediaDevices:microphoneLabels": mics.map(([m]) => m),
+		"mediaDevices:microphoneGroups": mics.map(([, g]) => g),
+		"mediaDevices:webcamLabels": cams.map(([c]) => c),
+		"mediaDevices:webcamGroups": cams.map(([, g]) => g),
+		"mediaDevices:speakerLabels": outs.map(([o]) => o),
+		"mediaDevices:speakerGroups": outs.map(([, g]) => g),
+	};
+}
+
+/**
+ * Give the identity a plausible set of media devices, drawn from the common
+ * desktop population for its OS and seeded by the identity. Nothing is drawn
+ * when the caller already set any mediaDevices: key.
+ */
+export function setMediaDevicesDefaults(
+	config: Config,
+	salt: number | bigint = 0,
+): void {
 	if (Object.keys(config).some((k) => k.startsWith("mediaDevices:"))) return;
-	config["mediaDevices:enabled"] = true;
-	config["mediaDevices:micros"] = 1;
-	config["mediaDevices:webcams"] = 1;
-	config["mediaDevices:speakers"] = 0;
+	const plat = pyStr(get(config, "navigator.platform", ""));
+	const osKey = plat.startsWith("Win")
+		? "win"
+		: plat.startsWith("Mac")
+			? "mac"
+			: "lin";
+	Object.assign(config, drawMediaDevices(osKey, identitySeed(config, salt)));
+}
+
+// ---------------------------------------------------------------------------
+// WebGL <-> screen coherence (#729)
+// ---------------------------------------------------------------------------
+
+/** Software rasterizers: never preferred, never screen-constrained. */
+const SOFTWARE_RENDERERS: readonly string[] = [
+	"llvmpipe",
+	"Microsoft Basic Render Driver",
+	"SwiftShader",
+	"Generic Renderer",
+];
+
+/** Gecko renderer buckets that are discrete GPUs (no netbook shipped one). */
+const DISCRETE_GPU_BUCKETS: ReadonlySet<string> = new Set([
+	"GeForce 8800 GTX",
+	"GeForce GTX 480",
+	"GeForce GTX 980",
+	"Radeon R9 200 Series",
+]);
+
+/** Netbook panels topped out at 1024x600; an area, not a per-axis floor. */
+const NETBOOK_MAX_PIXELS = 1024 * 600;
+
+const ANGLE_D3D_RE = /^ANGLE \([^,]*, (.*?) Direct3D.*\)$/s;
+const ANGLE_VULKAN_RE = /^ANGLE \((.*)\) on Vulkan$/s;
+const PCIE_SSE2_RE = /^(.*)\/PCIe?\/SSE2$/s;
+
+/** Reduce a reported renderer to Gecko's sanitized device bucket. */
+export function rendererBucket(renderer: string): string {
+	let core = renderer.endsWith(", or similar")
+		? renderer.slice(0, -", or similar".length)
+		: renderer;
+	let match = ANGLE_D3D_RE.exec(core) ?? ANGLE_VULKAN_RE.exec(core);
+	if (match) core = match[1];
+	match = PCIE_SSE2_RE.exec(core);
+	if (match) core = match[1];
+	return core.startsWith("NVIDIA ") ? core.slice("NVIDIA ".length) : core;
+}
+
+/** Whether `renderer` is a software rasterizer rather than real hardware. */
+export function isSoftwareRenderer(
+	renderer: string | null | undefined,
+): boolean {
+	return (
+		!!renderer && SOFTWARE_RENDERERS.some((name) => renderer.includes(name))
+	);
+}
+
+/** Whether `renderer` is a GPU that plausibly drives a `width` x `height` screen. */
+export function gpuScreenIsPlausible(
+	renderer: string | null | undefined,
+	width: number | null | undefined,
+	height: number | null | undefined,
+): boolean {
+	if (!renderer || !width || !height) return true;
+	if (isSoftwareRenderer(renderer)) return true;
+	if (!DISCRETE_GPU_BUCKETS.has(rendererBucket(renderer))) return true;
+	return width * height > NETBOOK_MAX_PIXELS;
+}
+
+type WebGLSampler = (
+	os: string,
+	vendor?: string | null,
+	renderer?: string | null,
+	seed?: number | bigint | null,
+) => WebGLData;
+
+function seedPlus(seed: number | bigint, add: number): number | bigint {
+	return typeof seed === "bigint" ? seed + BigInt(add) : seed + add;
 }
 
 /**
- * Pick the bundled-presets file appropriate for a given Firefox version.
+ * Sample a WebGL profile coherent with the screen already chosen, by
+ * rejection sampling: the GPU keeps the pool's real OS-weighted distribution,
+ * draws that contradict the screen are dropped, and a software rasterizer is
+ * never settled on. Falls back to the first draw when nothing is coherent.
  *
- * For Firefox >= PRESETS_V150_MIN_FF, prefer the v150 bundle (real
- * fingerprints scraped from contemporary browsers); otherwise fall back to the
- * original bundle.
+ * @param sampler the underlying draw (tests substitute it).
  */
-function selectPresetsFile(ffVersion?: string | number): string {
+export function sampleWebGLForScreen(
+	targetOs: string,
+	width?: number | null,
+	height?: number | null,
+	attempts = 32,
+	seed?: number | bigint | null,
+	sampler: WebGLSampler = sampleWebGL,
+): WebGLData {
+	const first = sampler(targetOs, null, null, seed);
+	let renderer = first["webGl:renderer"];
+	if (
+		!isSoftwareRenderer(renderer) &&
+		gpuScreenIsPlausible(renderer, width, height)
+	)
+		return first;
+
+	let fallback: WebGLData | null = isSoftwareRenderer(renderer) ? null : first;
+	for (let attempt = 0; attempt < attempts - 1; attempt++) {
+		const candidate = sampler(
+			targetOs,
+			null,
+			null,
+			isNone(seed) ? null : seedPlus(seed as number | bigint, 1 + attempt),
+		);
+		renderer = candidate["webGl:renderer"];
+		if (isSoftwareRenderer(renderer)) continue;
+		if (gpuScreenIsPlausible(renderer, width, height)) return candidate;
+		fallback = fallback ?? candidate;
+	}
+	return fallback ?? first;
+}
+
+/** Python name: sample_webgl_for_screen. */
+export const sampleWebglForScreen = sampleWebGLForScreen;
+
+// ---------------------------------------------------------------------------
+// Presets
+// ---------------------------------------------------------------------------
+
+/** The bundled-presets file for a Firefox version (v150 bundle from 149 up). */
+export function selectPresetsFile(ffVersion?: string | number | null): string {
 	let major = 0;
-	if (ffVersion !== undefined && ffVersion !== null) {
-		const parsed = Number.parseInt(String(ffVersion).split(".", 1)[0], 10);
-		major = Number.isNaN(parsed) ? 0 : parsed;
+	if (ffVersion) {
+		const parsed = Number.parseInt(
+			String(ffVersion).split(".", 1)[0].trim(),
+			10,
+		);
+		major = /^\s*[+-]?\d+\s*$/.test(String(ffVersion).split(".", 1)[0])
+			? parsed
+			: 0;
 	}
-	if (major >= PRESETS_V150_MIN_FF && fs.existsSync(PRESETS_V150_FILE)) {
+	if (major >= PRESETS_V150_MIN_FF && fs.existsSync(PRESETS_V150_FILE))
 		return PRESETS_V150_FILE;
-	}
 	return PRESETS_FILE;
 }
 
-/**
- * Load the bundled fingerprint presets from disk.
- */
-export function loadPresets(ffVersion?: string | number): PresetBundle | null {
-	const presetPath = selectPresetsFile(ffVersion);
-	if (PRESETS_CACHE.has(presetPath)) {
-		return PRESETS_CACHE.get(presetPath) ?? null;
-	}
-	if (!fs.existsSync(presetPath)) {
-		PRESETS_CACHE.set(presetPath, null);
-		return null;
-	}
-	const bundle = JSON.parse(fs.readFileSync(presetPath, "utf-8"));
-	PRESETS_CACHE.set(presetPath, bundle);
+/** Load the bundled fingerprint presets. */
+export function loadPresets(
+	ffVersion?: string | number | null,
+): PresetBundle | null {
+	const file = selectPresetsFile(ffVersion);
+	const cached = PRESETS_CACHE.get(file);
+	if (cached) return cached;
+	if (!fs.existsSync(file)) return null;
+	const bundle = JSON.parse(fs.readFileSync(file, "utf-8")) as PresetBundle;
+	PRESETS_CACHE.set(file, bundle);
 	return bundle;
 }
 
-// Map OS names to preset keys
-const OS_TO_PRESET_KEY: Record<string, SupportedOS> = {
+const OS_TO_PRESET_KEY: Readonly<Record<string, string>> = {
 	windows: "windows",
 	macos: "macos",
 	linux: "linux",
@@ -627,110 +2168,153 @@ const OS_TO_PRESET_KEY: Record<string, SupportedOS> = {
 };
 
 /**
- * Get a random preset for the given OS. Returns null when none are available.
+ * A random preset for the given OS (or OSes), or null when none is bundled.
+ * Draws from the shared `pyRandom` (Python's module-level random.choice).
  */
 export function getRandomPreset(
-	os?: string | string[],
-	ffVersion?: string | number,
+	os?: string | readonly string[] | null,
+	ffVersion?: string | number | null,
 ): Preset | null {
 	const presets = loadPresets(ffVersion);
-	if (!presets) return null;
-
-	const allOsKeys: SupportedOS[] = ["macos", "windows", "linux"];
+	if (!pyTruthy(presets)) return null;
 	let osKeys: string[];
-	if (os) {
-		const list = Array.isArray(os) ? os : [os];
-		osKeys = list.map((o) => OS_TO_PRESET_KEY[o] ?? o);
+	if (os?.length) {
+		const names = typeof os === "string" ? [os] : [...os];
+		osKeys = names.map((o) => OS_TO_PRESET_KEY[o] ?? o);
 	} else {
-		osKeys = allOsKeys;
+		osKeys = ["macos", "windows", "linux"];
 	}
-
 	const candidates: Preset[] = [];
 	for (const key of osKeys) {
-		candidates.push(...(presets.presets?.[key as SupportedOS] ?? []));
+		candidates.push(
+			...((presets?.presets as Record<string, Preset[]> | undefined)?.[key] ??
+				[]),
+		);
 	}
-
 	if (!candidates.length) return null;
-	return candidates[Math.floor(Math.random() * candidates.length)];
+	return pyRandom.choice(candidates);
 }
 
-function targetOsFromPlatform(plat: string): SupportedOS {
-	if (plat === "MacIntel") return "macos";
-	if (plat === "Win32") return "windows";
-	if (plat.toLowerCase().includes("linux")) return "linux";
-	return "macos";
+// Tokens that name the machine rather than the platform.
+const APP_VERSION_DROPPED: ReadonlySet<string> = new Set([
+	"Win64",
+	"x64",
+	"Mobile",
+	"Tablet",
+]);
+
+/**
+ * The appVersion Firefox reports for a browser sending this user agent:
+ * "5.0 (<OS tokens>)" without the architecture, the Gecko revision, or the
+ * Windows build number.
+ */
+export function appVersionFromUserAgent(
+	userAgent: string | null | undefined,
+): string | null {
+	const block = /^Mozilla\/5\.0 \(([^)]*)\)/.exec(userAgent ?? "");
+	if (!block) return null;
+	const kept: string[] = [];
+	for (const token of block[1].split(";").map((part) => part.trim())) {
+		if (
+			token.startsWith("rv:") ||
+			APP_VERSION_DROPPED.has(token) ||
+			token.startsWith("Linux ") ||
+			token.startsWith("Intel Mac OS X")
+		) {
+			continue;
+		}
+		kept.push(token.startsWith("Windows") ? "Windows" : token);
+	}
+	return kept.length ? `5.0 (${kept.join("; ")})` : null;
 }
 
-function oscpuFromPlatform(plat: string): string | undefined {
+function oscpuFromPlatform(plat: string): string | null {
 	if (plat === "MacIntel") return "Intel Mac OS X 10.15";
 	if (plat === "Win32") return "Windows NT 10.0; Win64; x64";
-	if (plat.toLowerCase().includes("linux")) return "Linux x86_64";
-	return undefined;
+	if (plat.includes("Linux") || plat.includes("linux")) return "Linux x86_64";
+	return null;
 }
 
 /**
  * Convert a real fingerprint preset to CAMOU_CONFIG format.
+ *
+ * `salt` (identitySalt) keys the font/voice draws; undefined draws a fresh
+ * one, so two users of the same recorded device do not share its font list.
  */
 export function fromPreset(
 	preset: Preset,
-	ffVersion?: string,
-): Record<string, any> {
-	const config: Record<string, any> = {};
+	ffVersion?: string | number | null,
+	salt?: number | bigint | null,
+): Config {
+	const s = isNone(salt) ? identitySalt() : (salt as number | bigint);
+	const config: Config = {};
 
-	const nav = preset.navigator ?? {};
-	if (nav.userAgent) {
+	const nav: Record<string, any> = preset.navigator ?? {};
+	if (pyTruthy(nav.userAgent)) {
 		let ua: string = nav.userAgent;
-		// Replace the Firefox version in the UA when ff_version is provided
 		if (ffVersion) {
 			ua = ua.replace(/Firefox\/\d+\.0/g, `Firefox/${ffVersion}.0`);
 			ua = ua.replace(/rv:\d+\.0/g, `rv:${ffVersion}.0`);
 		}
 		config["navigator.userAgent"] = ua;
 	}
-	if (nav.platform) config["navigator.platform"] = nav.platform;
-	if (nav.hardwareConcurrency) {
+	if (pyTruthy(nav.platform)) config["navigator.platform"] = nav.platform;
+	if (pyTruthy(nav.hardwareConcurrency))
 		config["navigator.hardwareConcurrency"] = nav.hardwareConcurrency;
-	}
-	if (nav.oscpu) {
+	if (pyTruthy(nav.oscpu)) {
 		config["navigator.oscpu"] = nav.oscpu;
-	} else if (nav.platform) {
-		// Derive oscpu from platform when not explicitly in the preset
+	} else if (pyTruthy(nav.platform)) {
 		const oscpu = oscpuFromPlatform(nav.platform);
 		if (oscpu) config["navigator.oscpu"] = oscpu;
 	}
-	if ("maxTouchPoints" in nav) {
-		config["navigator.maxTouchPoints"] = nav.maxTouchPoints;
+	if (pyTruthy(nav.appVersion)) {
+		config["navigator.appVersion"] = nav.appVersion;
+	} else if (pyTruthy(config["navigator.userAgent"])) {
+		// Left unset, appVersion falls through to the HOST's value and
+		// contradicts the userAgent and platform set above.
+		const derived = appVersionFromUserAgent(config["navigator.userAgent"]);
+		if (derived) config["navigator.appVersion"] = derived;
 	}
+	if (Object.hasOwn(nav, "maxTouchPoints"))
+		config["navigator.maxTouchPoints"] = nav.maxTouchPoints;
 
-	const screen = preset.screen ?? {};
-	if (screen.width) config["screen.width"] = screen.width;
-	if (screen.height) config["screen.height"] = screen.height;
-	if (screen.colorDepth) {
+	const screen: Record<string, any> = preset.screen ?? {};
+	if (pyTruthy(screen.width)) config["screen.width"] = screen.width;
+	if (pyTruthy(screen.height)) config["screen.height"] = screen.height;
+	if (pyTruthy(screen.colorDepth)) {
 		config["screen.colorDepth"] = screen.colorDepth;
 		config["screen.pixelDepth"] = screen.colorDepth;
 	}
-	if (screen.availWidth) config["screen.availWidth"] = screen.availWidth;
-	if (screen.availHeight) config["screen.availHeight"] = screen.availHeight;
+	if (pyTruthy(screen.availWidth))
+		config["screen.availWidth"] = screen.availWidth;
+	if (pyTruthy(screen.availHeight))
+		config["screen.availHeight"] = screen.availHeight;
 
-	const webgl = preset.webgl ?? {};
-	if (webgl.unmaskedVendor) config["webGl:vendor"] = webgl.unmaskedVendor;
-	if (webgl.unmaskedRenderer) config["webGl:renderer"] = webgl.unmaskedRenderer;
+	const webgl: Record<string, any> = preset.webgl ?? {};
+	if (pyTruthy(webgl.unmaskedVendor))
+		config["webGl:vendor"] = webgl.unmaskedVendor;
+	if (pyTruthy(webgl.unmaskedRenderer))
+		config["webGl:renderer"] = webgl.unmaskedRenderer;
 
-	// Unique random seeds per launch (1 to 2^32-1; 0 is a no-op in C++)
-	config["fonts:spacing_seed"] = randint(1, 4_294_967_295);
-	config["audio:seed"] = randint(1, 4_294_967_295);
-	config["canvas:seed"] = randint(1, 4_294_967_295);
+	// Unique random noise seeds per launch; fonts:spacing_seed stays 0 (off).
+	config["fonts:spacing_seed"] = 0;
+	config["audio:seed"] = pyRandom.randint(1, 4_294_967_295);
+	config["canvas:seed"] = pyRandom.randint(1, 4_294_967_295);
 
-	if (preset.timezone) config.timezone = preset.timezone;
+	if (pyTruthy(preset.timezone)) config.timezone = preset.timezone;
 
-	// Unique random font subset from the OS font list.
-	const targetOs = targetOsFromPlatform(nav.platform ?? "");
+	const plat: string = nav.platform ?? "";
+	let targetOs: string;
+	if (plat === "MacIntel") targetOs = "macos";
+	else if (plat === "Win32") targetOs = "windows";
+	else if (plat.includes("Linux") || plat.includes("linux")) targetOs = "linux";
+	else targetOs = "macos";
+
 	try {
-		config.fonts = generateRandomFontSubset(targetOs);
+		config.fonts = generateRandomFontSubset(targetOs, identitySeed(config, s));
 	} catch {
-		// Fallback to preset fonts if font generation fails
-		if (preset.fonts?.length) {
-			const fonts = [...preset.fonts];
+		if (pyTruthy(preset.fonts)) {
+			const fonts = [...(preset.fonts as string[])];
 			ensureMarkerFonts(
 				fonts,
 				{
@@ -742,20 +2326,28 @@ export function fromPreset(
 			config.fonts = fonts;
 		}
 	}
-
-	// Unique random voice subset from the OS voice list
 	try {
-		config.voices = generateRandomVoiceSubset(targetOs);
+		config.voices = generateRandomVoiceSubset(
+			targetOs,
+			null,
+			identitySeed(config, s),
+		);
 	} catch {
-		if (preset.speechVoices?.length) {
-			config.voices = normalizePresetVoices(preset.speechVoices, targetOs);
+		if (pyTruthy(preset.speechVoices)) {
+			config.voices = normalizePresetVoices(
+				preset.speechVoices as Array<string | VoiceObject>,
+				targetOs,
+			);
 		}
 	}
-
 	return config;
 }
 
-interface InitValues {
+// ---------------------------------------------------------------------------
+// Per-context fingerprints
+// ---------------------------------------------------------------------------
+
+export interface InitValues {
 	fontSpacingSeed?: number;
 	audioFingerprintSeed?: number;
 	canvasSeed?: number;
@@ -775,9 +2367,9 @@ interface InitValues {
 }
 
 /**
- * Builds the JavaScript init script that calls the per-context window.setXxx()
- * functions. Those self-destruct after their first call, so they must run via
- * addInitScript.
+ * The JavaScript init script that calls the per-context window.setXxx()
+ * functions. Those self-destruct after their first call, so they must run
+ * via addInitScript.
  */
 export function buildInitScript(values: InitValues): string {
 	const lines = ["(function(v) {", "  var w = window;"];
@@ -793,12 +2385,11 @@ export function buildInitScript(values: InitValues): string {
 		["webglVendor", "setWebGLVendor"],
 		["webglRenderer", "setWebGLRenderer"],
 	];
-
 	for (const [key, fnName] of setters) {
 		const val = values[key];
-		if (val !== undefined && val !== null) {
+		if (!isNone(val)) {
 			lines.push(
-				`  if (typeof w.${fnName} === "function") w.${fnName}(${JSON.stringify(val)});`,
+				`  if (typeof w.${fnName} === "function") w.${fnName}(${pyJsonDumps(val)});`,
 			);
 		}
 	}
@@ -806,33 +2397,31 @@ export function buildInitScript(values: InitValues): string {
 	// Screen dimensions (requires width + height together)
 	const sw = values.screenWidth;
 	const sh = values.screenHeight;
-	if (sw && sh) {
+	if (pyTruthy(sw) && pyTruthy(sh)) {
 		lines.push(
 			`  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions(${sw}, ${sh});`,
 		);
 		const scd = values.screenColorDepth;
-		if (scd) {
+		if (pyTruthy(scd)) {
 			lines.push(
 				`  if (typeof w.setScreenColorDepth === "function") w.setScreenColorDepth(${scd});`,
 			);
 		}
 	}
 
-	// Timezone -- only call setTimezone() when we have an explicit value.
-	// Without this, the C++ MaskConfig fallback (from CAMOU_CONFIG set by geoip
-	// in launchOptions) handles timezone for both the main thread and workers.
+	// Timezone -- only with an explicit value; MaskConfig handles the rest.
 	const tz = values.timezone;
-	if (tz) {
+	if (pyTruthy(tz)) {
 		lines.push(
-			`  if (typeof w.setTimezone === "function") w.setTimezone(${JSON.stringify(tz)});`,
+			`  if (typeof w.setTimezone === "function") w.setTimezone(${pyJsonDumps(tz)});`,
 		);
 	}
 
 	// WebRTC IP
 	const ip = values.webrtcIP;
 	lines.push(
-		ip
-			? `  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4(${JSON.stringify(ip)});`
+		pyTruthy(ip)
+			? `  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4(${pyJsonDumps(ip)});`
 			: '  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4("");',
 	);
 
@@ -840,18 +2429,18 @@ export function buildInitScript(values: InitValues): string {
 	const fontList = values.fontList;
 	if (fontList?.length) {
 		lines.push(
-			`  if (typeof w.setFontList === "function") w.setFontList(${JSON.stringify(fontList.join(","))});`,
+			`  if (typeof w.setFontList === "function") w.setFontList(${pyJsonDumps(fontList.join(","))});`,
 		);
 	}
 
-	// Speech voices (comma-separated names). config.voices holds MaskConfig
-	// voice objects; extract the display name from each (tolerating a legacy
-	// list of plain name strings).
+	// Speech voices (comma-separated names)
 	const voices = values.speechVoices;
 	if (voices?.length) {
-		const names = voices.map((v) => (typeof v === "object" ? v.name : v));
+		const names = voices.map((v) =>
+			v !== null && typeof v === "object" ? v.name : v,
+		);
 		lines.push(
-			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${JSON.stringify(names.join(","))});`,
+			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${pyJsonDumps(names.join(","))});`,
 		);
 	}
 
@@ -859,29 +2448,50 @@ export function buildInitScript(values: InitValues): string {
 	return lines.join("\n");
 }
 
+/** json.dumps() with its defaults (ASCII-escaped, ", " / ": " separators) for scalars. */
+function pyJsonDumps(value: unknown): string {
+	if (typeof value === "string") {
+		return JSON.stringify(value).replace(
+			/[\u007f-\uffff]/g,
+			(c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+		);
+	}
+	if (typeof value === "boolean") return value ? "true" : "false";
+	if (isNone(value)) return "null";
+	if (typeof value === "number" && !Number.isSafeInteger(value)) {
+		if (Number.isNaN(value)) return "NaN";
+		if (!Number.isFinite(value)) return value > 0 ? "Infinity" : "-Infinity";
+		return pyStr(value);
+	}
+	return String(value);
+}
+
 export interface ContextFingerprint {
 	init_script: string;
 	context_options: Record<string, any>;
-	config: Record<string, any>;
+	config: Config;
 	preset: Preset;
 }
 
+function targetOsFromPlatform(plat: string): SupportedOS {
+	if (plat === "Win32") return "windows";
+	if (plat.includes("Linux") || plat.includes("linux")) return "linux";
+	return "macos";
+}
+
 /**
- * Generate fingerprint values for a single per-context identity. Returns the
- * init script (a JS string) plus the Playwright context options.
+ * Fingerprint values for a single per-context identity: the init script plus
+ * the Playwright context options (camelCase, for playwright-core).
  *
- * By default, uses BrowserForge for infinite unique synthetic fingerprints.
- * Pass a preset to use a real fingerprint preset instead.
+ * By default an fpgen fingerprint is generated; pass a preset to use a real
+ * recorded one instead.
  *
- * @param timezone IANA timezone string (e.g. 'Europe/London'). Takes priority
- *   over any timezone from the preset.
- * @param locale BCP-47 locale string (e.g. 'en-GB'). Also sets
- *   context_options.locale for Playwright.
- * @param configOverrides CAMOU_CONFIG keys to override after the config is
- *   built but before the init script is rendered. Useful for disabling
- *   perturbation (e.g. {'fonts:spacing_seed': 0}).
+ * @param timezone IANA timezone; takes priority over the preset's.
+ * @param locale BCP-47 locale; also sets context_options.locale.
+ * @param config_overrides CAMOU_CONFIG keys applied after the config is built
+ *   and before the init script is rendered.
  */
-export async function generateContextFingerprint({
+export function generateContextFingerprint({
 	preset,
 	os,
 	ff_version,
@@ -891,81 +2501,105 @@ export async function generateContextFingerprint({
 	config_overrides,
 }: {
 	preset?: Preset | null;
-	os?: string;
-	ff_version?: string;
-	webrtc_ip?: string;
-	timezone?: string;
-	locale?: string;
-	config_overrides?: Record<string, any>;
-} = {}): Promise<ContextFingerprint> {
-	let config: Record<string, any>;
+	os?: string | null;
+	ff_version?: string | null;
+	webrtc_ip?: string | null;
+	timezone?: string | null;
+	locale?: string | null;
+	config_overrides?: Config | null;
+} = {}): ContextFingerprint {
+	let config: Config;
 	let nav: Record<string, any>;
 	let screen: Record<string, any>;
 	let webgl: Record<string, any>;
 	let resolvedPreset: Preset;
 
-	if (preset) {
-		// Use a real fingerprint preset
-		config = fromPreset(preset, ff_version);
-		nav = preset.navigator ?? {};
-		screen = preset.screen ?? {};
-		webgl = preset.webgl ?? {};
-		resolvedPreset = preset;
+	if (!isNone(preset)) {
+		const p = preset as Preset;
+		config = fromPreset(p, ff_version);
+		nav = p.navigator ?? {};
+		screen = p.screen ?? {};
+		webgl = p.webgl ?? {};
+		resolvedPreset = p;
 	} else {
-		// Fall back to BrowserForge synthetic generation
-		const fp = generateFingerprint(undefined, {
-			operatingSystems: os ? ([os] as any) : undefined,
-		});
-		config = fromBrowserforge(fp, ff_version);
+		const fp = generateFingerprint({ os: os ?? undefined });
+		config = fromFpgen(fp, ff_version);
 
-		// Add seeds (BrowserForge doesn't generate these)
-		setDefault(config, "fonts:spacing_seed", randint(1, 4_294_967_295));
-		setDefault(config, "audio:seed", randint(1, 4_294_967_295));
-		setDefault(config, "canvas:seed", randint(1, 4_294_967_295));
+		// A fresh identity: every seeded draw below gets its own salt.
+		const salt = identitySalt();
 
-		// Determine target OS from platform for font/voice generation
-		const plat: string = config["navigator.platform"] ?? "";
-		const osName = targetOsFromPlatform(plat);
+		if (!("fonts:spacing_seed" in config)) config["fonts:spacing_seed"] = 0;
+		if (!("audio:seed" in config))
+			config["audio:seed"] = pyRandom.randint(1, 4_294_967_295);
+		if (!("canvas:seed" in config))
+			config["canvas:seed"] = pyRandom.randint(1, 4_294_967_295);
 
-		// Add fonts (BrowserForge doesn't generate these)
+		const osName = targetOsFromPlatform(
+			pyStr(get(config, "navigator.platform", "")),
+		);
+
 		if (!("fonts" in config)) {
 			try {
-				config.fonts = generateRandomFontSubset(osName);
+				config.fonts = generateRandomFontSubset(
+					osName,
+					identitySeed(config, salt),
+				);
 			} catch {
-				// Leave fonts unset; the launcher fills them in.
+				// leave fonts unset
 			}
 		}
-
-		// Add voices (BrowserForge doesn't generate these)
 		if (!("voices" in config)) {
 			try {
-				config.voices = generateRandomVoiceSubset(osName);
+				config.voices = generateRandomVoiceSubset(
+					osName,
+					null,
+					identitySeed(config, salt),
+				);
 			} catch {
-				// Leave voices unset.
+				// leave voices unset
 			}
 		}
-
-		// Derive oscpu if BrowserForge didn't provide it
 		if (!("navigator.oscpu" in config)) {
-			const oscpu = oscpuFromPlatform(plat);
+			const oscpu = oscpuFromPlatform(
+				pyStr(get(config, "navigator.platform", "")),
+			);
 			if (oscpu) config["navigator.oscpu"] = oscpu;
 		}
 
-		// Sample WebGL vendor/renderer (BrowserForge doesn't generate these)
-		if (!config["webGl:vendor"] || !config["webGl:renderer"]) {
-			const targetOs: TargetOS =
-				(os ? OS_TO_SHORT[os] : undefined) ??
-				OS_TO_SHORT[targetOsFromPlatform(plat)];
+		if (
+			!pyTruthy(config["webGl:vendor"]) ||
+			!pyTruthy(config["webGl:renderer"])
+		) {
+			const osMap: Record<string, TargetOS> = {
+				macos: "mac",
+				linux: "lin",
+				windows: "win",
+			};
+			let targetOs: TargetOS | undefined = osMap[os ?? ""];
+			if (!targetOs) {
+				const plat = pyStr(get(config, "navigator.platform", ""));
+				targetOs =
+					plat === "Win32"
+						? "win"
+						: plat.includes("Linux") || plat.includes("linux")
+							? "lin"
+							: "mac";
+			}
 			try {
-				const webglFp = await sampleWebGL(targetOs);
+				// Same coherence treatment launchOptions applies (#729).
+				raiseScreenToModernFloor(config);
+				const webglFp = sampleWebGLForScreen(
+					targetOs,
+					config["screen.width"],
+					config["screen.height"],
+				);
 				delete webglFp.webGl2Enabled;
 				Object.assign(config, webglFp);
 			} catch {
-				// No WebGL data for this OS; leave the config alone.
+				// no WebGL data for this OS
 			}
 		}
 
-		// Build source objects from the BrowserForge config for init_values
 		nav = {
 			platform: config["navigator.platform"],
 			hardwareConcurrency: config["navigator.hardwareConcurrency"],
@@ -983,7 +2617,6 @@ export async function generateContextFingerprint({
 		resolvedPreset = { navigator: nav, screen, webgl };
 	}
 
-	// Inject explicit timezone/locale into config (takes priority over preset)
 	if (timezone) config.timezone = timezone;
 	if (locale) {
 		const parsed = normalizeLocale(locale);
@@ -993,7 +2626,6 @@ export async function generateContextFingerprint({
 		if (parsed.script) config["locale:script"] = parsed.script;
 	}
 
-	// Apply caller overrides before rendering the init script
 	if (config_overrides) Object.assign(config, config_overrides);
 
 	const initValues: InitValues = {
@@ -1003,8 +2635,9 @@ export async function generateContextFingerprint({
 		navigatorPlatform: nav.platform,
 		navigatorOscpu: config["navigator.oscpu"],
 		navigatorUserAgent: config["navigator.userAgent"],
-		hardwareConcurrency:
-			nav.hardwareConcurrency || config["navigator.hardwareConcurrency"],
+		hardwareConcurrency: pyTruthy(nav.hardwareConcurrency)
+			? nav.hardwareConcurrency
+			: config["navigator.hardwareConcurrency"],
 		webglVendor: webgl.unmaskedVendor,
 		webglRenderer: webgl.unmaskedRenderer,
 		screenWidth: screen.width,
@@ -1016,26 +2649,24 @@ export async function generateContextFingerprint({
 				: config.timezone,
 		fontList: config.fonts,
 		speechVoices: config.voices,
-		webrtcIP: webrtc_ip ?? "",
+		webrtcIP: webrtc_ip || "",
 	};
-
 	const initScript = buildInitScript(initValues);
 
-	// Playwright context options that must be set at context creation
 	const contextOptions: Record<string, any> = {};
 	const ua = config["navigator.userAgent"];
-	if (ua) contextOptions.userAgent = ua;
+	if (pyTruthy(ua)) contextOptions.userAgent = ua;
 	const sw = screen.width;
 	const sh = screen.height;
-	if (sw && sh) {
+	if (pyTruthy(sw) && pyTruthy(sh))
 		contextOptions.viewport = { width: sw, height: Math.max(sh - 28, 600) };
-	}
 	const dpr = screen.devicePixelRatio;
-	if (dpr) contextOptions.deviceScaleFactor = dpr;
-	const tz = config.timezone ?? resolvedPreset.timezone;
-	if (tz) contextOptions.timezoneId = tz;
+	if (pyTruthy(dpr)) contextOptions.deviceScaleFactor = dpr;
+	let tz = config.timezone;
+	if (!pyTruthy(tz)) tz = resolvedPreset.timezone;
+	if (pyTruthy(tz)) contextOptions.timezoneId = tz;
 	const navLang = config["navigator.language"];
-	if (navLang) contextOptions.locale = navLang;
+	if (pyTruthy(navLang)) contextOptions.locale = navLang;
 
 	return {
 		init_script: initScript,
@@ -1045,169 +2676,195 @@ export async function generateContextFingerprint({
 	};
 }
 
-function setDefault(
-	target: Record<string, any>,
-	key: string,
-	value: any,
-): void {
-	if (!(key in target)) target[key] = value;
+// ---------------------------------------------------------------------------
+// fpgen fingerprints
+// ---------------------------------------------------------------------------
+
+function isPlainObject(value: unknown): value is Record<string, any> {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		(Object.getPrototypeOf(value) === Object.prototype ||
+			Object.getPrototypeOf(value) === null)
+	);
 }
 
-interface ExtendedScreen extends ScreenFingerprint {
-	screenY?: number;
-}
-
-/**
- * Casts Browserforge fingerprints to Camoufox config properties.
- */
-function castToProperties(
-	camoufoxData: Record<string, any>,
+/** Casts an fpgen fingerprint node onto Camoufox config properties. */
+export function castToProperties(
+	camoufoxData: Config,
 	castEnum: Record<string, any>,
-	bfDict: Record<string, any>,
-	ffVersion?: string,
+	fpDict: Record<string, any>,
+	ffVersion?: string | number | null,
 ): void {
-	for (const [key, rawData] of Object.entries(bfDict)) {
+	for (const [key, raw] of Object.entries(fpDict)) {
 		// Ignore non-truthy values
-		if (!rawData) continue;
-		// Get the associated Camoufox property
+		if (!pyTruthy(raw)) continue;
 		const typeKey = castEnum[key];
-		if (!typeKey) continue;
-		// If the value is an object, recurse
-		if (typeof rawData === "object" && !Array.isArray(rawData)) {
-			castToProperties(camoufoxData, typeKey, rawData, ffVersion);
+		if (!pyTruthy(typeKey)) continue;
+		if (isPlainObject(raw)) {
+			castToProperties(camoufoxData, typeKey, raw, ffVersion);
 			continue;
 		}
-		let data = rawData;
-		// Fix values that are out of bounds
+		let data: any = raw;
+		// fpgen carries header values as a list; a single string is the value.
+		if (Array.isArray(data)) {
+			if (data.length === 1 && typeof data[0] === "string") data = data[0];
+			else continue;
+		}
 		if (
 			typeof typeKey === "string" &&
 			typeKey.startsWith("screen.") &&
-			typeof data === "number" &&
-			data < 0
+			(typeof data === "boolean" ||
+				(typeof data === "number" && Number.isInteger(data))) &&
+			Number(data) < 0
 		) {
 			data = 0;
 		}
-		// Replace the Firefox versions with ffVersion
 		if (ffVersion && typeof data === "string") {
-			data = data.replace(/(?<!\d)(1[0-9]{2})(\.0)(?!\d)/g, `${ffVersion}$2`);
+			data = data.replace(
+				/(?<!\d)(1[0-9]{2})(\.0)(?!\d)/g,
+				(_m, _v, dot) => `${ffVersion}${dot}`,
+			);
 		}
 		camoufoxData[typeKey] = data;
 	}
 }
 
-/**
- * Sets window.screenY based on Browserforge's screenX value.
- */
+/** Sets window.screenY from the generated screenX value. */
 export function handleScreenXY(
-	camoufoxData: Record<string, any>,
-	fpScreen: ScreenFingerprint,
+	camoufoxData: Config,
+	fingerprint: Record<string, any>,
 ): void {
-	// Skip if manually provided
 	if ("window.screenY" in camoufoxData) return;
-
-	// Default screenX to 0 if not provided
-	const screenX = fpScreen.screenX;
-	if (!screenX) {
+	const screen = pyTruthy(fingerprint.screen) ? fingerprint.screen : {};
+	const window = pyTruthy(fingerprint.window) ? fingerprint.window : {};
+	const screenX = window.screenX;
+	if (!pyTruthy(screenX)) {
 		camoufoxData["window.screenX"] = 0;
 		camoufoxData["window.screenY"] = 0;
 		return;
 	}
-
-	// If screenX is within [-50, 50], use the same value for screenY
-	if (screenX >= -50 && screenX <= 50) {
+	if (Number.isInteger(screenX) && screenX >= -50 && screenX <= 50) {
 		camoufoxData["window.screenY"] = screenX;
 		return;
 	}
-
-	// Browserforge thinks the browser is windowed. Randomly generate a screenY.
-	const screenY = fpScreen.availHeight - fpScreen.outerHeight;
-	if (screenY === 0) {
-		camoufoxData["window.screenY"] = 0;
-	} else if (screenY > 0) {
-		camoufoxData["window.screenY"] = randrange(0, screenY);
-	} else {
-		camoufoxData["window.screenY"] = randrange(screenY, 0);
-	}
+	// The generator thinks the browser is windowed. Randomly generate a screenY.
+	const screenY = num(screen.availHeight || 0) - num(window.outerHeight || 0);
+	if (screenY === 0) camoufoxData["window.screenY"] = 0;
+	else if (screenY > 0)
+		camoufoxData["window.screenY"] = pyRandom.randrange(0, screenY);
+	else camoufoxData["window.screenY"] = pyRandom.randrange(screenY, 0);
 }
 
-/**
- * Converts a Browserforge fingerprint to a Camoufox config.
- */
-export function fromBrowserforge(
-	fingerprint: Fingerprint,
-	ffVersion?: string,
-): Record<string, any> {
-	const camoufoxData: Record<string, any> = {};
-	castToProperties(
-		camoufoxData,
-		BROWSERFORGE_DATA,
-		{ ...fingerprint },
-		ffVersion,
-	);
-	handleScreenXY(camoufoxData, fingerprint.screen);
+/** Converts an fpgen fingerprint to a Camoufox config. */
+export function fromFpgen(
+	fingerprint: Record<string, any>,
+	ffVersion?: string | number | null,
+): Config {
+	const camoufoxData: Config = {};
+	castToProperties(camoufoxData, FPGEN_DATA, fingerprint, ffVersion);
+	handleScreenXY(camoufoxData, fingerprint);
 	return camoufoxData;
 }
 
-/**
- * Sets a custom outer window size and centers it in the screen.
- */
+/** Sets a custom outer window size and centers it in the screen (in place). */
 export function handleWindowSize(
-	fp: Fingerprint,
+	fp: Record<string, any>,
 	outerWidth: number,
 	outerHeight: number,
 ): void {
-	const sc: ExtendedScreen = { ...fp.screen, screenY: undefined };
+	fp.screen ??= {};
+	fp.window ??= {};
+	const screen = fp.screen;
+	const window = fp.window;
 
-	// Center the window on the screen
-	sc.screenX += Math.floor((sc.width - outerWidth) / 2);
-	sc.screenY = Math.floor((sc.height - outerHeight) / 2);
+	window.screenX =
+		(window.screenX || 0) +
+		Math.floor(((screen.width || outerWidth) - outerWidth) / 2);
+	window.screenY = Math.floor(
+		((screen.height || outerHeight) - outerHeight) / 2,
+	);
 
-	// Update inner dimensions if set
-	if (sc.innerWidth) {
-		sc.innerWidth = Math.max(outerWidth - sc.outerWidth + sc.innerWidth, 0);
+	if (pyTruthy(window.innerWidth)) {
+		window.innerWidth = Math.max(
+			outerWidth - (window.outerWidth || 0) + window.innerWidth,
+			0,
+		);
 	}
-	if (sc.innerHeight) {
-		sc.innerHeight = Math.max(outerHeight - sc.outerHeight + sc.innerHeight, 0);
+	if (pyTruthy(window.innerHeight)) {
+		window.innerHeight = Math.max(
+			outerHeight - (window.outerHeight || 0) + window.innerHeight,
+			0,
+		);
 	}
+	window.outerWidth = outerWidth;
+	window.outerHeight = outerHeight;
+}
 
-	// Set outer dimensions
-	sc.outerWidth = outerWidth;
-	sc.outerHeight = outerHeight;
-	fp.screen = sc;
+export interface GenerateFingerprintOptions {
+	/** Outer window size [width, height], applied after generation. */
+	window?: readonly [number, number] | null;
+	/** A bound on the generated screen (best-effort, see below). */
+	screen?: Screen | null;
+	/** Camoufox OS name(s): 'linux', 'macos', 'windows' (or lin/mac/win). */
+	os?: string | readonly string[] | null;
+	/** Any other fpgen conditions. */
+	[condition: string]: any;
 }
 
 /**
- * Canonical HTTP header casing: "accept-encoding" -> "Accept-Encoding".
- */
-function canonicalHeaderName(name: string): string {
-	return name
-		.split("-")
-		.map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-		.join("-");
-}
-
-/**
- * Generates a Firefox fingerprint with Browserforge.
+ * Generates a Firefox fingerprint with fpgen (the model must be installed:
+ * `await ensureModel()` from ./fpgen/index.js).
  *
- * `fingerprint-generator` hands the headers back *beside* the fingerprint and
- * lowercased, whereas browserforge's Python `Fingerprint` dataclass carries
- * them on the object with canonical casing -- which is the casing
- * browserforge.yml keys off. Attaching them here is what makes
- * `headers.Accept-Encoding` reach the config, as it does in the Python twin;
- * without it Firefox sent its own Accept-Encoding while every other header
- * was spoofed.
+ * `screen` bounds the generated screen; `window` overrides the outer window
+ * size afterwards; `os` is Camoufox's name for the platform; anything else is
+ * passed to fpgen as a condition.
  */
-export function generateFingerprint(
-	window?: [number, number],
-	config?: Partial<FingerprintGeneratorOptions>,
-): Fingerprint {
-	const { fingerprint, headers } = FP_GENERATOR.getFingerprint(config);
-	if (window) {
-		handleWindowSize(fingerprint, window[0], window[1]);
+export function generateFingerprint({
+	window,
+	screen,
+	os,
+	...conditions
+}: GenerateFingerprintOptions = {}): Record<string, any> {
+	if (os?.length) {
+		const names = typeof os === "string" ? [os] : [...os];
+		const resolved = names.map((n) => {
+			const v = FPGEN_OS[String(n).toLowerCase()];
+			if (!v) throw new Error(`Unknown OS for fingerprint generation: '${n}'`);
+			return v;
+		});
+		// fpgen takes one value or a predicate, not a list of alternatives.
+		// DIVERGENCE from Python: fpgen hands a predicate the CASEFOLDED value
+		// ("linux"), so Python's `lambda v: v in set(resolved)` compares it with
+		// "Linux" and never matches -- os=['linux', 'windows'] always raises
+		// InvalidConstraints there. The comparison here is casefolded, so a
+		// list of OSes works.
+		const allowed = new Set(resolved.map((r) => r.toLowerCase()));
+		conditions.os =
+			resolved.length === 1
+				? resolved[0]
+				: (v: unknown) => allowed.has(String(v).toLowerCase());
 	}
-	const canonical: Record<string, string> = {};
-	for (const [name, value] of Object.entries(headers ?? {})) {
-		canonical[canonicalHeaderName(name)] = value as string;
+	const screenConditions = screen ? screen.asConditions() : {};
+	let fingerprint: Record<string, any>;
+	try {
+		fingerprint = generator().generate({
+			browser: "Firefox",
+			...conditions,
+			...screenConditions,
+		});
+	} catch (err) {
+		if (
+			!Object.keys(screenConditions).length ||
+			!(err instanceof InvalidConstraints)
+		)
+			throw err;
+		// The screen bound is best-effort: a display the pool has nothing to fit
+		// must not stop a fingerprint being generated. clampScreenToDisplay()
+		// still bounds the result afterwards.
+		fingerprint = generator().generate({ browser: "Firefox", ...conditions });
 	}
-	return { ...fingerprint, headers: canonical } as Fingerprint;
+	if (window) handleWindowSize(fingerprint, window[0], window[1]);
+	return fingerprint;
 }
