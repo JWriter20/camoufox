@@ -33,13 +33,6 @@ export class CONSTRAINTS {
 	static readonly PLAYWRIGHT_BROWSER_FLOORS: ReadonlyArray<
 		readonly [readonly number[], string]
 	> = [[[1, 61], "beta.30"]];
-
-	/**
-	 * Returns the version range as a string.
-	 */
-	static asRange(): string {
-		return `>=${CONSTRAINTS.MIN_VERSION}, <${CONSTRAINTS.MAX_VERSION}`;
-	}
 }
 
 /** Version of this launcher library. Kept in step with package.json and
