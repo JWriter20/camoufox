@@ -31,7 +31,6 @@ def convert_preset(ctx):
         'profileConfig': {
             'fontSpacingSeed': config.get('fonts:spacing_seed', 0),
             'audioSeed': config.get('audio:seed', 0),
-            'canvasSeed': config.get('canvas:seed', 0),
             'screenWidth': screen.get('width', 1920),
             'screenHeight': screen.get('height', 1080),
             'screenColorDepth': screen.get('colorDepth', 24),

@@ -95,7 +95,6 @@ export interface ProfileConfig {
   webglVendor: string;
   webglRenderer: string;
   audioSeed: number;
-  canvasSeed: number;
   fontSpacingSeed: number;
   fontList: string[];
   speechVoices?: string[];

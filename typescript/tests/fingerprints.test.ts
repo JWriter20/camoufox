@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	appVersionFromUserAgent,
+	audioSeedFromIdentity,
 	buildInitScript,
 	clampScreenToDisplay,
 	clampWindowDimensions,
@@ -26,7 +27,6 @@ import {
 	getRandomPreset,
 	identitySalt,
 	identitySeed,
-	noiseSeedsFromIdentity,
 	normalizePresetVoices,
 	PLAUSIBLE_CORE_COUNTS,
 	type Preset,
@@ -728,13 +728,10 @@ describe("identity salt and seed (test_identity_salt.py)", () => {
 		);
 	});
 
-	it("derives the noise seeds without losing precision", () => {
+	it("derives the audio seed without losing precision", () => {
 		// (ident * 2654435761 + 97) & 0xFFFFFFFF, checked with Python ints
-		expect(noiseSeedsFromIdentity(4294967295)).toEqual({
-			audio: 1640531632,
-			canvas: 4294939138,
-		});
-		expect(noiseSeedsFromIdentity(0)).toEqual({ audio: 97, canvas: 12345 });
+		expect(audioSeedFromIdentity(4294967295)).toBe(1640531632);
+		expect(audioSeedFromIdentity(0)).toBe(97);
 	});
 
 	it("a pinned preset reproduces its draws", () => {

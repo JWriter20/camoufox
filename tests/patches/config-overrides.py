@@ -122,19 +122,18 @@ async def test():
         print(f"  init_script has setFontSpacingSeed({val}): FAIL")
 
     # --- Test 4: other seeds are NOT affected by a font-only override ---
-    print("\n=== Test 4: audio/canvas seeds unaffected by font override ===")
+    print("\n=== Test 4: the audio seed is unaffected by a font override ===")
     preset4 = get_random_preset(os="macos")
     fp4 = generate_context_fingerprint(
         preset=preset4,
         config_overrides={"fonts:spacing_seed": 0},
     )
     audio = fp4["config"]["audio:seed"]
-    canvas = fp4["config"]["canvas:seed"]
-    if audio != 0 and canvas != 0:
-        print(f"  audio:seed={audio}, canvas:seed={canvas} (both non-zero): PASS")
+    if audio != 0:
+        print(f"  audio:seed={audio} (non-zero): PASS")
     else:
-        failures.append(f"Other seeds affected: audio={audio}, canvas={canvas}")
-        print(f"  audio={audio}, canvas={canvas}: FAIL")
+        failures.append(f"audio seed affected: {audio}")
+        print(f"  audio={audio}: FAIL")
 
     # --- Summary ---
     print("\n" + "=" * 50)

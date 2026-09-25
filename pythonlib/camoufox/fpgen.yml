@@ -18,13 +18,10 @@ navigator:
   # fpgen's UAs trail the current release; the version is rewritten to the
   # Camoufox Firefox version in _cast_to_properties.
   userAgent: navigator.userAgent
-  appCodeName: navigator.appCodeName
-  appName: navigator.appName
   appVersion: navigator.appVersion
   oscpu: navigator.oscpu
   platform: navigator.platform
   hardwareConcurrency: navigator.hardwareConcurrency
-  product: navigator.product
   # Never override productSub (#105)
   # deviceMemory is not in Firefox, and fpgen reports the string "undefined"
   # Locale is handled separately (locale:*)

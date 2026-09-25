@@ -204,7 +204,7 @@ function pythonProbe(
 
 /**
  * The probe minus the canvas hash. The canvas readback differs between two
- * launches of the SAME config (same canvas:seed) -- measured with this build,
+ * launches of the SAME config -- measured with this build,
  * TS and Python alike -- so it is compared by its size only.
  */
 /**

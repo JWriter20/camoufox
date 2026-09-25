@@ -695,7 +695,7 @@ describe.skipIf(!modelReady)(
 			const seeds = new Set<number>();
 			for (let i = 0; i < 40; i++) {
 				seeds.add(
-					(await launchConfig({ os: "linux", headless: true }))["canvas:seed"],
+					(await launchConfig({ os: "linux", headless: true }))["audio:seed"],
 				);
 			}
 			expect(seeds.size).toBe(40);
@@ -705,13 +705,7 @@ describe.skipIf(!modelReady)(
 			const fp = fingerprints.generateFingerprint({ os: "linux" });
 			const drawn = (c: Record<string, any>) =>
 				JSON.stringify(
-					[
-						"canvas:seed",
-						"audio:seed",
-						"fonts",
-						"voices",
-						"webGl:renderer",
-					].map((k) => c[k]),
+					["audio:seed", "fonts", "voices", "webGl:renderer"].map((k) => c[k]),
 				);
 			const first = await launchConfig({ os: "linux", fingerprint: fp });
 			const second = await launchConfig({ os: "linux", fingerprint: fp });
@@ -722,10 +716,7 @@ describe.skipIf(!modelReady)(
 			const preset = fingerprints.getRandomPreset("windows", "150");
 			const first = await launchConfig({ fingerprint_preset: preset });
 			const second = await launchConfig({ fingerprint_preset: preset });
-			expect([first["canvas:seed"], first["audio:seed"]]).toEqual([
-				second["canvas:seed"],
-				second["audio:seed"],
-			]);
+			expect(first["audio:seed"]).toBe(second["audio:seed"]);
 			expect(first.fonts).toEqual(second.fonts);
 		});
 
@@ -743,9 +734,9 @@ describe.skipIf(!modelReady)(
 		it("keeps the caller's seeds", async () => {
 			const config = await launchConfig({
 				os: "linux",
-				config: { "canvas:seed": 7, "audio:seed": 9 },
+				config: { "audio:seed": 9 },
 			});
-			expect([config["canvas:seed"], config["audio:seed"]]).toEqual([7, 9]);
+			expect(config["audio:seed"]).toBe(9);
 		});
 
 		it("a Windows fr-FR identity has French voices", async () => {

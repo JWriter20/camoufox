@@ -714,7 +714,7 @@ def record_constants():
 def record_init_script():
     cases = [
         {},
-        {'fontSpacingSeed': 0, 'audioFingerprintSeed': 123, 'canvasSeed': 4294967295,
+        {'fontSpacingSeed': 0, 'audioFingerprintSeed': 123,
          'navigatorPlatform': 'Win32', 'navigatorOscpu': 'Windows NT 10.0; Win64; x64',
          'navigatorUserAgent': UAS[3], 'hardwareConcurrency': 8, 'webglVendor': 'Google Inc. (Intel)',
          'webglRenderer': 'ANGLE (Intel, "quoted" é)', 'screenWidth': 1920, 'screenHeight': 1080,

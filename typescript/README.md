@@ -51,7 +51,7 @@ const page = await context.newPage();
 ### Per-context identities
 
 `NewContext()` gives each context its own fingerprint — real preset or
-fpgen-synthesised — with unique audio/canvas/font-spacing seeds. The
+fpgen-synthesised — with its own audio noise seed. The
 values are applied through `addInitScript`, so the setters self-destruct before
 any page script runs.
 

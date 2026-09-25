@@ -231,9 +231,9 @@ export function camelCase(snake: string): string {
 /**
  * Creates a new browser context with a unique fingerprint identity.
  *
- * Each context gets its own fingerprint with unique seeds for audio, canvas,
- * and font-spacing noise. All values are applied via addInitScript so they
- * self-destruct before page scripts can detect them.
+ * Each context gets its own fingerprint with its own audio noise seed. All
+ * values are applied via addInitScript so they self-destruct before page
+ * scripts can detect them.
  */
 export async function NewContext(
 	browser: Browser,

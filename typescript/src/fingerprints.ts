@@ -46,13 +46,10 @@ export type SupportedOS = (typeof SUPPORTED_OS)[number];
 export const FPGEN_DATA: Readonly<Record<string, Record<string, string>>> = {
 	navigator: {
 		userAgent: "navigator.userAgent",
-		appCodeName: "navigator.appCodeName",
-		appName: "navigator.appName",
 		appVersion: "navigator.appVersion",
 		oscpu: "navigator.oscpu",
 		platform: "navigator.platform",
 		hardwareConcurrency: "navigator.hardwareConcurrency",
-		product: "navigator.product",
 		maxTouchPoints: "navigator.maxTouchPoints",
 	},
 	screen: {
@@ -1094,19 +1091,12 @@ export function identitySeed(
 }
 
 /**
- * The audio / canvas noise seeds launchOptions derives from identitySeed()
- * (utils.py: `(ident * 2654435761 + 97) & 0xFFFFFFFF or 1` and
- * `(ident * 40503 + 12345) & 0xFFFFFFFF or 1`), computed without losing
+ * The audio noise seed launchOptions derives from identitySeed() (utils.py:
+ * `(ident * 2654435761 + 97) & 0xFFFFFFFF or 1`), computed without losing
  * precision past 2**53.
  */
-export function noiseSeedsFromIdentity(ident: number): {
-	audio: number;
-	canvas: number;
-} {
-	const i = BigInt(ident);
-	const audio = Number((i * 2654435761n + 97n) & 0xffffffffn) || 1;
-	const canvas = Number((i * 40503n + 12345n) & 0xffffffffn) || 1;
-	return { audio, canvas };
+export function audioSeedFromIdentity(ident: number): number {
+	return Number((BigInt(ident) * 2654435761n + 97n) & 0xffffffffn) || 1;
 }
 
 /** A seeded generator for a draw, or a fresh OS-seeded one when unseeded. */
@@ -2296,10 +2286,9 @@ export function fromPreset(
 	if (pyTruthy(webgl.unmaskedRenderer))
 		config["webGl:renderer"] = webgl.unmaskedRenderer;
 
-	// Unique random noise seeds per launch; fonts:spacing_seed stays 0 (off).
+	// A unique audio seed per launch; fonts:spacing_seed stays 0 (off).
 	config["fonts:spacing_seed"] = 0;
 	config["audio:seed"] = pyRandom.randint(1, 4_294_967_295);
-	config["canvas:seed"] = pyRandom.randint(1, 4_294_967_295);
 
 	if (pyTruthy(preset.timezone)) config.timezone = preset.timezone;
 
@@ -2350,7 +2339,6 @@ export function fromPreset(
 export interface InitValues {
 	fontSpacingSeed?: number;
 	audioFingerprintSeed?: number;
-	canvasSeed?: number;
 	navigatorPlatform?: string;
 	navigatorOscpu?: string;
 	navigatorUserAgent?: string;
@@ -2377,7 +2365,6 @@ export function buildInitScript(values: InitValues): string {
 	const setters: Array<[keyof InitValues, string]> = [
 		["fontSpacingSeed", "setFontSpacingSeed"],
 		["audioFingerprintSeed", "setAudioFingerprintSeed"],
-		["canvasSeed", "setCanvasSeed"],
 		["navigatorPlatform", "setNavigatorPlatform"],
 		["navigatorOscpu", "setNavigatorOscpu"],
 		["navigatorUserAgent", "setNavigatorUserAgent"],
@@ -2531,8 +2518,6 @@ export function generateContextFingerprint({
 		if (!("fonts:spacing_seed" in config)) config["fonts:spacing_seed"] = 0;
 		if (!("audio:seed" in config))
 			config["audio:seed"] = pyRandom.randint(1, 4_294_967_295);
-		if (!("canvas:seed" in config))
-			config["canvas:seed"] = pyRandom.randint(1, 4_294_967_295);
 
 		const osName = targetOsFromPlatform(
 			pyStr(get(config, "navigator.platform", "")),
@@ -2631,7 +2616,6 @@ export function generateContextFingerprint({
 	const initValues: InitValues = {
 		fontSpacingSeed: config["fonts:spacing_seed"],
 		audioFingerprintSeed: config["audio:seed"],
-		canvasSeed: config["canvas:seed"],
 		navigatorPlatform: nav.platform,
 		navigatorOscpu: config["navigator.oscpu"],
 		navigatorUserAgent: config["navigator.userAgent"],

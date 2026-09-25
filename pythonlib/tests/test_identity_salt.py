@@ -42,7 +42,7 @@ def launch(**kwargs):
         return config_of(utils.launch_options(**kwargs))
 
 
-DRAWN = ("canvas:seed", "audio:seed", "fonts", "voices", "webGl:renderer")
+DRAWN = ("audio:seed", "fonts", "voices", "webGl:renderer")
 
 
 def drawn(config):
@@ -51,7 +51,7 @@ def drawn(config):
 
 class TestUnpinnedLaunchesAreDistinct:
     def test_noise_seeds_do_not_collide(self):
-        seeds = [launch()["canvas:seed"] for _ in range(40)]
+        seeds = [launch()["audio:seed"] for _ in range(40)]
         # 40 draws from 2**32: any collision means the seed space collapsed.
         assert len(set(seeds)) == len(seeds)
 
@@ -77,7 +77,7 @@ class TestPinnedIdentityIsStable:
             pytest.skip("no presets bundled")
         first = launch(os="windows", fingerprint_preset=preset)
         second = launch(os="windows", fingerprint_preset=preset)
-        assert (first["canvas:seed"], first["audio:seed"]) == (second["canvas:seed"], second["audio:seed"])
+        assert first["audio:seed"] == second["audio:seed"]
         assert first["fonts"] == second["fonts"]
 
     @pytest.mark.parametrize("os_name", ["windows", "macos", "linux"])
@@ -101,9 +101,17 @@ class TestPinnedIdentityIsStable:
             assert config.get("webGl:parameters"), (os_name, i)
             sample_webgl(key, config["webGl:vendor"], config["webGl:renderer"])
 
-    def test_caller_seeds_are_kept(self):
-        config = launch(config={"canvas:seed": 7, "audio:seed": 9})
-        assert (config["canvas:seed"], config["audio:seed"]) == (7, 9)
+    def test_caller_seed_is_kept(self):
+        assert launch(config={"audio:seed": 9})["audio:seed"] == 9
+
+
+def test_no_canvas_seed_is_generated():
+    """The browser adds no canvas noise (#528), and no patch reads canvas:seed
+    (#721). Generating one only sent the browser a value it ignored."""
+    assert "canvas:seed" not in launch()
+    context = fp.generate_context_fingerprint(os="linux")
+    assert "canvas:seed" not in context["config"]
+    assert "setCanvasSeed" not in context["init_script"]
 
     def test_salt_of_equal_objects_is_equal(self):
         a = fp.generate_fingerprint(os="windows")
