@@ -527,7 +527,7 @@ Camoufox does not draw its cursor paths. With `humanize=True` it uses [**Cursory
 
 That last part matters as much as the shape. Camoufox previously walked a Bézier curve through two random knots and emitted a point every 10ms. Both halves of that are tells: an analytic curve sampled at a fixed rate has velocity and jerk profiles that separate cleanly from a hand's, and the acceleration came entirely from one easing function, so every movement Camoufox ever made sped up and slowed down the same way. A replayed recording has neither property.
 
-Camoufox ships [cursory-js](https://github.com/JWriter20/cursory-js), a TypeScript port of Cursory, vendored into Juggler at `additions/juggler/input/cursory/`. It reproduces the Python original bit for bit, so a path can be reproduced against `pip install cursory`. **Cursory is LGPLv3-or-later, not MPL-2.0 like the rest of Camoufox**; its licence and full provenance are in `additions/juggler/input/cursory/NOTICE`.
+Camoufox ships [cursory-js](https://github.com/JWriter20/cursory-js), a TypeScript port of Cursory, vendored into Juggler at `additions/juggler/input/cursory/`. It reproduces the Python original bit for bit, so a path can be reproduced against `pip install cursory`. **Cursory is LGPLv3-or-later, not MPL-2.0 like the rest of the browser**; its licence and full provenance are in `additions/juggler/input/cursory/NOTICE`.
 
 However, this isn't perfect. It may still be detected with sophisticated enough analysis. (WIP for the future)
 
@@ -803,6 +803,13 @@ flowchart TD
 | (6) | `make edit-cfg`                               | Edit camoufox.cfg in the default system editor.                                                             |
 
 </details>
+
+---
+
+## Licensing
+
+- **The browser** (`patches/`, `additions/`, `settings/`, and the build system) is [MPL-2.0](LICENSE), the licence of the Firefox source it modifies. The vendored Cursory trajectories are LGPLv3-or-later (`additions/juggler/input/cursory/NOTICE`).
+- **The launchers** are MIT: the Python package ([`pythonlib/LICENSE`](pythonlib/LICENSE)) and the TypeScript package ([`typescript/LICENSE`](typescript/LICENSE)). The TypeScript package also contains ports of fpgen, CPython's `random` and NumPy's random generators; their notices are in [`typescript/THIRD_PARTY_NOTICES.md`](typescript/THIRD_PARTY_NOTICES.md).
 
 ---
 
