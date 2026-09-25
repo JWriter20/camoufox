@@ -143,15 +143,31 @@ PROBES = """async (port) => {
     for (let i = 0; i < 20000; i++) sink += fn();
     return performance.now() - t;
   };
-  out.costColor = time(() => matchMedia('(color: 8)').matches ? 1 : 0);
-  out.costMinWidth = time(() => matchMedia('(min-width: 1px)').matches ? 1 : 0);
-  out.costHwc = time(() => navigator.hardwareConcurrency);
-  out.costUA = time(() => navigator.userAgent.length);
-  out.sink = sink;
+  // Each pair is timed ROUNDS times, interleaved, and compared by median. One
+  // sample per getter let a single GC pause or CPU-steal spike on a shared
+  // runner decide the verdict (hardwareConcurrency once took 77 ms against a
+  // 50 ms allowance on a healthy build that passed the run before). The
+  // regressions these catch cost extra on EVERY read, so they move every
+  // sample and the median with them; a one-off spike moves one sample.
+  const ROUNDS = 5;
+  const median = (xs) => xs.slice().sort((a, b) => a - b)[xs.length >> 1];
+  const pair = (a, b) => {
+    const ta = [], tb = [];
+    for (let r = 0; r < ROUNDS; r++) { ta.push(time(a)); tb.push(time(b)); }
+    return [median(ta), median(tb)];
+  };
+  [out.costColor, out.costMinWidth] = pair(
+    () => matchMedia('(color: 8)').matches ? 1 : 0,
+    () => matchMedia('(min-width: 1px)').matches ? 1 : 0);
+  [out.costHwc, out.costUA] = pair(
+    () => navigator.hardwareConcurrency,
+    () => navigator.userAgent.length);
   // Fresh Date objects: a Date caches its local-time fields after one read.
   let n = 0;
-  out.costLocalDate = time(() => new Date(1.6e12 + (n++) * 3.6e6).getHours());
-  out.costUTCDate = time(() => new Date(1.6e12 + (n++) * 3.6e6).getUTCHours());
+  [out.costLocalDate, out.costUTCDate] = pair(
+    () => new Date(1.6e12 + (n++) * 3.6e6).getHours(),
+    () => new Date(1.6e12 + (n++) * 3.6e6).getUTCHours());
+  out.sink = sink;
   out.timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   return out;
 }"""
