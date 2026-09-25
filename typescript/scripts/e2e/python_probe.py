@@ -8,17 +8,23 @@ the same binary and the same identity:
         .venv/bin/python typescript/scripts/e2e/python_probe.py
 
 Prints one JSON object: {"probe": <probe result>, "config": <CAMOU_CONFIG>}.
-`mode` is "config-only" (launch_options() alone), "headless" (Camoufox(...) -> new_page) or "persistent"
-(Camoufox(persistent_context=True, user_data_dir=...)).
+`mode` is "config-only" (launch_options() alone), "headless" (Camoufox(...) -> new_page),
+"persistent" (Camoufox(persistent_context=True, user_data_dir=...)) or "context"
+(Camoufox(...) -> NewContext(browser, preset=req["preset"]) -> new_page).
+
+stdout carries the JSON and nothing else: pythonlib prints to stdout (e.g.
+"Skipping unknown patch" when the binary predates a config key), so everything
+the launch prints is sent to stderr instead.
 """
 
+import contextlib
 import json
 import sys
 import tempfile
 import warnings
 from pathlib import Path
 
-from camoufox.sync_api import Camoufox
+from camoufox.sync_api import Camoufox, NewContext
 from camoufox.utils import launch_options
 
 PROBE = (Path(__file__).resolve().parent.parent.parent / 'tests' / 'fixtures' / 'e2e' / 'probe.js').read_text()
@@ -32,19 +38,30 @@ def config_of(options):
 
 def main():
     req = json.loads(sys.stdin.read())
+    with contextlib.redirect_stdout(sys.stderr):
+        out = run(req)
+    json.dump(out, sys.stdout)
+
+
+def run(req):
     kwargs = req['kwargs']
     warnings.simplefilter('ignore')
     config = config_of(launch_options(**kwargs))
     if req['mode'] == 'config-only':
-        json.dump({'config': config}, sys.stdout)
-        return
+        return {'config': config}
+    if req['mode'] == 'context':
+        with Camoufox(**kwargs) as browser:
+            context = NewContext(browser, preset=req['preset'])
+            page = context.new_page()
+            page.goto(req['url'])
+            return {'probe': page.evaluate(PROBE), 'config': config}
     with tempfile.TemporaryDirectory() as profile:
         extra = {'persistent_context': True, 'user_data_dir': profile} if req['mode'] == 'persistent' else {}
         with Camoufox(**kwargs, **extra) as browser:
             page = browser.new_page()
             page.goto(req['url'])
             probe = page.evaluate(PROBE)
-    json.dump({'probe': probe, 'config': config}, sys.stdout)
+    return {'probe': probe, 'config': config}
 
 
 if __name__ == '__main__':

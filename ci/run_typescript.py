@@ -97,6 +97,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             proc = run(["pnpm", script], cwd=TYPESCRIPT, env=env, timeout=600, tee=True, capture=False)
             result.record(f"pnpm {script}", evidence.PASS if proc.ok else evidence.FAIL)
 
+    # The tarball a user would install: builds, ships every data file, installs
+    # and imports in an empty project, and its CLI starts. publish-npm.yml runs
+    # the same check before uploading; running it here means a packaging mistake
+    # is caught on the pull request that makes it, not on release day.
+    if not args.browser:
+        build = run(["pnpm", "build"], cwd=TYPESCRIPT, env=env, timeout=600, tee=True, capture=False)
+        pack = build.ok and run(["node", "scripts/check-pack.mjs"], cwd=TYPESCRIPT, env=env,
+                                timeout=900, tee=True, capture=False).ok
+        result.record("npm package (scripts/check-pack.mjs)", evidence.PASS if pack else evidence.FAIL)
+
     junit = WORK_DIR / f"junit-{gate}.xml"
     junit.parent.mkdir(parents=True, exist_ok=True)
     proc = run(

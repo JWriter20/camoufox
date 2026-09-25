@@ -6,13 +6,24 @@
  *
  *   CAMOUFOX_E2E=1 CAMOUFOX_EXECUTABLE=/path/to/camoufox-bin pnpm test tests/e2e.test.ts
  *
- * For each fixed identity it launches headless, as a persistent context, and
- * through launchServer(), runs tests/fixtures/e2e/probe.js on a local page, and
- * checks the navigator/screen/window/fonts/timezone/voices/WebGL values against
- * the CAMOU_CONFIG the launcher sent. Then it launches the PYTHON camoufox on
- * the same binary with the same identity (scripts/e2e/python_probe.py, run with
- * $CAMOUFOX_E2E_PYTHON or the repo's .venv) and requires the same probe result
- * -- canvas hash included, since both derive the noise seeds from the identity.
+ * Two kinds of assertion, deliberately kept apart:
+ *
+ *  - PARITY, always enforced: for each fixed identity it launches headless, as a
+ *    persistent context, through launchServer() and through NewContext(), runs
+ *    tests/fixtures/e2e/probe.js on a local page, then launches the PYTHON
+ *    camoufox on the same binary with the same identity
+ *    (scripts/e2e/python_probe.py, run with $CAMOUFOX_E2E_PYTHON or the repo's
+ *    .venv) and requires the same CAMOU_CONFIG and the same probe result. This is
+ *    the claim this package makes, and it holds on any binary.
+ *
+ *  - THE BROWSER HONOURS THE CONFIG: navigator/screen/window/fonts/timezone/
+ *    voices/WebGL on the page equal what the launcher sent. That is the
+ *    browser's half of the contract, so it is only asserted on a binary that
+ *    knows every key the launcher sets (its properties.json lists them). An
+ *    older binary -- the published release, on a driver-only pull request, while
+ *    the launcher is ahead of it -- ignores the keys it does not know, exactly
+ *    as pythonlib's "Skipping unknown patch" says, and those tests skip naming
+ *    the missing keys rather than failing on the skew.
  */
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -54,6 +65,21 @@ const IDENTITIES: Record<string, Record<string, any>> = {
 		config: { timezone: "Europe/Paris" },
 	},
 };
+
+/** Config keys the binary under test does not know (see the header). */
+function unknownToBinary(config: Record<string, any>): string[] {
+	const dir = path.dirname(EXECUTABLE);
+	const candidates = [
+		path.join(dir, "properties.json"),
+		path.join(dir, "..", "Resources", "properties.json"), // macOS bundle
+	];
+	const file = candidates.find((f) => fs.existsSync(f));
+	if (!file) return ["<no properties.json beside the binary>"];
+	const known = new Set(
+		JSON.parse(fs.readFileSync(file, "utf-8")).map((p: any) => p.property),
+	);
+	return Object.keys(config).filter((k) => !known.has(k));
+}
 
 let server: http.Server;
 let url = "";
@@ -105,7 +131,11 @@ async function probePage(page: any): Promise<any> {
  * Run the Python side. Asynchronously: the probe page is served from this
  * process, so blocking the event loop would hang Python's page.goto().
  */
-function pythonProbe(mode: string, kwargs: Record<string, any>): Promise<any> {
+function pythonProbe(
+	mode: string,
+	kwargs: Record<string, any>,
+	extra: Record<string, any> = {},
+): Promise<any> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			PYTHON,
@@ -124,11 +154,21 @@ function pythonProbe(mode: string, kwargs: Record<string, any>): Promise<any> {
 		});
 		child.on("error", reject);
 		child.on("close", (code) => {
-			if (code !== 0)
+			if (code !== 0) {
 				reject(new Error(`python probe failed (${code}): ${stderr}`));
-			else resolve(JSON.parse(stdout));
+				return;
+			}
+			try {
+				resolve(JSON.parse(stdout));
+			} catch (err) {
+				reject(
+					new Error(
+						`python probe printed non-JSON (${err}): ${stdout.slice(0, 500)}`,
+					),
+				);
+			}
 		});
-		child.stdin.end(JSON.stringify({ mode, url, kwargs }));
+		child.stdin.end(JSON.stringify({ mode, url, kwargs, ...extra }));
 	});
 }
 
@@ -242,7 +282,6 @@ describe.runIf(ENABLED)("e2e: the TS launcher drives a real Camoufox", () => {
 					await (browser as any).close();
 				}
 				results[`${identity}:headless`] = probe;
-				expectMatchesConfig(probe, results[`${identity}:config`]);
 
 				// A second launch of the same identity presents the same device.
 				const { result: again } = await mods.warnings.recordWarnings(() =>
@@ -282,8 +321,7 @@ describe.runIf(ENABLED)("e2e: the TS launcher drives a real Camoufox", () => {
 				} finally {
 					fs.rmSync(profile, { recursive: true, force: true });
 				}
-				expectMatchesConfig(probe, results[`${identity}:config`]);
-				expect(stable(probe)).toEqual(stable(results[`${identity}:headless`]));
+				results[`${identity}:persistent`] = probe;
 
 				const py = await pythonProbe("persistent", kwargsFor(identity));
 				expect(stable(probe)).toEqual(stable(py.probe));
@@ -316,9 +354,71 @@ describe.runIf(ENABLED)("e2e: the TS launcher drives a real Camoufox", () => {
 				} finally {
 					await browserServer.close();
 				}
-				expectMatchesConfig(probe, results[`${identity}:config`]);
+				results[`${identity}:server`] = probe;
 				expect(stable(probe)).toEqual(stable(results[`${identity}:headless`]));
 			}, 240_000);
+
+			it("NewContext: a per-context identity, same as Python", async () => {
+				// A different identity from the launch one, so a context that
+				// inherited the browser's identity would be caught.
+				const preset =
+					identity === "fpgen_linux_de"
+						? INPUTS.presets.windows
+						: INPUTS.presets.macos;
+				const { result: browser } = await mods.warnings.recordWarnings(() =>
+					mods.sync.Camoufox(kwargsFor(identity)),
+				);
+				let probe: any;
+				let second: any;
+				try {
+					const context = await mods.sync.NewContext(browser as any, {
+						preset,
+					});
+					probe = await probePage(await context.newPage());
+					// Contexts are isolated: another preset, another device.
+					const other = await mods.sync.NewContext(browser as any, {
+						preset: INPUTS.presets.linux,
+					});
+					second = await probePage(await other.newPage());
+				} finally {
+					await (browser as any).close();
+				}
+				const launch = results[`${identity}:headless`];
+				expect(probe.navigator.userAgent).not.toBe(launch.navigator.userAgent);
+				expect(second.navigator.userAgent).not.toBe(probe.navigator.userAgent);
+
+				// Per-context noise seeds are drawn fresh in both launchers, so
+				// compare the identity itself, not the noise.
+				const identityOf = (p: any) => ({
+					navigator: p.navigator,
+					screen: p.screen,
+					timeZone: p.intl.timeZone,
+					webgl: p.webgl,
+				});
+				const py = await pythonProbe("context", kwargsFor(identity), {
+					preset,
+				});
+				expect(identityOf(probe)).toEqual(identityOf(py.probe));
+			}, 240_000);
+
+			it("the browser honours the config (headless, persistent, launchServer)", async (ctx) => {
+				const config = results[`${identity}:config`];
+				const missing = unknownToBinary(config);
+				if (missing.length)
+					ctx.skip(
+						`binary predates the launcher; it does not know: ${missing.join(", ")}`,
+					);
+				for (const mode of ["headless", "persistent", "server"]) {
+					expect(results[`${identity}:${mode}`], mode).toBeTruthy();
+					expectMatchesConfig(results[`${identity}:${mode}`], config);
+				}
+				// A persistent profile presents the same device as a throwaway one.
+				// (beta.30 did not: its storage quota was Firefox's pinned 10 GiB
+				// headless and the disk's in a profile -- LEAKS row 107.)
+				expect(stable(results[`${identity}:persistent`])).toEqual(
+					stable(results[`${identity}:headless`]),
+				);
+			});
 
 			it.runIf(identity === "fpgen_linux_de" && process.platform === "linux")(
 				"pin_cpu_cores: the browser runs on as many cores as it reports",
@@ -387,9 +487,16 @@ describe.runIf(ENABLED)("e2e: the TS launcher drives a real Camoufox", () => {
 					} finally {
 						await (browser as any).close();
 					}
-					expectMatchesConfig(probe, results[`${identity}:config`], true);
 					// close() killed the Xvfb it spawned.
 					expect(display.proc ?? null).toBeNull();
+					// Headful on Xvfb must present the same device as headless.
+					const { media: _m, ...headful } = stable(probe);
+					const { media: _h, ...headless } = stable(
+						results[`${identity}:headless`],
+					);
+					expect(headful).toEqual(headless);
+					if (unknownToBinary(results[`${identity}:config`]).length === 0)
+						expectMatchesConfig(probe, results[`${identity}:config`], true);
 				},
 				240_000,
 			);
