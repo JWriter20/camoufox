@@ -4,8 +4,10 @@
 /mozilla-unified
 dist/
 bin/
-launch
-launch.exe
+# The Go launcher binary. Anchored: unanchored, this ignored every path
+# segment named `launch` anywhere in the tree (e.g. test fixtures).
+/launch
+/launch.exe
 
 
 # Internal testing

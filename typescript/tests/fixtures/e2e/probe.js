@@ -1,5 +1,14 @@
 async () => {
 	const out = {};
+	// An await that never settles would hang the whole test with no clue which
+	// one; this records "timeout: <what>" in the result instead.
+	const within = (promise, what, ms = 10000) =>
+		Promise.race([
+			promise,
+			new Promise((_, reject) =>
+				setTimeout(() => reject(new Error(`timeout: ${what} (${ms} ms)`)), ms),
+			),
+		]);
 	const nav = navigator;
 	out.navigator = {
 		userAgent: nav.userAgent,
@@ -94,7 +103,7 @@ async () => {
 	});
 	out.voices = voices.map((v) => `${v.name}|${v.lang}|${v.default}|${v.localService}`);
 	try {
-		out.storageQuota = (await navigator.storage.estimate()).quota;
+		out.storageQuota = (await within(navigator.storage.estimate(), "storage.estimate")).quota;
 	} catch (e) {
 		out.storageQuota = `error: ${e}`;
 	}
@@ -103,12 +112,21 @@ async () => {
 		reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
 	};
 	try {
-		const devices = await navigator.mediaDevices.enumerateDevices();
+		const devices = await within(
+			navigator.mediaDevices.enumerateDevices(),
+			"enumerateDevices",
+		);
 		out.mediaDevices = devices.map((d) => d.kind).sort();
 	} catch (e) {
 		out.mediaDevices = `error: ${e}`;
 	}
-	out.permissionsGeo = (await navigator.permissions.query({ name: "geolocation" })).state;
+	try {
+		out.permissionsGeo = (
+			await within(navigator.permissions.query({ name: "geolocation" }), "permissions.query")
+		).state;
+	} catch (e) {
+		out.permissionsGeo = `error: ${e}`;
+	}
 	out.historyLength = history.length;
 	return out;
 }

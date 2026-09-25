@@ -76,9 +76,9 @@ export interface EnsureModelOptions {
 
 const inflight = new Map<string, Promise<string>>();
 
-const LOCK_DIR = ".install.lock";
+export const LOCK_DIR = ".install.lock";
 /** A lock older than this was left by a process that died holding it. */
-const STALE_LOCK_MS = 10 * 60 * 1000;
+export const STALE_LOCK_MS = 10 * 60 * 1000;
 
 /**
  * Run `fn` holding `dir`'s install lock, across processes. `inflight` only
@@ -88,7 +88,7 @@ const STALE_LOCK_MS = 10 * 60 * 1000;
  * another had just decompressed and was about to read. mkdir is atomic on every
  * platform, so the lock is a directory.
  */
-async function withInstallLock<T>(
+export async function withInstallLock<T>(
 	dir: string,
 	fn: () => Promise<T>,
 ): Promise<T> {

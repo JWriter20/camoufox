@@ -15,6 +15,7 @@ import {
 	SCREEN_ENV_VAR,
 	VirtualDisplay,
 } from "../src/virtdisplay.js";
+import { prerequisite } from "./prereq.js";
 
 afterEach(() => {
 	delete process.env[SCREEN_ENV_VAR];
@@ -106,7 +107,10 @@ function hasXvfb(): boolean {
 const DISPLAY_RE = /^:\d+$/;
 const N = Number.parseInt(process.env.VIRTDISPLAY_TEST_N ?? "50", 10);
 
-describe.skipIf(!hasXvfb())("Xvfb lifecycle", () => {
+describe.skipIf(
+	process.platform !== "linux" ||
+		!prerequisite("xvfb", hasXvfb(), "apt-get install xvfb"),
+)("Xvfb lifecycle", () => {
 	const tracked: VirtualDisplay[] = [];
 	const track = (vd: VirtualDisplay) => {
 		tracked.push(vd);

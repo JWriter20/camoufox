@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureModel } from "../src/fpgen/index.js";
+import { prerequisite } from "./prereq.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const FIXTURES = path.join(HERE, "fixtures", "fpgen");
@@ -27,8 +28,8 @@ async function prepare(): Promise<{ ok: boolean; reason?: string }> {
 		await ensureModel();
 		return { ok: true };
 	} catch (e) {
-		const reason = `fpgen model unavailable (not cached and could not be downloaded): ${(e as Error).message}`;
-		console.warn(`[fpgen tests] SKIPPING model-dependent tests -- ${reason}`);
+		const reason = `not cached and could not be downloaded: ${(e as Error).message}`;
+		prerequisite("fpgen-model", false, reason);
 		return { ok: false, reason };
 	}
 }

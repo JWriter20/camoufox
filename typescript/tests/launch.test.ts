@@ -25,6 +25,7 @@ import {
 	utils,
 	warnings,
 } from "./launch-host.js";
+import { prerequisite } from "./prereq.js";
 
 const { ensureModel } = await import("../src/fpgen/index.js");
 const { PyFloat } = await import("../src/pycompat.js");
@@ -36,10 +37,7 @@ let modelReady = true;
 try {
 	await ensureModel();
 } catch (e) {
-	modelReady = false;
-	console.warn(
-		`[launch tests] fpgen model unavailable, skipping generation tests: ${e}`,
-	);
+	modelReady = prerequisite("fpgen-model", false, String(e));
 }
 
 const deps = utils.utilsDeps;

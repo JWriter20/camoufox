@@ -4,7 +4,3 @@ yarn.lock
 .npmrc
 dist/
 *.mmdb
-
-# The root .gitignore ignores every path named `launch` (local build output).
-# These are the launch_options() golden fixtures, not build output.
-!/tests/fixtures/launch/

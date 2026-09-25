@@ -83,6 +83,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             CAMOUFOX_E2E_PYTHON=str(args.python.absolute()),
         )
 
+    # Every test input must be something a checkout gets. A git-ignored file
+    # under src/, tests/ or scripts/ exists on the machine that made it and
+    # nowhere else, so the suite passes there and fails in CI -- which is how
+    # tests/fixtures/launch/ once went missing from a branch (an unanchored
+    # `launch` rule in the root .gitignore).
+    ignored = run(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory",
+         "--", "typescript/src", "typescript/tests", "typescript/scripts"],
+        cwd=REPO_ROOT,
+    )
+    stray = [p for p in ignored.stdout.split() if "__pycache__" not in p]
+    for path in stray:
+        result.note(f"git-ignored test input: {path}")
+    result.record("no test input is git-ignored", evidence.FAIL if stray else evidence.PASS)
+
     install = run(["pnpm", "install", "--frozen-lockfile"], cwd=TYPESCRIPT, env=env,
                   timeout=600, tee=True, capture=False)
     if not install.ok:
@@ -109,9 +124,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     junit = WORK_DIR / f"junit-{gate}.xml"
     junit.parent.mkdir(parents=True, exist_ok=True)
+    # The browser gate runs the e2e file alone: the unit suite already ran in
+    # tier 1, and running it again here would need that job's prerequisites.
+    files = ["tests/e2e.test.ts"] if args.browser else []
     proc = run(
         ["pnpm", "exec", "vitest", "run", "--config", "tests/vitest.config.ts",
-         "--reporter=default", "--reporter=junit", f"--outputFile.junit={junit}"],
+         "--reporter=default", "--reporter=junit", f"--outputFile.junit={junit}", *files],
         cwd=TYPESCRIPT, env=env, timeout=args.timeout, tee=True, capture=False,
     )
     outcomes = parse_vitest_junit(junit)

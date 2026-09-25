@@ -177,6 +177,23 @@ function pythonProbe(
  * launches of the SAME config (same canvas:seed) -- measured with this build,
  * TS and Python alike -- so it is compared by its size only.
  */
+/**
+ * `promise`, or a rejection naming the step after `ms`. A hung launch otherwise
+ * surfaces only as vitest's whole-test timeout, which says nothing about where.
+ */
+function step<T>(what: string, promise: Promise<T>, ms = 60_000): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	return Promise.race([
+		promise,
+		new Promise<never>((_, reject) => {
+			timer = setTimeout(
+				() => reject(new Error(`${what}: did not complete in ${ms / 1000} s`)),
+				ms,
+			);
+		}),
+	]).finally(() => clearTimeout(timer));
+}
+
 function stable(probe: any): any {
 	const { canvasHash, ...rest } = probe;
 	return { ...rest, canvasSize: String(canvasHash).split(":")[1] };
@@ -476,16 +493,26 @@ describe.runIf(ENABLED)("e2e: the TS launcher drives a real Camoufox", () => {
 			it.runIf(identity === "fpgen_linux_de" && process.platform === "linux")(
 				"headless: 'virtual' runs headful on a private Xvfb and tears it down",
 				async () => {
-					const { result: browser } = await mods.warnings.recordWarnings(() =>
-						mods.sync.Camoufox({ ...kwargsFor(identity), headless: "virtual" }),
+					const { result: browser } = await step(
+						"virtual: launch (Xvfb + headful browser)",
+						mods.warnings.recordWarnings(() =>
+							mods.sync.Camoufox({
+								...kwargsFor(identity),
+								headless: "virtual",
+							}),
+						),
 					);
 					const display = (browser as any)._virtualDisplay;
 					expect(display).toBeTruthy();
 					let probe: any;
 					try {
-						probe = await probePage(await (browser as any).newPage());
+						const page = await step(
+							"virtual: newPage",
+							(browser as any).newPage(),
+						);
+						probe = await step("virtual: probe the page", probePage(page));
 					} finally {
-						await (browser as any).close();
+						await step("virtual: close", (browser as any).close());
 					}
 					// close() killed the Xvfb it spawned.
 					expect(display.proc ?? null).toBeNull();

@@ -15,6 +15,7 @@ import {
 	partition,
 	signature,
 } from "../src/fontprobe.js";
+import { prerequisite } from "./prereq.js";
 
 const PY = path.join(import.meta.dirname, "../../.venv/bin/python");
 
@@ -71,11 +72,10 @@ describe("pure helpers", () => {
 	});
 });
 
-// The host's own fonts, read two ways. fontTools is the Python reference.
-const bundledFonts = path.join(
-	os.homedir(),
-	".cache/camoufox/browsers/local/152.0.4-beta.31-frompatches-20260914/fonts",
-);
+// A directory of real fonts, read two ways; fontTools is the Python reference.
+// Any fonts will do -- the system's by default. CI installs a set that includes
+// .ttc collections, the header the reader is likeliest to get wrong.
+const fontDir = process.env.CAMOUFOX_TEST_FONT_DIR ?? "/usr/share/fonts";
 // Whichever interpreter has fontTools (the venv may not carry it).
 const FONTTOOLS_PY = [PY, "python3"].find((py) => {
 	try {
@@ -85,7 +85,21 @@ const FONTTOOLS_PY = [PY, "python3"].find((py) => {
 		return false;
 	}
 });
-const hasFontTools = FONTTOOLS_PY !== undefined;
+const hasFontTools = prerequisite(
+	"fonttools",
+	FONTTOOLS_PY !== undefined,
+	"pip install fonttools",
+);
+const hasFontDir = prerequisite(
+	"font-dir",
+	fs.existsSync(fontDir),
+	`${fontDir}; set CAMOUFOX_TEST_FONT_DIR`,
+);
+const hasPython = prerequisite(
+	"pythonlib-venv",
+	fs.existsSync(PY),
+	`${PY}: python3 -m venv .venv && .venv/bin/pip install -e pythonlib`,
+);
 // Load fontprobe.py by path: it is stdlib-only, but the camoufox package's
 // __init__ pulls in Playwright.
 const LOAD_FONTPROBE = `
@@ -95,11 +109,11 @@ fontprobe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fontprobe)
 `;
 
-describe.skipIf(!hasFontTools || !fs.existsSync(bundledFonts))(
+describe.skipIf(!hasFontTools || !hasFontDir)(
 	"name-table reader vs fontTools",
 	() => {
 		it("reads the same families as the Python fallback", () => {
-			const dir = path.join(bundledFonts, "linux");
+			const dir = fontDir;
 			const script = `${LOAD_FONTPROBE}
 import json
 print(json.dumps(sorted(fontprobe._from_font_files([${JSON.stringify(dir)}]))))
@@ -147,7 +161,7 @@ describe("installedFamilies cache", () => {
 		expect(fp.installedFamilies(true).cached).toBe(false);
 	});
 
-	it.skipIf(!fs.existsSync(PY))("is readable by the Python twin", async () => {
+	it.skipIf(!hasPython)("is readable by the Python twin", async () => {
 		const fp = await import("../src/fontprobe.js");
 		const ours = fp.installedFamilies();
 		const script = `

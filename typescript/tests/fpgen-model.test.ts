@@ -27,6 +27,11 @@ import {
 	verifyArchive,
 } from "../src/fpgen/index.js";
 import {
+	LOCK_DIR,
+	STALE_LOCK_MS,
+	withInstallLock,
+} from "../src/fpgen/model.js";
+import {
 	casefold,
 	PyFloat,
 	parseOrdered,
@@ -34,6 +39,7 @@ import {
 	pyEquals,
 } from "../src/fpgen/pyjson.js";
 import { MODEL } from "./fpgen-setup.js";
+import { prerequisite } from "./prereq.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_PIN = path.resolve(HERE, "../../scripts/data/fpgen-model.json");
@@ -59,7 +65,7 @@ function pinFor(buf: Buffer, files: string[]): ModelPin {
 }
 
 describe("fpgen model pin", () => {
-	it.skipIf(!fs.existsSync(REPO_PIN))(
+	it.skipIf(!prerequisite("repo-pin", fs.existsSync(REPO_PIN), REPO_PIN))(
 		"matches scripts/data/fpgen-model.json (bump both together)",
 		() => {
 			const repo = JSON.parse(fs.readFileSync(REPO_PIN, "utf-8"));
@@ -135,6 +141,59 @@ describe("fpgen model pin", () => {
 			installArchive(buf, dir, pinFor(buf, ["a.zst", "b.zst"])),
 		).toThrow(/missing b\.zst/);
 		expect(fs.existsSync(path.join(dir, ".pinned-model"))).toBe(false);
+	});
+
+	// Several processes installing into an empty cache at once: one's install
+	// deleted the values.dat another had just decompressed and was reading.
+	it("a same-model reinstall keeps values.dat; a different model drops it", () => {
+		const archive = (tag: string) => {
+			const zip = new AdmZip();
+			zip.addFile("a.zst", Buffer.from(tag));
+			return zip.toBuffer();
+		};
+		const dir = tmpDir();
+		const dat = path.join(dir, "values.dat");
+		const first = archive("one");
+		installArchive(first, dir, pinFor(first, ["a.zst"]));
+		fs.writeFileSync(dat, "decompressed");
+		installArchive(first, dir, pinFor(first, ["a.zst"]));
+		expect(fs.existsSync(dat)).toBe(true);
+		const second = archive("two");
+		installArchive(second, dir, pinFor(second, ["a.zst"]));
+		expect(fs.existsSync(dat)).toBe(false);
+	});
+
+	it("the install lock admits one holder at a time, and releases", async () => {
+		const dir = tmpDir();
+		const events: string[] = [];
+		const holder = (name: string, ms: number) =>
+			withInstallLock(dir, async () => {
+				events.push(`${name}+`);
+				await new Promise((r) => setTimeout(r, ms));
+				events.push(`${name}-`);
+				return name;
+			});
+		// mkdir is the lock, so this is the same exclusion another process gets.
+		const results = await Promise.all([holder("a", 300), holder("b", 10)]);
+		expect(results).toEqual(["a", "b"]);
+		expect(events).toEqual(["a+", "a-", "b+", "b-"]);
+		expect(fs.existsSync(path.join(dir, LOCK_DIR))).toBe(false);
+		// ...and a holder that throws still releases it.
+		await expect(
+			withInstallLock(dir, async () => {
+				throw new Error("boom");
+			}),
+		).rejects.toThrow("boom");
+		expect(fs.existsSync(path.join(dir, LOCK_DIR))).toBe(false);
+	});
+
+	it("reclaims a lock left by a process that died holding it", async () => {
+		const dir = tmpDir();
+		const lock = path.join(dir, LOCK_DIR);
+		fs.mkdirSync(lock);
+		const old = (Date.now() - STALE_LOCK_MS - 60_000) / 1000;
+		fs.utimesSync(lock, old, old);
+		await expect(withInstallLock(dir, async () => "ok")).resolves.toBe("ok");
 	});
 
 	it("honours CAMOUFOX_FPGEN_DATA", () => {

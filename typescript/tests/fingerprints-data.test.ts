@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { LOCAL_DATA } from "../src/pkgman.js";
+import { prerequisite } from "./prereq.js";
 
 const PYTHONLIB = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -32,7 +33,9 @@ const SHARED = [
 	"fingerprint-presets-v150.json",
 ];
 
-describe.skipIf(!fs.existsSync(PYTHONLIB))("identity data files", () => {
+describe.skipIf(
+	!prerequisite("pythonlib-source", fs.existsSync(PYTHONLIB), PYTHONLIB),
+)("identity data files", () => {
 	for (const name of SHARED) {
 		it(`${name} is byte-identical to pythonlib's`, () => {
 			const ours = fs.readFileSync(path.join(LOCAL_DATA, name));

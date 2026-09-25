@@ -334,12 +334,21 @@ jobs:
           # pythonlib look for it (fontprobe's shared cache, fonttools). Without
           # it they skip, and a skip is not a pass.
           python3 -m venv .venv
-          .venv/bin/pip install -r ci/requirements.txt -e pythonlib
+          .venv/bin/pip install -r ci/requirements.txt -e pythonlib fonttools
           # fpgen downloads its model on first import with TLS verification
           # OFF and no checksum, and its release picker can only ever reach the
           # April-2025 model. Install the pinned one first: see
           # scripts/pin-fpgen-model.py.
           .venv/bin/python scripts/pin-fpgen-model.py
+      - name: Test prerequisites
+        # Everything tests/prereq.ts may ask for. In CI a missing prerequisite
+        # FAILS its tests rather than skipping them, so this list is the job's
+        # contract. xvfb: the virtual-display lifecycle. Fonts, with a .ttc
+        # collection among them: the font-name reader is checked against
+        # fontTools over /usr/share/fonts.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb fonts-dejavu-core fonts-wqy-zenhei
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: typescript/package.json
