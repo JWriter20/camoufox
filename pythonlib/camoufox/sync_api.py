@@ -174,7 +174,7 @@ def NewContext(
     Creates a new browser context with a unique fingerprint identity.
 
     Each context gets its own real fingerprint preset
-    with unique seeds for audio, canvas, and font spacing noise. All values are applied
+    with its own audio noise seed. All values are applied
     via addInitScript so they self-destruct before page scripts can detect them.
 
     Parameters:

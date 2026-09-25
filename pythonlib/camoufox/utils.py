@@ -994,7 +994,7 @@ def launch_options(
     _user_set_dnt = 'navigator.doNotTrack' in config
     _user_set_gpc = 'navigator.globalPrivacyControl' in config
     _user_set_accept_encoding = 'headers.Accept-Encoding' in config
-    _user_set_noise_seeds = {k for k in ('audio:seed', 'canvas:seed') if k in config}
+    _user_set_audio_seed = 'audio:seed' in config
 
     # The salt that makes every seeded draw belong to this identity (see
     # fingerprints.identity_salt): stable when the caller pinned the identity
@@ -1274,16 +1274,14 @@ def launch_options(
     # on every measureText), which is a fingerprint no stock Firefox emits.
     # Pass fonts:spacing_seed explicitly to opt back in.
     set_into(config, 'fonts:spacing_seed', 0)
-    # audio/canvas noise seeds follow the identity: a returning "same device"
-    # must reproduce its audio and canvas hashes (#442/#765). Derived, not
-    # equal, so the two streams differ; never 0 (0 disables the noise).
-    # A preset draws its own random seeds; they are replaced here too so a
-    # pinned preset reproduces them, but a seed the caller set is kept.
-    _ident = identity_seed(config, _identity_salt)
-    if 'audio:seed' not in _user_set_noise_seeds:
+    # The audio noise seed follows the identity: a returning "same device" must
+    # reproduce its audio hash (#442/#765). Never 0 (0 disables the noise). A
+    # preset draws its own random seed; it is replaced here too so a pinned
+    # preset reproduces it, but a seed the caller set is kept. There is no
+    # canvas seed: the browser adds no canvas noise (#528).
+    if not _user_set_audio_seed:
+        _ident = identity_seed(config, _identity_salt)
         config['audio:seed'] = ((_ident * 2654435761 + 97) & 0xFFFFFFFF) or 1
-    if 'canvas:seed' not in _user_set_noise_seeds:
-        config['canvas:seed'] = ((_ident * 40503 + 12345) & 0xFFFFFFFF) or 1
 
     # Set geolocation
     if geoip:

@@ -1644,12 +1644,11 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None, salt: Optional[i
     if webgl.get('unmaskedRenderer'):
         config['webGl:renderer'] = webgl['unmaskedRenderer']
 
-    # Generate unique random seeds per launch (1 to 2^32-1, excluding 0 which is a no-op in C++)
+    # Generate a unique audio seed per launch (1 to 2^32-1, excluding 0 which is a no-op in C++)
     # fonts:spacing_seed stays 0 (off): glyph-advance perturbation produces text
     # widths no real machine emits (see launch_options in utils.py).
     config['fonts:spacing_seed'] = 0
     config['audio:seed'] = randint(1, 4_294_967_295)  # nosec
-    config['canvas:seed'] = randint(1, 4_294_967_295)  # nosec
 
     if preset.get('timezone'):
         config['timezone'] = preset['timezone']
@@ -1700,7 +1699,6 @@ def _build_init_script(values: Dict[str, Any]) -> str:
     setters = [
         ('fontSpacingSeed', 'setFontSpacingSeed', '{val}'),
         ('audioFingerprintSeed', 'setAudioFingerprintSeed', '{val}'),
-        ('canvasSeed', 'setCanvasSeed', '{val}'),
         ('navigatorPlatform', 'setNavigatorPlatform', '{val}'),
         ('navigatorOscpu', 'setNavigatorOscpu', '{val}'),
         ('navigatorUserAgent', 'setNavigatorUserAgent', '{val}'),
@@ -1820,7 +1818,6 @@ def generate_context_fingerprint(
         # Add seeds (the generator doesn't produce these)
         config.setdefault('fonts:spacing_seed', 0)  # perturbation off; see utils.launch_options
         config.setdefault('audio:seed', randint(1, 4_294_967_295))  # nosec
-        config.setdefault('canvas:seed', randint(1, 4_294_967_295))  # nosec
 
         # Determine target OS from platform for font/voice generation
         plat = config.get('navigator.platform', '')
@@ -1917,7 +1914,6 @@ def generate_context_fingerprint(
     init_values: Dict[str, Any] = {
         'fontSpacingSeed': config.get('fonts:spacing_seed'),
         'audioFingerprintSeed': config.get('audio:seed'),
-        'canvasSeed': config.get('canvas:seed'),
         'navigatorPlatform': nav.get('platform'),
         'navigatorOscpu': config.get('navigator.oscpu'),
         'navigatorUserAgent': config.get('navigator.userAgent'),

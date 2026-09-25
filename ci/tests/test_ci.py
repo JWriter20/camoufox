@@ -602,7 +602,7 @@ def _cross(**kw):
 
 
 def test_a_shared_per_context_value_is_a_leak():
-    """audio, canvas and timezone are derived per context.
+    """audio and timezone are derived per context.
 
     Two contexts sharing one is the failure this whole suite exists to catch.
     """
@@ -614,19 +614,14 @@ def test_a_shared_per_context_value_is_a_leak():
         assert not out["noise"]
 
 
-def test_canvas_collisions_are_tracked_but_do_not_gate():
-    """Canvas belongs in must-vary and does not hold there yet.
-
-    Measured 16 distinct canvas fingerprints in 24 samples where audio gave
-    24/24 -- so two contexts collide about a third of the time. Gating would
-    fail one run in three for a real, unfixed reason; silence would lose the
-    finding. It gets its own bucket and is reported every run.
-    """
+def test_a_shared_canvas_is_noise_not_a_leak():
+    """The canvas is rendered, not noised (#528), so contexts with the same
+    fonts and GPU draw the same image, as two real machines would."""
     from ci.run_build_tester import uniqueness
 
     out = uniqueness(_cross(uniqueCanvas=2))
-    assert out["low_entropy"] == ["macPerContext.uniqueCanvas (2/3 distinct)"]
-    assert not out["leaks"] and not out["noise"]
+    assert out["noise"] == ["macPerContext.uniqueCanvas (2/3 distinct)"]
+    assert not out["leaks"]
 
 
 def test_a_shared_preset_value_is_noise_not_a_leak():

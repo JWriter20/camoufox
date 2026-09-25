@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -538,6 +539,19 @@ def test_a_sandbox_held_over_a_page_window_is_nuked_not_just_dropped():
     assert "nukeSandbox" in source, (
         "FrameTree.js caches a Cu.Sandbox over a page window but never nukes it."
         + explain("per-frame-state-released-on-dispose")
+    )
+
+
+def test_no_canvas_seed_is_declared_or_sent():
+    """Nothing in the browser reads a canvas seed, so neither launcher sends one."""
+    declared = {
+        entry["property"]
+        for entry in json.loads((REPO_ROOT / "settings" / "properties.json").read_text())
+    }
+    assert not {k for k in declared if k.startswith("canvas:")}, explain("canvas-is-not-noised")
+    fingerprints = REPO_ROOT / "pythonlib" / "camoufox" / "fingerprints.py"
+    assert "setCanvasSeed" not in fingerprints.read_text(encoding="utf-8"), (
+        "fingerprints.py still calls setCanvasSeed" + explain("canvas-is-not-noised")
     )
 
 

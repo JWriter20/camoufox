@@ -159,28 +159,22 @@ rules:
   # Measurement
   # -------------------------------------------------------------------------
 
-  - id: canvas-noise-entropy-is-lower-than-audio
-    title: Two contexts share a canvas fingerprint far more often than they should
-    check: manual   # an open finding, not a settled decision
+  - id: canvas-is-not-noised
+    title: The canvas is rendered, not noised, and there is no canvas seed
+    check: automated
     evidence:
-      - "24 profiles across 3 runs on v152.0.4-beta.30, once the canvas was actually hashed"
-      - "audio 24 distinct / 24 samples; canvas 16 / 24, values recurring across independent runs"
-      - "macOS 7 distinct of 12, Linux 9 of 12; one value seen three times"
-      - "matches the rate at which CI flagged cross-profile canvas collisions"
+      - "PR #528 (e4528a2): 'Disable Canvas Noise' -- removed the canvas noise patch"
+      - "issue #721: canvas:seed declared and passed through, but nothing consumed it"
+      - "24 profiles across 3 runs on v152.0.4-beta.30: canvas 16 distinct of 24, audio 24 of 24"
     rationale: >-
-      Audio and canvas are both noised per context, by the same machinery, and
-      were measured in the same runs with the same hash. Audio came back
-      completely unique; canvas did not, and its values repeat across runs that
-      share nothing. So two contexts in one browser are linkable by canvas
-      roughly a third of the time, which is the property per-context spoofing
-      exists to prevent.
-      This was invisible until the fingerprint stopped being a 100-character
-      prefix of a data URL, which compared equal for almost anything. It is
-      recorded as an open question rather than a decision: it may be that canvas
-      output is deliberately tied to the device preset rather than to
-      canvas:seed, in which case the seed is not doing what its name suggests.
-      Not gated, because failing one run in three helps nobody, and not dropped,
-      because it is real.
+      No stock Firefox perturbs its canvas output, so noise is itself a tell:
+      a page that renders the same image twice and gets two answers has found
+      a spoofing browser. A context's canvas therefore follows what really
+      determines it on a real machine, the GPU and the fonts, and two contexts
+      that share those share a canvas. That is why build-tester counts canvas
+      collisions with the device-level values and does not gate on them. The
+      launchers generated a canvas:seed for three releases after the patch
+      that read it was gone; it is not generated or declared any more.
 
   - id: canvas-fingerprint-is-hashed-not-truncated
     title: The canvas check hashes pixels, not a prefix of the data URL
@@ -197,8 +191,7 @@ rules:
       contexts whose canvas differed everywhere else read as identical. Worse,
       the stability check compared the same prefix between two collections, so
       it passed on PNG headers and could not have noticed non-deterministic
-      noise. getImageData is the surface Camoufox noises and the one a
-      fingerprinter reads; hash that.
+      output. getImageData is the surface a fingerprinter reads; hash that.
 
   # -------------------------------------------------------------------------
   # Teardown
