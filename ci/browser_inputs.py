@@ -82,6 +82,7 @@ BROWSER_FILES = ("upstream.sh", "Makefile")
 NON_NATIVE_SCRIPTS = frozenset(
     {
         "scripts/clean-fingerprint-data.py",
+        "scripts/cursor-demo.py",
     }
 )
 
