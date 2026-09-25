@@ -4,7 +4,10 @@ This document describes how to maintain Playwright integration in Camoufox.
 
 ## Overview
 
-Camoufox integrates Playwright's browser automation capabilities through patches and additional files. These need to be kept in sync with upstream Playwright development.
+Camoufox integrates Playwright's browser automation through a patch and a copy of
+Playwright's Juggler protocol. Both started from upstream Playwright and both
+carry Camoufox changes, so upstream updates are ported into them, never copied
+over them.
 
 ## Patch Files
 
@@ -12,105 +15,77 @@ Location: `patches/playwright/`
 
 | File                   | Purpose                                                                                                                                                 |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0-playwright.patch`   | Playwright's upstream patches. Must be kept up to date with [bootstrap.diff](https://github.com/microsoft/playwright/blob/main/browser_patches/firefox/patches/bootstrap.diff) |
-| `1-leak-fixes.patch`   | Undos certain patches from `0-playwright.patch` to fix memory leaks                                                                                    |
+| `0-playwright.patch`   | Playwright's [bootstrap.diff](https://github.com/microsoft/playwright/blob/main/browser_patches/firefox/patches/bootstrap.diff), ported to the Firefox version in `upstream.sh`, plus Camoufox fixes to the Juggler input and navigation paths |
+| `1-leak-fixes.patch`   | Undoes two changes from `0-playwright.patch` that expose automation: `navigator.webdriver` always reports `false`, and enterprise policies load from Firefox's normal provider instead of Playwright's |
+
+Both sort ahead of every other patch, so `scripts/patch.py` applies them first.
 
 ## Addition Files
 
 Location: `additions/juggler/`
 
-The `juggler` directory contains Playwright's Juggler protocol implementation. These files must be kept in sync with:
-
-**Upstream Source:** https://github.com/microsoft/playwright/tree/main/browser_patches/firefox/juggler
+Camoufox's Juggler, started from
+[upstream](https://github.com/microsoft/playwright/tree/main/browser_patches/firefox/juggler).
+Camoufox changes include the isolated-world page agent and the human cursor
+(`input/`), so a straight copy from upstream would remove them.
 
 ### Key Files
 
-- **`components/Juggler.js`** - Main Juggler component (legacy JSM format)
-- **`components/Juggler.sys.mjs`** - ESM wrapper for Firefox 146+ compatibility
+- **`components/Juggler.js`** - Main Juggler component, an ES module that exports `JugglerFactory`
 - **`components/components.conf`** - XPCOM component registration
+- **`jar.mn`** - What gets packaged into `chrome://juggler/content/`
 
-### Firefox 146 ESM Migration
+`components.conf` registers the component with the `esModule` field (Firefox
+no longer supports `jsm`):
 
-Firefox 146 removed JSM (JavaScript Module) support in favor of ESM (ES Modules). To maintain compatibility:
-
-1. **`components.conf`** uses `esModule` field instead of deprecated `jsm` field:
-   ```python
-   {
-       "esModule": "chrome://juggler/content/components/Juggler.sys.mjs",
-       "constructor": "JugglerFactory",
-   }
-   ```
-
-2. **`Juggler.sys.mjs`** acts as an ESM wrapper that imports the legacy JSM file:
-   ```javascript
-   const { JugglerFactory } = ChromeUtils.import(
-     "chrome://juggler/content/components/Juggler.js"
-   );
-   export { JugglerFactory };
-   ```
-
-This maintains backward compatibility while satisfying Firefox 146's static component generator requirements.
+```python
+{
+    "esModule": "chrome://juggler/content/components/Juggler.js",
+    "constructor": "JugglerFactory",
+}
+```
 
 ## Updating Playwright Integration
 
-### 1. Update Upstream Patches
+### 1. Port Upstream Patch Changes
 
-Compare the current `patches/playwright/0-playwright.patch` with Playwright's [bootstrap.diff](https://github.com/microsoft/playwright/blob/main/browser_patches/firefox/patches/bootstrap.diff).
-
-If changes are needed:
-```bash
-# Download latest bootstrap.diff
-curl -o patches/playwright/0-playwright.patch \
-  https://raw.githubusercontent.com/microsoft/playwright/main/browser_patches/firefox/patches/bootstrap.diff
-
-# Test the build
-make clean && make dir && make build
-```
-
-### 2. Update Juggler Files
-
-Sync `additions/juggler/` with upstream:
+Compare what changed in Playwright's
+[bootstrap.diff](https://github.com/microsoft/playwright/blob/main/browser_patches/firefox/patches/bootstrap.diff)
+since the last sync and apply those changes to the tree, then regenerate the
+patch with the make targets described in
+[patch-upgrading-guide.md](patch-upgrading-guide.md):
 
 ```bash
-# Clone Playwright repository
-git clone https://github.com/microsoft/playwright.git /tmp/playwright
-
-# Compare directories
-diff -r additions/juggler/ /tmp/playwright/browser_patches/firefox/juggler/
-
-# Copy updated files (example)
-cp -r /tmp/playwright/browser_patches/firefox/juggler/* additions/juggler/
-
-# IMPORTANT: Preserve Firefox 146 ESM compatibility
-# - Keep additions/juggler/components/Juggler.sys.mjs
-# - Keep additions/juggler/components/components.conf with esModule field
-```
-
-### 3. Verify ESM Wrapper Compatibility
-
-After updating from upstream, ensure the ESM wrapper remains functional:
-
-1. Check that `Juggler.js` still exports `JugglerFactory`:
-   ```javascript
-   var EXPORTED_SYMBOLS = ["Juggler", "JugglerFactory"];
-   var JugglerFactory = function() { /* ... */ };
-   ```
-
-2. If upstream changed the export name, update `Juggler.sys.mjs` accordingly.
-
-3. Verify `components.conf` matches the format above (not upstream's format).
-
-### 4. Test Build
-
-```bash
-# Clean build to verify component registration
-cd camoufox-146.0.1-beta.25
-make clean
-cd ..
 make dir
-cd camoufox-146.0.1-beta.25
-./mach build
+make workspace ./patches/playwright/0-playwright.patch
+# port the upstream changes into camoufox-<version>-<release>/
+make diff > patches/playwright/0-playwright.patch
 ```
+
+### 2. Port Juggler Changes
+
+```bash
+git clone https://github.com/microsoft/playwright.git /tmp/playwright
+diff -r additions/juggler/ /tmp/playwright/browser_patches/firefox/juggler/
+```
+
+Port the upstream hunks one by one, keeping the Camoufox changes. After an
+update, check that:
+
+1. `Juggler.js` still exports `JugglerFactory`, and `components.conf` still
+   names it as the `constructor`.
+2. `components.conf` uses `esModule`, not `jsm`.
+3. Every file upstream added or renamed is listed in `jar.mn`.
+
+### 3. Test
+
+```bash
+make dir && make build
+make tests
+```
+
+`make dir` resets the tree, clobbers the object directory and reapplies every
+patch, so this is a clean build.
 
 **Expected:** No linker errors about `mozCreateComponent<nsICommandLineHandler>`.
 
@@ -129,7 +104,7 @@ This means `components.conf` is not using ESM format. Fix by ensuring it has:
 
 **Error:** `Externally-constructed components may not specify 'constructor' or 'legacy_constructor' properties`
 
-**Cause:** Using `"jsm"` field which is unsupported in Firefox 146.
+**Cause:** Using the `"jsm"` field, which Firefox no longer supports.
 
 **Fix:** Use `"esModule"` field instead.
 
@@ -153,13 +128,11 @@ This means `components.conf` is not using ESM format. Fix by ensuring it has:
 
 If the build fails after updating Juggler files:
 
-1. Check that all JSM imports in `Juggler.js` are still valid
-2. Verify the ESM wrapper exports match what's imported
-3. Ensure no file paths changed in upstream
-4. Check for Firefox API changes that might require patches
+1. Check that every `ChromeUtils.importESModule()` path in the Juggler files still exists
+2. Check that new or renamed files are listed in `jar.mn`
+3. Check for Firefox API changes that might require patches
 
 ## References
 
 - [Playwright Firefox Patches](https://github.com/microsoft/playwright/tree/main/browser_patches/firefox)
-- [Firefox 146 Component Registration](https://firefox-source-docs.mozilla.org/toolkit/components/extensions/webextensions/basics.html)
 - [Firefox ESM Migration Guide](https://firefox-source-docs.mozilla.org/dom/script_loader/index.html)

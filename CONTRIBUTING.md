@@ -9,6 +9,8 @@ Thanks for your interest in contributing! Here's how to get started.
 - **Code contributions** — Fork the repo, make your changes, and open a pull request.
 - **Documentation** — Fixes and improvements to docs are always welcome.
 
+Planned work is in [`ROADMAP.md`](ROADMAP.md). Comment on an item's issue before you start on it.
+
 ## Development Setup
 
 See README.md for general setup. For iterative development with frequent rebuilds, install [ccache](https://ccache.dev/) to cache compiled objects:
@@ -26,6 +28,8 @@ ccache is already enabled in the build config. A cold build takes the usual ~40 
 
 ## Pull Request Rules
 
+The engineering rules in [`AGENTS.md`](AGENTS.md) apply to every change, whether a person or an agent wrote it. They cover less code, no band-aids, no flakes, and docs that ship with the code.
+
 1. Each pull request must be associated with a Github issue
 2. Follow the pull request template
 3. Keep commits focused — one logical change per commit.
@@ -34,7 +38,7 @@ ccache is already enabled in the build config. A cold build takes the usual ~40 
 
 ## Testing Requirements
 
-**CI runs everything, on every pull request.** [`.github/workflows/tests.yml`](.github/workflows/tests.yml) builds the browser from your branch when you touch browser sources (and tests against the published release when you do not), then runs the patch guards, build-tester, the upstream Playwright suite, the leak suite and the stealth check. Branch protection requires exactly one check, **`All tests passed`**, which is green only when every applicable suite is.
+**CI runs everything, on every pull request.** [`.github/workflows/tests.yml`](.github/workflows/tests.yml) builds the browser from your branch when you touch browser sources (and tests against the published release when you do not), then runs the Python package tests, the patch guards, build-tester, the upstream Playwright suite, the leak suite and the stealth check. Branch protection requires exactly one check, **`All tests passed`**, which is green only when every applicable suite is.
 
 So there is nothing to attach to the pull request by hand. The old process — run the suites locally, screenshot the output, paste it in — was unenforceable: nothing checked that the browser in the screenshot was built from the branch under review. If you want a report in the description anyway, CI leaves one as a comment on the pull request.
 
@@ -45,6 +49,7 @@ python3 -m ci.run_patch_guards   --binary /path/to/camoufox-bin
 python3 -m ci.run_build_tester   --binary /path/to/camoufox-bin
 python3 -m ci.run_playwright     --binary /path/to/camoufox-bin   # or --shard 3/6
 python3 -m ci.run_skiplist_audit --binary /path/to/camoufox-bin
+python3 -m ci.run_pythonlib                                       # pythonlib/
 python3 -m pytest ci/tests -q                                     # the pipeline's own tests
 ```
 
@@ -77,8 +82,7 @@ Tests the **full stack** — the binary and the Python package together — usin
 
 ```bash
 cd service-tester
-# Add proxies (one per line, format: user:pass@domain:port)
-cp proxies.txt.example proxies.txt   # or create manually
+# Create proxies.txt: one user:pass@domain:port per line (# comments allowed)
 ./run_tests.sh
 ```
 
@@ -102,7 +106,7 @@ See [`service-tester/README.md`](service-tester/README.md) for full details.
 
 Please search existing issues before opening a new one. Include:
 - Camoufox version
-- OS and Python version
+- OS, and your Python or Node version
 - A minimal reproducible example
 
 ## Questions

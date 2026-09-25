@@ -214,7 +214,7 @@ and `font-hijacker.patch` does not activate the bundle. On a Windows host the
 Win11 marker families are *subtracted* when the host cannot render them, rather
 than added when it can; claiming a marker the host lacks is the leak.
 
-`pythonlib/tests/test_font_distribution.py` (29 tests) covers this: base
+`pythonlib/tests/test_font_distribution.py` covers this: base
 completeness and weights, per-unit probability, bundle atomicity, à-la-carte
 sizing, locale gating, determinism, renderable-only, and that the draw actually
 varies (distinct lists, no single list dominating). Tolerances are binomial, at

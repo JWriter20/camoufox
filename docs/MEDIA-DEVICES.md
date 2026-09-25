@@ -24,8 +24,10 @@ Camoufox reproduces exactly that for a spoofed machine:
 - `getUserMedia()` therefore succeeds iff the identity has the requested
   device kind (a claimed camera captures the fake engine's test pattern; a
   camera-less identity gets `NotFoundError`, like a real machine without one).
-- `media.navigator.permission.fake = true` (camoufox.cfg) makes the fake
-  devices count as capturing, which is what exposes labels after a grant.
+- The patch treats the identity's devices (`LocalMediaDevice::IsIdentityDevice()`)
+  as real hardware, so they get the permission prompt, count as capturing
+  and expose their labels after a grant. `media.navigator.permission.fake`
+  stays off, as in stock Firefox, because a page can detect it.
 
 ## Config keys
 

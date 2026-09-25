@@ -1,16 +1,16 @@
-# Firefox Patch Upgrading Guide for LLMs
+# Firefox Patch Upgrading Guide
 
-This guide provides step-by-step instructions for updating Camoufox patches when upgrading Firefox versions. Patches frequently break due to Firefox API changes, file reorganizations, and line number shifts.
-
-**All patches are located in the `patches/` directory.** There are no separate context patches to merge—per-context functionality is already built into the patches.
+How to update Camoufox's patches when `upstream.sh` moves to a new Firefox
+version. Patches break because Firefox renames APIs, moves code and shifts line
+numbers; this guide covers finding and fixing those rejects.
 
 ## Table of Contents
 
 1. [Understanding the Patch System](#understanding-the-patch-system)
-2. [Preparation](#preparation)
+2. [The Source Tree and Its Make Targets](#the-source-tree-and-its-make-targets)
 3. [General Workflow](#general-workflow)
 4. [Fixing Common Reject Types](#fixing-common-reject-types)
-5. [Context Patch Merging](#context-patch-merging) *(Historical - skip for future updates)*
+5. [Per-Context Machinery](#per-context-machinery)
 6. [Testing and Validation](#testing-and-validation)
 7. [Best Practices](#best-practices)
 
@@ -20,66 +20,89 @@ This guide provides step-by-step instructions for updating Camoufox patches when
 
 ### Patch Categories
 
-All Camoufox patches are in the `patches/` directory:
+All patches live under `patches/`, and `scripts/patch.py` applies every
+`*.patch` in it (subdirectories included), sorted by file name:
 
-- **Core Patches**: `0-playwright.patch`, `1-leak-fixes.patch`, etc.
-- **Feature Patches**: `webrtc-ip-spoofing.patch`, `anti-font-fingerprinting.patch`, etc.
-- All patches now include per-user-context (per-Playwright-context) support built-in
+- **Playwright**: `playwright/0-playwright.patch` (Juggler integration) and
+  `playwright/1-leak-fixes.patch`. Their names sort first, and every other
+  patch is written against a tree that already has them.
+- **Feature patches**: `webrtc-ip-spoofing.patch`,
+  `anti-font-fingerprinting.patch`, etc. Per-user-context (per-Playwright-context)
+  support is built into each one.
+- **`librewolf/`, `ghostery/`**: patches taken from those projects.
 
-**Historical Note**: Context patches (e.g., `font-fingerprinting.context.patch`, `webrtc.context.patch`) were previously separate but have been merged into their base patches as of Firefox 146. You will not find `.context.patch` files in the repository.
+Compile-time dependencies between patches (MaskConfig, RoverfoxStorageManager)
+are listed in [`patches/patch-dependencies.md`](../patches/patch-dependencies.md).
 
 ### Key Infrastructure Files
 
 - **RoverfoxStorageManager.cpp/h**: Thread-safe key-value storage for per-context data
 - **Manager Classes**: FontSpacingSeedManager, WebRTCIPManager, etc.
-- **Window.webidl**: Exposes JavaScript APIs to Playwright
+- **Window.webidl**: Exposes the per-context setters to Playwright
 
 ---
 
-## Preparation
+## The Source Tree and Its Make Targets
 
-### 1. Reset to Clean State
+The Firefox tree is `camoufox-<version>-<release>/` (from `upstream.sh`). It is
+a git repository whose `unpatched` tag is plain Firefox plus `additions/` and
+`settings/`. Run every target from the repository root:
 
-**IMPORTANT**: Always use `make clean` to reset to fresh Firefox source:
+| Target | What it does |
+|---|---|
+| `make dir` | Fetches and extracts Firefox if the tree is missing. Otherwise resets it to `unpatched`, runs `mach clobber` and `git clean -fdx` (the object directory goes too), re-copies additions, then applies every patch and lists the ones that left rejects. |
+| `make revert` | `git reset --hard unpatched`. Untracked files stay, including new files that patches created. |
+| `make clean` | `mach clobber`, `git clean -fdx`, then `make revert`: unpatched Firefox with nothing left over, without re-fetching. |
+| `make patch ./patches/x.patch` | Applies one patch (`patch -p1`). |
+| `make unpatch ./patches/x.patch` | Reverses one patch. |
+| `make first-checkpoint` | Commits the current tree and tags it `first-checkpoint`. |
+| `make workspace ./patches/x.patch` | Unapplies `x` if it is applied, runs `first-checkpoint`, then applies `x` again, so the working tree differs from the checkpoint by exactly that patch. |
+| `make diff` | `git diff first-checkpoint`. Redirect it into the patch file. |
 
-```bash
-make clean
-```
-
-**DO NOT** use `git reset` or `git clean` commands directly in the Firefox source directory - these can delete untracked files needed for the build.
-
-### 2. Identify Patches to Update
-
-Check which patches exist:
-
-```bash
-ls patches/*.patch
-```
-
-### 3. Understand Patch Dependencies
-
-Some patches depend on others being applied first:
-- `1-leak-fixes.patch` requires `0-playwright.patch`
-- Check the Makefile or patch comments for dependency chains
+`git diff` does not show untracked files. Before `make diff`, mark new files
+with `git add -N <file>` inside the source tree, or they will be missing from
+the patch.
 
 ---
 
 ## General Workflow
 
-### Step 1: Apply Base Patch and Identify Rejects
+### Step 1: Bump the Version and Find the Broken Patches
+
+Update `version` and `release` in `upstream.sh`, then:
 
 ```bash
-cd camoufox-<version>
-patch -p1 < ../patches/patch-name.patch
+make dir
 ```
 
-Find reject files:
+`patch.py` applies every patch and ends with a list of the ones that failed and
+their reject files. It deletes the `.rej` files after listing them, so reproduce
+each failure one patch at a time (Step 2).
+
+### Step 2: Set Up One Patch
+
+Start from a clean unpatched tree, apply what the patch builds on (at least the
+Playwright patches, plus anything from `patches/patch-dependencies.md`),
+checkpoint, then apply the broken patch. Use `make clean` rather than
+`make revert` here: files that other patches created survive a revert and make
+`patch` stop on "previously applied" prompts.
 
 ```bash
+make clean
+make patch ./patches/playwright/0-playwright.patch
+make patch ./patches/playwright/1-leak-fixes.patch
+make first-checkpoint
+make patch ./patches/patch-name.patch     # fails, leaving .rej files
+```
+
+Find the reject files:
+
+```bash
+cd camoufox-<version>-<release>
 find . -name '*.rej' -type f
 ```
 
-### Step 2: Analyze Each Reject File
+### Step 3: Analyze Each Reject File
 
 Read the reject file to understand what failed:
 
@@ -92,7 +115,7 @@ Reject files show:
 - `-` lines: What the patch expected to find (old code)
 - `+` lines: What the patch wanted to add (new code)
 
-### Step 3: Locate the Correct Position in Firefox Code
+### Step 4: Locate the Correct Position in Firefox Code
 
 The line numbers in rejects are usually wrong for the new Firefox version. You need to:
 
@@ -100,42 +123,31 @@ The line numbers in rejects are usually wrong for the new Firefox version. You n
 2. **Understand what the patch is doing**
 3. **Find equivalent location** in new Firefox code
 
-### Step 4: Apply Changes Manually
+### Step 5: Apply Changes Manually
 
-Use the Edit tool to apply the rejected changes to the correct location.
+Edit the file to make the rejected change at the correct location.
 
-### Step 5: Remove Reject Files
+### Step 6: Remove Reject Files
 
-After fixing all rejects:
-
-```bash
-rm -f path/to/file.cpp.rej
-find . -name '*.rej' -type f  # Verify all removed
-```
-
-### Step 6: Generate Updated Patch
+After fixing all rejects, delete the `.rej` files and any `.orig` backups
+`patch` left, so they do not end up in the diff:
 
 ```bash
-# Add any new files first
-git add new/file.cpp new/file.h
-
-# Generate patch with both staged and unstaged changes
-git diff --cached --binary > /tmp/patch-name.patch
-git diff --binary >> /tmp/patch-name.patch
-
-# Copy to patches directory
-cp /tmp/patch-name.patch ../patches/patch-name.patch
+find . -name '*.rej' -o -name '*.orig' | xargs rm -f
 ```
 
-### Step 7: Verify Patch Applies Cleanly
+### Step 7: Write the Updated Patch
+
+From the repository root:
 
 ```bash
-cd ..
-make clean
-cd camoufox-<version>
-patch -p1 < ../patches/patch-name.patch
-find . -name '*.rej' -type f  # Should return nothing
+(cd camoufox-<version>-<release> && git add -N path/to/new/file.cpp)   # new files only
+make diff > patches/patch-name.patch
 ```
+
+### Step 8: Verify
+
+Run `make dir` again. The patch should no longer be listed as failing.
 
 ---
 
@@ -285,68 +297,10 @@ Simply apply the patch manually at the correct line number. The code hasn't chan
 
 ---
 
-## Context Patch Merging (Historical - Not Applicable for Future Updates)
+## Per-Context Machinery
 
-**NOTE**: As of Firefox 146, all context patches have been merged into their base patches. This section is kept for historical reference and understanding how the patches evolved. Future Firefox updates will only need to update patches in the `patches/` directory.
-
----
-
-**Historical Context**: Context patches previously added per-user-context functionality to base patches. The workflow was different from simple patch updates.
-
-### Historical Goal
-
-Merge all changes from `*.context.patch` into the corresponding base patch so there's only one comprehensive patch file.
-
-### Historical Example: font-fingerprinting.context.patch → anti-font-fingerprinting.patch
-
-### Workflow
-
-1. **Reset to clean Firefox**:
-   ```bash
-   make clean
-   ```
-
-2. **Apply base patch first**:
-   ```bash
-   cd camoufox-<version>
-   patch -p1 < ../patches/anti-font-fingerprinting.patch
-   ```
-
-3. **Apply context patch on top**:
-   ```bash
-   patch -p1 < ../font-fingerprinting.context.patch
-   ```
-
-4. **Fix any rejects** (usually include conflicts since base patch may have some overlapping changes)
-
-5. **Generate combined patch**:
-   ```bash
-   # Add new files (e.g., FontSpacingSeedManager.cpp/h)
-   git add dom/base/FontSpacingSeedManager.cpp
-   git add dom/base/FontSpacingSeedManager.h
-   git add dom/base/RoverfoxStorageManager.cpp
-   git add dom/base/RoverfoxStorageManager.h
-
-   # Generate combined patch
-   git diff --cached --binary > /tmp/anti-font-fingerprinting.patch
-   git diff --binary >> /tmp/anti-font-fingerprinting.patch
-
-   # Replace base patch
-   cp /tmp/anti-font-fingerprinting.patch ../patches/anti-font-fingerprinting.patch
-   ```
-
-6. **Verify combined patch**:
-   ```bash
-   cd ..
-   make clean
-   cd camoufox-<version>
-   patch -p1 < ../patches/anti-font-fingerprinting.patch
-   find . -name '*.rej' -type f  # Should be empty
-   ```
-
-### What Context Patches Add
-
-Context patches typically add:
+Most spoofing patches carry per-context support. When porting one, expect these
+pieces:
 
 1. **Manager classes** (e.g., FontSpacingSeedManager, WebRTCIPManager):
    - Store per-context settings using RoverfoxStorageManager
@@ -363,9 +317,10 @@ Context patches typically add:
    - Self-destruct logic (remove function after first use)
 
 4. **Core logic changes**:
-   - Replace global config (MaskConfig) with per-context manager
+   - Consult the per-context manager before the global config (MaskConfig)
    - Pass userContextId through call chains
-   - Query manager for per-context values
+
+See [`per-context-patches.md`](per-context-patches.md) for the full list.
 
 ---
 
@@ -375,25 +330,18 @@ Context patches typically add:
 
 After updating a patch, always verify:
 
-1. **Patch applies cleanly**:
-   ```bash
-   make clean
-   cd camoufox-<version>
-   patch -p1 < ../patches/patch-name.patch
-   find . -name '*.rej' -type f
-   ```
+1. **Every patch applies cleanly**: `make dir` lists no failures.
 
-2. **No reject files remain**
-
-3. **Build compiles** (if feasible):
+2. **Build compiles** (if feasible):
    ```bash
-   cd ..
    make build
    ```
 
 ### Full Testing
 
-For critical patches, test with actual Playwright scenarios after building.
+Run the suites that cover the patch (see [`ci/README.md`](../ci/README.md)):
+`python3 -m ci.run_patch_guards --binary <camoufox-bin>` is the most direct
+evidence that a patch which still applies was not neutered by the upgrade.
 
 ---
 
@@ -401,18 +349,18 @@ For critical patches, test with actual Playwright scenarios after building.
 
 ### DO:
 
-1. ✅ **Always use `make clean`** to reset Firefox source
+1. ✅ **Start each patch from `make clean`** plus the patches it builds on
 2. ✅ **Read and understand** what the patch is trying to do before fixing rejects
 3. ✅ **Search for API changes** in Firefox release notes when functions have changed
 4. ✅ **Use grep/search** extensively to find where code moved
 5. ✅ **Extract userContextId properly** using the standard pattern
-6. ✅ **Test patches apply cleanly** before considering them done
+6. ✅ **Check with `make dir`** that the whole stack applies before considering a patch done
 7. ✅ **Keep commits atomic** - one patch fix per session
 8. ✅ **Document major API changes** you discover
 
 ### DON'T:
 
-1. ❌ **Don't use `git reset` or `git clean`** on Firefox source directory
+1. ❌ **Don't hand-edit `.patch` files** - edit the tree and regenerate with `make diff`
 2. ❌ **Don't leave TODO comments** - fix things properly as you go
 3. ❌ **Don't guess parameter values** - extract them properly or investigate
 4. ❌ **Don't skip verification** - always test the patch applies cleanly
@@ -424,75 +372,9 @@ For critical patches, test with actual Playwright scenarios after building.
 
 1. **Assuming reject line numbers are accurate**: They're usually wrong in new Firefox versions
 2. **Not understanding API changes**: Firefox refactors often - read the new code
-3. **Forgetting to add new files**: Use `git add` before generating patch
-4. **Not testing on clean source**: Always verify with `make clean`
-5. **Leaving reject files**: Remove all `.rej` files after fixing
-
----
-
-## Example: Complete Patch Update Session
-
-Here's a complete example of updating `0-playwright.patch` from Firefox 144 to Firefox 146:
-
-### 1. Reset and Apply
-
-```bash
-make clean
-cd camoufox-146.0.1-beta.25
-patch -p1 < ../patches/0-playwright.patch
-```
-
-### 2. Find Rejects
-
-```bash
-find . -name '*.rej' -type f
-```
-
-Output shows 20 reject files.
-
-### 3. Analyze First Reject
-
-```bash
-cat dom/base/Navigator.cpp.rej
-```
-
-Shows parameter order changed in `GetAcceptLanguages`.
-
-### 4. Fix the Reject
-
-Search for the function in the actual file, understand the new signature, apply changes manually.
-
-### 5. Repeat for All Rejects
-
-Work through each reject systematically.
-
-### 6. Discover API Change
-
-Firefox 146 refactored mouse events from individual parameters to `SynthesizeMouseEventData` and `SynthesizeMouseEventOptions`. Port all mouse event logic to new API.
-
-### 7. Remove Rejects
-
-```bash
-rm -f dom/base/Navigator.cpp.rej dom/base/Element.cpp.rej ...
-find . -name '*.rej' -type f  # Verify empty
-```
-
-### 8. Generate New Patch
-
-```bash
-git diff --binary > /tmp/0-playwright.patch
-cp /tmp/0-playwright.patch ../patches/0-playwright.patch
-```
-
-### 9. Verify
-
-```bash
-cd ..
-make clean
-cd camoufox-146.0.1-beta.25
-patch -p1 < ../patches/0-playwright.patch
-find . -name '*.rej' -type f  # Should be empty
-```
+3. **Forgetting new files**: `git diff` skips untracked files; `git add -N` them before `make diff`
+4. **Diffing against the wrong base**: `make first-checkpoint` before applying the patch you are fixing, or `make diff` will include its dependencies
+5. **Leaving reject files**: Remove all `.rej` and `.orig` files after fixing
 
 ---
 
@@ -570,17 +452,17 @@ if (userContextId == 0) {
 
 When updating patches for a new Firefox version:
 
-- [ ] Use `make clean` to reset to fresh Firefox source
-- [ ] Apply patch and identify all reject files
+- [ ] Bump `upstream.sh` and run `make dir` to list the failing patches
+- [ ] For each: `make clean`, apply its dependencies, `make first-checkpoint`, `make patch` it
 - [ ] Analyze each reject to understand what changed
 - [ ] Search Firefox source for moved/refactored code
 - [ ] Fix rejects by porting logic to new Firefox APIs
 - [ ] Extract userContextId properly using standard patterns
 - [ ] Don't leave TODO comments - fix everything immediately
-- [ ] Remove all `.rej` files after fixing
-- [ ] Add any new files with `git add`
-- [ ] Generate new patch with `git diff --cached --binary` + `git diff --binary`
-- [ ] Verify patch applies cleanly to fresh source
+- [ ] Remove all `.rej` and `.orig` files after fixing
+- [ ] `git add -N` any new files
+- [ ] `make diff > patches/<name>.patch`
+- [ ] `make dir` applies the whole stack cleanly
 - [ ] Document any major API changes discovered
 
 ---
@@ -590,7 +472,3 @@ When updating patches for a new Firefox version:
 - Firefox source: https://searchfox.org/
 - Firefox API documentation: https://firefox-source-docs.mozilla.org/
 - Mercurial repository: https://hg.mozilla.org/mozilla-central/
-
----
-
-**Last Updated**: December 2025 (Firefox 146 upgrade)
