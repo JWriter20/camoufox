@@ -892,8 +892,8 @@ def launch_options(
             To prevent leaks, only use this for special cases.
         headless (Optional[bool]):
             Whether to run the browser in headless mode. Defaults to False.
-            Note: If you are running linux, passing headless='virtual' to Camoufox & AsyncCamoufox
-            will use Xvfb.
+            Note: If you are running linux, passing headless='virtual' to Camoufox, AsyncCamoufox
+            or launch_server will use Xvfb.
         main_world_eval (Optional[bool]):
             Whether to enable running scripts in the main world.
             To use this, prepend "mw:" to the script: page.evaluate("mw:" + script).
@@ -921,7 +921,7 @@ def launch_options(
         debug (Optional[bool]):
             Prints the config being sent to Camoufox.
         virtual_display (Optional[str]):
-            Virtual display number. Ex: ':99'. This is handled by Camoufox & AsyncCamoufox.
+            Virtual display number. Ex: ':99'. This is handled by Camoufox, AsyncCamoufox and launch_server.
         pin_cpu_cores (Optional[bool]):
             Pin the browser to navigator.hardwareConcurrency cores
             (Linux/Windows) so the fingerprint's own core count can be kept:
