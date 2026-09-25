@@ -1,0 +1,14 @@
+{
+ "tag": "model-2/2026",
+ "asset": "model-release.zip",
+ "size": 1564571,
+ "sha256": "6530b8322cdaa4ec042921c8d9a0369a0e6e0269ba636c01a7203e4a2f109936",
+ "url": "https://github.com/scrapfly/fingerprint-generator/releases/download/model-2/2026/model-release.zip",
+ "repo": "scrapfly/fingerprint-generator",
+ "files": [
+  "fingerprint-network.json.zst",
+  "values.dat.zst",
+  "values.json.zst"
+ ],
+ "note": "fpgen's model data, pinned. fpgen fetches this itself on first import with TLS verification DISABLED, no checksum, and a release selection that cannot reach this tag -- see scripts/pin-fpgen-model.py. Bump by editing this file; the sha256 is the gate."
+}

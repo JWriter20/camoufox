@@ -96,12 +96,13 @@ export class Juggler {
         new NetworkObserver(targetRegistry);
 
         const loadStyleSheet = () => {
-          if (Cc["@mozilla.org/gfx/info;1"].getService(Ci.nsIGfxInfo).isHeadless) {
-            const styleSheetService = Cc["@mozilla.org/content/style-sheet-service;1"].getService(Components.interfaces.nsIStyleSheetService);
-            const ioService = Cc["@mozilla.org/network/io-service;1"].getService(Components.interfaces.nsIIOService);
-            const uri = ioService.newURI('chrome://juggler/content/content/hidden-scrollbars.css', null, null);
-            styleSheetService.loadAndRegisterSheet(uri, styleSheetService.AGENT_SHEET);
-          }
+          // Camoufox: upstream Playwright hides content scrollbars in headless
+          // with an agent sheet (scrollbar-width: none !important). A page can
+          // read that back -- getComputedStyle(document.body).scrollbarWidth is
+          // "none" and overflow:scroll boxes lose their gutter -- and no stock
+          // Firefox does it. Scrollbar appearance is left to the platform
+          // look-and-feel instead (the launcher sets ui.useOverlayScrollbars to
+          // what the claimed OS shows), so headless matches headed.
         };
 
         // Force create hidden window here, otherwise its creation later closes the web socket!

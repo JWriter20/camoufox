@@ -505,8 +505,8 @@ class Backend(QObject):
         return self._pkg_version('playwright')
 
     @Property(str, notify=infoChanged)
-    def browserforgeVersion(self):
-        return self._pkg_version('browserforge')
+    def fpgenVersion(self):
+        return self._pkg_version('fpgen')
 
     @Property(str, notify=infoChanged)
     def fingerprintVersion(self):

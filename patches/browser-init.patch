@@ -51,11 +51,13 @@ index 1cfa4b8497..bdf8d7202e 100644
      // If we are given a tab to swap in, take care of it before first paint to
      // avoid an about:blank flash.
      let tabToAdopt = this.getTabToAdopt();
-@@ -345,6 +371,31 @@ var gBrowserInit = {
+@@ -345,6 +371,33 @@ var gBrowserInit = {
        }
      }
  
-+    if (ChromeUtils.camouGetBool("showcursor", true)) {
++    // Camoufox: debugging aid only -- a red dot following the mouse is a visible
++    // automation cue no real Firefox draws. Opt in with config showcursor=true.
++    if (ChromeUtils.camouGetBool("showcursor", false)) {
 +      let cursorFollower = document.createElement("div");
 +      cursorFollower.id = "cursor-highlighter";
 +      cursorFollower.style.cssText = `
@@ -83,7 +85,7 @@ index 1cfa4b8497..bdf8d7202e 100644
      // Wait until chrome is painted before executing code not critical to making the window visible
      this._boundDelayedStartup = this._delayedStartup.bind(this);
      window.addEventListener("MozAfterPaint", this._boundDelayedStartup);
-@@ -366,9 +417,156 @@ var gBrowserInit = {
+@@ -366,9 +417,177 @@ var gBrowserInit = {
        )?.removeAttribute("key");
      }
  
@@ -92,10 +94,11 @@ index 1cfa4b8497..bdf8d7202e 100644
 +
 +    // Hijack the outer window size.
 +    //
-+    // window.outerWidth/outerHeight are already spoofed unconditionally in C++
-+    // (nsGlobalWindowInner::GetOuterWidth/GetOuterHeight consult MaskConfig, see
-+    // fingerprint-injection.patch), so the chrome window only has to be *resized*
-+    // here -- it must not be pinned. Pinning documentElement to the spoofed size
++    // window.outerWidth/outerHeight report the REAL window (they are not read
++    // from MaskConfig; see nsGlobalWindowInner::GetOuterWidth in
++    // fingerprint-injection.patch), so resizing the real window here is what
++    // makes them match the drawn identity. It must not be pinned: pinning
++    // documentElement to the spoofed size
 +    // caps .browserStack, which caps the content viewport, which makes Juggler's
 +    // awaitViewportDimensions handshake unsatisfiable for any larger viewport.
 +    // That await has no timeout, so it hangs forever (daijro/camoufox#666).
@@ -105,6 +108,26 @@ index 1cfa4b8497..bdf8d7202e 100644
 +    }
 +    if ((outerHeight = ChromeUtils.camouGetInt("window.outerHeight"))) {
 +      window.resizeTo(window.outerWidth, outerHeight);
++    }
++    // The window manager can override that size when it maps the window: GNOME
++    // mutter auto-maximizes a new window covering >= 80% of the work area
++    // (org.gnome.mutter auto-maximize). The page would then get the host's
++    // work area instead of the drawn window, which can exceed the drawn
++    // screen.width. Undo a maximize that lands during startup and re-assert
++    // the drawn size; after the deadline a maximize is the user's own.
++    if (outerWidth || outerHeight) {
++      const deadline = Date.now() + 5000;
++      const undoStartupMaximize = () => {
++        if (Date.now() > deadline) {
++          window.removeEventListener("sizemodechange", undoStartupMaximize);
++          return;
++        }
++        if (window.windowState === window.STATE_MAXIMIZED) {
++          window.restore();
++          window.resizeTo(outerWidth || window.outerWidth, outerHeight || window.outerHeight);
++        }
++      };
++      window.addEventListener("sizemodechange", undoStartupMaximize);
 +    }
 +    browser.style.setProperty('box-sizing', 'content-box');
 +

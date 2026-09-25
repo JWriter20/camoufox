@@ -5,6 +5,10 @@ on:
   push:
     tags:
       - "*"
+      # The font bundle ships as its own release, in a separate tag namespace so
+      # it does not appear among the browser downloads. Those tags must not
+      # trigger a browser build (see scripts/fetch-fonts.py).
+      - "!font-bundle-*"
 
 jobs:
   build:
@@ -86,7 +90,25 @@ jobs:
           sudo apt-get update
           # ccache: the mozconfig enables --with-ccache, but the runner image no
           # longer ships it, so configure fails with "Cannot find ccache".
-          sudo apt-get install -y msitools p7zip-full aria2 ccache
+          # fontconfig: scripts/verify-fonts.py resolves every reportable family
+          # through fc-list/fc-match, so the bundle is checked with the same tool
+          # the browser uses rather than assumed correct.
+          sudo apt-get install -y msitools p7zip-full aria2 ccache fontconfig
+
+      - name: Fetch the font bundle
+        # The bundle is a release asset, not repo content (~2.16 GB extracted,
+        # 843 MB as .tar.xz -- see scripts/fetch-fonts.py). Without this the
+        # package would ship with NO fonts while pythonlib/camoufox/fonts.json
+        # still reports hundreds of families, which is a reverse leak in the
+        # shipped browser. After the dependency install, so the download uses
+        # aria2c's parallel connections rather than the curl fallback.
+        run: make fonts-extract
+
+      - name: Verify the font bundle matches the manifest
+        # Full run, not --quick: this is the release path, and the one invariant
+        # that cannot be recovered after publishing is a family fonts.json
+        # reports that the packaged fontconfig cannot resolve.
+        run: python3 scripts/verify-fonts.py
 
       - name: Fetch source
         env:

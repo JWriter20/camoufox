@@ -16,7 +16,9 @@ from camoufox.virtdisplay import VirtualDisplay
 from .fingerprints import generate_context_fingerprint
 from .utils import (
     attach_no_viewport_default,
+    attach_stock_media_defaults,
     launch_options,
+    STOCK_MEDIA_DEFAULTS,
     spoofs_window_dimensions,
     sync_attach_vd,
 )
@@ -107,24 +109,51 @@ def NewBrowser(
         virtual_display = None
 
     if not from_options:
+        # Opt-in (2026-09-17). Pinning keeps the identity's core count by
+        # constraining the browser to that many cores; it costs real CPU, needs
+        # a launch lock, and does nothing on macOS. What it defends against is a
+        # page timing N parallel workers, which is expensive and noisy on a busy
+        # machine. Off, the host's own snapped count is reported, so reported
+        # and measurable still agree -- the identity just loses that one draw.
+        kwargs.setdefault('pin_cpu_cores', False)
         from_options = launch_options(headless=headless, debug=debug, **kwargs)
 
     # Playwright's default viewport deadlocks Juggler when the window is spoofed
     # to a different size (daijro/camoufox#666), so default to no_viewport.
     no_viewport_default = spoofs_window_dimensions(from_options)
 
-    # Persistent context
-    if persistent_context:
-        if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
-            from_options = {**from_options, 'no_viewport': True}
-        context = playwright.firefox.launch_persistent_context(**from_options)
-        return sync_attach_vd(context, virtual_display)
+    # Pin the driver (and so the browser it is about to spawn) to as many
+    # cores as the identity reports, so measurable parallelism matches
+    # navigator.hardwareConcurrency; the driver gets its cores back afterwards.
+    from . import cpu_affinity
+    from .utils import driver_pid, pinned_core_count
 
-    # Browser
-    browser = playwright.firefox.launch(**from_options)
-    if no_viewport_default:
-        attach_no_viewport_default(browser)
-    return sync_attach_vd(browser, virtual_display)
+    pin_to = pinned_core_count(from_options)
+    pid = driver_pid(playwright) if pin_to else None
+    previous = cpu_affinity.pin(pid, pin_to) if pid else None
+    try:
+        # Persistent context
+        if persistent_context:
+            if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
+                from_options = {**from_options, 'no_viewport': True}
+            # The persistent context is created by the launch itself, so its media
+            # features come from these options rather than from new_context().
+            from_options = {
+                **{k: v for k, v in STOCK_MEDIA_DEFAULTS.items() if k not in from_options},
+                **from_options,
+            }
+            context = playwright.firefox.launch_persistent_context(**from_options)
+            return sync_attach_vd(context, virtual_display)
+
+        # Browser
+        browser = playwright.firefox.launch(**from_options)
+        if no_viewport_default:
+            attach_no_viewport_default(browser)
+        attach_stock_media_defaults(browser)
+        return sync_attach_vd(browser, virtual_display)
+    finally:
+        if pid:
+            cpu_affinity.restore(pid, previous)
 
 
 def _proxy_url_with_creds(proxy: Dict[str, str]) -> str:

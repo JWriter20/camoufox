@@ -49,11 +49,11 @@ Low-level equivalents: `make patch ./patches/x.patch`, `make unpatch ./patches/x
 
 - **`patches/`** — the diffs applied to Firefox source. This is where browser behavior is changed.
 - **`additions/`** — whole files copied *into* the source tree (not diffs) by `scripts/copy-additions.sh`:
-  - `additions/camoucfg/` — the C++ config layer. `MaskConfig.hpp` reads the spoofing config (from `CAMOU_CONFIG` env var / `camoufox.cfg`) that the patches consult at the C++ level; `MouseTrajectories.hpp` is the human-cursor algorithm.
+  - `additions/camoucfg/` — the C++ config layer. `MaskConfig.hpp` reads the spoofing config (from `CAMOU_CONFIG` env var / `camoufox.cfg`) that the patches consult at the C++ level. (The human-cursor algorithm used to live here too; it is now `additions/juggler/input/CursorTrajectory.js` and the vendored Cursory beside it.)
   - `additions/juggler/` — Camoufox's patched **Juggler** (Firefox's Playwright automation protocol, the Firefox analog of CDP). This is where Playwright is made undetectable — the page agent runs in an isolated scope so injected automation JS is not visible to the page.
 - **`settings/`** — `camoufox.cfg`, `chrome.css`, `properties.json`, `camoucfg.jvv`, prefs/policies. Copied into the source's `lw/` dir by `copy-additions.sh`. Edit the built config with `make edit-cfg`.
 - **`scripts/`** — `patch.py` (the patcher, LibreWolf-derived), `developer.py` (the `make edits` UI), `package.py`, `copy-additions.sh`, `install-deps.sh`.
-- **`pythonlib/`** — the `camoufox` PyPI package: the Playwright-compatible Python interface that generates + injects fingerprints via BrowserForge and launches the binary. `fingerprint-presets-v150.json` holds real scraped fingerprints. This is the user-facing API; the browser binary is the backend.
+- **`pythonlib/`** — the `camoufox` PyPI package: the Playwright-compatible Python interface that generates + injects fingerprints via [fpgen](https://github.com/scrapfly/fingerprint-generator) and launches the binary. `fingerprint-presets-v150.json` holds real scraped fingerprints; `coherence.py` checks the assembled identity (the pools are sampled independently, so an impossible machine can be built from individually plausible parts), and `scripts/clean-fingerprint-data.py` applies the same rules to the shipped data files. This is the user-facing API; the browser binary is the backend.
 - **`jsonvv/`** — JSON-with-validation format library used for `camoucfg.jvv` (config schema).
 - **`legacy/launcher/`** — Go launcher binary.
 - **`assets/`** — `base.mozconfig` and other build inputs.

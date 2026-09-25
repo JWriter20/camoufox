@@ -64,6 +64,22 @@ skip:
       expects a timeout error when the element never settles, and Camoufox does
       not raise one.
 
+  - test: tests/async/test_keyboard.py::test_should_send_proper_codes_while_typing
+    reason: >-
+      Typing "!" on a US layout takes Shift, and upstream asserts the three events
+      it dispatches for the character alone, with shiftKey false throughout. A
+      page listening to keydown therefore sees a character no keyboard could have
+      produced. Camoufox presses Shift around the shifted character, so the page
+      sees "Keydown: Shift ShiftLeft 16 [Shift]" before it and shiftKey true on
+      the character's own events. The character's own key/code/keyCode are
+      unchanged (! Digit1 49); what upstream asserts is the absence of the Shift.
+
+  - test: tests/async/test_keyboard.py::test_should_press_plus
+    reason: >-
+      The same auto-Shift, reached through keyboard.press("+") rather than
+      type(). Listed separately because dropping auto-Shift would have to unskip
+      both.
+
   # --- client certificates the BROWSER has to present ------------------------
   #
   # Not the whole module. Playwright offers client certs two ways, and only one
@@ -139,3 +155,35 @@ skip:
       drives the bare binary through plain Playwright. The replacement asserts
       what this layer can actually promise -- a Gecko UA carrying one of the two
       tokens, and the same one in the header as in the DOM.
+
+  # --- the popup blocker -----------------------------------------------------
+  #
+  # Firefox blocks window.open() that is not called while handling user input.
+  # Playwright and geckodriver both ship that blocker OFF, and the difference is
+  # one bit of page JS with no permission and nothing to wait for, so Camoufox
+  # keeps Firefox's default and lifts it only for the driver's own evaluate
+  # (nsIDocShell.driverPopupsAllowed; patches/popup-blocker-parity.patch,
+  # tests/patches/popup-blocker-parity.py, sundial ls-popup-blocker).
+  #
+  # page.evaluate(() => window.open(...)) therefore still works, which is what
+  # nearly every popup test in the suite does. This one is the exception.
+
+  - test: tests/async/test_browsercontext.py::test_page_event_should_have_an_opener
+    reason: >-
+      The fixture it navigates to, /popup/window-open.html, calls window.open()
+      from the PAGE's own script at load, with no user gesture. Stock Firefox
+      returns null there and opens nothing, so no page event arrives and
+      popup.opener() has nothing to assert. Upstream can rely on it only because
+      Playwright's Firefox ships dom.disable_open_during_load=false. Every other
+      popup test in the suite goes through page.evaluate and still passes.
+
+  - test: tests/async/test_popup.py::test_should_work_with_fake_clicking_target__blank_and_rel_noopener
+    reason: >-
+      A scripted `a.click()` on a <a target=_blank> link, which carries no user
+      activation, so stock Firefox blocks the popup and upstream can only assert
+      one because Playwright's Firefox ships the blocker off. Camoufox's driver
+      door does not reach this case either: it is a content-process docShell
+      flag and link retargeting is decided in the parent (see
+      patches/popup-blocker-parity.patch). page.click() still works -- it
+      synthesizes a real click, which grants a real activation -- and so does
+      page.evaluate(() => window.open(...)).

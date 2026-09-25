@@ -49,9 +49,6 @@ const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sy
  */
 export const kAckDeadlineMs = 5000;
 
-/** Delay between humanized trajectory points, preserving the original cadence. */
-export const kTrajectoryStepMs = 10;
-
 function warnUndelivered(eventType, x, y, box, deadlineMs) {
   dump(
     `[juggler] WARN ${eventType} at (${x}, ${y}) was not delivered to the ` +
@@ -144,7 +141,10 @@ export class MouseDispatch {
       this._args.modifiers,
       false /* aIgnoreRootScrollFrame */,
       0.0 /* pressure */,
-      0 /* inputSource */,
+      // MOZ_SOURCE_MOUSE: a real mouse reports PointerEvent.pointerType "mouse";
+      // MOZ_SOURCE_UNKNOWN (0) surfaces as an empty pointerType, which no OS
+      // input path ever produces (daijro/camoufox#776, microsoft/playwright#38376).
+      this._win.MouseEvent.MOZ_SOURCE_MOUSE /* inputSource */,
       true /* isDOMEventSynthesized */,
       false /* isWidgetEventSynthesized */,
       this._args.buttons,
@@ -176,10 +176,23 @@ export class MouseDispatch {
   /**
    * Dispatch the intermediate points of a humanized trajectory.
    *
-   * Points outside the viewport are skipped. Bounding each ack individually is
-   * not enough to bound the work: a curve is ~110 points dispatched inside a
-   * SINGLE activation-chain slot, so a curve riding a coordinate that cannot be
-   * delivered would spend 110 x the deadline there. Rather than a wall-clock
+   * Each step carries its own pause because the trajectory generator
+   * (input/CursorTrajectory.js) replays timing recorded from a real hand: the
+   * gaps are uneven, and evening them out would throw away the half of the
+   * realism that is not the shape of the path. The pause is taken BEFORE the
+   * point it belongs to, and it is taken even for a point that is then skipped,
+   * so dropping a point shifts nothing that follows it in time.
+   *
+   * Points outside the viewport are skipped, and a curve leaves the viewport
+   * more often than it sounds: measured over 400 random moves, 69% of Cursory
+   * paths stray outside the box spanned by their own endpoints, by up to 184px.
+   *
+   * Bounding each ack individually is not enough to bound the work: a curve is
+   * dispatched inside a SINGLE activation-chain slot, and holds up to ~90
+   * points at the 1.5s default ceiling (the generator holds the sample rate at
+   * 60Hz however the duration is scaled; measured worst case over 800 moves was
+   * 83). A curve riding a coordinate that cannot be delivered would spend 90 x
+   * the deadline there. Rather than a wall-clock
    * budget -- which would false-fire on exactly the slow pages the deadline
    * exists to tolerate -- the first undelivered point abandons the rest of the
    * curve. Intermediate points are humanization garnish: if one did not reach
@@ -187,16 +200,35 @@ export class MouseDispatch {
    * dropping them costs realism, not correctness. The caller still dispatches
    * the real destination afterwards.
    *
+   * @param {Array<[number, number, number]>} steps [x, y, msToPauseBeforeIt].
+   * @param {number} trailingDelayMs pause before the caller's own dispatch of
+   *   the destination, so the movement ends on the generator's clock and not
+   *   the moment its last intermediate point landed.
    * @returns {boolean} true if the whole curve was delivered.
    */
-  async sendTrajectoryAcked(watcher, eventType, points, stepDelayMs = kTrajectoryStepMs) {
-    for (const [x, y] of points) {
+  async sendTrajectoryAcked(watcher, eventType, steps, trailingDelayMs = 0) {
+    // A point on the pixel the cursor is already on generates no eMouseMove, so
+    // it is never acked and the wait below would burn the whole deadline. The
+    // generator already drops those, but it cannot see which points this method
+    // skipped for being off-screen, and skipping one can leave the next landing
+    // back where the last dispatch left the cursor. Tracking what was actually
+    // dispatched is the only place that check is reliable.
+    let lastX = NaN;
+    let lastY = NaN;
+    for (const [x, y, delayMs] of steps) {
+      if (delayMs > 0)
+        await new Promise(resolve => setTimeout(resolve, delayMs));
       if (!this.isInViewport(x, y))
+        continue;
+      if (Math.round(x) === lastX && Math.round(y) === lastY)
         continue;
       if (!await this.sendAcked(watcher, eventType, x, y))
         return false;
-      await new Promise(resolve => setTimeout(resolve, stepDelayMs));
+      lastX = Math.round(x);
+      lastY = Math.round(y);
     }
+    if (trailingDelayMs > 0)
+      await new Promise(resolve => setTimeout(resolve, trailingDelayMs));
     return true;
   }
 
@@ -212,9 +244,10 @@ export class MouseDispatch {
   }
 
   /** Wheel events take the same conversion; they are not acked. */
-  sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY}) {
+  sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY, nativeNotches = false}) {
     const {x: absX, y: absY} = this.toAbsolute(x, y);
-    this._win.windowUtils.sendWheelEvent(
+    const utils = this._win.windowUtils;
+    utils.sendWheelEvent(
       absX,
       absY,
       deltaX,
@@ -224,6 +257,6 @@ export class MouseDispatch {
       this._args.modifiers,
       lineOrPageDeltaX,
       lineOrPageDeltaY,
-      0 /* options */);
+      nativeNotches ? utils.WHEEL_EVENT_NATIVE_NOTCHES : 0);
   }
 }

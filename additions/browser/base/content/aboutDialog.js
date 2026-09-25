@@ -4,10 +4,13 @@
 
  "use strict";
 
- // Services = object with smart getters for common XPCOM services
- var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
- var { AppConstants } = ChromeUtils.import(
-   "resource://gre/modules/AppConstants.jsm"
+ // Services is a chrome global; importing it declared an extra page-visible
+ // name, and resource://gre/modules/Services.jsm no longer exists in Firefox
+ // 152, so that line threw. chrome://browser/content/ is contentaccessible, so
+ // the declarations here must match stock's (guard:
+ // tests/patches/contentaccessible-parity.py).
+ var { AppConstants } = ChromeUtils.importESModule(
+   "resource://gre/modules/AppConstants.sys.mjs"
  );
  
  async function init(aEvent) {

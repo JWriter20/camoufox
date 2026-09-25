@@ -226,7 +226,13 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       # -e pythonlib because the settled-decisions tests import camoufox.* to
       # assert against it. It is a pure-Python install; no browser involved.
-      - run: pip install -r ci/requirements.txt pytest -e pythonlib
+      - run: |
+          pip install -r ci/requirements.txt pytest -e pythonlib
+          # fpgen downloads its model on first import with TLS verification
+          # OFF and no checksum, and its release picker can only ever reach the
+          # April-2025 model. Install the pinned one first: see
+          # scripts/pin-fpgen-model.py.
+          python3 scripts/pin-fpgen-model.py
 
       - name: Synthesized input goes through one chokepoint
         run: python3 scripts/check-input-dispatch.py
@@ -278,7 +284,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install -r ci/requirements.txt pytest -e pythonlib
+      - run: |
+          pip install -r ci/requirements.txt pytest -e pythonlib
+          # fpgen downloads its model on first import with TLS verification
+          # OFF and no checksum, and its release picker can only ever reach the
+          # April-2025 model. Install the pinned one first: see
+          # scripts/pin-fpgen-model.py.
+          python3 scripts/pin-fpgen-model.py
       - name: Run
         # pythonlib resolves the published release through the GitHub API
         # (pkgman.py honours GITHUB_TOKEN). Unauthenticated, a runner shares the
@@ -470,7 +482,11 @@ jobs:
 
           # Fail here, once, rather than in five browser jobs with five
           # different confusing errors.
-          for required in camoufox-bin properties.json camoufox.cfg fonts/linux fontconfig/linux; do
+          # fonts/ holds the bundle's group directories (L, M, W, LM, ... --
+          # bundle/fonts/groups.json), not a copy per OS; groups.json is what
+          # utils._generate_fontconfig reads to decide which of them an identity
+          # may see, so its absence is the failure that matters.
+          for required in camoufox-bin properties.json camoufox.cfg fonts/groups.json fonts/LMW fontconfig/linux; do
             [ -e "$src/$required" ] || { echo "::error::artifact is missing $required"; exit 1; }
           done
 
@@ -569,7 +585,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install -r ci/requirements.txt -e pythonlib
+      - run: |
+          pip install -r ci/requirements.txt -e pythonlib
+          # fpgen downloads its model on first import with TLS verification
+          # OFF and no checksum, and its release picker can only ever reach the
+          # April-2025 model. Install the pinned one first: see
+          # scripts/pin-fpgen-model.py.
+          python3 scripts/pin-fpgen-model.py
 
       - name: Download
         # Same GitHub API path as the pythonlib job above, and the same anonymous
@@ -686,7 +708,13 @@ jobs:
       - uses: ./.github/actions/prepare-browser
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install -e pythonlib
+      - run: |
+          pip install -e pythonlib
+          # fpgen downloads its model on first import with TLS verification
+          # OFF and no checksum, and its release picker can only ever reach the
+          # April-2025 model. Install the pinned one first: see
+          # scripts/pin-fpgen-model.py.
+          python3 scripts/pin-fpgen-model.py
       # Fonts and properties.json are staged into the artifact by the build job;
       # `make stage-fonts` here would find no source tree and do nothing.
       - run: xvfb-run -a python3 -m ci.run_patch_guards --binary "$CAMOUFOX_BINARY"
@@ -730,6 +758,13 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: |
           cd build-tester && npm install && pip install -r requirements.txt
+          # build-tester pulls pythonlib -- and so fpgen -- through its own
+          # requirements.txt (`-e ../pythonlib`) rather than `pip install -e
+          # pythonlib`, so the pin the other jobs get by matching that line has
+          # to be spelled out here. Without it this job was still downloading
+          # fpgen's model itself: TLS verification off, no checksum, and only
+          # ever the April-2025 release (observed in run 36050915401).
+          python3 "$GITHUB_WORKSPACE/scripts/pin-fpgen-model.py"
       - run: xvfb-run -a python3 -m ci.run_build_tester --binary "$CAMOUFOX_BINARY"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -767,7 +802,13 @@ jobs:
       - uses: ./.github/actions/prepare-browser
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install -e pythonlib
+      - run: |
+          pip install -e pythonlib
+          # fpgen downloads its model on first import with TLS verification
+          # OFF and no checksum, and its release picker can only ever reach the
+          # April-2025 model. Install the pinned one first: see
+          # scripts/pin-fpgen-model.py.
+          python3 scripts/pin-fpgen-model.py
       - name: Run
         # Launches browsers, kills them, and proves nothing survived -- the
         # failure a long-running scraper hits after six hours and no Playwright
@@ -824,7 +865,13 @@ jobs:
       - uses: ./.github/actions/prepare-browser
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install -e pythonlib
+      - run: |
+          pip install -e pythonlib
+          # fpgen downloads its model on first import with TLS verification
+          # OFF and no checksum, and its release picker can only ever reach the
+          # April-2025 model. Install the pinned one first: see
+          # scripts/pin-fpgen-model.py.
+          python3 scripts/pin-fpgen-model.py
       - run: xvfb-run -a python3 -m ci.run_native --subset growth --binary "$CAMOUFOX_BINARY"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -850,7 +897,13 @@ jobs:
       - uses: ./.github/actions/prepare-browser
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install -e pythonlib
+      - run: |
+          pip install -e pythonlib
+          # fpgen downloads its model on first import with TLS verification
+          # OFF and no checksum, and its release picker can only ever reach the
+          # April-2025 model. Install the pinned one first: see
+          # scripts/pin-fpgen-model.py.
+          python3 scripts/pin-fpgen-model.py
       - name: Run
         # Exits 0 with a SKIP result if sundial itself is unreachable -- the
         # browser was never measured, so neither a pass nor a failure would be

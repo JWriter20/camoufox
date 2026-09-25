@@ -86,24 +86,26 @@ index 330a707789..241f87780b 100644
    // We ignore aCallerType; we only have that argument because some other things
    // called by GetReplaceableWindowCoord need it.  If this ever changes, fix
    //   nsresult nsGlobalWindowInner::GetInnerHeight(double* aInnerWidth)
-@@ -3466,12 +3471,16 @@ nsresult nsGlobalWindowInner::GetInnerHeight(double* aHeight) {
+@@ -3466,12 +3471,18 @@ nsresult nsGlobalWindowInner::GetInnerHeight(double* aHeight) {
  
  int32_t nsGlobalWindowInner::GetOuterWidth(CallerType aCallerType,
                                             ErrorResult& aError) {
-+  if (auto value = MaskConfig::GetInt32("window.outerWidth"))
-+    return value.value();
++  // Camoufox: window.outerWidth/outerHeight are deliberately NOT read from
++  // MaskConfig. browser-init.js resizes the real window to the drawn size, and
++  // innerWidth/innerHeight report the real content area, so a fixed outer size
++  // contradicted inner whenever the window ended up a different size: the WM
++  // clamped or auto-maximized it, or Juggler resized it for a viewport. Pages
++  // then saw innerWidth > outerWidth (measured 1853 > 1680 on GNOME).
    FORWARD_TO_OUTER_OR_THROW(GetOuterWidthOuter, (aCallerType, aError), aError,
                              0);
  }
  
  int32_t nsGlobalWindowInner::GetOuterHeight(CallerType aCallerType,
                                              ErrorResult& aError) {
-+  if (auto value = MaskConfig::GetInt32("window.outerHeight"))
-+    return value.value();
    FORWARD_TO_OUTER_OR_THROW(GetOuterHeightOuter, (aCallerType, aError), aError,
                              0);
  }
-@@ -3486,11 +3495,13 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
+@@ -3486,11 +3497,13 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
  
  int32_t nsGlobalWindowInner::GetScreenX(CallerType aCallerType,
                                          ErrorResult& aError) {
@@ -117,7 +119,7 @@ index 330a707789..241f87780b 100644
    FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError, 0);
  }
  
-@@ -3524,6 +3535,8 @@ static nsPresContext* GetPresContextForRatio(Document* aDoc) {
+@@ -3524,6 +3537,8 @@ static nsPresContext* GetPresContextForRatio(Document* aDoc) {
  double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
                                                  ErrorResult& aError) {
    ENSURE_ACTIVE_DOCUMENT(aError, 0.0);
@@ -126,7 +128,7 @@ index 330a707789..241f87780b 100644
  
    RefPtr<nsPresContext> presContext = GetPresContextForRatio(mDoc);
    if (NS_WARN_IF(!presContext)) {
-@@ -3594,26 +3607,38 @@ already_AddRefed<MediaQueryList> nsGlobalWindowInner::MatchMedia(
+@@ -3594,26 +3609,38 @@ already_AddRefed<MediaQueryList> nsGlobalWindowInner::MatchMedia(
  }
  
  int32_t nsGlobalWindowInner::GetScrollMinX(ErrorResult& aError) {

@@ -2,6 +2,8 @@
 
 import argparse
 import glob
+import hashlib
+import json
 import os
 import shutil
 import sys
@@ -10,10 +12,79 @@ from shlex import join
 
 from _mixin import find_src_dir, get_moz_target, list_files, run, temp_cd
 
-UNNEEDED_PATHS = {'uninstall', 'pingsender.exe', 'pingsender', 'vaapitest', 'glxtest'}
+# glxtest and vaapitest are NOT here: Firefox runs them at startup to learn what
+# the GPU and the video stack can do, and without them nsIGfxInfo has no data,
+# so the driver blocklist refuses every WebGL context ("WebglAllowWindowsNativeGl:
+# false restricts context creation on this system ... Exhausted GL driver
+# options", measured 2026-09-18 against stock 152.0.4 on the same machine, which
+# returned a full WebGL 2.0 context from the real GPU). The launcher papers over
+# it with webgl.force-enabled; shipping the two probes is what makes the browser
+# decide the way stock does in the first place. ~50 KB.
+UNNEEDED_PATHS = {'uninstall', 'pingsender.exe', 'pingsender'}
 
 
-def add_includes_to_package(package_file, includes, fonts, new_file, target):
+def inject_locales(target_dir, target, version, src_dir):
+    """Bake the official language packs in as packaged locales.
+
+    Without them a spoofed non-English locale localizes Intl/number/date
+    formatting but leaves every browser-provided string that content can read
+    (input.validationMessage, XML parse errors) in English -- a mix no real
+    Firefox produces. A langpack add-on does not fix it: the parent pre-creates
+    those string bundles before add-ons start. Packaged locales are what a
+    Mozilla localized build has, selected by intl.locale.requested (pythonlib).
+    """
+    langpacks = os.path.join('bundle', 'langpacks')
+    version_file = os.path.join(langpacks, 'VERSION')
+    base_version = version.split('-')[0]
+    have = open(version_file).read().strip() if os.path.exists(version_file) else None
+    if have != base_version:
+        # Not in git (bundle/langpacks is ignored): fetch them from
+        # archive.mozilla.org the way `make fetch` fetches the source.
+        run(join([sys.executable, os.path.join('scripts', 'fetch-langpacks.py'), base_version]))
+        have = open(version_file).read().strip() if os.path.exists(version_file) else None
+    if have != base_version:
+        raise FileNotFoundError(
+            f"bundle/langpacks is for Firefox {have}, need {base_version}: "
+            f"run scripts/fetch-langpacks.py {base_version}"
+        )
+    # Mozilla's macOS Japanese build is ja-JP-mac; every other platform ships ja.
+    skip = 'ja' if target == 'macos' else 'ja-JP-mac'
+    xpis = sorted(
+        path for path in glob.glob(os.path.join(langpacks, '*.xpi'))
+        if os.path.basename(path)[:-4] != skip
+    )
+    run(join([sys.executable, os.path.join('scripts', 'inject-locales.py'),
+              '--source-tree', src_dir, target_dir, *xpis]))
+
+
+
+def font_groups_for(groups_file, oses):
+    """Group directories the named OSes read, or None if the bundle predates groups."""
+    if not os.path.exists(groups_file):
+        return None
+    with open(groups_file, encoding='utf-8') as fh:
+        read_by = json.load(fh).get('readBy', {})
+    key = {'linux': 'lin', 'macos': 'mac', 'windows': 'win'}
+    out = set()
+    for o in oses:
+        out.update(read_by.get(key.get(o, o), []))
+    return sorted(out)
+
+
+def legacy_font_copy(target, fonts, fonts_dir):
+    """The pre-groups layout: one full copy of each OS's set under fonts/<os>/."""
+    if target == 'linux':
+        for font in fonts or []:
+            shutil.copytree(os.path.join('bundle', 'fonts', font),
+                            os.path.join(fonts_dir, font), dirs_exist_ok=True)
+    else:
+        os.makedirs(fonts_dir, exist_ok=True)
+        for font in fonts or []:
+            for file in list_files(root_dir=os.path.join('bundle', 'fonts', font), suffix='*'):
+                shutil.copy2(file, os.path.join(fonts_dir, os.path.basename(file)))
+
+
+def add_includes_to_package(package_file, includes, fonts, new_file, target, version, src_dir):
     with tempfile.TemporaryDirectory() as temp_dir:
         # Extract package
         run(join(['7z', 'x', package_file, f'-o{temp_dir}']), exit_on_fail=False)
@@ -28,6 +99,8 @@ def add_includes_to_package(package_file, includes, fonts, new_file, target):
                 fonts=fonts,
                 new_file=new_file,
                 target=target,
+                version=version,
+                src_dir=src_dir,
             )
 
         if target == 'macos':
@@ -79,22 +152,44 @@ def add_includes_to_package(package_file, includes, fonts, new_file, target):
             else:
                 shutil.copy2(include, target_dir)
 
-        # Add the font folders under fonts/
+        # Add the fonts under fonts/.
+        #
+        # The bundle stores each face ONCE, in a directory named for the set of
+        # OSes that use it (L, M, W, LM, LW, MW, LMW -- bundle/fonts/groups.json).
+        # Storing a copy per OS instead made 41% of the bundle byte-identical
+        # duplicates. `fonts` still names OSes; the groups each one reads are
+        # looked up here, so the set a package ships is unchanged.
         fonts_dir = os.path.join(target_dir, 'fonts')
-        if target == 'linux':
-            for font in fonts or []:
-                shutil.copytree(
-                    os.path.join('bundle', 'fonts', font),
-                    os.path.join(fonts_dir, font),
-                    dirs_exist_ok=True,
-                )
-        # Non-linux systems cannot read fonts within subfolders.
-        # Instead, we walk the fonts/ directory and copy all files.
+        groups_file = os.path.join('bundle', 'fonts', 'groups.json')
+        wanted = font_groups_for(groups_file, fonts or [])
+        if wanted is None:
+            legacy_font_copy(target, fonts, fonts_dir)
+        elif target == 'linux':
+            # Linux resolves fonts through fontconfig, which is handed the exact
+            # group directories for the claimed OS at launch (utils._generate_fontconfig),
+            # so the subdirectories are the per-OS gate and must be preserved.
+            for g in wanted:
+                shutil.copytree(os.path.join('bundle', 'fonts', g),
+                                os.path.join(fonts_dir, g), dirs_exist_ok=True)
+            shutil.copy2(groups_file, os.path.join(fonts_dir, 'groups.json'))
         else:
+            # macOS (CoreText) and Windows (DirectWrite) activate ONE flat
+            # directory and cannot read subfolders, so there is no directory
+            # gate on those targets -- the font allowlist is what restricts a
+            # lookup (font-hijacker.patch). Flatten, skipping any face whose
+            # bytes are already present.
             os.makedirs(fonts_dir, exist_ok=True)
-            for font in fonts or []:
-                for file in list_files(root_dir=os.path.join('bundle', 'fonts', font), suffix='*'):
+            seen = set()
+            for g in wanted:
+                for file in list_files(root_dir=os.path.join('bundle', 'fonts', g), suffix='*'):
+                    with open(file, 'rb') as fh:
+                        digest = hashlib.sha256(fh.read()).hexdigest()
+                    if digest in seen:
+                        continue
+                    seen.add(digest)
                     shutil.copy2(file, os.path.join(fonts_dir, os.path.basename(file)))
+
+        inject_locales(target_dir, target, version, src_dir)
 
         # Remove unneeded paths
         for path in UNNEEDED_PATHS:
@@ -173,6 +268,8 @@ def main():
         fonts=args.fonts,
         new_file=new_name,
         target=args.os,
+        version=args.version,
+        src_dir=os.path.abspath(src_dir),
     )
 
     print(f"Packaging complete for {args.os}")

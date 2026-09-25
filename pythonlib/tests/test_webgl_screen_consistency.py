@@ -153,20 +153,19 @@ def test_hardware_is_not_mistaken_for_software(monkeypatch):
         assert not is_software_renderer(renderer)
 
 
-def test_software_first_draw_is_never_resampled(monkeypatch):
-    """The strongest reason this sampler must not be a plain reject loop.
-
-    Rejecting hardware draws while accepting every software one renormalises
-    the pool onto llvmpipe / WARP / SwiftShader. On a sub-floor screen that
-    turned a 1.5% software rate into ~40%, trading a weak incoherence for the
-    strongest VM/headless tell there is. So the first draw settles the class.
-    """
+def test_software_first_draw_is_resampled_to_hardware(monkeypatch):
+    """A presented llvmpipe / WARP / SwiftShader is the first thing every
+    consumer-hardware check flags (measured 2026-09-14 with sundial), so a
+    software first draw is retried until a hardware renderer that fits the
+    screen comes up, and only kept when the pool offers nothing else."""
     draws = iter([{"webGl:renderer": _LLVMPIPE}, {"webGl:renderer": _INTEL}])
     monkeypatch.setattr(fingerprints, "sample_webgl", lambda *a, **kw: next(draws))
 
-    # 1024x600 would reject a discrete GPU, but llvmpipe is plausible there and
-    # must be returned as drawn rather than swapped for the Intel part.
-    assert sample_webgl_for_screen("lin", 1024, 600)["webGl:renderer"] == _LLVMPIPE
+    assert sample_webgl_for_screen("lin", 1024, 600)["webGl:renderer"] == _INTEL
+
+    only_software = iter([{"webGl:renderer": _LLVMPIPE}] * 40)
+    monkeypatch.setattr(fingerprints, "sample_webgl", lambda *a, **kw: next(only_software))
+    assert sample_webgl_for_screen("lin", 1920, 1080)["webGl:renderer"] == _LLVMPIPE
 
 
 def test_software_draws_are_skipped_when_resampling(monkeypatch):
@@ -273,10 +272,18 @@ def test_context_fingerprints_get_the_same_treatment(target_os):
 
 
 def test_preset_screens_are_never_lifted():
-    """Presets are real devices, coherent by construction -- #729 says so
-    explicitly. Two bundled v150 presets report genuinely sub-netbook screens,
-    and the floor used to rewrite them to 1366x768 because
-    _user_set_screen_window is computed before the preset merges in."""
+    """A preset's own small screen is kept -- #729 -- unless it is not a screen.
+
+    The original premise here was that a preset IS a real device, so the floor
+    must never rewrite it. That premise does not survive the data: the two
+    "genuinely sub-netbook" v150 presets report 736x414 (an iPhone viewport) and
+    960x540, and another reports 1440x2560, portrait. The presets are scraped
+    from live traffic, so they carry phones and bots alongside real desktops.
+
+    So the rule is narrower than "never lift a preset screen": a panel a desktop
+    could have is kept at whatever size it claims, and one no desktop reports is
+    repaired (camoufox.coherence). This asserts the keeping half; the repairing
+    half is in test_coherence.py."""
     import json
     from pathlib import Path
 
@@ -293,7 +300,11 @@ def test_preset_screens_are_never_lifted():
                 isinstance(screen, dict)
                 and screen.get("width")
                 and screen.get("height")
-                and screen["width"] * screen["height"] <= 1024 * 600
+                # Small, but a shape a desktop can have: coherence.py repairs
+                # anything narrower than 1024 or taller than it is wide.
+                and screen["width"] * screen["height"] <= 1366 * 768
+                and screen["width"] >= 1024
+                and screen["width"] >= screen["height"]
             ):
                 yield node
             for value in node.values():
@@ -303,7 +314,7 @@ def test_preset_screens_are_never_lifted():
                 yield from small_presets(value)
 
     found = list(small_presets(presets))
-    assert found, "expected the v150 presets to still carry sub-netbook screens"
+    assert found, "expected the v150 presets to still carry small desktop screens"
 
     for preset in found:
         env = launch_options(

@@ -622,6 +622,10 @@ class Runtime {
   }
 }
 
+// How many driver evaluates are on the stack for a docShell; see
+// ExecutionContext.withDriverPopups.
+const driverPopupDepth = new WeakMap();
+
 class ExecutionContext {
   constructor(runtime, domWindow, contextGlobal, auxData) {
     this._runtime = runtime;
@@ -709,13 +713,49 @@ class ExecutionContext {
     return this._mainWorldContext;
   }
 
-  async evaluateScript(script, exceptionDetails = {}) {
-    const userInputHelper = this._domWindow ? this._domWindow.windowUtils.setHandlingUserInput(true) : null;
-    if (this._domWindow && this._domWindow.document)
-      this._domWindow.document.notifyUserGestureActivation();
+  // Camoufox: `page.evaluate(() => window.open(...))` has to keep working while
+  // the popup blocker stays at Firefox's default, because a gesture-less
+  // window.open() returning a window instead of null is a one-bit automation
+  // tell any page can read (dom.disable_open_during_load; sundial
+  // ls-popup-blocker). nsIDocShell.driverPopupsAllowed lifts the blocker for
+  // this docShell -- unlike upstream's setHandlingUserInput() it grants NO
+  // user-gesture activation, so navigator.userActivation and the autoplay
+  // policy are untouched.
+  //
+  // SYNCHRONOUS scope only, deliberately. Holding it across the promise an
+  // async evaluate returns would leave the blocker open for as long as that
+  // evaluate runs, and a page polling window.open() on a timer would eventually
+  // land inside the window -- silent on stock, one popup on camoufox. So a
+  // popup opened after an `await` inside the evaluated function is blocked,
+  // exactly as it is on stock without an activation.
+  withDriverPopups(fn) {
+    const docShell = this._domWindow?.docShell;
+    if (!docShell || !('driverPopupsAllowed' in docShell))
+      return fn();
+    // Counted, not a plain boolean: one docShell carries both the isolated and
+    // the main world, and two evaluates can interleave, so the inner one must
+    // not clear the flag out from under the outer one.
+    driverPopupDepth.set(docShell, (driverPopupDepth.get(docShell) || 0) + 1);
+    docShell.driverPopupsAllowed = true;
+    try {
+      return fn();
+    } finally {
+      const left = (driverPopupDepth.get(docShell) || 1) - 1;
+      driverPopupDepth.set(docShell, left);
+      if (!left)
+        docShell.driverPopupsAllowed = false;
+    }
+  }
 
-    let {success, obj} = this._getResult(this._debuggee.executeInGlobal(script), exceptionDetails);
-    userInputHelper && userInputHelper.destruct();
+  async evaluateScript(script, exceptionDetails = {}) {
+    // Camoufox: upstream Playwright runs every evaluate() as user input and
+    // grants the document a user-gesture activation. Init scripts run through
+    // this path at load, so every page saw navigator.userActivation.hasBeenActive
+    // === true, autoplay "allowed" and popups permitted before any input -- a
+    // stock Firefox grants activation only from real input, which juggler's
+    // synthesized-trusted clicks already provide (measured 2026-09-14).
+    let {success, obj} = this._getResult(
+        this.withDriverPopups(() => this._debuggee.executeInGlobal(script)), exceptionDetails);
     if (!success)
       return null;
     if (obj && obj.isPromise) {
@@ -755,11 +795,9 @@ class ExecutionContext {
         default: return this._toDebugger(arg.value);
       }
     });
-    const userInputHelper = this._domWindow ? this._domWindow.windowUtils.setHandlingUserInput(true) : null;
-    if (this._domWindow && this._domWindow.document)
-      this._domWindow.document.notifyUserGestureActivation();
-    let {success, obj} = this._getResult(funEvaluation.obj.apply(null, args), exceptionDetails);
-    userInputHelper && userInputHelper.destruct();
+    // Camoufox: no synthetic user activation here either (see evaluateScript).
+    let {success, obj} = this._getResult(
+        this.withDriverPopups(() => funEvaluation.obj.apply(null, args)), exceptionDetails);
     if (!success)
       return null;
     if (obj && obj.isPromise) {

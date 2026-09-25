@@ -48,13 +48,28 @@ reintroducing a fixed deadlock one day before it was re-fixed.
 the boundary snap), the in-viewport predicate, and the ack wait. Callers pass
 relative coordinates and never see a bounding box.
 
+**A fresh rect.** The browser rect is measured *after* the last `await` before
+the dispatch (`apz-repaints-flushed`), never before it. The chrome can change
+height during that wait — measured 2026-09-14: the nav-bar grew from 40 to
+41 px about a second after startup when the (then forced) built-in theme was
+applied — and a rect taken before it put a relative `y == 0` one row above the
+content: the event reached the renderer as an exit event at client `y == -1`,
+produced no ack, and the page saw no mousemove (~1 in 25 runs of
+`near-edge-mouse-deadlock.py`). Both dispatch sites (`Page.dispatchMouseEvent`,
+`Page.dispatchWheelEvent`) measure synchronously before dispatching.
+
 **Bounded waits.** `sendAcked()` waits at most `kAckDeadlineMs` (5s) and then
 drops the event with a warning naming the type, coordinate and browser rect. The
 deadline is sized above the slowest *legitimate* ack, not near the typical one:
 acks are p99 1ms on an idle page, but they are delivered from the content main
 thread and inherit any block on it — a 3s synchronous script delayed one by
 2849ms. `sendTrajectoryAcked()` abandons the rest of a curve after the first
-undelivered point, so ~110 bounded waits cannot add up to an unbounded slot.
+undelivered point, so the ~90 bounded waits a curve can hold — the 1.5s default
+humanize ceiling at 60Hz — cannot add up to an unbounded slot. It also refuses
+to dispatch a point on the pixel the previous dispatch left the cursor on: a
+zero-displacement move produces no `eMouseMove`, so it is never acked, and
+that is the same deadlock reached from inside a curve rather than from
+`Page.dispatchMouseEvent`.
 `activateAndRun()` carries a 30s backstop for the other unbounded waits
 reachable from the same slot (`apz-repaints-flushed`, `TabSwitchDone`, the drag
 path's waits), none of which has failed yet.

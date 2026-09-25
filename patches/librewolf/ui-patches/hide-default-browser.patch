@@ -1,95 +1,37 @@
+LibreWolf: hide the "set as default browser" UI in preferences.
+
+Hides the settings rather than deleting them. chrome://browser/content/ is
+contentaccessible, so a page can load preferences/main.js and read the order of
+the globals it declares; removing the blocks outright changed that order away
+from stock Firefox's. Guard: tests/patches/contentaccessible-parity.py.
+
 diff --git a/browser/components/preferences/main.js b/browser/components/preferences/main.js
-index c86e54bb6f..bdfcc7bb9f 100644
 --- a/browser/components/preferences/main.js
 +++ b/browser/components/preferences/main.js
-@@ -494,65 +494,6 @@ const DefaultBrowserHelper = {
-   },
- };
- 
--Preferences.addSetting({
--  id: "alwaysCheckDefault",
--  pref: "browser.shell.checkDefaultBrowser",
--  setup: emitChange => {
--    if (!DefaultBrowserHelper.canCheck) {
--      return;
--    }
--    DefaultBrowserHelper.pollForDefaultChanges(emitChange);
--    // eslint-disable-next-line consistent-return
--    return () => DefaultBrowserHelper.clearPollingForDefaultChanges();
--  },
--  /**
--   * Show button for setting browser as default browser or information that
--   * browser is already the default browser.
--   */
+@@ -509,7 +509,7 @@
+    * Show button for setting browser as default browser or information that
+    * browser is already the default browser.
+    */
 -  visible: () => DefaultBrowserHelper.canCheck,
--  disabled: (_, setting) =>
--    !DefaultBrowserHelper.canCheck ||
--    setting.locked ||
--    DefaultBrowserHelper.isBrowserDefault,
--});
--
--Preferences.addSetting({
--  id: "isDefaultPane",
--  deps: ["alwaysCheckDefault"],
++  visible: () => false,
+   disabled: (_, setting) =>
+     !DefaultBrowserHelper.canCheck ||
+     setting.locked ||
+@@ -519,15 +519,13 @@
+ Preferences.addSetting({
+   id: "isDefaultPane",
+   deps: ["alwaysCheckDefault"],
 -  visible: () =>
 -    DefaultBrowserHelper.canCheck && DefaultBrowserHelper.isBrowserDefault,
--});
--
--Preferences.addSetting({
--  id: "isNotDefaultPane",
--  deps: ["alwaysCheckDefault"],
++  visible: () => false,
+ });
+ 
+ Preferences.addSetting({
+   id: "isNotDefaultPane",
+   deps: ["alwaysCheckDefault"],
 -  visible: () =>
 -    DefaultBrowserHelper.canCheck && !DefaultBrowserHelper.isBrowserDefault,
--  onUserClick: (e, { alwaysCheckDefault }) => {
--    if (!DefaultBrowserHelper.canCheck) {
--      return;
--    }
--    const setDefaultButton = /** @type {MozButton} */ (e.target);
--
--    if (!setDefaultButton) {
--      return;
--    }
--    if (setDefaultButton.disabled) {
--      return;
--    }
--
--    /**
--     * Disable the set default button, so that the user
--     * doesn't try to hit it again while browser is being set to default.
--     */
--    setDefaultButton.disabled = true;
--    alwaysCheckDefault.value = true;
--    DefaultBrowserHelper.setDefaultBrowser().finally(() => {
--      setDefaultButton.disabled = false;
--    });
--  },
--});
--
- // AI Control pref settings
- Preferences.addSetting({
-   id: "aiControlDefault",
-@@ -679,16 +620,11 @@ function createStartupConfig(hidden = false) {
-           role: "status",
-         },
-       },
--      {
--        id: "alwaysCheckDefault",
--        l10nId: "always-check-default",
--      },
-     ],
-   };
- }
- 
- SettingGroupManager.registerGroups({
--  defaultBrowser: createDefaultBrowserConfig(),
-   startup: createStartupConfig(
-     Services.prefs.getBoolPref("browser-settings-redesign.enabled", false)
-   ),
-@@ -797,7 +733,6 @@ var gMainPane = {
-     initSettingGroup("translations");
-     initSettingGroup("spellCheck");
-     initSettingGroup("performance");
--    initSettingGroup("defaultBrowser");
-     initSettingGroup("startup");
-     initSettingGroup("importBrowserData");
-     initSettingGroup("tabs");
++  visible: () => false,
+   onUserClick: (e, { alwaysCheckDefault }) => {
+     if (!DefaultBrowserHelper.canCheck) {
+       return;

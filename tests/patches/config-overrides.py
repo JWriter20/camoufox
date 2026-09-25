@@ -82,16 +82,25 @@ async def test():
     else:
         raise RuntimeError("Could not find a valid preset") from last_error
 
-    # --- Test 2: without config_overrides, seed is non-zero ---
-    print("\n=== Test 2: default (no overrides) gets non-zero seed ===")
+    # --- Test 2: without config_overrides, the perturbation is OFF (seed 0) ---
+    # Glyph-advance perturbation moves every measured text width off the value
+    # the same font gives on a real machine, so the default is 0; an explicit
+    # non-zero seed must still be honoured (opt-in).
+    print("\n=== Test 2: default (no overrides) seed is 0, explicit seed honoured ===")
     preset2 = get_random_preset(os="macos")
     fp2 = generate_context_fingerprint(preset=preset2)
     seed2 = fp2["config"]["fonts:spacing_seed"]
-    if seed2 != 0:
-        print(f"  Default seed is {seed2} (non-zero): PASS")
+    if seed2 == 0:
+        print("  Default seed is 0 (perturbation off): PASS")
     else:
-        failures.append("Default seed is 0 — should be random non-zero")
-        print(f"  Default seed is 0: FAIL")
+        failures.append(f"Default seed is {seed2} — should be 0 (perturbation off by default)")
+        print(f"  Default seed is {seed2}: FAIL")
+    fp2b = generate_context_fingerprint(preset=preset2, config_overrides={"fonts:spacing_seed": 12345})
+    if fp2b["config"]["fonts:spacing_seed"] == 12345:
+        print("  Explicit seed 12345 honoured: PASS")
+    else:
+        failures.append("Explicit fonts:spacing_seed override was not honoured")
+        print("  Explicit seed override: FAIL")
 
     # --- Test 3: init_script contains setFontSpacingSeed(0) when overridden ---
     print("\n=== Test 3: init_script emits setFontSpacingSeed(0) ===")

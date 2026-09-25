@@ -59,9 +59,10 @@ changes, so a single classification per process is safe.
 Bug: daijro/camoufox#598, daijro/camoufox#695
 
 diff --git a/layout/base/moz.build b/layout/base/moz.build
+index 2ec366ca45..bcdc4301b9 100644
 --- a/layout/base/moz.build
 +++ b/layout/base/moz.build
-@@ -146,6 +146,7 @@
+@@ -146,6 +146,7 @@ LOCAL_INCLUDES += [
      "../tables",
      "../xul",
      "../xul/tree/",
@@ -70,6 +71,7 @@ diff --git a/layout/base/moz.build b/layout/base/moz.build
      "/dom/base",
      "/dom/html",
 diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
+index 1e76b87091..53a7006f01 100644
 --- a/layout/base/nsLayoutUtils.cpp
 +++ b/layout/base/nsLayoutUtils.cpp
 @@ -4,6 +4,7 @@
@@ -80,7 +82,7 @@ diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
  #include <algorithm>
  #include <limits>
  
-@@ -9718,6 +9719,55 @@
+@@ -9748,6 +9749,113 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
  
  static void GetSpoofedSystemFontForRFP(LookAndFeel::FontID aFontID,
                                         gfxFontStyle& aStyle, nsAString& aName) {
@@ -103,7 +105,7 @@ diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
 +  // and uses probe duration as a probabilistic headless signal.
 +  // navigator.platform is set from CAMOU_CONFIG at process start and never
 +  // changes, so a single lookup per process is safe.
-+  enum class SpoofedOS { Other, Mac, Win };
++  enum class SpoofedOS { Other, Mac, Win, Linux };
 +  static const SpoofedOS sSpoofedOS = []() {
 +    auto platform = MaskConfig::GetString("navigator.platform");
 +    if (!platform) return SpoofedOS::Other;
@@ -119,24 +121,82 @@ diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
 +    };
 +    if (starts_with("mac")) return SpoofedOS::Mac;
 +    if (starts_with("win")) return SpoofedOS::Win;
++    if (starts_with("linux")) return SpoofedOS::Linux;
 +    return SpoofedOS::Other;
 +  }();
++  // Every branch must mark the result as a system font, as the upstream path at
++  // the end of this function does: ComputeSystemFont copies the flag into
++  // FontFamilyList::is_system_font, and without it canvas's font setter
++  // overrides the size and cannot serialize the value, so
++  // `ctx.font = "caption"` was silently ignored ("10px sans-serif").
 +  if (sSpoofedOS == SpoofedOS::Mac) {
++    // Same per-keyword table as a real macOS (see the XP_MACOSX branch below).
 +    aName = u"-apple-system"_ns;
-+    aStyle.size = 13;
++    switch (aFontID) {
++      case LookAndFeel::FontID::Caption:
++      case LookAndFeel::FontID::Menu:
++        aStyle.size = 13;
++        break;
++      case LookAndFeel::FontID::SmallCaption:
++        aStyle.weight = gfxFontStyle::FontWeight::BOLD;
++        [[fallthrough]];
++      case LookAndFeel::FontID::MessageBox:
++      case LookAndFeel::FontID::StatusBar:
++        aStyle.size = 11;
++        break;
++      default:
++        aStyle.size = 12;
++        break;
++    }
++    aStyle.systemFont = true;
 +    return;
 +  }
 +  if (sSpoofedOS == SpoofedOS::Win) {
-+    aName = u"Segoe UI"_ns;
-+    aStyle.size = 12;
++    // Windows reports the system font in device pixels, so every keyword is
++    // 12 px x the display scale (30 px at 250 %). Use the DPR the identity
++    // presents, which is the one the page cross-checks it against.
++    static const float sWinScale = []() {
++      if (auto dpr = MaskConfig::GetDouble("window.devicePixelRatio");
++          dpr && *dpr > 0) {
++        return static_cast<float>(*dpr);
++      }
++      return 1.0f;
++    }();
++    // Form controls resolve -moz-button/-moz-field/-moz-list, which stock
++    // Windows maps to the dialog font "MS Shell Dlg 2" (nsLookAndFeel::
++    // GetLookAndFeelFont, aUseShellDlg); every other keyword is the
++    // NONCLIENTMETRICS face. Answering "Segoe UI" for all of them made
++    // getComputedStyle(button).fontFamily and form-control metrics differ from
++    // stock (Win11: 13.3333px "MS Shell Dlg 2" vs "Segoe UI", 22 vs 23 px).
++    switch (aFontID) {
++      case LookAndFeel::FontID::MozButton:
++      case LookAndFeel::FontID::MozField:
++      case LookAndFeel::FontID::MozList:
++        aName = u"MS Shell Dlg 2"_ns;
++        break;
++      default:
++        aName = u"Segoe UI"_ns;
++        break;
++    }
++    aStyle.size = 12.0f * sWinScale;
++    aStyle.systemFont = true;
 +    return;
 +  }
-+  // Linux / iPhone / unspoofed: fall through to upstream behavior.
++  if (sSpoofedOS == SpoofedOS::Linux) {
++    // A stock Ubuntu desktop: GTK interface font "Ubuntu 11" (11pt = 14.6667
++    // CSS px). Upstream's RFP value for Linux ("sans-serif" 15px) is what a
++    // resistFingerprinting user shows, not a regular desktop.
++    aName = u"Ubuntu"_ns;
++    aStyle.size = 14.6667f;
++    aStyle.systemFont = true;
++    return;
++  }
++  // iPhone / unspoofed: fall through to upstream behavior.
 +
  #if defined(XP_MACOSX) || defined(MOZ_WIDGET_UIKIT)
    aName = u"-apple-system"_ns;
    // Values taken from a macOS 10.15 system.
-@@ -9772,8 +9822,22 @@
+@@ -9802,8 +9910,22 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
                                        const Document* aDocument) {
    gfxFontStyle fontStyle;
    nsAutoString systemFontName;

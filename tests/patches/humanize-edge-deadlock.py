@@ -21,12 +21,14 @@ and can still land exactly on the edge:
     PageHandler.js:566   currentX >  boundingBox.width   <-- intermediate points
     PageHandler.js:589   x        >= boundingBox.width   <-- requested endpoint
 
-This is reachable rather than theoretical: MouseTrajectories.hpp:65-74 rounds
-every point to `int`, and :83-86 generates the curve's control knots with a
-+/-80px boundary around the endpoints -- so a target within 80px of an edge
-produces a curve that sweeps across the boundary column and lands on it exactly.
-Points *beyond* the edge are skipped safely by the `continue`; points *on* it
-are dispatched and hang.
+This is reachable rather than theoretical, and it stayed reachable when the
+generator was replaced. Trajectory points are rounded to whole pixels, and the
+path does not stay between its endpoints: measured over 400 random moves,
+Cursory's paths stray a median of 33-57px perpendicular to the straight line
+(up to 214px), and 69% leave the box spanned by their own endpoints entirely.
+So a target anywhere near an edge produces a curve that sweeps across the
+boundary column and lands on it exactly. Points *beyond* the edge are skipped
+safely by the `continue`; points *on* it are dispatched and hang.
 
 Run against a specific build:
     CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python3 tests/patches/humanize-edge-deadlock.py

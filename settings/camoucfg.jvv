@@ -88,6 +88,12 @@
     "mediaDevices:webcams": "int[>=0]",
     "mediaDevices:speakers": "int[>=0]",
     "mediaDevices:enabled": "bool",
+    "mediaDevices:microphoneLabels": "array[str]",
+    "mediaDevices:microphoneGroups": "array[str]",
+    "mediaDevices:webcamLabels": "array[str]",
+    "mediaDevices:webcamGroups": "array[str]",
+    "mediaDevices:speakerLabels": "array[str]",
+    "mediaDevices:speakerGroups": "array[str]",
     "media:spoof_codecs": "bool",
 
     "webGl:renderer$__WEBGL": "str",
