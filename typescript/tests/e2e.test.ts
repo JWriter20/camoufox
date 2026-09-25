@@ -516,14 +516,35 @@ describe.runIf(ENABLED)("e2e: the TS launcher drives a real Camoufox", () => {
 					}
 					// close() killed the Xvfb it spawned.
 					expect(display.proc ?? null).toBeNull();
-					// Headful on Xvfb must present the same device as headless.
+					results[`${identity}:virtual`] = probe;
+
+					// Parity: Python's headless="virtual" on the same binary.
+					const py = await pythonProbe("virtual", kwargsFor(identity));
+					expect(stable(probe)).toEqual(stable(py.probe));
+				},
+				240_000,
+			);
+
+			it.runIf(identity === "fpgen_linux_de" && process.platform === "linux")(
+				"the browser honours the config headful, as it does headless",
+				async (ctx) => {
+					const config = results[`${identity}:config`];
+					const missing = unknownToBinary(config);
+					if (missing.length)
+						ctx.skip(
+							`binary predates the launcher; it does not know: ${missing.join(", ")}`,
+						);
+					const probe = results[`${identity}:virtual`];
+					expect(probe, "the virtual-display test ran").toBeTruthy();
+					expectMatchesConfig(probe, config, true);
+					// A headful window presents the same device as headless. On a
+					// runner with no media hardware, published beta.31 never settled
+					// enumerateDevices() headful while headless answered.
 					const { media: _m, ...headful } = stable(probe);
 					const { media: _h, ...headless } = stable(
 						results[`${identity}:headless`],
 					);
 					expect(headful).toEqual(headless);
-					if (unknownToBinary(results[`${identity}:config`]).length === 0)
-						expectMatchesConfig(probe, results[`${identity}:config`], true);
 				},
 				240_000,
 			);

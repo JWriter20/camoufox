@@ -9,7 +9,8 @@ the same binary and the same identity:
 
 Prints one JSON object: {"probe": <probe result>, "config": <CAMOU_CONFIG>}.
 `mode` is "config-only" (launch_options() alone), "headless" (Camoufox(...) -> new_page),
-"persistent" (Camoufox(persistent_context=True, user_data_dir=...)) or "context"
+"persistent" (Camoufox(persistent_context=True, user_data_dir=...)), "virtual"
+(Camoufox(headless="virtual")) or "context"
 (Camoufox(...) -> NewContext(browser, preset=req["preset"]) -> new_page).
 
 stdout carries the JSON and nothing else: pythonlib prints to stdout (e.g.
@@ -57,6 +58,9 @@ def run(req):
             return {'probe': page.evaluate(PROBE), 'config': config}
     with tempfile.TemporaryDirectory() as profile:
         extra = {'persistent_context': True, 'user_data_dir': profile} if req['mode'] == 'persistent' else {}
+        if req['mode'] == 'virtual':
+            extra = {'headless': 'virtual'}
+            kwargs = {k: v for k, v in kwargs.items() if k != 'headless'}
         with Camoufox(**kwargs, **extra) as browser:
             page = browser.new_page()
             page.goto(req['url'])
