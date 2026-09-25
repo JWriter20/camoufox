@@ -18,7 +18,8 @@
     "camoufox": "dist/__main__.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "type": "module",
   "keywords": [
@@ -41,7 +42,7 @@
   "engines": {
     "node": ">= 22.15"
   },
-  "license": "MPL-2.0",
+  "license": "MIT",
   "description": "Camoufox: TypeScript launcher for the Camoufox anti-detect Firefox browser. A port of the Python wrapper.",
   "//playwright-core": "Range mirrors pythonlib/pyproject.toml's `playwright = \"<1.63\"`: every Playwright minor is free to change Juggler, so the ceiling is bumped deliberately, with a run of `make tests`. The dev pin (1.62.0) is the version the Python venv resolves, so the goldens compare like with like.",
   "packageManager": "pnpm@10.33.4",

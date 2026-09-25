@@ -173,3 +173,10 @@ workflow. It type-checks, lints, tests, builds, runs `scripts/check-pack.mjs`
 (the version must equal pythonlib's; every data file must be in the tarball;
 the tarball must install and import in an empty project), then publishes with
 npm trusted publishing -- no token is stored.
+
+## Licence
+
+MIT, like the Python package ([`LICENSE`](LICENSE)); the browser itself is
+MPL-2.0. The package contains ports of fpgen (Apache-2.0), CPython's `random`
+and NumPy's random generators; their notices are in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), which ships with it.
