@@ -76,6 +76,48 @@ export interface EnsureModelOptions {
 
 const inflight = new Map<string, Promise<string>>();
 
+const LOCK_DIR = ".install.lock";
+/** A lock older than this was left by a process that died holding it. */
+const STALE_LOCK_MS = 10 * 60 * 1000;
+
+/**
+ * Run `fn` holding `dir`'s install lock, across processes. `inflight` only
+ * dedupes within one process; several processes installing into an empty cache
+ * at once (a worker pool on a fresh machine, or vitest's parallel files) would
+ * otherwise each download the model, and one's install deleted the values.dat
+ * another had just decompressed and was about to read. mkdir is atomic on every
+ * platform, so the lock is a directory.
+ */
+async function withInstallLock<T>(
+	dir: string,
+	fn: () => Promise<T>,
+): Promise<T> {
+	fs.mkdirSync(dir, { recursive: true });
+	const lock = path.join(dir, LOCK_DIR);
+	for (;;) {
+		try {
+			fs.mkdirSync(lock);
+			break;
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+			try {
+				if (Date.now() - fs.statSync(lock).mtimeMs > STALE_LOCK_MS) {
+					fs.rmSync(lock, { recursive: true, force: true });
+					continue;
+				}
+			} catch {
+				continue; // released between the mkdir and the stat
+			}
+			await new Promise((resolve) => setTimeout(resolve, 200));
+		}
+	}
+	try {
+		return await fn();
+	} finally {
+		fs.rmSync(lock, { recursive: true, force: true });
+	}
+}
+
 /**
  * Make sure the pinned model is installed and values.dat is decompressed.
  * Downloads (TLS on, sha256-checked) only when it is missing. Returns the
@@ -86,11 +128,16 @@ export function ensureModel(options: EnsureModelOptions = {}): Promise<string> {
 	const running = inflight.get(dir);
 	if (running && !options.force) return running;
 	const job = (async () => {
-		if (options.force || !isModelInstalled(dir)) {
-			const archive = await downloadArchive(MODEL_PIN, options.fetchImpl);
-			installArchive(archive, dir, MODEL_PIN);
-		}
-		await decompressValuesDat(dir);
+		// The unlocked check is the fast path for an installed model; the
+		// locked one decides, since another process may have just installed it.
+		if (!options.force && isModelInstalled(dir) && datIsReady(dir)) return dir;
+		await withInstallLock(dir, async () => {
+			if (options.force || !isModelInstalled(dir)) {
+				const archive = await downloadArchive(MODEL_PIN, options.fetchImpl);
+				installArchive(archive, dir, MODEL_PIN);
+			}
+			await decompressValuesDat(dir);
+		});
 		return dir;
 	})();
 	inflight.set(dir, job);
@@ -157,10 +204,18 @@ export function installArchive(
 ): void {
 	verifyArchive(archive, pin);
 	fs.mkdirSync(dir, { recursive: true });
+	let previous = "";
+	try {
+		previous = fs.readFileSync(path.join(dir, STAMP_FILE), "utf-8").trim();
+	} catch {}
 	// An interrupted install must not leave a stamp over a partial model.
 	fs.rmSync(path.join(dir, STAMP_FILE), { force: true });
-	// A stale decompressed values.dat from an older model would be trusted.
-	fs.rmSync(path.join(dir, VALUES_DAT), { force: true });
+	// A values.dat decompressed from a DIFFERENT model would be trusted (its
+	// size is all that is checked), so drop it -- but only then: reinstalling
+	// the same model must not pull the file out from under a process reading it.
+	if (previous !== pin.sha256) {
+		fs.rmSync(path.join(dir, VALUES_DAT), { force: true });
+	}
 	const zip = new AdmZip(archive);
 	for (const name of pin.files) {
 		if (path.basename(name) !== name) {
@@ -192,6 +247,14 @@ function expectedDatSize(valuePairs: readonly ValuePair[]): number {
 		if (offset + length > end) end = offset + length;
 	}
 	return end;
+}
+
+function datIsReady(dir: string): boolean {
+	try {
+		return datIsComplete(path.join(dir, VALUES_DAT), readValuePairs(dir));
+	} catch {
+		return false;
+	}
 }
 
 function datIsComplete(
@@ -275,6 +338,9 @@ export class FpgenModel {
 	readonly network: BayesianNetwork;
 	readonly valuePairs: readonly ValuePair[];
 	readonly datPath: string;
+	/** Held open for the model's lifetime: one open per lookup was a syscall
+	 * per call, and a path reopened each time fails if the file is replaced. */
+	private fd: number | null = null;
 
 	constructor(readonly dir: string) {
 		this.valuePairs = readValuePairs(dir);
@@ -301,27 +367,30 @@ export class FpgenModel {
 		const sorted = ids
 			.map((id, n) => [base85ToInt(id), n] as const)
 			.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-		const fd = fs.openSync(this.datPath, "r");
-		try {
-			for (const [index, n] of sorted) {
-				const pair = this.valuePairs[index];
-				if (pair === undefined) {
-					throw new RangeError(`list index out of range: value id ${index}`);
-				}
-				const [offset, length] = pair;
-				const buf = Buffer.allocUnsafe(length);
-				let read = 0;
-				while (read < length) {
-					const got = fs.readSync(fd, buf, read, length - read, offset + read);
-					if (got === 0) break;
-					read += got;
-				}
-				out[n] = buf.toString("utf-8", 0, read);
+		if (this.fd === null) this.fd = fs.openSync(this.datPath, "r");
+		const fd = this.fd;
+		for (const [index, n] of sorted) {
+			const pair = this.valuePairs[index];
+			if (pair === undefined) {
+				throw new RangeError(`list index out of range: value id ${index}`);
 			}
-		} finally {
-			fs.closeSync(fd);
+			const [offset, length] = pair;
+			const buf = Buffer.allocUnsafe(length);
+			let read = 0;
+			while (read < length) {
+				const got = fs.readSync(fd, buf, read, length - read, offset + read);
+				if (got === 0) break;
+				read += got;
+			}
+			out[n] = buf.toString("utf-8", 0, read);
 		}
 		return out;
+	}
+
+	/** Release the values.dat handle. The model reopens it on next use. */
+	close(): void {
+		if (this.fd !== null) fs.closeSync(this.fd);
+		this.fd = null;
 	}
 }
 
@@ -349,5 +418,6 @@ export function getModel(dir: string = modelDir()): FpgenModel {
 
 /** Drop loaded models (tests, or after changing CAMOUFOX_FPGEN_DATA). */
 export function resetModelCache(): void {
+	for (const model of loaded.values()) model.close();
 	loaded.clear();
 }
