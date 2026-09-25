@@ -75,6 +75,34 @@ def validate_ip(ip: str) -> None:
         raise InvalidIP(f"Invalid IP address: {ip}")
 
 
+def proxy_exit_geo(proxy: str) -> Tuple[str, str]:
+    """
+    The exit IP of `proxy` and that IP's timezone, looked up through the proxy.
+    Raises InvalidIP when the lookup fails: a context that silently kept the
+    host's WebRTC IP and timezone behind a proxy would be a leak.
+    """
+    try:
+        resp = requests.get(
+            "http://ip-api.com/json?fields=status,message,query,timezone",
+            proxies=Proxy.as_requests_proxy(proxy),
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as exception:
+        raise InvalidIP(f"{PROXY_LOOKUP_FAILED}: {exception}") from exception
+    if data.get("status") != "success" or not data.get("timezone"):
+        raise InvalidIP(f"{PROXY_LOOKUP_FAILED}: {data.get('message') or data}")
+    validate_ip(data["query"])
+    return data["query"], data["timezone"]
+
+
+PROXY_LOOKUP_FAILED = (
+    "Could not look up the proxy's exit IP and timezone. Pass webrtc_ip and "
+    "timezone_id explicitly to skip the lookup"
+)
+
+
 @lru_cache(maxsize=None)
 def public_ip(proxy: Optional[str] = None) -> str:
     """

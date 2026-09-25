@@ -66,7 +66,8 @@ const context = await NewContext(browser, {
 ```
 
 When a `proxy` is given and no `webrtc_ip`/`timezoneId` is, both are resolved
-from the proxy's exit IP.
+from the proxy's exit IP. If that lookup fails, `NewContext()` throws
+`InvalidIP` rather than open a context that would show the host's values.
 
 ### Server mode
 

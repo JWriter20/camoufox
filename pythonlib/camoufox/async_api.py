@@ -1,9 +1,6 @@
 import asyncio
-import json as _json
-import urllib.request
 from functools import partial
-from typing import Any, Dict, Optional, Union, overload
-from urllib.parse import urlparse
+from typing import Any, Dict, Optional, Tuple, Union, overload
 
 from playwright.async_api import (
     Browser,
@@ -16,6 +13,7 @@ from typing_extensions import Literal
 from camoufox.virtdisplay import VirtualDisplay
 
 from .fingerprints import generate_context_fingerprint
+from .ip import Proxy, proxy_exit_geo
 from .utils import (
     async_attach_vd,
     attach_no_viewport_default,
@@ -178,31 +176,9 @@ async def _launch(
     return await async_attach_vd(browser, virtual_display)
 
 
-def _proxy_url_with_creds(proxy: Dict[str, str]) -> str:
-    """Builds a proxy URL string with embedded credentials."""
-    parsed = urlparse(proxy.get("server", ""))
-    user = proxy.get("username", "")
-    pwd = proxy.get("password", "")
-    if user and pwd:
-        return f"{parsed.scheme}://{user}:{pwd}@{parsed.netloc}"
-    return proxy.get("server", "")
-
-
-async def _resolve_proxy_geo(proxy: Dict[str, str]) -> Dict[str, Optional[str]]:
-    """Queries ip-api.com through the proxy for the exit IP and timezone."""
-    proxy_url = _proxy_url_with_creds(proxy)
-
-    def _fetch() -> Dict[str, Optional[str]]:
-        handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-        opener = urllib.request.build_opener(handler)
-        try:
-            with opener.open("http://ip-api.com/json?fields=query,timezone", timeout=10) as resp:
-                data = _json.loads(resp.read())
-                return {"ip": data.get("query") or None, "timezone": data.get("timezone") or None}
-        except Exception:
-            return {"ip": None, "timezone": None}
-
-    return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+async def _resolve_proxy_geo(proxy: Dict[str, str]) -> Tuple[str, str]:
+    """The proxy's exit IP and timezone, looked up off the event loop."""
+    return await asyncio.to_thread(proxy_exit_geo, Proxy(**proxy).as_string())
 
 
 async def AsyncNewContext(
@@ -230,16 +206,16 @@ async def AsyncNewContext(
         ff_version: Firefox version string for UA patching.
         webrtc_ip: IPv4 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
+            Unless webrtc_ip and timezone_id are both given, they are looked up from the
+            proxy's exit IP; InvalidIP is raised if that lookup fails.
         geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
         **context_kwargs: Additional Playwright new_context() options.
     """
     # Auto-derive WebRTC IP and timezone from proxy's exit IP when not explicitly provided
     if proxy and (not webrtc_ip or "timezone_id" not in context_kwargs):
-        geo = await _resolve_proxy_geo(proxy)
-        if not webrtc_ip:
-            webrtc_ip = geo["ip"]
-        if "timezone_id" not in context_kwargs and geo["timezone"]:
-            context_kwargs["timezone_id"] = geo["timezone"]
+        exit_ip, timezone = await _resolve_proxy_geo(proxy)
+        webrtc_ip = webrtc_ip or exit_ip
+        context_kwargs.setdefault("timezone_id", timezone)
 
     fp = await asyncio.get_event_loop().run_in_executor(
         None,
