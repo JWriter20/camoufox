@@ -1118,12 +1118,15 @@ export async function runExtendedChecks(): Promise<
       };
     })();
 
-    // hardwareConcurrency should be a common value
+    // hardwareConcurrency should be a common value. 18 and 22 are real:
+    // Intel Meteor Lake laptops (Core Ultra 5 125H = 18 threads, Core Ultra 7
+    // 155H = 22), and both are in the recorded presets. Every value pythonlib
+    // can present must be here -- ci/tests/test_ci.py checks it.
     result.trashDetection.plausibleHWC = (() => {
       const hwc = navigator.hardwareConcurrency;
       const common = [
-        1, 2, 4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 36, 40, 48, 56, 64,
-        96, 128, 256,
+        1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 40, 48, 56,
+        64, 96, 128, 256,
       ];
       const isCommon = common.indexOf(hwc) !== -1;
       return {
