@@ -88,7 +88,7 @@
  "warnings": [
   {
    "category": "LeakWarning",
-   "message": "Passing your own fingerprint is not recommended. BrowserForge fingerprints are automatically generated within Camoufox based on the provided `os` and `screen` constraints.\nIf this is intentional, pass `i_know_what_im_doing=True`."
+   "message": "Passing your own fingerprint is not recommended. Fingerprints are automatically generated within Camoufox based on the provided `os` and `screen` constraints.\nIf this is intentional, pass `i_know_what_im_doing=True`."
   },
   {
    "category": "LeakWarning",

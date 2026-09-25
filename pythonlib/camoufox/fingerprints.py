@@ -1789,7 +1789,7 @@ def generate_context_fingerprint(
     Generate fingerprint values for a single per-context identity.
     Returns a dict with init_script (JS string) and context_options (Playwright options).
 
-    By default, uses BrowserForge for infinite unique synthetic fingerprints.
+    By default, fpgen generates a unique synthetic fingerprint.
     Pass a preset dict to use a real fingerprint preset instead.
 
     Parameters:
@@ -1830,21 +1830,21 @@ def generate_context_fingerprint(
         elif 'Linux' in plat or 'linux' in plat:
             os_name = 'linux'
 
-        # Add fonts (BrowserForge doesn't generate these)
+        # Add fonts (fpgen.yml does not map these yet)
         if 'fonts' not in config:
             try:
                 config['fonts'] = _generate_random_font_subset(os_name, seed=identity_seed(config, _salt))
             except Exception:
                 pass
 
-        # Add voices (BrowserForge doesn't generate these)
+        # Add voices (fpgen.yml does not map these yet)
         if 'voices' not in config:
             try:
                 config['voices'] = _generate_random_voice_subset(os_name, seed=identity_seed(config, _salt))
             except Exception:
                 pass
 
-        # Derive oscpu if BrowserForge didn't provide it
+        # Derive oscpu if the fingerprint didn't provide it
         if 'navigator.oscpu' not in config:
             plat = config.get('navigator.platform', '')
             if plat == 'MacIntel':
@@ -1854,7 +1854,7 @@ def generate_context_fingerprint(
             elif 'Linux' in plat or 'linux' in plat:
                 config['navigator.oscpu'] = 'Linux x86_64'
 
-        # Sample WebGL vendor/renderer from database (BrowserForge doesn't generate these)
+        # Sample WebGL vendor/renderer from database (fpgen.yml does not map these yet)
         if not config.get('webGl:vendor') or not config.get('webGl:renderer'):
             _os_map = {'macos': 'mac', 'linux': 'lin', 'windows': 'win'}
             _target_os = _os_map.get(os or '', None)
@@ -1880,7 +1880,7 @@ def generate_context_fingerprint(
             except Exception:
                 pass
 
-        # Build source dicts from BrowserForge config for init_values
+        # Build source dicts from the fingerprint config for init_values
         nav = {
             'platform': config.get('navigator.platform'),
             'hardwareConcurrency': config.get('navigator.hardwareConcurrency'),
@@ -1974,7 +1974,7 @@ def _cast_to_properties(
     ff_version: Optional[str] = None,
 ) -> None:
     """
-    Casts Browserforge fingerprints to Camoufox config properties.
+    Casts a generated fingerprint to Camoufox config properties.
     """
     for key, data in bf_dict.items():
         # Ignore non-truthy values

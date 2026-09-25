@@ -86,11 +86,11 @@
  "warnings": [
   {
    "category": "LeakWarning",
-   "message": "Manually setting screen & window properties is not recommended. Screen dimensions are randomly generated within Camoufox based on the provided screen constraints. See here: https://github.com/daijro/camoufox/tree/main/pythonlib#browserforge-integration.\nIf this is intentional, pass `i_know_what_im_doing=True`."
+   "message": "Manually setting screen & window properties is not recommended. Screen dimensions are randomly generated within Camoufox based on the provided screen constraints.\nIf this is intentional, pass `i_know_what_im_doing=True`."
   },
   {
    "category": "LeakWarning",
-   "message": "Passing your own fingerprint is not recommended. BrowserForge fingerprints are automatically generated within Camoufox based on the provided `os` and `screen` constraints.\nIf this is intentional, pass `i_know_what_im_doing=True`."
+   "message": "Passing your own fingerprint is not recommended. Fingerprints are automatically generated within Camoufox based on the provided `os` and `screen` constraints.\nIf this is intentional, pass `i_know_what_im_doing=True`."
   }
  ],
  "stdout": "",
