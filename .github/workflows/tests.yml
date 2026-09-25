@@ -648,7 +648,11 @@ jobs:
         run: |
           set -euo pipefail
           python -m camoufox fetch
-          install_dir="$(python -m camoufox path)"
+          # The ACTIVE build's directory, resolved the way the launcher resolves
+          # it. `camoufox path` prints the cache root, and multiversion installs
+          # each build under browsers/<channel>/<version>/ -- so reading the
+          # binary from the root failed every driver-only run since #772.
+          install_dir="$(python -c 'from camoufox.pkgman import camoufox_path; print(camoufox_path(download_if_missing=False))')"
           echo "install dir: $install_dir"
           # Which browser did we actually get? This path does not build, it
           # downloads the current release -- correct for a driver change, since
