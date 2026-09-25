@@ -8,6 +8,7 @@ from playwright._impl._driver import compute_driver_executable
 
 from camoufox.pkgman import LOCAL_DATA
 from camoufox.utils import launch_options
+from camoufox.virtdisplay import VirtualDisplay
 
 LAUNCH_SCRIPT: Path = LOCAL_DATA / "launchServer.js"
 
@@ -60,7 +61,20 @@ def launch_server(**kwargs) -> NoReturn:
             )
         kwargs.pop(unsupported, None)
 
-    config = launch_options(**kwargs)
+    virtual_display = None
+    if kwargs.get('headless') == 'virtual':
+        virtual_display = VirtualDisplay(debug=kwargs.get('debug'))
+        kwargs['virtual_display'] = virtual_display.get()
+        kwargs['headless'] = False
+    try:
+        _serve(launch_options(**kwargs))
+    finally:
+        if virtual_display:
+            virtual_display.kill()
+
+
+def _serve(config: Dict[str, Any]) -> NoReturn:
+    """Run launchServer.js with `config` until the Node process exits."""
     nodejs = get_nodejs()
 
     data = orjson.dumps(to_camel_case_dict(config))
