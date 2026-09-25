@@ -1,7 +1,4 @@
-import json as _json
-import urllib.request
-from typing import Any, Dict, Optional, Union, overload
-from urllib.parse import urlparse
+from typing import Any, Dict, Optional, Tuple, Union, overload
 
 from playwright.sync_api import (
     Browser,
@@ -14,6 +11,7 @@ from typing_extensions import Literal
 from camoufox.virtdisplay import VirtualDisplay
 
 from .fingerprints import generate_context_fingerprint
+from .ip import Proxy, proxy_exit_geo
 from .utils import (
     attach_no_viewport_default,
     attach_stock_media_defaults,
@@ -156,27 +154,9 @@ def NewBrowser(
             cpu_affinity.restore(pid, previous)
 
 
-def _proxy_url_with_creds(proxy: Dict[str, str]) -> str:
-    """Builds a proxy URL string with embedded credentials."""
-    parsed = urlparse(proxy.get("server", ""))
-    user = proxy.get("username", "")
-    pwd = proxy.get("password", "")
-    if user and pwd:
-        return f"{parsed.scheme}://{user}:{pwd}@{parsed.netloc}"
-    return proxy.get("server", "")
-
-
-def _resolve_proxy_geo(proxy: Dict[str, str]) -> Dict[str, Optional[str]]:
-    """Queries ip-api.com through the proxy for the exit IP and timezone."""
-    proxy_url = _proxy_url_with_creds(proxy)
-    handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-    opener = urllib.request.build_opener(handler)
-    try:
-        with opener.open("http://ip-api.com/json?fields=query,timezone", timeout=10) as resp:
-            data = _json.loads(resp.read())
-            return {"ip": data.get("query") or None, "timezone": data.get("timezone") or None}
-    except Exception:
-        return {"ip": None, "timezone": None}
+def _resolve_proxy_geo(proxy: Dict[str, str]) -> Tuple[str, str]:
+    """The proxy's exit IP and timezone."""
+    return proxy_exit_geo(Proxy(**proxy).as_string())
 
 
 def NewContext(
@@ -204,16 +184,16 @@ def NewContext(
         ff_version: Firefox version string for UA patching.
         webrtc_ip: IPv4 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
+            Unless webrtc_ip and timezone_id are both given, they are looked up from the
+            proxy's exit IP; InvalidIP is raised if that lookup fails.
         geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
         **context_kwargs: Additional Playwright new_context() options.
     """
     # Auto-derive WebRTC IP and timezone from proxy's exit IP when not explicitly provided
     if proxy and (not webrtc_ip or "timezone_id" not in context_kwargs):
-        geo = _resolve_proxy_geo(proxy)
-        if not webrtc_ip:
-            webrtc_ip = geo["ip"]
-        if "timezone_id" not in context_kwargs and geo["timezone"]:
-            context_kwargs["timezone_id"] = geo["timezone"]
+        exit_ip, timezone = _resolve_proxy_geo(proxy)
+        webrtc_ip = webrtc_ip or exit_ip
+        context_kwargs.setdefault("timezone_id", timezone)
 
     fp = generate_context_fingerprint(preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip)
 
