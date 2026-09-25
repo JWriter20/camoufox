@@ -8,11 +8,13 @@ pass", not two.
 ```
 resolve ──┬─ static ────────── tribal rules, skiplist, self-tests   (seconds)
           ├─ pythonlib ─────── the package's own tests               (a minute)
+          ├─ typescript ────── the npm package: types, lint, golden parity
           └─ build ──┬─ playwright × 6 shards        (conformance + our own)
                      ├─ skiplist audit ───── every skip must still fail
                      ├─ native ───────────── leaks, contexts         (ours)
                      ├─ patch guards ─────── one per spoofing patch
                      ├─ build-tester ─────── 8 fingerprint profiles
+                     ├─ typescript-browser ─ the npm launcher end to end, against Python
                      └─ sundial ──────────── stealth grade  (off: see below)
                                     │
                                  summary ──► one comment on the PR
@@ -526,17 +528,23 @@ Each tier gates the next, so a two-second lint failure never reaches the build:
 
 ```
 0  static    lint, self-tests, settled decisions        seconds
-1  unit      pythonlib                                  ~1 min
+1  unit      pythonlib, typescript                      ~1 min
 2  browser   build  (patches/additions/settings/assets/upstream.sh/Makefile/scripts changed)
-             fetch  (anything else -- driver changes test against the published release)
-3a smoke     patch guards, build-tester                 ~15 min
+             fetch  (anything else, when the published release has this tree's browser sources)
+3a smoke     patch guards, build-tester,
+             typescript-browser                         ~15 min
 3b full      Playwright x2, leaks, stealth              ~40 min
 4  gate      the required check
 ```
 
-**Driver-only pull requests never build.** There is nothing new to compile, so
-`fetch-browser` downloads the published release and the browser suites run
-against the build users are actually on — a minute instead of seventy.
+**Driver-only pull requests test the published release, when it matches.**
+There is nothing new to compile, so `fetch-browser` downloads the published
+release and the browser suites run against the build users are actually on — a
+minute instead of seventy. That is only right while the release was built from
+this tree's browser sources: once a browser change has merged but not been
+released, the guards in the checkout would judge an older browser. So the scope
+step compares the browser sources against the release tag, and when they
+differ it builds instead, which restores the base branch's cached browser.
 
 **Changing Juggler's JavaScript does not rebuild the browser.** Measured on a
 real build: ccache reported a **98.63%** hit rate, so almost none of those 24
@@ -613,6 +621,7 @@ python3 -m ci.run_native     --subset rules            # no browser needed
 python3 -m ci.run_native     --subset browser --binary path/to/camoufox-bin
 python3 -m ci.run_sundial    --binary path/to/camoufox-bin
 python3 -m ci.summarize      --results-dir .ci-work/results
+python3 -m ci.run_typescript                  # the npm package; add --browser <camoufox-bin> for end to end
 ```
 
 Each writes one result file to `.ci-work/results/`. `ci/summarize.py` folds the

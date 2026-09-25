@@ -338,7 +338,7 @@ Camoufox is a Firefox fork engineered for web scraping and AI agents. It is head
 
 * **Built for AI agents** 🤖
   * Minimal, debloated Firefox - fast to launch, cheap to run
-  * Drop-in Playwright compatibility via Python interface
+  * Drop-in Playwright compatibility from Python and JavaScript/TypeScript
   * Invisible to anti-bot systems so you can run your agent cluster locally or in the cloud without being flagged
 
 - **Undetectable by design** 🎭
@@ -362,7 +362,7 @@ Camoufox is a Firefox fork engineered for web scraping and AI agents. It is head
   * No CSS animations 💨
 
 - Debloated & optimized for memory efficiency ⚡
-- [PyPi package](https://pypi.org/project/camoufox/) for updates & auto fingerprint injection 📦
+- [PyPI](https://pypi.org/project/camoufox/) and npm packages for updates & auto fingerprint injection 📦
 - Stays up to date with the latest Firefox version 🕓
 
 ---
@@ -408,6 +408,19 @@ async with AsyncCamoufox() as browser:
 ```
 
 [[Installation & usage](https://camoufox.com/python/)]
+
+## JavaScript / TypeScript Usage
+
+```javascript
+import { Camoufox } from "@camoufox/camoufox";
+
+const browser = await Camoufox({ headless: true });
+const page = await browser.newPage();
+await page.goto("https://example.com");
+await browser.close();
+```
+
+The npm package is a port of the Python one, with the same options and the same identities. [[TypeScript package](typescript/README.md)]
 
 ---
 
