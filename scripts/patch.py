@@ -6,12 +6,11 @@ Based on LibreWolf's patch script:
 https://gitlab.com/librewolf-community/browser/source/-/blob/main/scripts/librewolf-patches.py
 
 Run:
-    python3 scripts/init-patch.py <version> <release>
+    python3 scripts/patch.py <version> <release>
 """
 
 import hashlib
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -22,7 +21,6 @@ from _mixin import (
     get_moz_target,
     get_options,
     list_patches,
-    patch,
     run,
     temp_cd,
 )
@@ -70,30 +68,8 @@ class Patcher:
             self._update_mozconfig()
 
             if not options.mozconfig_only:
-                # Apply patches with roverfox patches at the very end
-                all_patches = list_patches()
-                # Normalize paths and partition into non-roverfox and roverfox
-                non_roverfox = []
-                roverfox = []
-                for p in all_patches:
-                    norm = os.path.normpath(p)
-                    parts = norm.split(os.sep)
-                    if 'roverfox' in parts:
-                        roverfox.append(p)
-                    else:
-                        non_roverfox.append(p)
-
-                # Track patch failures
                 failed_patches = []
-
-                # Apply non-roverfox patches first
-                for patch_file in non_roverfox:
-                    rejects = self._apply_and_check(patch_file)
-                    if rejects:
-                        failed_patches.append((patch_file, rejects))
-
-                # Apply roverfox patches last
-                for patch_file in roverfox:
+                for patch_file in list_patches():
                     rejects = self._apply_and_check(patch_file)
                     if rejects:
                         failed_patches.append((patch_file, rejects))

@@ -28,11 +28,10 @@
 #   rust + cargo       Required by `./mach bootstrap` / the build. Installed
 #                      via rustup (not available as a Homebrew keg we control
 #                      the toolchain version of).
-#   p7zip (`7z`)       scripts/package.py + package-helper.sh use `7z`.
+#   p7zip (`7z`)       scripts/package.py uses `7z`.
 #   aria2 (`aria2c`)   `make fetch` downloads the Firefox source tarball.
-#   go / golang        Building the launcher (legacy/launcher).
 #   msitools           `msiextract` — Windows font/redist extraction.
-#   wget               scripts/mozfetch.sh + setup-wasi.
+#   wget               Downloads during `make setup` and `mach bootstrap`.
 #   sqlite             libsqlite3 headers for the Linux build target.
 #   git, curl, make,   Core build tooling. Present by default on macOS via
 #   clang, unzip,      the Xcode Command Line Tools; installed explicitly on
@@ -136,7 +135,7 @@ install_macos() {
 
   # Note: `p7zip` provides the `7z` binary the scripts call; the newer
   # `sevenzip` formula only ships `7zz`.
-  local formulae=(python@3.14 aria2 p7zip go msitools wget sqlite)
+  local formulae=(python@3.14 aria2 p7zip msitools wget sqlite)
   log "Installing Homebrew formulae: ${formulae[*]}"
   brew install "${formulae[@]}"
 
@@ -149,9 +148,9 @@ install_macos() {
 install_linux() {
   log "Detected Linux."
 
-  local debs="python3 python3-dev python3-pip p7zip-full golang-go msitools wget aria2 libsqlite3-dev build-essential make git curl unzip rsync ca-certificates"
-  local rpms="python3 python3-devel p7zip golang msitools wget aria2 sqlite-devel gcc gcc-c++ make git curl unzip rsync ca-certificates"
-  local pacman_pkgs="python python-pip p7zip go msitools wget aria2 sqlite base-devel git curl unzip rsync ca-certificates"
+  local debs="python3 python3-dev python3-pip p7zip-full msitools wget aria2 libsqlite3-dev build-essential make git curl unzip rsync ca-certificates"
+  local rpms="python3 python3-devel p7zip msitools wget aria2 sqlite-devel gcc gcc-c++ make git curl unzip rsync ca-certificates"
+  local pacman_pkgs="python python-pip p7zip msitools wget aria2 sqlite base-devel git curl unzip rsync ca-certificates"
 
   if have apt-get; then
     log "Using apt-get..."
