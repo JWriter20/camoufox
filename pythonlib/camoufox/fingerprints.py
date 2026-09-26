@@ -3,10 +3,8 @@ import json
 import os
 import re
 import secrets
-import sqlite3
 import unicodedata
 from dataclasses import asdict, dataclass, is_dataclass
-from functools import lru_cache
 from pathlib import Path
 from random import Random, choice, randint, randrange
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
@@ -14,7 +12,6 @@ from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 from camoufox._warnings import FallbackWarning
 from camoufox.ip import valid_ipv4, validate_ip
 from camoufox.pkgman import load_yaml
-from camoufox.webgl import sample_webgl
 
 # Load the fpgen mapping file
 FPGEN_DATA = load_yaml('fpgen.yml')
@@ -36,21 +33,6 @@ def _generator():
 
         _FP_GENERATOR = Generator()
     return _FP_GENERATOR
-
-
-@lru_cache(maxsize=None)
-def firefox_gpus(os_name: str) -> FrozenSet[Tuple[str, str]]:
-    """Every (vendor, renderer) that fpgen has seen Firefox report on this OS.
-
-    A GPU outside this set has no recorded WebGL parameters behind it, so an
-    identity naming it could only borrow another device's.
-    """
-    import fpgen
-
-    return frozenset(
-        (result.value['vendor'], result.value['renderer'])
-        for result in fpgen.trace(target='gpu', browser='Firefox', os=_FPGEN_OS[os_name.lower()])
-    )
 
 
 @dataclass
@@ -1292,8 +1274,8 @@ def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
 
 # -- WebGL <-> screen coherence (#729) ---------------------------------------
 #
-# BrowserForge picks navigator/screen; the GPU is drawn separately from
-# webgl_data.db weighted only by OS. Nothing ties the two together, so the
+# fpgen picks navigator/screen; the GPU is drawn separately, weighted only by
+# OS (camoufox.webgl). Nothing ties the two together, so the
 # synthetic path can emit pairs no real machine ships -- a discrete GPU behind
 # a 1024x600 netbook panel. Consistency checks (Pixelscan, Fingerprint.com)
 # read that as masking even when every individual value is plausible alone.
@@ -1331,8 +1313,8 @@ _SOFTWARE_RENDERERS: Tuple[str, ...] = (
     'Generic Renderer',
 )
 
-# Discrete NVIDIA, plus the AMD R5/R7/R9/RX/Vega bucket. Everything else in
-# webgl_data.db reaches down into netbook territory and gets no floor at all:
+# Discrete NVIDIA, plus the AMD R5/R7/R9/RX/Vega bucket. Every other GPU
+# Firefox reports reaches down into netbook territory and gets no floor at all:
 # the "Intel(R) HD Graphics" bucket swallows the GMA 3150 netbook chipset,
 # "Radeon HD 3200 Graphics" is Gecko's catch-all for a bare "AMD"/"Radeon"
 # (the C-50/E-350 netbook APUs included), and Apple silicon drives arbitrary
@@ -1442,57 +1424,6 @@ def gpu_screen_is_plausible(
     if _renderer_bucket(renderer) not in _DISCRETE_GPU_BUCKETS:
         return True
     return width * height > _NETBOOK_MAX_PIXELS
-
-
-def sample_webgl_for_screen(
-    target_os: str,
-    width: Optional[int] = None,
-    height: Optional[int] = None,
-    attempts: int = 32,
-    seed: Optional[int] = None,
-) -> Dict[str, str]:
-    """Sample a WebGL profile that is coherent with the screen already chosen.
-
-    Rejection sampling, so the GPU keeps webgl_data.db's real OS-weighted
-    distribution -- we only drop draws that contradict the screen. The screen
-    itself is left alone on purpose: it has already been reconciled with the
-    real display and the window box (clamp_screen_to_display,
-    fix_screen_no_taskbar, clamp_window_dimensions, clamp_window_position),
-    and widening it here to flatter the GPU would push a headful window back
-    off the monitor it is drawn on (#499).
-
-    Software rasterisers are the one exception to keeping the pool's rate: a
-    draw that lands on llvmpipe / WARP / SwiftShader is resampled, so they
-    never present as the GPU (see below). That does cost fidelity -- the corpus
-    records them at ~1.5%, because real users do run without working drivers --
-    but "no consumer machine reports llvmpipe" is a live, standard check on a
-    string every fingerprint script already reads, so the trade is worth it.
-    Reviewed against the JS-detectability bar on 2026-09-17 and kept.
-
-    Falls back to that first draw when the pool holds nothing coherent, so an
-    unusual screen degrades to today's behaviour rather than raising.
-    """
-    # A software rasteriser (llvmpipe / SwiftShader / WARP) as the presented
-    # GPU is what every consumer-hardware check flags first ("no consumer
-    # machine reports llvmpipe" -- sundial, measured 2026-09-14), so the draw
-    # never settles on one: keep drawing until a hardware renderer that fits
-    # the screen comes up, and only fall back to the first draw if the pool
-    # holds nothing better.
-    first = sample_webgl(target_os, seed=seed)
-    renderer = first.get('webGl:renderer')
-    if not is_software_renderer(renderer) and gpu_screen_is_plausible(renderer, width, height):
-        return first
-
-    fallback = None if is_software_renderer(renderer) else first
-    for attempt in range(attempts - 1):
-        candidate = sample_webgl(target_os, seed=None if seed is None else seed + 1 + attempt)
-        renderer = candidate.get('webGl:renderer')
-        if is_software_renderer(renderer):
-            continue
-        if gpu_screen_is_plausible(renderer, width, height):
-            return candidate
-        fallback = fallback or candidate
-    return fallback or first
 
 
 def _select_presets_file(ff_version: Optional[Any] = None) -> Path:
@@ -1890,8 +1821,11 @@ def generate_context_fingerprint(
             elif 'Linux' in plat or 'linux' in plat:
                 config['navigator.oscpu'] = 'Linux x86_64'
 
-        # Sample WebGL vendor/renderer from database (fpgen.yml does not map these yet)
+        # Draw the GPU and its WebGL data (fpgen.yml does not map these)
         if not config.get('webGl:vendor') or not config.get('webGl:renderer'):
+            # Not at the top: camoufox.webgl imports this module.
+            from .webgl import sample_webgl_for_screen
+
             _os_map = {'macos': 'mac', 'linux': 'lin', 'windows': 'win'}
             _target_os = _os_map.get(os or '', None)
             if not _target_os:
@@ -1907,18 +1841,11 @@ def generate_context_fingerprint(
             # screen this identity ended up with. This path has no real
             # display to reconcile against, so the floor is unconditional.
             raise_screen_to_modern_floor(config)
-            try:
-                webgl_fp = sample_webgl_for_screen(
-                    _target_os, config.get('screen.width'), config.get('screen.height')
-                )
-            except (ValueError, sqlite3.Error) as e:
-                FallbackWarning.warn(
-                    'Drawing the WebGL GPU', "the browser's launch-time GPU", e,
-                    config.get('navigator.userAgent'),
-                )
-            else:
-                webgl_fp.pop('webGl2Enabled', None)
-                config.update(webgl_fp)
+            webgl_fp = sample_webgl_for_screen(
+                _target_os, config.get('screen.width'), config.get('screen.height')
+            )
+            webgl_fp.pop('webGl2Enabled')
+            config.update(webgl_fp)
 
         # Build source dicts from the fingerprint config for init_values
         nav = {

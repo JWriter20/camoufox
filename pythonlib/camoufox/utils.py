@@ -22,7 +22,7 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import Screen, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
+from .fingerprints import Screen, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
 from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
@@ -41,7 +41,7 @@ from .pkgman import (
 )
 from .virtdisplay import VirtualDisplay
 from ._warnings import FallbackWarning, LeakWarning
-from .webgl import sample_webgl
+from .webgl import sample_webgl_for_screen, webgl_for_gpu
 
 ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
 
@@ -1423,37 +1423,18 @@ def launch_options(
         firefox_user_prefs['webgl.disabled'] = True
         LeakWarning.warn('block_webgl', i_know_what_im_doing)
     else:
-        # If the user has provided a specific WebGL vendor/renderer pair, use it
+        # A pair the caller named, or the preset's own GPU, keeps its name and
+        # gets that device's recorded parameters. webgl_for_gpu raises for a GPU
+        # fpgen has never seen: the caller asked for something that does not exist.
         if webgl_config:
-            webgl_fp = sample_webgl(target_os, *webgl_config, seed=identity_seed(config, _identity_salt))
+            webgl_fp = webgl_for_gpu(target_os, *webgl_config, seed=identity_seed(config, _identity_salt))
         elif config.get('webGl:vendor') and config.get('webGl:renderer'):
-            # Preset already set vendor/renderer — sample matching WebGL params
-            try:
-                webgl_fp = sample_webgl(target_os, config['webGl:vendor'], config['webGl:renderer'], seed=identity_seed(config, _identity_salt))
-            except ValueError as e:
-                # The pair is not in webgl_data.db, which holds 31 GPUs; 36 of the
-                # 397 bundled presets name one it does not have. The parameters,
-                # extension list and shader precisions must all come from one
-                # recorded device, and there is none for this renderer, so the
-                # identity takes a GPU drawn to fit the screen instead.
-                webgl_fp = sample_webgl_for_screen(
-                    target_os, config.get('screen.width'), config.get('screen.height'),
-                    seed=identity_seed(config, _identity_salt),
-                )
-                # merge_into does not overwrite keys that are already set, and the
-                # preset set these two. Drop them, or the page would read the
-                # preset's renderer string with another device's parameters,
-                # extensions and shader precisions behind it -- a mismatch louder
-                # than the unknown GPU we are replacing.
-                preset_gpu = f"{config.pop('webGl:vendor', None)} / {config.pop('webGl:renderer', None)}"
-                FallbackWarning.warn(
-                    f"Finding the preset's GPU ({preset_gpu}) in webgl_data.db",
-                    f"a GPU drawn to fit the screen ({webgl_fp['webGl:renderer']})",
-                    e,
-                    config.get('navigator.userAgent'),
-                )
+            webgl_fp = webgl_for_gpu(
+                target_os, config['webGl:vendor'], config['webGl:renderer'],
+                seed=identity_seed(config, _identity_salt),
+            )
         else:
-            # Synthetic path: keep the GPU coherent with the screen BrowserForge
+            # Synthetic path: keep the GPU coherent with the screen fpgen
             # already picked. Sampling the two independently yields pairs no
             # real machine ships -- a discrete desktop GPU behind a 1024x600
             # panel -- which consistency checks read as masking (#729).
@@ -1477,7 +1458,7 @@ def launch_options(
     # Every identity passes the whole-identity checks, whatever built it: a
     # generated fingerprint, a bundled preset, or a config the caller wrote.
     # The pools are sampled independently -- navigator and screen from the
-    # generator, GPU from webgl_data.db, fonts and voices from their own
+    # generator, GPU from fpgen's WebGL records, fonts and voices from their own
     # catalogues -- so a machine that never existed can be assembled from parts
     # that are each fine on their own. See coherence.py.
     _incoherent = coherence.apply(config, target_os)

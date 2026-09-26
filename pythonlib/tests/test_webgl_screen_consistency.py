@@ -4,8 +4,8 @@ Tests for the WebGL <-> screen coherence helpers in camoufox.fingerprints.
 Run with:
     cd pythonlib && python -m pytest tests/test_webgl_screen_consistency.py -v
 
-The regression these guard (daijro/camoufox#729): BrowserForge picks the
-screen, webgl_data.db picks the GPU, and nothing ties them together -- so the
+The regression these guard (daijro/camoufox#729): the generator picks the
+screen, camoufox.webgl picks the GPU, and nothing ties them together -- so the
 synthetic path can emit pairs no real machine ships (a discrete GPU behind a
 1024x600 netbook panel).
 
@@ -24,15 +24,14 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from camoufox import fingerprints  # noqa: E402
 from camoufox.fingerprints import (  # noqa: E402
     MODERN_SCREEN_FLOOR,
     _renderer_bucket,
     gpu_screen_is_plausible,
     is_software_renderer,
     raise_screen_to_modern_floor,
-    sample_webgl_for_screen,
 )
+from camoufox.webgl import sample_webgl_for_screen  # noqa: E402
 
 # The three spellings Gecko emits for one discrete-NVIDIA bucket.
 _NV_ANGLE = "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar"
@@ -153,64 +152,10 @@ def test_hardware_is_not_mistaken_for_software(monkeypatch):
         assert not is_software_renderer(renderer)
 
 
-def test_software_first_draw_is_resampled_to_hardware(monkeypatch):
-    """A presented llvmpipe / WARP / SwiftShader is the first thing every
-    consumer-hardware check flags (measured 2026-09-14 with sundial), so a
-    software first draw is retried until a hardware renderer that fits the
-    screen comes up, and only kept when the pool offers nothing else."""
-    draws = iter([{"webGl:renderer": _LLVMPIPE}, {"webGl:renderer": _INTEL}])
-    monkeypatch.setattr(fingerprints, "sample_webgl", lambda *a, **kw: next(draws))
-
-    assert sample_webgl_for_screen("lin", 1024, 600)["webGl:renderer"] == _INTEL
-
-    only_software = iter([{"webGl:renderer": _LLVMPIPE}] * 40)
-    monkeypatch.setattr(fingerprints, "sample_webgl", lambda *a, **kw: next(only_software))
-    assert sample_webgl_for_screen("lin", 1920, 1080)["webGl:renderer"] == _LLVMPIPE
-
-
-def test_software_draws_are_skipped_when_resampling(monkeypatch):
-    # A hardware first draw settles the class as hardware, so a software
-    # candidate mid-loop is skipped instead of accepted -- otherwise the
-    # rejection loop still leaks probability mass onto the rasterizers.
-    draws = iter(
-        [
-            {"webGl:renderer": _NV_ANGLE},  # implausible at 1024x600
-            {"webGl:renderer": _LLVMPIPE},  # plausible, but wrong class
-            {"webGl:renderer": _INTEL},  # the coherent hardware answer
-        ]
-    )
-    monkeypatch.setattr(fingerprints, "sample_webgl", lambda *a, **kw: next(draws))
-
-    assert sample_webgl_for_screen("lin", 1024, 600)["webGl:renderer"] == _INTEL
-
-
-def test_falls_back_to_the_first_draw_when_nothing_is_coherent(monkeypatch):
-    monkeypatch.setattr(
-        fingerprints, "sample_webgl", lambda *a, **kw: {"webGl:renderer": _NV_ANGLE}
-    )
-    fp = sample_webgl_for_screen("win", 800, 600, attempts=4)
-    assert fp["webGl:renderer"] == _NV_ANGLE
-
-
-def test_a_plausible_first_draw_costs_one_query(monkeypatch):
-    # sample_webgl opens a fresh sqlite connection per call, and the common
-    # case (any screen at or above the floor) must not pay for 32 of them.
-    calls = []
-
-    def _counted(*args, **kwargs):
-        calls.append(args)
-        return {"webGl:renderer": _NV_ANGLE}
-
-    monkeypatch.setattr(fingerprints, "sample_webgl", _counted)
-    sample_webgl_for_screen("win", 1920, 1080)
-    assert len(calls) == 1
-
-
 @pytest.mark.parametrize("target_os", ["win", "mac", "lin"])
 def test_sampled_gpu_is_coherent_with_the_screen(target_os):
-    # Against the real webgl_data.db pool.
-    for _ in range(25):
-        fp = sample_webgl_for_screen(target_os, 1280, 800)
+    for seed in range(25):
+        fp = sample_webgl_for_screen(target_os, 1280, 800, seed=seed)
         assert gpu_screen_is_plausible(fp.get("webGl:renderer"), 1280, 800)
 
 
@@ -257,8 +202,8 @@ def test_screen_floor_is_a_no_op_without_screen_values():
 @pytest.mark.parametrize("target_os", ["windows", "macos", "linux"])
 def test_context_fingerprints_get_the_same_treatment(target_os):
     """generate_context_fingerprint() is the per-context API #729 names, and
-    build-tester drives the browser through it. It sampled the GPU with a bare
-    sample_webgl() and never applied the floor, so the coherence fix reached
+    build-tester drives the browser through it. It drew the GPU without the
+    screen and never applied the floor, so the coherence fix reached
     launch_options() only."""
     from camoufox.fingerprints import generate_context_fingerprint
 
