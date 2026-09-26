@@ -36,7 +36,7 @@ class TestRules:
         assert config["navigator.hardwareConcurrency"] == 8
 
     def test_a_mac_cannot_report_a_braswell_atom_igp(self):
-        # webgl_data.db weights this at 7.4% of the macOS pool.
+        # webgl_data.db once weighted this at 7.4% of the macOS pool.
         config = {"webGl:renderer": "Intel(R) HD Graphics 400, or similar"}
         assert [v.rule for v in coherence.validate(config, "mac")] == ["gpu-matches-os"]
 

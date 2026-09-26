@@ -117,7 +117,7 @@ def sample_webgl(
         raise ValueError(f'No WebGL data found for OS: {os}')
 
     # Drop pairs this OS cannot report before sampling. webgl_data.db weights
-    # each pair per OS, and its macOS column carries a Braswell Atom IGP
+    # each pair per OS, and its macOS column once carried a Braswell Atom IGP
     # ("Intel(R) HD Graphics 400") at 7.4% and a desktop PC card ("Radeon R9 200
     # Series") at 3.7% -- neither shipped in any Mac, so ~11% of macOS
     # identities were drawing a GPU that would contradict the rest of the

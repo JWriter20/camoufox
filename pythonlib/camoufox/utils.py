@@ -1424,7 +1424,7 @@ def launch_options(
             try:
                 webgl_fp = sample_webgl(target_os, config['webGl:vendor'], config['webGl:renderer'], seed=identity_seed(config, _identity_salt))
             except ValueError:
-                # The pair is not in webgl_data.db, which holds 33 GPUs. 39 of the
+                # The pair is not in webgl_data.db, which holds 31 GPUs. 39 of the
                 # 435 bundled presets name one it does not have -- including rows
                 # that cannot be the OS they are filed under, e.g. a Windows
                 # preset claiming "ANGLE (Unknown, Adreno (TM) 650 ...)", a phone

@@ -643,7 +643,7 @@ bundles are shipped in the wheel.
 
 **`fonts.json`, `font-bases.json`, `font-groups.json`** — OS font lists, the OS-version bases and the addition units with their probabilities (see [FONTS.md](FONTS.md)).
 
-**`voices.json`** — OS-specific speech voice lists (macOS 190, Windows 53, Linux 131). Format: `"Name:locale:type"`. **`voice-manifests.json`** holds the per-OS model the voice draw follows.
+**`voice-manifests.json`, `voice-uris.json`** — The per-OS model the voice draw follows (a base, language packs and additions, each entry `"Name:locale:type"`) and the real `voiceURI` a stock browser reports for each voice.
 
 **`properties.json`** — Includes `audio:seed` as a `CAMOU_CONFIG` property (uint type), the MaskConfig fallback for the audio patch when using global config without per-context JavaScript.
 

@@ -85,7 +85,7 @@ class TestPinnedIdentityIsStable:
         # The test above draws ONE preset at random, so a preset that cannot
         # launch shows up as a 1-in-11 flake rather than a failure -- which is
         # how it reached CI. 39 of the 435 bundled presets name a GPU that is
-        # not among the 33 in webgl_data.db, and sample_webgl raises for those.
+        # not among the 31 in webgl_data.db, and sample_webgl raises for those.
         # Every preset has to produce launch options; see the fallback in
         # utils.launch_options.
         from camoufox.webgl import sample_webgl

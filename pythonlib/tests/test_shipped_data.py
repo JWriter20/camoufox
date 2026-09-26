@@ -74,3 +74,23 @@ def test_each_os_still_has_gpus_to_draw_from():
             assert count >= 2, f"{os_key} has {count} GPU(s) left"
     finally:
         connection.close()
+
+
+def test_every_gpu_row_can_be_drawn_on_some_os():
+    """A row no OS can draw is dead weight a reader would take as real data."""
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        rows = connection.execute(
+            "SELECT vendor, renderer, win, mac, lin FROM webgl_fingerprints"
+        ).fetchall()
+    finally:
+        connection.close()
+    undrawable = [
+        (vendor, renderer)
+        for vendor, renderer, *weights in rows
+        if not any(
+            weight > 0 and coherence.gpu_fits_os(renderer, os_key)
+            for os_key, weight in zip(("win", "mac", "lin"), weights)
+        )
+    ]
+    assert undrawable == []

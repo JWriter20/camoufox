@@ -153,7 +153,7 @@ def test_voice_generation_failure_fails_closed(monkeypatch):
     import camoufox.utils as utils
 
     def boom(*_args, **_kwargs):
-        raise RuntimeError("voices.json unreadable")
+        raise RuntimeError("voice-manifests.json unreadable")
 
     monkeypatch.setattr(utils, "_generate_random_voice_subset", boom)
     cfg = _launch_config(os="macos")
