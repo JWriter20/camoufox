@@ -196,13 +196,13 @@ async function launchWith(
 }
 
 export interface NewContextOptions extends Record<string, any> {
-	/** A specific fingerprint preset to use. If omitted, one is picked. */
+	/** A fingerprint preset to use. If omitted, fpgen draws a new identity. */
 	preset?: Record<string, any>;
-	/** Target OS for preset selection ("windows", "macos", "linux"). */
+	/** Target OS for the drawn identity ("windows", "macos", "linux"). */
 	os?: string;
-	/** Firefox version string for UA patching. */
+	/** Firefox major version to claim in the UA. Defaults to the browser's own. */
 	ff_version?: string;
-	/** IPv4 address to spoof for WebRTC ICE candidates. */
+	/** IPv4 or IPv6 address to spoof for WebRTC ICE candidates. */
 	webrtc_ip?: string;
 	/** Per-context proxy, in Playwright's format. */
 	proxy?: ProxyConfig;
@@ -231,9 +231,10 @@ export function camelCase(snake: string): string {
 /**
  * Creates a new browser context with a unique fingerprint identity.
  *
- * Each context gets its own fingerprint with its own audio noise seed. All
- * values are applied via addInitScript so they self-destruct before page
- * scripts can detect them.
+ * Each context gets its own identity (navigator, screen, WebGL, fonts,
+ * voices), drawn by fpgen unless a preset is given, with its own audio noise
+ * seed. All values are applied via addInitScript so they self-destruct before
+ * page scripts can detect them.
  */
 export async function NewContext(
 	browser: Browser,
@@ -247,6 +248,10 @@ export async function NewContext(
 		...contextOptions
 	}: NewContextOptions = {},
 ): Promise<BrowserContext> {
+	// The drawn UA carries fpgen's Firefox version, which must not disagree with
+	// the browser the page is actually talking to.
+	const ffVersion = ff_version || browser.version().split(".", 1)[0];
+
 	// Auto-derive the WebRTC IP and timezone from the proxy's exit IP when they
 	// aren't explicitly provided.
 	let webrtcIp = webrtc_ip;
@@ -259,7 +264,7 @@ export async function NewContext(
 	const fp = generateContextFingerprint({
 		preset: preset as any,
 		os,
-		ff_version,
+		ff_version: ffVersion,
 		webrtc_ip: webrtcIp,
 	});
 

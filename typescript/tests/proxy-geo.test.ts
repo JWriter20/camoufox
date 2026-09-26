@@ -3,6 +3,8 @@
  * Twin of pythonlib/tests/test_proxy_geo.py: the lookup must go through the
  * proxy as Playwright would reach it (a scheme-less server is http), and a
  * failed lookup must raise rather than leave the context on the host's values.
+ * Also the twin of test_new_context_version.py: the context's UA names the
+ * browser's Firefox version.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -32,9 +34,11 @@ const EXIT = {
 	timezone: "Europe/Paris",
 };
 
-function fakeBrowser() {
+function fakeBrowser(version = "152.0.4") {
 	const calls: { options?: any; script?: string } = {};
 	const browser = {
+		// Playwright's Browser.version() for Firefox: MOZ_APP_VERSION_DISPLAY.
+		version: () => version,
 		newContext: async (options: any) => {
 			calls.options = options;
 			return {
@@ -100,5 +104,17 @@ describe("NewContext proxy lookup", () => {
 			timezoneId: "UTC",
 		} as any);
 		expect(impit.proxyUrls).toEqual([]);
+	});
+});
+
+describe("NewContext identity", () => {
+	it("the user agent carries the browser's Firefox version", async () => {
+		const { browser, calls } = fakeBrowser("160.0.1");
+		await NewContext(browser, { os: "linux" });
+		const userAgent = /setNavigatorUserAgent\("([^"]+)"\)/.exec(
+			calls.script ?? "",
+		)?.[1];
+		expect(userAgent).toContain("Firefox/160.0");
+		expect(userAgent).toContain("rv:160.0");
 	});
 });
