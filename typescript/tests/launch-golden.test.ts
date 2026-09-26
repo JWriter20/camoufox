@@ -77,6 +77,9 @@ function mask(value: any): any {
 	if (typeof value === "string") {
 		let out = value;
 		for (const [real, ph] of PLACEHOLDERS) out = out.split(real).join(ph);
+		// A FallbackWarning's report block names the host and the runtime
+		// (python/node), so neither launcher can reproduce the other's.
+		out = out.replace(/(and include:\n\n)( {4}.*(\n|$))+/g, "$1<REPORT>");
 		return out.replace(/fonts-[0-9a-f]{12}\.conf/g, "fonts-<HASH>.conf");
 	}
 	if (Array.isArray(value)) return value.map(mask);

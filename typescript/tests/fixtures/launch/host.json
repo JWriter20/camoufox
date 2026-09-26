@@ -113,6 +113,7 @@
   "config_dnt_gpc",
   "config_accept_encoding",
   "config_seeds",
+  "config_instant_animations",
   "config_media_devices",
   "config_webgl_pair",
   "config_webgl_unknown_pair",

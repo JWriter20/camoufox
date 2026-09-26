@@ -229,6 +229,9 @@ def mask(value):
     if isinstance(value, str):
         for real, ph in PLACEHOLDERS:
             value = value.replace(real, ph)
+        # A FallbackWarning's report block names the host and the runtime
+        # (python/node), so neither launcher can reproduce the other's.
+        value = re.sub(r'(and include:\n\n)(    .*(\n|$))+', r'\1<REPORT>', value)
         # The name hashes the fonts.conf content, which embeds the checkout path;
         # the TS test masks it the same way and checks the hash itself.
         return re.sub(r'fonts-[0-9a-f]{12}\.conf', 'fonts-<HASH>.conf', value)
@@ -366,8 +369,8 @@ scenario('config_touch', fingerprint=FP['windows'], os='windows', config={'navig
 scenario('config_dnt_gpc', fingerprint=FP['windows'], os='windows',
          config={'navigator.doNotTrack': '1', 'navigator.globalPrivacyControl': True})
 scenario('config_accept_encoding', fingerprint=FP['linux'], os='linux', config={'headers.Accept-Encoding': 'gzip'})
-scenario('config_seeds', fingerprint=FP['linux'], os='linux', config={'audio:seed': 42,
-                                                                      'fonts:spacing_seed': 3})
+scenario('config_seeds', fingerprint=FP['linux'], os='linux', config={'audio:seed': 42})
+scenario('config_instant_animations', fingerprint=FP['linux'], os='linux', config={'instantAnimations': True})
 scenario('config_media_devices', fingerprint=FP['linux'], os='linux', config={'mediaDevices:micros': 0})
 scenario('config_webgl_pair', fingerprint=FP['linux'], os='linux',
          config={'webGl:vendor': INPUTS['webgl_pairs']['lin'][1][0], 'webGl:renderer': INPUTS['webgl_pairs']['lin'][1][1]})
