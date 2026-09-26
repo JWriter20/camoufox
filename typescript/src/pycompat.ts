@@ -11,6 +11,8 @@
  * distinction (and keeps integers above 2**53 exact as bigint).
  */
 
+import { FileNotFoundError } from "./exceptions.js";
+
 /** A Python float whose value happens to be integral (1.0, 3.4e38...). */
 export class PyFloat {
 	constructor(public readonly value: number) {}
@@ -370,4 +372,42 @@ export function crc32(data: Uint8Array | string): number {
 		crc = CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
 	}
 	return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** Python's OSError, for failures Node does not raise as a system error. */
+export class OSError extends Error {
+	name = "OSError";
+}
+
+/** Python's ValueError. */
+export class ValueError extends Error {
+	name = "ValueError";
+}
+
+/** Python's KeyError. */
+export class KeyError extends Error {
+	name = "KeyError";
+}
+
+const PY_ERROR_TESTS = {
+	// Node's system errors (fs, net) carry a string code and a numeric errno;
+	// FileNotFoundError is an OSError in Python.
+	OSError: (e: unknown) =>
+		e instanceof OSError ||
+		e instanceof FileNotFoundError ||
+		(e instanceof Error &&
+			typeof (e as NodeJS.ErrnoException).code === "string" &&
+			typeof (e as NodeJS.ErrnoException).errno === "number"),
+	// JSON.parse's SyntaxError is json.JSONDecodeError, a ValueError.
+	ValueError: (e: unknown) =>
+		e instanceof ValueError || e instanceof SyntaxError,
+	KeyError: (e: unknown) => e instanceof KeyError,
+};
+
+/** Whether `except (<kinds>)` in the Python twin would catch `error`. */
+export function isPyError(
+	error: unknown,
+	...kinds: Array<keyof typeof PY_ERROR_TESTS>
+): boolean {
+	return kinds.some((kind) => PY_ERROR_TESTS[kind](error));
 }

@@ -22,14 +22,18 @@ import { LOCAL_DATA } from "./pkgman.js";
 import {
 	comparePyStr,
 	crc32,
+	isPyError,
+	KeyError,
 	num,
 	orjsonDumps,
 	pyStr,
 	pySum,
 	pySumFloats,
 	pyTruthy,
+	ValueError,
 } from "./pycompat.js";
 import { PyRandom, pyRandom } from "./pyrandom.js";
+import { FallbackWarning } from "./warnings.js";
 import { sampleWebGL, type TargetOS, type WebGLData } from "./webgl/sample.js";
 
 export type { TargetOS } from "./webgl/sample.js";
@@ -1126,7 +1130,13 @@ function loadFontGroups(): Record<string, FontUnit[]> {
 		try {
 			fontGroupsCache =
 				readJson<Record<string, FontUnit[]>>("font-groups.json");
-		} catch {
+		} catch (e) {
+			if (!isPyError(e, "OSError", "ValueError")) throw e;
+			FallbackWarning.warn(
+				"Reading font-groups.json",
+				"an OS-version base with no font additions",
+				e,
+			);
 			fontGroupsCache = {};
 		}
 	}
@@ -1140,7 +1150,13 @@ function loadFontBases(): Record<string, FontBase[]> {
 	if (!fontBasesCache) {
 		try {
 			fontBasesCache = readJson<Record<string, FontBase[]>>("font-bases.json");
-		} catch {
+		} catch (e) {
+			if (!isPyError(e, "OSError", "ValueError")) throw e;
+			FallbackWarning.warn(
+				"Reading font-bases.json",
+				"only the always-present core fonts as its OS base",
+				e,
+			);
 			fontBasesCache = {};
 		}
 	}
@@ -1429,7 +1445,7 @@ function splitVoiceEntry(entry: string): [string, string, string] {
 	const last = entry.lastIndexOf(":");
 	const langsep = last < 0 ? -1 : entry.lastIndexOf(":", last - 1);
 	if (last < 0 || langsep < 0) {
-		throw new Error(
+		throw new ValueError(
 			`not enough values to unpack (voice entry ${JSON.stringify(entry)})`,
 		);
 	}
@@ -1517,6 +1533,7 @@ export function generateRandomVoiceSubset(
 	const manifest = pyTruthy(manifests[osKey])
 		? manifests[osKey]
 		: manifests.mac;
+	if (manifest === undefined) throw new KeyError("'mac'");
 
 	const out: string[] = [];
 	const seen = new Set<string>();
@@ -2297,9 +2314,19 @@ export function fromPreset(
 	else if (plat.includes("Linux") || plat.includes("linux")) targetOs = "linux";
 	else targetOs = "macos";
 
+	const presetKey = `${pyStr(config["navigator.userAgent"])} / ${pyStr(config["webGl:renderer"])}`;
 	try {
 		config.fonts = generateRandomFontSubset(targetOs, identitySeed(config, s));
-	} catch {
+	} catch (e) {
+		if (!isPyError(e, "OSError", "ValueError")) throw e;
+		FallbackWarning.warn(
+			"Drawing the font list",
+			pyTruthy(preset.fonts)
+				? "the preset's recorded fonts"
+				: "the browser's own fonts",
+			e,
+			presetKey,
+		);
 		if (pyTruthy(preset.fonts)) {
 			const fonts = [...(preset.fonts as string[])];
 			ensureMarkerFonts(
@@ -2319,7 +2346,16 @@ export function fromPreset(
 			null,
 			identitySeed(config, s),
 		);
-	} catch {
+	} catch (e) {
+		if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
+		FallbackWarning.warn(
+			"Drawing the speech voices",
+			pyTruthy(preset.speechVoices)
+				? "the preset's recorded voices"
+				: "the browser's own voices",
+			e,
+			presetKey,
+		);
 		if (pyTruthy(preset.speechVoices)) {
 			config.voices = normalizePresetVoices(
 				preset.speechVoices as Array<string | VoiceObject>,
@@ -2524,8 +2560,14 @@ export function generateContextFingerprint({
 					osName,
 					identitySeed(config, salt),
 				);
-			} catch {
-				// leave fonts unset
+			} catch (e) {
+				if (!isPyError(e, "OSError", "ValueError")) throw e;
+				FallbackWarning.warn(
+					"Drawing the font list",
+					"the browser's launch-time fonts",
+					e,
+					config["navigator.userAgent"],
+				);
 			}
 		}
 		if (!("voices" in config)) {
@@ -2535,8 +2577,14 @@ export function generateContextFingerprint({
 					null,
 					identitySeed(config, salt),
 				);
-			} catch {
-				// leave voices unset
+			} catch (e) {
+				if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
+				FallbackWarning.warn(
+					"Drawing the speech voices",
+					"the browser's launch-time voices",
+					e,
+					config["navigator.userAgent"],
+				);
 			}
 		}
 		if (!("navigator.oscpu" in config)) {

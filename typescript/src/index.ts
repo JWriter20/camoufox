@@ -43,4 +43,4 @@ export {
 	launchOptions as launch_options,
 } from "./utils.js";
 export { VirtualDisplay } from "./virtdisplay.js";
-export { LeakWarning } from "./warnings.js";
+export { FallbackWarning, LeakWarning } from "./warnings.js";

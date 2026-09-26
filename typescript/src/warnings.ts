@@ -1,5 +1,5 @@
 /**
- * Leak warnings, and the warning channel the launcher reports through.
+ * Leak and fallback warnings, and the warning channel the launcher reports through.
  *
  * TypeScript twin of pythonlib/camoufox/_warnings.py. The messages are read
  * from the same warnings.yml the Python package ships, so both launchers say
@@ -12,9 +12,13 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { LIBRARY_VERSION } from "./__version__.js";
+import { CamoufoxNotInstalled } from "./exceptions.js";
+import { installedVerStr } from "./pkgman.js";
 
 const currentDir =
 	import.meta.dirname ?? path.dirname(fileURLToPath(import.meta.url));
@@ -89,5 +93,56 @@ export class LeakWarning extends Error {
 			warning += "\nIf this is intentional, pass `i_know_what_im_doing=True`.";
 		}
 		warn(warning, "LeakWarning");
+	}
+}
+
+function browserVersion(): string {
+	try {
+		return installedVerStr();
+	} catch (error) {
+		if (error instanceof CamoufoxNotInstalled) return "not installed";
+		throw error;
+	}
+}
+
+/**
+ * Emitted when part of an identity could not be drawn and a substitute was used.
+ */
+export class FallbackWarning extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "FallbackWarning";
+	}
+
+	/**
+	 * Warns that `what` failed with `error` and the identity uses `instead`,
+	 * with a block of versions and the error for the user to paste into an issue.
+	 */
+	static warn(
+		what: string,
+		instead: string,
+		error: unknown,
+		identity?: string | null,
+	): void {
+		const lines = [
+			`camoufox: ${LIBRARY_VERSION} (npm)`,
+			`browser: ${browserVersion()}`,
+			`os: ${os.type()}-${os.release()}-${os.arch()}`,
+			`node: ${process.versions.node}`,
+			`error: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`,
+		];
+		if (identity) lines.push(`identity: ${identity}`);
+		const values: Record<string, string> = {
+			what,
+			instead,
+			report: lines.map((line) => `    ${line}`).join("\n"),
+		};
+		warn(
+			loadWarnings().fallback.replace(
+				/\{(what|instead|report)\}/g,
+				(_, key: string) => values[key],
+			),
+			"FallbackWarning",
+		);
 	}
 }

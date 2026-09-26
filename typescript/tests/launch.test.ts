@@ -28,7 +28,7 @@ import {
 import { prerequisite } from "./prereq.js";
 
 const { ensureModel } = await import("../src/fpgen/index.js");
-const { PyFloat } = await import("../src/pycompat.js");
+const { OSError, PyFloat } = await import("../src/pycompat.js");
 const { Version } = await import("../src/pkgman.js");
 const { InvalidPropertyType } = await import("../src/exceptions.js");
 const cpuAffinity = await import("../src/cpu_affinity.js");
@@ -55,6 +55,29 @@ afterAll(() => fs.rmSync(SCRATCH, { recursive: true, force: true }));
 
 const launch = (opts: Record<string, any>) =>
 	quietly(() => utils.launchOptions({ env: { HOME }, ...opts }));
+
+/** The launch's config, and whether it emitted `category` containing `text`. */
+async function launchWarning(
+	opts: Record<string, any>,
+	category: string,
+	text: string,
+): Promise<{ config: Record<string, any>; warned: boolean }> {
+	const {
+		result,
+		error,
+		warnings: caught,
+	} = await warnings.recordWarnings(() =>
+		utils.launchOptions({ env: { HOME }, ...opts }),
+	);
+	if (error) throw error;
+	return {
+		config: configOf(result as Record<string, any>),
+		warned: caught.some(
+			(w) => w.category === category && w.message.includes(text),
+		),
+	};
+}
+const REPORT = "github.com/daijro/camoufox/issues/new";
 
 describe("test_launch_environment: virtual display", () => {
 	beforeEach(() => isolateLaunch());
@@ -546,17 +569,16 @@ describe("test_executable_path_version_warning", () => {
 
 describe("test_voices (launch half)", () => {
 	beforeEach(() => stubHost());
+	const cfgOptions = (extra: Record<string, any> = {}) => ({
+		headless: true,
+		i_know_what_im_doing: true,
+		executable_path: BUNDLE_EXE,
+		os: "macos",
+		fingerprint_preset: fingerprints.getRandomPreset("macos", "152"),
+		...extra,
+	});
 	const cfg = async (extra: Record<string, any> = {}) =>
-		configOf(
-			await launch({
-				headless: true,
-				i_know_what_im_doing: true,
-				executable_path: BUNDLE_EXE,
-				os: "macos",
-				fingerprint_preset: fingerprints.getRandomPreset("macos", "152"),
-				...extra,
-			}),
-		);
+		configOf(await launch(cfgOptions(extra)));
 
 	it("pins the block flag by default", async () => {
 		expect((await cfg())["voices:blockIfNotDefined"]).toBe(true);
@@ -572,9 +594,16 @@ describe("test_voices (launch half)", () => {
 
 	it("fails closed when voice generation fails", async () => {
 		deps.generateRandomVoiceSubset = () => {
-			throw new Error("voices.json unreadable");
+			throw new OSError("voice-manifests.json unreadable");
 		};
-		const config = await cfg();
+		const { config, warned } = await launchWarning(
+			cfgOptions(),
+			"FallbackWarning",
+			REPORT,
+		);
+		expect(warned).toBe(true);
+		// An empty list plus the block flag means "no voices" -- never "all of
+		// the host's".
 		expect(config.voices).toEqual([]);
 		expect(config["voices:blockIfNotDefined"]).toBe(true);
 	});
@@ -747,23 +776,35 @@ describe.skipIf(!modelReady)(
 			expect(context.init_script).toContain("setAudioFingerprintSeed(7)");
 		});
 
+		it("a failed font draw warns and uses the OS's font list", async () => {
+			deps.generateRandomFontSubset = () => {
+				throw new OSError("font-bases.json missing");
+			};
+			const { config, warned } = await launchWarning(
+				{
+					os: "windows",
+					i_know_what_im_doing: true,
+					executable_path: BUNDLE_EXE,
+				},
+				"FallbackWarning",
+				"OSError: font-bases.json missing",
+			);
+			expect(warned).toBe(true);
+			expect(config.fonts.length).toBeGreaterThan(0);
+		});
+
 		it("instantAnimations warns that it is detectable", async () => {
-			const { warnings: caught } = await warnings.recordWarnings(() =>
-				utils.launchOptions({
-					env: { HOME },
+			const { warned } = await launchWarning(
+				{
 					os: "windows",
 					executable_path: BUNDLE_EXE,
 					config: { instantAnimations: true },
 					i_know_what_im_doing: false,
-				}),
+				},
+				"LeakWarning",
+				"getComputedTiming",
 			);
-			expect(
-				caught.some(
-					(w) =>
-						w.category === "LeakWarning" &&
-						w.message.includes("getComputedTiming"),
-				),
-			).toBe(true);
+			expect(warned).toBe(true);
 		});
 
 		it("keeps the caller's seeds", async () => {

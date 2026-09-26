@@ -74,13 +74,14 @@ import {
 } from "./pkgman.js";
 import {
 	formatPyFloatRepr,
+	isPyError,
 	orjsonDumps,
 	PyFloat,
 	pyRepr,
 	pyStr,
 } from "./pycompat.js";
 import type { VirtualDisplay } from "./virtdisplay.js";
-import { LeakWarning, warn } from "./warnings.js";
+import { FallbackWarning, LeakWarning, warn } from "./warnings.js";
 import { sampleWebGL } from "./webgl/sample.js";
 
 export type ListOrString = string | string[];
@@ -1444,7 +1445,14 @@ export async function launchOptions({
 				(targetOs === "mac" || targetOs === "win") &&
 					utilsDeps.hostOsKey() === targetOs,
 			);
-		} catch {
+		} catch (e) {
+			if (!isPyError(e, "OSError", "ValueError")) throw e;
+			FallbackWarning.warn(
+				"Drawing the font list",
+				`every font fonts.json lists for ${targetOs}`,
+				e,
+				config["navigator.userAgent"],
+			);
 			updateFonts(config, targetOs);
 		}
 	}
@@ -1613,8 +1621,17 @@ export async function launchOptions({
 				voiceLocale ?? null,
 				utilsDeps.identitySeed(config, salt),
 			);
-		} catch {
-			// An empty list still blocks the host's voices (see below).
+		} catch (e) {
+			if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
+			// An empty list still blocks the host's voices (see below), so a
+			// generation failure degrades to "no voices" rather than "all of
+			// the host's".
+			FallbackWarning.warn(
+				"Drawing the speech voices",
+				"no speech voices",
+				e,
+				config["navigator.userAgent"],
+			);
 			config.voices = [];
 		}
 	}
