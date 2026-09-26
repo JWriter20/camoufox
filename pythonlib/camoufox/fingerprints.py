@@ -6,6 +6,7 @@ import secrets
 import sqlite3
 import unicodedata
 from dataclasses import asdict, dataclass, is_dataclass
+from functools import lru_cache
 from pathlib import Path
 from random import Random, choice, randint, randrange
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
@@ -35,6 +36,21 @@ def _generator():
 
         _FP_GENERATOR = Generator()
     return _FP_GENERATOR
+
+
+@lru_cache(maxsize=None)
+def firefox_gpus(os_name: str) -> FrozenSet[Tuple[str, str]]:
+    """Every (vendor, renderer) that fpgen has seen Firefox report on this OS.
+
+    A GPU outside this set has no recorded WebGL parameters behind it, so an
+    identity naming it could only borrow another device's.
+    """
+    import fpgen
+
+    return frozenset(
+        (result.value['vendor'], result.value['renderer'])
+        for result in fpgen.trace(target='gpu', browser='Firefox', os=_FPGEN_OS[os_name.lower()])
+    )
 
 
 @dataclass

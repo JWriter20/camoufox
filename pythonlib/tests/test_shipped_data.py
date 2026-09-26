@@ -94,3 +94,21 @@ def test_every_gpu_row_can_be_drawn_on_some_os():
         )
     ]
     assert undrawable == []
+
+
+@pytest.mark.parametrize("filename", PRESET_FILES)
+def test_every_preset_gpu_has_webgl_data(filename):
+    """A preset records only its GPU's name; the WebGL parameters behind it come
+    from fpgen. A GPU fpgen has never seen Firefox report on that OS has none, so
+    launching it would pair the name with another device's parameters."""
+    from camoufox.fingerprints import firefox_gpus
+
+    presets = json.loads((DATA / filename).read_text())["presets"]
+    for os_name, entries in presets.items():
+        known = firefox_gpus(os_name)
+        for index, preset in enumerate(entries):
+            gpu = (preset["webgl"]["unmaskedVendor"], preset["webgl"]["unmaskedRenderer"])
+            assert gpu in known, (
+                f"{filename} {os_name}[{index}]: {gpu[1]!r} has no WebGL data"
+                " -- run scripts/clean-fingerprint-data.py --write"
+            )
