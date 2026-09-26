@@ -2883,76 +2883,6 @@
       },
       {
         "navigator": {
-          "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "MacIntel",
-          "hardwareConcurrency": 2,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1280,
-          "height": 800,
-          "colorDepth": 30,
-          "availWidth": 1280,
-          "availHeight": 800,
-          "devicePixelRatio": 2
-        },
-        "webgl": {
-          "unmaskedVendor": "Intel Inc.",
-          "unmaskedRenderer": "Intel 945GM, or similar"
-        },
-        "speechVoices": [
-          "Alex:en-US:local",
-          "Alice:it-IT:local",
-          "Alva:sv-SE:local",
-          "Amelie:fr-CA:local",
-          "Anna:de-DE:local",
-          "Carmit:he-IL:local",
-          "Damayanti:id-ID:local",
-          "Daniel:en-GB:local",
-          "Diego:es-AR:local",
-          "Ellen:nl-BE:local",
-          "Fiona:en-scotland:local",
-          "Fred:en-US:local",
-          "Ioana:ro-RO:local",
-          "Joana:pt-PT:local",
-          "Jorge:es-ES:local",
-          "Juan:es-MX:local",
-          "Kanya:th-TH:local",
-          "Karen:en-AU:local",
-          "Kyoko:ja-JP:local",
-          "Laura:sk-SK:local",
-          "Lekha:hi-IN:local",
-          "Luca:it-IT:local",
-          "Luciana:pt-BR:local",
-          "Maged:ar-SA:local",
-          "Mariska:hu-HU:local",
-          "Mei-Jia:zh-TW:local",
-          "Melina:el-GR:local",
-          "Milena:ru-RU:local",
-          "Moira:en-IE:local",
-          "Monica:es-ES:local",
-          "Nora:nb-NO:local",
-          "Paulina:es-MX:local",
-          "Rishi:en-IN:local",
-          "Samantha:en-US:local",
-          "Sara:da-DK:local",
-          "Satu:fi-FI:local",
-          "Sin-ji:zh-HK:local",
-          "Tessa:en-ZA:local",
-          "Thomas:fr-FR:local",
-          "Ting-Ting:zh-CN:local",
-          "Veena:en-IN:local",
-          "Victoria:en-US:local",
-          "Xander:nl-NL:local",
-          "Yelda:tr-TR:local",
-          "Yuna:ko-KR:local",
-          "Yuri:ru-RU:local",
-          "Zosia:pl-PL:local",
-          "Zuzana:cs-CZ:local"
-        ]
-      },
-      {
-        "navigator": {
           "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0",
           "platform": "MacIntel",
           "hardwareConcurrency": 10,
@@ -6899,76 +6829,6 @@
         "navigator": {
           "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:149.0) Gecko/20100101 Firefox/149.0",
           "platform": "MacIntel",
-          "hardwareConcurrency": 4,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1920,
-          "height": 1080,
-          "colorDepth": 30,
-          "availWidth": 1920,
-          "availHeight": 984,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Intel Inc.",
-          "unmaskedRenderer": "Intel 945GM, or similar"
-        },
-        "speechVoices": [
-          "Alex:en-US:local",
-          "Alice:it-IT:local",
-          "Alva:sv-SE:local",
-          "Amelie:fr-CA:local",
-          "Anna:de-DE:local",
-          "Carmit:he-IL:local",
-          "Damayanti:id-ID:local",
-          "Daniel:en-GB:local",
-          "Diego:es-AR:local",
-          "Ellen:nl-BE:local",
-          "Fiona:en-scotland:local",
-          "Fred:en-US:local",
-          "Ioana:ro-RO:local",
-          "Joana:pt-PT:local",
-          "Jorge:es-ES:local",
-          "Juan:es-MX:local",
-          "Kanya:th-TH:local",
-          "Karen:en-AU:local",
-          "Kyoko:ja-JP:local",
-          "Laura:sk-SK:local",
-          "Lekha:hi-IN:local",
-          "Luca:it-IT:local",
-          "Luciana:pt-BR:local",
-          "Maged:ar-SA:local",
-          "Mariska:hu-HU:local",
-          "Mei-Jia:zh-TW:local",
-          "Melina:el-GR:local",
-          "Milena:ru-RU:local",
-          "Moira:en-IE:local",
-          "Monica:es-ES:local",
-          "Nora:nb-NO:local",
-          "Paulina:es-MX:local",
-          "Rishi:en-IN:local",
-          "Samantha:en-US:local",
-          "Sara:da-DK:local",
-          "Satu:fi-FI:local",
-          "Sin-ji:zh-HK:local",
-          "Tessa:en-ZA:local",
-          "Thomas:fr-FR:local",
-          "Ting-Ting:zh-CN:local",
-          "Veena:en-IN:local",
-          "Victoria:en-US:local",
-          "Xander:nl-NL:local",
-          "Yelda:tr-TR:local",
-          "Yuna:ko-KR:local",
-          "Yuri:ru-RU:local",
-          "Zosia:pl-PL:local",
-          "Zuzana:cs-CZ:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "MacIntel",
           "hardwareConcurrency": 10,
           "maxTouchPoints": 0
         },
@@ -8264,33 +8124,6 @@
           "maxTouchPoints": 0
         },
         "screen": {
-          "width": 1366,
-          "height": 768,
-          "colorDepth": 24,
-          "availWidth": 1366,
-          "availHeight": 728,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (AMD)",
-          "unmaskedRenderer": "ANGLE (AMD, Radeon R9 200 Series Direct3D11 vs_4_0 ps_4_0), or similar"
-        },
-        "speechVoices": [
-          "Microsoft Helena - Spanish (Spain):es-ES:local",
-          "Microsoft Laura - Spanish (Spain):es-ES:local",
-          "Microsoft Pablo - Spanish (Spain):es-ES:local",
-          "Microsoft Helena Desktop - Spanish (Spain):es-ES:local",
-          "Microsoft Zira Desktop - English (United States):en-US:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
-          "platform": "Win32",
-          "hardwareConcurrency": 2,
-          "maxTouchPoints": 0
-        },
-        "screen": {
           "width": 1360,
           "height": 768,
           "colorDepth": 24,
@@ -8531,33 +8364,6 @@
           "Microsoft Zira - English (United States):en-US:local",
           "Microsoft David Desktop - English (United States):en-US:local",
           "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
-          "Microsoft Zira Desktop - English (United States):en-US:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
-          "platform": "Win32",
-          "hardwareConcurrency": 4,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1920,
-          "height": 1080,
-          "colorDepth": 24,
-          "availWidth": 1920,
-          "availHeight": 1040,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (Intel)",
-          "unmaskedRenderer": "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_4_1 ps_4_1), or similar"
-        },
-        "speechVoices": [
-          "Microsoft Helena - Spanish (Spain):es-ES:local",
-          "Microsoft Laura - Spanish (Spain):es-ES:local",
-          "Microsoft Pablo - Spanish (Spain):es-ES:local",
-          "Microsoft Helena Desktop - Spanish (Spain):es-ES:local",
           "Microsoft Zira Desktop - English (United States):en-US:local"
         ]
       },
@@ -9592,32 +9398,6 @@
         "navigator": {
           "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
           "platform": "Win32",
-          "hardwareConcurrency": 4,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1366,
-          "height": 768,
-          "colorDepth": 24,
-          "availWidth": 1299,
-          "availHeight": 768,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (Intel)",
-          "unmaskedRenderer": "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_4_1 ps_4_1), or similar"
-        },
-        "speechVoices": [
-          "Microsoft Raul - Spanish (Mexico):es-MX:local",
-          "Microsoft Sabina - Spanish (Mexico):es-MX:local",
-          "Microsoft Sabina Desktop - Spanish (Mexico):es-MX:local",
-          "Microsoft Zira Desktop - English (United States):en-US:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
-          "platform": "Win32",
           "hardwareConcurrency": 8,
           "maxTouchPoints": 0
         },
@@ -9814,29 +9594,6 @@
         "navigator": {
           "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
           "platform": "Win32",
-          "hardwareConcurrency": 2,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1680,
-          "height": 1050,
-          "colorDepth": 24,
-          "availWidth": 1680,
-          "availHeight": 1010,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (NVIDIA)",
-          "unmaskedRenderer": "ANGLE (NVIDIA, NVIDIA GeForce 8800 GTX Direct3D11 vs_4_0 ps_4_0), or similar"
-        },
-        "speechVoices": [
-          "Microsoft Zira Desktop - English (United States):en-US:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
-          "platform": "Win32",
           "hardwareConcurrency": 16,
           "maxTouchPoints": 0
         },
@@ -9886,26 +9643,6 @@
           "Microsoft David Desktop - English (United States):en-US:local",
           "Microsoft Zira Desktop - English (United States):en-US:local"
         ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "Win32",
-          "hardwareConcurrency": 4,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1366,
-          "height": 768,
-          "colorDepth": 24,
-          "availWidth": 1366,
-          "availHeight": 720,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (Intel)",
-          "unmaskedRenderer": "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_4_1 ps_4_1), or similar"
-        }
       },
       {
         "navigator": {
@@ -10897,33 +10634,6 @@
         "navigator": {
           "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0",
           "platform": "Win32",
-          "hardwareConcurrency": 8,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1280,
-          "height": 800,
-          "colorDepth": 24,
-          "availWidth": 1280,
-          "availHeight": 752,
-          "devicePixelRatio": 1.5
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (Unknown)",
-          "unmaskedRenderer": "ANGLE (Unknown, Generic Renderer Direct3D11 vs_5_0 ps_5_0), or similar"
-        },
-        "speechVoices": [
-          "Microsoft Hortense - French (France):fr-FR:local",
-          "Microsoft Julie - French (France):fr-FR:local",
-          "Microsoft Paul - French (France):fr-FR:local",
-          "Microsoft Hortense Desktop - French:fr-FR:local",
-          "Microsoft Zira Desktop - English (United States):en-US:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "Win32",
           "hardwareConcurrency": 12,
           "maxTouchPoints": 10
         },
@@ -10973,33 +10683,6 @@
           "Microsoft Katja - German (Germany):de-DE:local",
           "Microsoft Stefan - German (Germany):de-DE:local",
           "Microsoft Hedda Desktop - German:de-DE:local",
-          "Microsoft Zira Desktop - English (United States):en-US:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "Win32",
-          "hardwareConcurrency": 8,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1366,
-          "height": 768,
-          "colorDepth": 24,
-          "availWidth": 1366,
-          "availHeight": 720,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (Unknown)",
-          "unmaskedRenderer": "ANGLE (Unknown, Adreno (TM) 650 Direct3D11 vs_5_0 ps_5_0), or similar"
-        },
-        "speechVoices": [
-          "Microsoft David - English (United States):en-US:local",
-          "Microsoft Mark - English (United States):en-US:local",
-          "Microsoft Zira - English (United States):en-US:local",
-          "Microsoft David Desktop - English (United States):en-US:local",
           "Microsoft Zira Desktop - English (United States):en-US:local"
         ]
       },
@@ -11433,85 +11116,6 @@
           "Microsoft Hazel - English (United Kingdom):en-GB:local",
           "Microsoft Susan - English (United Kingdom):en-GB:local",
           "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
-          "Microsoft Zira Desktop - English (United States):en-US:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "Win32",
-          "hardwareConcurrency": 12,
-          "maxTouchPoints": 10
-        },
-        "screen": {
-          "width": 1440,
-          "height": 960,
-          "colorDepth": 24,
-          "availWidth": 1440,
-          "availHeight": 912,
-          "devicePixelRatio": 2
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (Unknown)",
-          "unmaskedRenderer": "ANGLE (Unknown, Generic Renderer Direct3D11 vs_5_0 ps_5_0), or similar"
-        },
-        "speechVoices": [
-          "Microsoft David - English (United States):en-US:local",
-          "Microsoft Mark - English (United States):en-US:local",
-          "Microsoft Zira - English (United States):en-US:local",
-          "Microsoft David Desktop - English (United States):en-US:local",
-          "Microsoft Zira Desktop - English (United States):en-US:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "Win32",
-          "hardwareConcurrency": 4,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1366,
-          "height": 768,
-          "colorDepth": 24,
-          "availWidth": 1366,
-          "availHeight": 728,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (Intel)",
-          "unmaskedRenderer": "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_4_0 ps_4_0), or similar"
-        },
-        "speechVoices": [
-          "Microsoft Raul - Spanish (Mexico):es-MX:local",
-          "Microsoft Sabina - Spanish (Mexico):es-MX:local",
-          "Microsoft Sabina Desktop - Spanish (Mexico):es-MX:local",
-          "Microsoft Zira Desktop - English (United States):en-US:local"
-        ]
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "Win32",
-          "hardwareConcurrency": 8,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1536,
-          "height": 864,
-          "colorDepth": 24,
-          "availWidth": 1536,
-          "availHeight": 816,
-          "devicePixelRatio": 1.25
-        },
-        "webgl": {
-          "unmaskedVendor": "Google Inc. (Unknown)",
-          "unmaskedRenderer": "ANGLE (Unknown, Adreno (TM) 650 Direct3D11 vs_5_0 ps_5_0), or similar"
-        },
-        "speechVoices": [
-          "Microsoft Daniel - Portuguese (Brazil):pt-BR:local",
-          "Microsoft Maria - Portuguese (Brazil):pt-BR:local",
-          "Microsoft Maria Desktop - Portuguese(Brazil):pt-BR:local",
           "Microsoft Zira Desktop - English (United States):en-US:local"
         ]
       },
@@ -12128,26 +11732,6 @@
     "linux": [
       {
         "navigator": {
-          "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
-          "platform": "Linux x86_64",
-          "hardwareConcurrency": 8,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1920,
-          "height": 1080,
-          "colorDepth": 24,
-          "availWidth": 1920,
-          "availHeight": 1080,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "NVIDIA Corporation",
-          "unmaskedRenderer": "NVIDIA GeForce 8800 GTX, or similar"
-        }
-      },
-      {
-        "navigator": {
           "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
           "platform": "Linux x86_64",
           "hardwareConcurrency": 12,
@@ -12470,26 +12054,6 @@
         "navigator": {
           "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
           "platform": "Linux x86_64",
-          "hardwareConcurrency": 2,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1368,
-          "height": 768,
-          "colorDepth": 24,
-          "availWidth": 1368,
-          "availHeight": 728,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Mesa",
-          "unmaskedRenderer": "GeForce 8800 GTX, or similar"
-        }
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
-          "platform": "Linux x86_64",
           "hardwareConcurrency": 8,
           "maxTouchPoints": 0
         },
@@ -12505,128 +12069,6 @@
           "unmaskedVendor": "Intel",
           "unmaskedRenderer": "Intel(R) HD Graphics, or similar"
         }
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "Linux x86_64",
-          "hardwareConcurrency": 2,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1366,
-          "height": 768,
-          "colorDepth": 24,
-          "availWidth": 1366,
-          "availHeight": 717,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Intel Open Source Technology Center",
-          "unmaskedRenderer": "Intel(R) HD Graphics 400, or similar"
-        },
-        "speechVoices": [
-          "Catalan:ca:remote",
-          "Bishnupriya Manipuri:bpy:remote",
-          "Nahuatl (Classical):nci:remote",
-          "Dutch:nl:remote",
-          "Azerbaijani:az:remote",
-          "Kyrgyz:ky:remote",
-          "English (Great Britain):en:remote",
-          "Chinese (Cantonese):yue:remote",
-          "English (Lancaster):en:remote",
-          "Vietnamese (Northern):vi:remote",
-          "Amharic:am:remote",
-          "Gaelic (Irish):ga:remote",
-          "Latvian:lv:remote",
-          "Swahili:sw:remote",
-          "Afrikaans:af:remote",
-          "Malay:ms:remote",
-          "Tatar:tt:remote",
-          "Nepali:ne:remote",
-          "Serbian:sr:remote",
-          "Oriya:or:remote",
-          "Arabic:ar:remote",
-          "Interlingua:ia:remote",
-          "Italian:it:remote",
-          "Aragonese:an:remote",
-          "German:de:remote",
-          "Assamese:as:remote",
-          "Bengali:bn:remote",
-          "Georgian:ka:remote",
-          "Lithuanian:lt:remote",
-          "Danish:da:remote",
-          "English (Caribbean):en:remote",
-          "Papiamento:pap:remote",
-          "Chinese (Mandarin):cmn:remote",
-          "Bosnian:bs:remote",
-          "Guarani:gn:remote",
-          "Marathi:mr:remote",
-          "Persian:fa:remote",
-          "Hindi:hi:remote",
-          "Bulgarian:bg:remote",
-          "Lingua Franca Nova:lfn:remote",
-          "Hungarian:hu:remote",
-          "Icelandic:is:remote",
-          "Burmese:my:remote",
-          "Maltese:mt:remote",
-          "Esperanto:eo:remote",
-          "Portuguese (Portugal):pt:remote",
-          "Spanish (Spain):es:remote",
-          "Kurdish:ku:remote",
-          "Lojban:jbo:remote",
-          "Czech:cs:remote",
-          "Turkish:tr:remote",
-          "Tamil:ta:remote",
-          "Spanish (Latin America):es:remote",
-          "Indonesian:id:remote",
-          "Armenian (West Armenia):hy:remote",
-          "Kannada:kn:remote",
-          "Greek (Ancient):grc:remote",
-          "Armenian (East Armenia):hy:remote",
-          "Greenlandic:kl:remote",
-          "French (Switzerland):fr:remote",
-          "Norwegian Bokmål:nb:remote",
-          "Portuguese (Brazil):pt:remote",
-          "Urdu:ur:remote",
-          "Punjabi:pa:remote",
-          "Japanese:ja:remote",
-          "Romanian:ro:remote",
-          "Gujarati:gu:remote",
-          "Latin:la:remote",
-          "Polish:pl:remote",
-          "French (France):fr:remote",
-          "Slovenian:sl:remote",
-          "Malayalam:ml:remote",
-          "Russian:ru:remote",
-          "Croatian:hr:remote",
-          "Korean:ko:remote",
-          "Welsh:cy:remote",
-          "Slovak:sk:remote",
-          "poz/mi:mi:remote",
-          "English (Scotland):en:remote",
-          "Vietnamese (Southern):vi:remote",
-          "English (West Midlands):en:remote",
-          "Persian (Pinglish):fa:remote",
-          "Albanian:sq:remote",
-          "Finnish:fi:remote",
-          "English (Received Pronunciation):en:remote",
-          "Greek:el:remote",
-          "French (Belgium):fr:remote",
-          "Gaelic (Scottish):gd:remote",
-          "Telugu:te:remote",
-          "Konkani:kok:remote",
-          "Sindhi:sd:remote",
-          "Estonian:et:remote",
-          "Basque:eu:remote",
-          "Oromo:om:remote",
-          "English (America):en:remote",
-          "Swedish:sv:remote",
-          "Macedonian:mk:remote",
-          "Setswana:tn:remote",
-          "Sinhala:si:remote",
-          "Vietnamese (Central):vi:remote"
-        ]
       },
       {
         "navigator": {
@@ -12746,46 +12188,6 @@
         "webgl": {
           "unmaskedVendor": "Intel",
           "unmaskedRenderer": "Intel(R) HD Graphics, or similar"
-        }
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
-          "platform": "Linux x86_64",
-          "hardwareConcurrency": 2,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1366,
-          "height": 768,
-          "colorDepth": 24,
-          "availWidth": 1366,
-          "availHeight": 718,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Intel Open Source Technology Center",
-          "unmaskedRenderer": "Intel(R) HD Graphics 400, or similar"
-        }
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "Linux x86_64",
-          "hardwareConcurrency": 24,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 3072,
-          "height": 1728,
-          "colorDepth": 24,
-          "availWidth": 3072,
-          "availHeight": 1728,
-          "devicePixelRatio": 2
-        },
-        "webgl": {
-          "unmaskedVendor": "NVIDIA Corporation",
-          "unmaskedRenderer": "NVIDIA GeForce 8800 GTX, or similar"
         }
       },
       {
@@ -13417,26 +12819,6 @@
         "webgl": {
           "unmaskedVendor": "Intel",
           "unmaskedRenderer": "Intel(R) HD Graphics 400, or similar"
-        }
-      },
-      {
-        "navigator": {
-          "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
-          "platform": "Linux x86_64",
-          "hardwareConcurrency": 2,
-          "maxTouchPoints": 0
-        },
-        "screen": {
-          "width": 1366,
-          "height": 768,
-          "colorDepth": 24,
-          "availWidth": 1366,
-          "availHeight": 735,
-          "devicePixelRatio": 1
-        },
-        "webgl": {
-          "unmaskedVendor": "Mesa",
-          "unmaskedRenderer": "Radeon HD 5850, or similar"
         }
       },
       {

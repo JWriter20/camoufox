@@ -83,9 +83,9 @@ BROWSER_CHROME_HEIGHT = 86
 
 # GPU strings that are not possible on macOS. Firefox on a Mac reports Apple
 # Silicon as "Apple M1, or similar", and Intel Macs as an Intel Iris/UHD/HD
-# 4000-6000 part; ANGLE is Windows-only (Direct3D), and these two rows in
-# webgl_data.db are a Braswell Atom IGP and a desktop PC card, neither of which
-# shipped in any Mac.
+# 4000-6000 part; ANGLE is Windows-only (Direct3D), and the other two, which
+# webgl_data.db once offered to macOS, are a Braswell Atom IGP and a desktop PC
+# card, neither of which shipped in any Mac.
 _NOT_A_MAC_GPU = ('ANGLE', 'Intel(R) HD Graphics 400', 'Radeon R9 200 Series', 'llvmpipe')
 
 

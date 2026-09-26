@@ -59,7 +59,6 @@ window:
   # bottom edge land (see BROWSER_CHROME_HEIGHT in coherence.py).
   screenX: window.screenX
   screenY: window.screenY
-  pageYOffset: screen.pageYOffset
   # devicePixelRatio is not mapped: any value but 1 is a spoofing tell unless
   # the whole geometry is scaled with it.
 

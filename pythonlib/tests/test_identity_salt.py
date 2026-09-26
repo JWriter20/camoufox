@@ -85,7 +85,7 @@ class TestPinnedIdentityIsStable:
         # The test above draws ONE preset at random, so a preset that cannot
         # launch shows up as a 1-in-11 flake rather than a failure -- which is
         # how it reached CI. 39 of the 435 bundled presets name a GPU that is
-        # not among the 33 in webgl_data.db, and sample_webgl raises for those.
+        # not among the 31 in webgl_data.db, and sample_webgl raises for those.
         # Every preset has to produce launch options; see the fallback in
         # utils.launch_options.
         from camoufox.webgl import sample_webgl
@@ -178,3 +178,26 @@ def test_fingerprint_preset_off_never_draws_a_preset(off):
     checked with `is not None`, so False drew a random bundled preset."""
     with mock.patch.object(utils, "get_random_preset", side_effect=AssertionError("preset drawn")):
         launch(fingerprint_preset=off)
+
+
+def test_no_glyph_spacing_seed_is_generated():
+    """Glyph-spacing noise moved every measured text width off what the same
+    font gives on a real machine, so it was itself a fingerprint; the feature
+    is gone from the browser, and the launcher sends nothing for it."""
+    assert "fonts:spacing_seed" not in launch()
+    context = fp.generate_context_fingerprint(os="linux")
+    assert "fonts:spacing_seed" not in context["config"]
+    assert "setFontSpacingSeed" not in context["init_script"]
+
+
+def test_config_overrides_reach_the_config_and_the_init_script():
+    context = fp.generate_context_fingerprint(os="linux", config_overrides={"audio:seed": 7})
+    assert context["config"]["audio:seed"] == 7
+    assert "setAudioFingerprintSeed(7)" in context["init_script"]
+
+
+def test_instant_animations_warn_that_they_are_detectable():
+    from camoufox._warnings import LeakWarning
+
+    with pytest.warns(LeakWarning, match="getComputedTiming"):
+        launch(config={"instantAnimations": True}, i_know_what_im_doing=False)

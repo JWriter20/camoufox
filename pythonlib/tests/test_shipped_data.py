@@ -74,3 +74,41 @@ def test_each_os_still_has_gpus_to_draw_from():
             assert count >= 2, f"{os_key} has {count} GPU(s) left"
     finally:
         connection.close()
+
+
+def test_every_gpu_row_can_be_drawn_on_some_os():
+    """A row no OS can draw is dead weight a reader would take as real data."""
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        rows = connection.execute(
+            "SELECT vendor, renderer, win, mac, lin FROM webgl_fingerprints"
+        ).fetchall()
+    finally:
+        connection.close()
+    undrawable = [
+        (vendor, renderer)
+        for vendor, renderer, *weights in rows
+        if not any(
+            weight > 0 and coherence.gpu_fits_os(renderer, os_key)
+            for os_key, weight in zip(("win", "mac", "lin"), weights)
+        )
+    ]
+    assert undrawable == []
+
+
+@pytest.mark.parametrize("filename", PRESET_FILES)
+def test_every_preset_gpu_has_webgl_data(filename):
+    """A preset records only its GPU's name; the WebGL parameters behind it come
+    from fpgen. A GPU fpgen has never seen Firefox report on that OS has none, so
+    launching it would pair the name with another device's parameters."""
+    from camoufox.fingerprints import firefox_gpus
+
+    presets = json.loads((DATA / filename).read_text())["presets"]
+    for os_name, entries in presets.items():
+        known = firefox_gpus(os_name)
+        for index, preset in enumerate(entries):
+            gpu = (preset["webgl"]["unmaskedVendor"], preset["webgl"]["unmaskedRenderer"])
+            assert gpu in known, (
+                f"{filename} {os_name}[{index}]: {gpu[1]!r} has no WebGL data"
+                " -- run scripts/clean-fingerprint-data.py --write"
+            )

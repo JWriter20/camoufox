@@ -1,5 +1,5 @@
 diff --git a/dom/animation/AnimationEffect.cpp b/dom/animation/AnimationEffect.cpp
-index e92fdc9268..5f3fa86940 100644
+index e92fdc9268..9c04f00200 100644
 --- a/dom/animation/AnimationEffect.cpp
 +++ b/dom/animation/AnimationEffect.cpp
 @@ -11,6 +11,7 @@
@@ -10,7 +10,7 @@ index e92fdc9268..5f3fa86940 100644
  
  namespace mozilla::dom {
  
-@@ -121,10 +122,19 @@ ComputedTiming AnimationEffect::GetComputedTimingAt(
+@@ -121,10 +122,20 @@ ComputedTiming AnimationEffect::GetComputedTimingAt(
    // Always return the same object to benefit from return-value optimization.
    ComputedTiming result;
  
@@ -19,19 +19,20 @@ index e92fdc9268..5f3fa86940 100644
      MOZ_ASSERT(aTiming.Duration().ref() >= zeroDuration,
                 "Iteration duration should be positive");
 -    result.mDuration = aTiming.Duration().ref();
-+    // Camoufox: finite CSS animations complete instantly so Playwright doesn't
-+    // wait on them. `disableInstantAnimations` restores normal animation timing.
-+    if (MaskConfig::GetBool("disableInstantAnimations") ||
-+        result.mActiveDuration == StickyTimeDuration::Forever()) {
-+      result.mDuration = aTiming.Duration().ref();
-+    } else {
++    // Camoufox: `instantAnimations` completes finite animations at once so
++    // Playwright never waits on them. Off by default: a page reads the zero
++    // duration back through getComputedTiming().
++    if (MaskConfig::GetBool("instantAnimations") &&
++        result.mActiveDuration != StickyTimeDuration::Forever()) {
 +      result.mDuration = zeroDuration;
 +      result.mActiveDuration = zeroDuration;
++    } else {
++      result.mDuration = aTiming.Duration().ref();
 +    }
    }
  
    MOZ_ASSERT(aTiming.Iterations() >= 0.0 && !std::isnan(aTiming.Iterations()),
-@@ -137,7 +147,6 @@ ComputedTiming AnimationEffect::GetComputedTimingAt(
+@@ -137,7 +148,6 @@ ComputedTiming AnimationEffect::GetComputedTimingAt(
               "ValidateIterationStart");
    result.mIterationStart = aTiming.IterationStart();
  

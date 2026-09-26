@@ -134,10 +134,10 @@ index 0000000000..888303c315
 +
 +#endif  // mozilla_dom_TimezoneManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index 743be1950f..922a79af86 100644
+index 56e0798c8b..eab5894010 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -285,6 +285,7 @@ EXPORTS.mozilla.dom += [
+@@ -284,6 +284,7 @@ EXPORTS.mozilla.dom += [
      "TimeoutBudgetManager.h",
      "TimeoutHandler.h",
      "TimeoutManager.h",
@@ -145,7 +145,7 @@ index 743be1950f..922a79af86 100644
      "TreeIterator.h",
      "TreeOrderedArray.h",
      "TreeOrderedArrayInlines.h",
-@@ -503,6 +504,7 @@ UNIFIED_SOURCES += [
+@@ -501,6 +502,7 @@ UNIFIED_SOURCES += [
      "TimeoutExecutor.cpp",
      "TimeoutHandler.cpp",
      "TimeoutManager.cpp",
@@ -154,20 +154,20 @@ index 743be1950f..922a79af86 100644
      "UIDirectionManager.cpp",
      "UserActivation.cpp",
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 6444fccd9c..c0b2671d5b 100644
+index fb9c5c69d3..d4453fda3f 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -249,6 +249,8 @@
+@@ -248,6 +248,8 @@
+ #include "nsICookieService.h"
  #include "nsID.h"
  #include "nsIDOMStorageManager.h"
- #include "FontSpacingSeedManager.h"
 +#include "TimezoneManager.h"
 +#include "js/Date.h"
  #include "nsDocShell.h"
  #include "mozilla/OriginAttributes.h"
  #include "nsIDOMXULControlElement.h"
-@@ -7781,6 +7783,50 @@ void nsGlobalWindowInner::SetFontSpacingSeed(uint32_t seed, ErrorResult& aRv) {
-   }
+@@ -7763,6 +7765,50 @@ IntlUtils* nsGlobalWindowInner::GetIntlUtils(ErrorResult& aError) {
+   return mIntlUtils;
  }
  
 +void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aRv) {
@@ -218,17 +218,18 @@ index 6444fccd9c..c0b2671d5b 100644
    MOZ_ASSERT(aSharedWorker);
    MOZ_ASSERT(!mSharedWorkers.Contains(aSharedWorker));
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index bb70b2b8fe..bfde19786c 100644
+index 43600d66bf..1f9f283026 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -685,6 +685,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -683,6 +683,8 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
  
-   // Font spacing seed for privacy-preserving font fingerprinting
-   void SetFontSpacingSeed(uint32_t seed, mozilla::ErrorResult& aRv);
+   mozilla::dom::IntlUtils* GetIntlUtils(mozilla::ErrorResult& aRv);
+ 
 +  void SetTimezone(const nsAString& timezone, mozilla::ErrorResult& aRv);
- 
++
    void StoreSharedWorker(mozilla::dom::SharedWorker* aSharedWorker);
  
+   void ForgetSharedWorker(mozilla::dom::SharedWorker* aSharedWorker);
 diff --git a/dom/base/nsGlobalWindowOuter.cpp b/dom/base/nsGlobalWindowOuter.cpp
 index dd0124f7e9..549e0869d0 100644
 --- a/dom/base/nsGlobalWindowOuter.cpp
@@ -306,10 +307,10 @@ index 21d69bdfed..fa2a7e3be3 100644
    MOZ_ASSERT(NS_IsMainThread());
  
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index 6448765fb8..f01e8011cc 100644
+index 162c95ba3d..b20d7c1f6f 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
-@@ -958,6 +958,12 @@ partial interface Window {
+@@ -952,6 +952,12 @@ partial interface Window {
    undefined setSpeechVoices(DOMString voices);
  };
  

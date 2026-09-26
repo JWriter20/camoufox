@@ -13,10 +13,11 @@ index 6ec4dc5265..d8a5a5aac0 100644
    uint32_t userContextId = 0;
    if (BrowsingContext* bc = win->GetBrowsingContext()) {
 diff --git a/dom/base/ChromeUtils.cpp b/dom/base/ChromeUtils.cpp
-index 8657d3282b..d8889edb6a 100644
+index 9a04e43224..fb7f231799 100644
 --- a/dom/base/ChromeUtils.cpp
 +++ b/dom/base/ChromeUtils.cpp
-@@ -6,5 +6,9 @@
+@@ -5,6 +5,10 @@
+ #include "ChromeUtils.h"
  #include "MaskConfig.hpp"
  
 +// Camoufox: for CamouSealFingerprintSetters below.
@@ -39,7 +40,7 @@ index 8657d3282b..d8889edb6a 100644
 +    "setScreenDimensions", "setScreenColorDepth",
 +    "setWebGLVendor", "setWebGLRenderer",
 +    "setWebRTCIPv4", "setWebRTCIPv6",
-+    "setFontList", "setFontSpacingSeed",
++    "setFontList",
 +    "setAudioFingerprintSeed", "setSpeechVoices",
 +    "setTimezone",
 +};
@@ -102,7 +103,7 @@ index 8657d3282b..d8889edb6a 100644
  bool ChromeUtils::ShouldResistFingerprinting(
      GlobalObject& aGlobal, JSRFPTarget aTarget,
 diff --git a/dom/base/ChromeUtils.h b/dom/base/ChromeUtils.h
-index e32ee77dfd..8747d75c44 100644
+index f1de113a05..0937a561f3 100644
 --- a/dom/base/ChromeUtils.h
 +++ b/dom/base/ChromeUtils.h
 @@ -361,6 +361,12 @@ class ChromeUtils {
@@ -132,20 +133,6 @@ index 438bad576d..5fd40e4e48 100644
    uint32_t id = 0;
    if (BrowsingContext* bc = win->GetBrowsingContext()) {
      id = bc->OriginAttributesRef().mUserContextId;
-diff --git a/dom/base/FontSpacingSeedManager.cpp b/dom/base/FontSpacingSeedManager.cpp
-index e07de3e753..f16422badf 100644
---- a/dom/base/FontSpacingSeedManager.cpp
-+++ b/dom/base/FontSpacingSeedManager.cpp
-@@ -76,6 +76,9 @@ FontSpacingSeedManager::IsFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aOb
-   if (!win) {
-     return false;
-   }
-+  // Camoufox: sealed once this window's init scripts have run, so page
-+  // script never sees the setter (FrameTree -> camouSealFingerprintSetters).
-+  if (win->CamouSettersSealed()) return false;
- 
-   uint32_t userContextId = 0;
-   if (BrowsingContext* bc = win->GetBrowsingContext()) {
 diff --git a/dom/base/NavigatorManager.cpp b/dom/base/NavigatorManager.cpp
 index 37a1713159..e53e97de25 100644
 --- a/dom/base/NavigatorManager.cpp
@@ -229,10 +216,10 @@ index 0119707221..511e92e1f2 100644
    if (BrowsingContext* bc = win->GetBrowsingContext()) {
      id = bc->OriginAttributesRef().mUserContextId;
 diff --git a/dom/base/TimezoneManager.cpp b/dom/base/TimezoneManager.cpp
-index ffbc624040..548ff14a78 100644
+index 206a027918..cd35b265ad 100644
 --- a/dom/base/TimezoneManager.cpp
 +++ b/dom/base/TimezoneManager.cpp
-@@ -56,6 +56,9 @@ TimezoneManager::IsFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj) {
+@@ -75,6 +75,9 @@ TimezoneManager::IsFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj) {
    if (!win) {
      return false;
    }
@@ -291,11 +278,11 @@ index 8834c93e4b..fa807ad165 100644
    uint32_t userContextId = 0;
    if (BrowsingContext* bc = win->GetBrowsingContext()) {
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index d709b07f7d..95184adcef 100644
+index 66f858aad5..65ccfc6ea5 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -687,6 +687,36 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
-   void SetFontSpacingSeed(uint32_t seed, mozilla::ErrorResult& aRv);
+@@ -685,6 +685,36 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+ 
    void SetTimezone(const nsAString& timezone, mozilla::ErrorResult& aRv);
  
 +  // Camoufox: the window.setXxx() fingerprint setters are configuration API
@@ -332,7 +319,7 @@ index d709b07f7d..95184adcef 100644
    void SetWebRTCIPv4(const nsAString& ipv4, mozilla::ErrorResult& aRv);
    void SetWebRTCIPv6(const nsAString& ipv6, mozilla::ErrorResult& aRv);
 diff --git a/dom/chrome-webidl/ChromeUtils.webidl b/dom/chrome-webidl/ChromeUtils.webidl
-index 4c15c49fef..33aa276db2 100644
+index 31c1212350..5f655f6714 100644
 --- a/dom/chrome-webidl/ChromeUtils.webidl
 +++ b/dom/chrome-webidl/ChromeUtils.webidl
 @@ -938,6 +938,20 @@ partial namespace ChromeUtils {

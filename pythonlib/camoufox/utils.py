@@ -40,7 +40,7 @@ from .pkgman import (
     launch_path,
 )
 from .virtdisplay import VirtualDisplay
-from ._warnings import LeakWarning
+from ._warnings import FallbackWarning, LeakWarning
 from .webgl import sample_webgl
 
 ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
@@ -558,7 +558,7 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
     """
     # Manual locale setting
     if is_domain_set(
-        config, 'navigator.language', 'navigator.languages', 'headers.Accept-Language', 'locale:'
+        config, 'navigator.language', 'headers.Accept-Language', 'locale:'
     ):
         LeakWarning.warn('locale', False)
     # Manual geolocation and timezone setting
@@ -575,6 +575,8 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
     # CSS pointer media queries and the TouchEvent interfaces.
     if is_domain_set(config, 'navigator.maxTouchPoints'):
         LeakWarning.warn('max_touch_points', False)
+    if config.get('instantAnimations'):
+        LeakWarning.warn('instant_animations', False)
     # Manual screen/window setting
     if is_domain_set(config, 'screen.', 'window.', 'document.body.'):
         LeakWarning.warn('viewport', False)
@@ -585,8 +587,6 @@ _WINDOW_DIM_KEYS = (
     'window.outerHeight',
     'window.innerWidth',
     'window.innerHeight',
-    'document.body.clientWidth',
-    'document.body.clientHeight',
 )
 
 
@@ -1146,7 +1146,11 @@ def launch_options(
                 # OS base is claimed
                 native=(target_os in ('mac', 'win') and _host_os_key() == target_os),
             )
-        except Exception:
+        except (OSError, ValueError) as e:
+            FallbackWarning.warn(
+                'Drawing the font list', f"every font fonts.json lists for {target_os}", e,
+                config.get('navigator.userAgent'),
+            )
             update_fonts(config, target_os)
 
     # Draw the identity's media devices (counts + OS-style labels/groups from
@@ -1267,18 +1271,12 @@ def launch_options(
     if not _user_set_accept_encoding:
         config.pop('headers.Accept-Encoding', None)
 
-    # Set random seeds for fingerprint noise (per launch)
-    # Glyph-advance perturbation is OFF by default (seed 0): it moves every
-    # measured text width off the value the same font produces on a real
-    # machine (measured 2026-09-14: +1 px per ~100 glyphs, fractional deltas
-    # on every measureText), which is a fingerprint no stock Firefox emits.
-    # Pass fonts:spacing_seed explicitly to opt back in.
-    set_into(config, 'fonts:spacing_seed', 0)
     # The audio noise seed follows the identity: a returning "same device" must
     # reproduce its audio hash (#442/#765). Never 0 (0 disables the noise). A
     # preset draws its own random seed; it is replaced here too so a pinned
     # preset reproduces it, but a seed the caller set is kept. There is no
-    # canvas seed: the browser adds no canvas noise (#528).
+    # canvas seed: the browser adds no canvas noise (#528), and no glyph-spacing
+    # noise either (ci/tribal-rules.yml: no-glyph-spacing-noise).
     if not _user_set_audio_seed:
         _ident = identity_seed(config, _identity_salt)
         config['audio:seed'] = ((_ident * 2654435761 + 97) & 0xFFFFFFFF) or 1
@@ -1380,10 +1378,13 @@ def launch_options(
             config['voices'] = _generate_random_voice_subset(
                 os_name_v, voice_locale, seed=identity_seed(config, _identity_salt)
             )
-        except Exception:
+        except (OSError, ValueError, KeyError) as e:
             # An empty list still blocks the host's voices (see below), so a
             # generation failure degrades to "no voices" rather than "all of
             # the host's".
+            FallbackWarning.warn(
+                'Drawing the speech voices', 'no speech voices', e, config.get('navigator.userAgent')
+            )
             config['voices'] = []
 
     # Pin the block explicitly instead of relying on a non-empty list to imply
@@ -1418,8 +1419,7 @@ def launch_options(
         LeakWarning.warn('disable_coop', i_know_what_im_doing)
         firefox_user_prefs['browser.tabs.remote.useCrossOriginOpenerPolicy'] = False
 
-    # Allow allow_webgl parameter for backwards compatibility
-    if block_webgl or launch_options.pop('allow_webgl', True) is False:
+    if block_webgl:
         firefox_user_prefs['webgl.disabled'] = True
         LeakWarning.warn('block_webgl', i_know_what_im_doing)
     else:
@@ -1430,21 +1430,12 @@ def launch_options(
             # Preset already set vendor/renderer — sample matching WebGL params
             try:
                 webgl_fp = sample_webgl(target_os, config['webGl:vendor'], config['webGl:renderer'], seed=identity_seed(config, _identity_salt))
-            except ValueError:
-                # The pair is not in webgl_data.db, which holds 33 GPUs. 39 of the
-                # 435 bundled presets name one it does not have -- including rows
-                # that cannot be the OS they are filed under, e.g. a Windows
-                # preset claiming "ANGLE (Unknown, Adreno (TM) 650 ...)", a phone
-                # GPU. Raising here made launch_options() fail outright for ~9% of
-                # presets, and a caller passing their own preset dict had no way
-                # to know which pairs are supported.
-                #
-                # There is no way to keep the named GPU: the parameters, extension
-                # list and shader precisions all have to come from a real recorded
-                # device, and there is none for an unknown renderer. So draw a GPU
-                # that fits the screen and let it replace the pair -- the identity
-                # loses the preset's GPU string but stays internally coherent,
-                # which is the property that matters to a page reading both.
+            except ValueError as e:
+                # The pair is not in webgl_data.db, which holds 31 GPUs; 36 of the
+                # 397 bundled presets name one it does not have. The parameters,
+                # extension list and shader precisions must all come from one
+                # recorded device, and there is none for this renderer, so the
+                # identity takes a GPU drawn to fit the screen instead.
                 webgl_fp = sample_webgl_for_screen(
                     target_os, config.get('screen.width'), config.get('screen.height'),
                     seed=identity_seed(config, _identity_salt),
@@ -1454,8 +1445,13 @@ def launch_options(
                 # preset's renderer string with another device's parameters,
                 # extensions and shader precisions behind it -- a mismatch louder
                 # than the unknown GPU we are replacing.
-                config.pop('webGl:vendor', None)
-                config.pop('webGl:renderer', None)
+                preset_gpu = f"{config.pop('webGl:vendor', None)} / {config.pop('webGl:renderer', None)}"
+                FallbackWarning.warn(
+                    f"Finding the preset's GPU ({preset_gpu}) in webgl_data.db",
+                    f"a GPU drawn to fit the screen ({webgl_fp['webGl:renderer']})",
+                    e,
+                    config.get('navigator.userAgent'),
+                )
         else:
             # Synthetic path: keep the GPU coherent with the screen BrowserForge
             # already picked. Sampling the two independently yields pairs no

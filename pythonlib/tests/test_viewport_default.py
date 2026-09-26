@@ -22,7 +22,6 @@ def _opts(config_blob: str):
     [
         ('{"window.outerWidth": 360}', True),
         ('{"window.innerHeight": 740}', True),
-        ('{"document.body.clientWidth": 360}', True),
         ('{"screen.width": 360}', False),
         ('{"navigator.userAgent": "x"}', False),
         ("{}", False),

@@ -152,11 +152,14 @@ def test_caller_can_override_the_block_flag():
 def test_voice_generation_failure_fails_closed(monkeypatch):
     import camoufox.utils as utils
 
+    from camoufox._warnings import FallbackWarning
+
     def boom(*_args, **_kwargs):
-        raise RuntimeError("voices.json unreadable")
+        raise OSError("voice-manifests.json unreadable")
 
     monkeypatch.setattr(utils, "_generate_random_voice_subset", boom)
-    cfg = _launch_config(os="macos")
+    with pytest.warns(FallbackWarning, match="github.com/daijro/camoufox/issues/new"):
+        cfg = _launch_config(os="macos")
     # An empty list plus the block flag means "no voices" -- never "all of the
     # host's".
     assert cfg["voices"] == []

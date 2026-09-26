@@ -15,6 +15,11 @@ issue first.
 - **Draw more of the identity from fpgen.** Navigator, screen, window and
   headers come from fpgen today. Its fonts, voices, WebGL parameters,
   permissions, WebRTC capabilities and audio hashes are still drawn elsewhere.
+- **Capture WebGL data for GPUs Camoufox cannot present yet**: Windows on ARM
+  (Adreno), Direct3D 10-level hardware, and the Mesa/nouveau and older Intel
+  Linux drivers. Presets naming them were dropped because nothing recorded
+  their WebGL parameters. They come back as normal identities once real
+  parameters for them exist.
 - **Reproducible identities across relaunches**: the same seed gives the same
   device, including its canvas and audio output
   ([#442](https://github.com/daijro/camoufox/issues/442),

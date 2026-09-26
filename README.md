@@ -359,7 +359,7 @@ Camoufox is a Firefox fork engineered for web scraping and AI agents. It is head
 * **Optimized for automation**
   * Human-like mouse movement 🖱️
   * Blocks & circumvents ads 🛡️
-  * No CSS animations 💨
+  * Optional instant animations (`instantAnimations`), so Playwright never waits on one 💨
 
 - Debloated & optimized for memory efficiency ⚡
 - [PyPI](https://pypi.org/project/camoufox/) and npm packages for updates & auto fingerprint injection 📦
@@ -438,7 +438,6 @@ Below is a list of patches and features implemented in Camoufox.
 - Network headers (Accept-Languages and User-Agent) are spoofed to match the navigator properties
 - WebRTC IP spoofing at the protocol level
 - Geolocation, timezone, and locale spoofing
-- Battery API spoofing
 - etc.
 
 ### Stealth patches
@@ -458,7 +457,7 @@ Below is a list of patches and features implemented in Camoufox.
 
 - Automatically uses the correct system fonts for your User Agent
 - Bundled with Windows, Mac, and Linux system fonts
-- Letter-spacing noise is available (`fonts:spacing_seed`) but off by default, because no real machine produces it
+- No glyph-spacing noise: measured text widths are the ones the same font gives on a real machine
 
 ### Playwright support
 
@@ -471,7 +470,7 @@ Below is a list of patches and features implemented in Camoufox.
 - Patches from LibreWolf & Ghostery to help remove telemetry & bloat
 - Debloat config from PeskyFox, LibreWolf, and others
 - Speed & network optimizations from FastFox
-- Removed all CSS animations
+- Animations run on stock timing; `instantAnimations: True` finishes them at once, at the cost of being detectable
 - Minimalistic theming
 - etc.
 

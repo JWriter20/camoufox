@@ -37,7 +37,7 @@ are listed in [`patches/patch-dependencies.md`](../patches/patch-dependencies.md
 ### Key Infrastructure Files
 
 - **RoverfoxStorageManager.cpp/h**: Thread-safe key-value storage for per-context data
-- **Manager Classes**: FontSpacingSeedManager, WebRTCIPManager, etc.
+- **Manager Classes**: AudioFingerprintManager, WebRTCIPManager, etc.
 - **Window.webidl**: Exposes the per-context setters to Playwright
 
 ---
@@ -302,14 +302,14 @@ Simply apply the patch manually at the correct line number. The code hasn't chan
 Most spoofing patches carry per-context support. When porting one, expect these
 pieces:
 
-1. **Manager classes** (e.g., FontSpacingSeedManager, WebRTCIPManager):
+1. **Manager classes** (e.g., AudioFingerprintManager, WebRTCIPManager):
    - Store per-context settings using RoverfoxStorageManager
    - Provide WebIDL-compatible enable/disable checks
    - Handle self-destructing functions
 
 2. **Window.webidl functions**:
    - JavaScript APIs exposed to Playwright
-   - Examples: `setFontSpacingSeed()`, `setWebRTCIPv4()`
+   - Examples: `setAudioFingerprintSeed()`, `setWebRTCIPv4()`
 
 3. **nsGlobalWindowInner.cpp implementations**:
    - Extract userContextId from window/document/docshell

@@ -34,6 +34,7 @@ EXIT = {"status": "success", "query": "203.0.113.7", "timezone": "Europe/Paris"}
 
 def _sync_browser():
     browser = mock.MagicMock()
+    browser.version = "152.0.4"
     return browser
 
 
@@ -41,6 +42,7 @@ def _async_browser():
     context = mock.MagicMock()
     context.add_init_script = mock.AsyncMock()
     browser = mock.MagicMock()
+    browser.version = "152.0.4"
     browser.new_context = mock.AsyncMock(return_value=context)
     return browser
 
