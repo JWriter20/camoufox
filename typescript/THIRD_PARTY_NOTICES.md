@@ -97,9 +97,9 @@ agrees to be bound by the terms and conditions of this License
 Agreement.
 ```
 
-## NumPy random — `src/webgl/nprandom.ts`
+## NumPy — `src/locales.ts`
 
-A port of NumPy's `SeedSequence` and `Generator.random()` / `choice()`:
+A port of NumPy's pairwise float64 summation (`np.sum`):
 
 ```
 Copyright (c) 2005-2025, NumPy Developers.

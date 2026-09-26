@@ -3,8 +3,7 @@
  * dist/data-files) and must be the SAME files pythonlib ships, or one seed
  * would draw different fonts / voices / devices / GPUs in the two launchers.
  * scripts/sync-identity-data.py copies them; this test fails when a copy
- * drifts. (webgl_data.json is an export of webgl_data.db, checked row by row
- * against the database in identity-golden.test.ts.)
+ * drifts.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";

@@ -793,6 +793,55 @@ describe.skipIf(!modelReady)(
 			expect(config.fonts.length).toBeGreaterThan(0);
 		});
 
+		it("a preset keeps its own GPU (test_webgl.py)", async () => {
+			const preset = fingerprints.loadPresets("152")?.presets.linux[0];
+			const config = await launchConfig({
+				os: "linux",
+				fingerprint_preset: preset,
+			});
+			expect([config["webGl:vendor"], config["webGl:renderer"]]).toEqual([
+				preset.webgl.unmaskedVendor,
+				preset.webgl.unmaskedRenderer,
+			]);
+		});
+
+		it("a preset GPU fpgen has never seen raises", async () => {
+			const preset = {
+				...fingerprints.loadPresets("152")?.presets.windows[0],
+				webgl: {
+					unmaskedVendor: "Google Inc. (Acme)",
+					unmaskedRenderer:
+						"ANGLE (Acme, Acme GPU 9000 Direct3D11 vs_5_0 ps_5_0)",
+				},
+			};
+			await expect(
+				launchConfig({ os: "windows", fingerprint_preset: preset }),
+			).rejects.toThrow(/Acme GPU 9000/);
+		});
+
+		it("an unknown webgl_config raises", async () => {
+			await expect(
+				launchConfig({
+					os: "windows",
+					webgl_config: ["Apple", "Apple M1, or similar"],
+				}),
+			).rejects.toThrow(/No recorded WebGL data/);
+		});
+
+		it("a device without WebGL2 turns WebGL2 off", async () => {
+			const options = await launch({
+				os: "windows",
+				headless: true,
+				i_know_what_im_doing: true,
+				executable_path: BUNDLE_EXE,
+				webgl_config: [
+					"Google Inc. (Microsoft)",
+					"ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0), or similar",
+				],
+			});
+			expect(options.firefoxUserPrefs["webgl.enable-webgl2"]).toBe(false);
+		});
+
 		it("instantAnimations warns that it is detectable", async () => {
 			const { warned } = await launchWarning(
 				{
@@ -828,12 +877,8 @@ describe.skipIf(!modelReady)(
 			"windows",
 			"macos",
 			"linux",
-		])("every bundled %s preset launches, GPU coherent", async (osName) => {
+		])("every bundled %s preset launches with its own GPU", async (osName) => {
 			const presets = fingerprints.loadPresets("150")?.presets[osName] ?? [];
-			const { sampleWebGL } = await import("../src/webgl/sample.js");
-			const key = ({ windows: "win", macos: "mac", linux: "lin" } as const)[
-				osName as "windows"
-			];
 			expect(presets.length).toBeGreaterThan(0);
 			for (const [i, preset] of presets.entries()) {
 				const config = await launchConfig({
@@ -841,7 +886,9 @@ describe.skipIf(!modelReady)(
 					fingerprint_preset: preset,
 				});
 				expect(config["webGl:parameters"], `${osName} ${i}`).toBeTruthy();
-				sampleWebGL(key, config["webGl:vendor"], config["webGl:renderer"]);
+				expect(config["webGl:renderer"], `${osName} ${i}`).toBe(
+					preset.webgl.unmaskedRenderer,
+				);
 			}
 		}, 120_000);
 	},

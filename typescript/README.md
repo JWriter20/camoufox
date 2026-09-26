@@ -6,8 +6,8 @@ to Python.
 
 The two launchers are twins: they read the same `properties.json`, write the
 same chunked `CAMOU_CONFIG`, share the same browser install directory, and
-ship the same fingerprint presets, font/voice lists, WebGL catalogue, and
-GeoIP configuration. They draw the same identities too: fingerprints come from a
+ship the same fingerprint presets, font/voice lists and GeoIP configuration.
+They draw the same identities too: fingerprints and WebGL devices come from a
 TypeScript port of [fpgen](https://github.com/scrapfly/fingerprint-generator)
 using the same pinned model, and the per-identity draws (fonts, voices, GPU,
 media devices, noise seeds) use a bit-exact port of CPython's `random`, so a
@@ -137,8 +137,8 @@ pnpm typecheck   # tsc --noEmit
 ```
 
 `src/data-files/` holds copies of the Python package's data, kept
-byte-identical by `scripts/sync-identity-data.py` (and `webgl_data.json` is
-exported from `webgl_data.db`); a test fails if any copy drifts.
+byte-identical by `scripts/sync-identity-data.py`; a test fails if any copy
+drifts.
 
 ### Parity with pythonlib
 
@@ -175,5 +175,5 @@ npm trusted publishing -- no token is stored.
 
 MIT, like the Python package ([`LICENSE`](LICENSE)); the browser itself is
 MPL-2.0. The package contains ports of fpgen (Apache-2.0), CPython's `random`
-and NumPy's random generators; their notices are in
+and NumPy's pairwise summation; their notices are in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), which ships with it.

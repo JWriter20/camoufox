@@ -4,12 +4,11 @@
  * and the geometry / arch corrections applied on top of both.
  *
  * TypeScript twin of pythonlib/camoufox/fingerprints.py. Every seeded draw is
- * bit-for-bit the Python one -- `random.Random(seed)` is ./pyrandom.ts,
- * numpy's default_rng is ./webgl/nprandom.ts, and identitySalt() hashes the
- * same orjson bytes -- so one config and salt present one identity whichever
- * launcher built it. Unseeded Python draws (`random.randint`, `random.choice`)
- * go through the shared `pyRandom` instance, the twin of Python's module-level
- * generator.
+ * bit-for-bit the Python one -- `random.Random(seed)` is ./pyrandom.ts, and
+ * identitySalt() hashes the same orjson bytes -- so one config and salt
+ * present one identity whichever launcher built it. Unseeded Python draws
+ * (`random.randint`, `random.choice`) go through the shared `pyRandom`
+ * instance, the twin of Python's module-level generator.
  */
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
@@ -35,9 +34,9 @@ import {
 } from "./pycompat.js";
 import { PyRandom, pyRandom } from "./pyrandom.js";
 import { FallbackWarning } from "./warnings.js";
-import { sampleWebGL, type TargetOS, type WebGLData } from "./webgl/sample.js";
+import { sampleWebglForScreen, type TargetOS } from "./webgl.js";
 
-export type { TargetOS } from "./webgl/sample.js";
+export type { TargetOS } from "./webgl.js";
 
 type Config = Record<string, any>;
 
@@ -79,7 +78,7 @@ export const FPGEN_DATA: Readonly<Record<string, Record<string, string>>> = {
 };
 
 // fpgen's OS names, from Camoufox's.
-const FPGEN_OS: Readonly<Record<string, string>> = {
+export const FPGEN_OS: Readonly<Record<string, string>> = {
 	lin: "Linux",
 	linux: "Linux",
 	mac: "macOS",
@@ -2077,60 +2076,6 @@ export function gpuScreenIsPlausible(
 	return width * height > NETBOOK_MAX_PIXELS;
 }
 
-type WebGLSampler = (
-	os: string,
-	vendor?: string | null,
-	renderer?: string | null,
-	seed?: number | bigint | null,
-) => WebGLData;
-
-function seedPlus(seed: number | bigint, add: number): number | bigint {
-	return typeof seed === "bigint" ? seed + BigInt(add) : seed + add;
-}
-
-/**
- * Sample a WebGL profile coherent with the screen already chosen, by
- * rejection sampling: the GPU keeps the pool's real OS-weighted distribution,
- * draws that contradict the screen are dropped, and a software rasterizer is
- * never settled on. Falls back to the first draw when nothing is coherent.
- *
- * @param sampler the underlying draw (tests substitute it).
- */
-export function sampleWebGLForScreen(
-	targetOs: string,
-	width?: number | null,
-	height?: number | null,
-	attempts = 32,
-	seed?: number | bigint | null,
-	sampler: WebGLSampler = sampleWebGL,
-): WebGLData {
-	const first = sampler(targetOs, null, null, seed);
-	let renderer = first["webGl:renderer"];
-	if (
-		!isSoftwareRenderer(renderer) &&
-		gpuScreenIsPlausible(renderer, width, height)
-	)
-		return first;
-
-	let fallback: WebGLData | null = isSoftwareRenderer(renderer) ? null : first;
-	for (let attempt = 0; attempt < attempts - 1; attempt++) {
-		const candidate = sampler(
-			targetOs,
-			null,
-			null,
-			isNone(seed) ? null : seedPlus(seed as number | bigint, 1 + attempt),
-		);
-		renderer = candidate["webGl:renderer"];
-		if (isSoftwareRenderer(renderer)) continue;
-		if (gpuScreenIsPlausible(renderer, width, height)) return candidate;
-		fallback = fallback ?? candidate;
-	}
-	return fallback ?? first;
-}
-
-/** Python name: sample_webgl_for_screen. */
-export const sampleWebglForScreen = sampleWebGLForScreen;
-
 // ---------------------------------------------------------------------------
 // Presets
 // ---------------------------------------------------------------------------
@@ -2620,19 +2565,16 @@ export function generateContextFingerprint({
 							? "lin"
 							: "mac";
 			}
-			try {
-				// Same coherence treatment launchOptions applies (#729).
-				raiseScreenToModernFloor(config);
-				const webglFp = sampleWebGLForScreen(
-					targetOs,
-					config["screen.width"],
-					config["screen.height"],
-				);
-				delete webglFp.webGl2Enabled;
-				Object.assign(config, webglFp);
-			} catch {
-				// no WebGL data for this OS
-			}
+			// Same coherence treatment launchOptions applies (#729): lift netbook
+			// geometry, then keep the GPU consistent with the resulting screen.
+			raiseScreenToModernFloor(config);
+			const webglFp = sampleWebglForScreen(
+				targetOs,
+				config["screen.width"],
+				config["screen.height"],
+			);
+			delete webglFp.webGl2Enabled;
+			Object.assign(config, webglFp);
 		}
 
 		nav = {

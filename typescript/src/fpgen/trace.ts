@@ -16,6 +16,13 @@ export class TraceResult {
 	constructor(
 		readonly value: any,
 		readonly probability: number,
+		/**
+		 * The value's JSON as the model stores it (a TypeScript addition). It
+		 * is the key of the node's lookup index, and JSON.parse cannot always
+		 * give it back: 2**64 re-serialises as 18446744073709552000, where
+		 * the store holds orjson's 1.8446744073709552e19.
+		 */
+		readonly text: string,
 	) {}
 
 	toString(): string {
@@ -114,7 +121,7 @@ function pullTarget(target: string, evidence: EvidenceMap): TraceResult[] {
 	const data = model.lookupValueList(possibilities.keys());
 	const probs = [...possibilities.values()];
 	const resp = data.map(
-		(text, i) => new TraceResult(JSON.parse(text), probs[i]),
+		(text, i) => new TraceResult(JSON.parse(text), probs[i], text),
 	);
 	// list.sort is stable, as is Array.prototype.sort.
 	resp.sort((a, b) => b.probability - a.probability);

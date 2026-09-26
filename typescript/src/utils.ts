@@ -45,7 +45,6 @@ import {
 	identitySeed,
 	raiseScreenToModernFloor,
 	Screen,
-	sampleWebglForScreen,
 	setMediaDevicesDefaults,
 	WINDOWS_11_MARKER_FONTS,
 } from "./fingerprints.js";
@@ -79,10 +78,11 @@ import {
 	PyFloat,
 	pyRepr,
 	pyStr,
+	ValueError,
 } from "./pycompat.js";
 import type { VirtualDisplay } from "./virtdisplay.js";
 import { FallbackWarning, LeakWarning, warn } from "./warnings.js";
-import { sampleWebGL } from "./webgl/sample.js";
+import { sampleWebglForScreen, webglForGpu } from "./webgl.js";
 
 export type ListOrString = string | string[];
 export type TargetOS = "mac" | "win" | "lin";
@@ -217,8 +217,17 @@ export const utilsDeps = {
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
 	setMediaDevicesDefaults,
-	sampleWebgl: sampleWebGL,
-	sampleWebglForScreen,
+	// The WebGL draws read fpgen's model, fetched on first use like Python's.
+	webglForGpu: async (...args: Parameters<typeof webglForGpu>) => {
+		await ensureModel();
+		return webglForGpu(...args);
+	},
+	sampleWebglForScreen: async (
+		...args: Parameters<typeof sampleWebglForScreen>
+	) => {
+		await ensureModel();
+		return sampleWebglForScreen(...args);
+	},
 	publicIp: publicIP,
 	getGeolocation,
 	validateConfig: (config: Record<string, any>, p?: string | null) =>
@@ -1299,7 +1308,7 @@ export async function launchOptions({
 		checkValidOs(targetOsOption as ListOrString);
 	} else if (isTruthy(webgl_config)) {
 		// webgl_config requires OS to be set
-		throw new Error("OS must be set when using webgl_config");
+		throw new ValueError("OS must be set when using webgl_config");
 	}
 
 	// Add the default addons
@@ -1423,7 +1432,7 @@ export async function launchOptions({
 		if (fonts?.length) {
 			LeakWarning.warn("custom_fonts_only");
 		} else {
-			throw new Error(
+			throw new ValueError(
 				"No custom fonts were passed, but `custom_fonts_only` is enabled.",
 			);
 		}
@@ -1680,48 +1689,30 @@ export async function launchOptions({
 		let webglFp: Record<string, any>;
 		const seed = () =>
 			utilsDeps.identitySeed(config as Record<string, any>, salt);
+		// A pair the caller named, or the preset's own GPU, keeps its name and
+		// gets that device's recorded parameters. webglForGpu raises for a GPU
+		// fpgen has never seen: the caller asked for something that does not exist.
 		if (isTruthy(webgl_config)) {
-			// If the user has provided a specific WebGL vendor/renderer pair, use it
 			const [vendor, renderer] = webgl_config as [string, string];
-			webglFp = utilsDeps.sampleWebgl(targetOs, vendor, renderer, seed());
+			webglFp = await utilsDeps.webglForGpu(targetOs, vendor, renderer, seed());
 		} else if (
 			isTruthy(config["webGl:vendor"]) &&
 			isTruthy(config["webGl:renderer"])
 		) {
-			// Preset already set vendor/renderer -- sample matching WebGL params
-			try {
-				webglFp = utilsDeps.sampleWebgl(
-					targetOs,
-					config["webGl:vendor"],
-					config["webGl:renderer"],
-					seed(),
-				);
-			} catch {
-				// The pair is not in the WebGL catalogue. There is no way to keep
-				// the named GPU: the parameters, extension list and shader
-				// precisions all have to come from a real recorded device. So draw
-				// a GPU that fits the screen and let it replace the pair.
-				webglFp = await utilsDeps.sampleWebglForScreen(
-					targetOs,
-					config["screen.width"],
-					config["screen.height"],
-					undefined,
-					seed(),
-				);
-				// mergeInto does not overwrite keys that are already set; drop
-				// the preset's pair or the page would read its renderer string
-				// with another device's parameters behind it.
-				delete config["webGl:vendor"];
-				delete config["webGl:renderer"];
-			}
+			webglFp = await utilsDeps.webglForGpu(
+				targetOs,
+				config["webGl:vendor"],
+				config["webGl:renderer"],
+				seed(),
+			);
 		} else {
-			// Synthetic path: keep the GPU coherent with the screen already
-			// picked (#729).
+			// Synthetic path: keep the GPU coherent with the screen fpgen already
+			// picked. Sampling the two independently yields pairs no real machine
+			// ships -- a discrete desktop GPU behind a 1024x600 panel (#729).
 			webglFp = await utilsDeps.sampleWebglForScreen(
 				targetOs,
 				config["screen.width"],
 				config["screen.height"],
-				undefined,
 				seed(),
 			);
 		}

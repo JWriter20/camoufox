@@ -12,7 +12,8 @@ import { describe, expect, it } from "vitest";
 import * as coherence from "../src/coherence.js";
 import { fromPreset } from "../src/fingerprints.js";
 import { LOCAL_DATA } from "../src/pkgman.js";
-import { loadWebGLRecords } from "../src/webgl/sample.js";
+import { firefoxGpus } from "../src/webgl.js";
+import { MODEL } from "./fpgen-setup.js";
 
 const rules = (config: Record<string, any>, os: string) =>
 	coherence.validate(config, os).map((v) => v.rule);
@@ -256,27 +257,34 @@ describe("shipped data (test_shipped_data.py)", () => {
 		});
 	}
 
-	it("no GPU is offered to an OS that cannot report it", () => {
-		const rows = loadWebGLRecords();
-		expect(rows.length).toBeGreaterThan(0);
-		for (const row of rows) {
-			for (const os of ["win", "mac", "lin"] as const) {
-				if (row[os] > 0) {
+	for (const file of [
+		"fingerprint-presets.json",
+		"fingerprint-presets-v150.json",
+	]) {
+		// A preset records only its GPU's name; the WebGL parameters behind it
+		// come from fpgen, and a GPU fpgen never saw from Firefox on that OS has
+		// none, so launching it would borrow another device's.
+		it.skipIf(!MODEL.ok)(`every preset GPU in ${file} has WebGL data`, () => {
+			const presets = JSON.parse(
+				fs.readFileSync(path.join(LOCAL_DATA, file), "utf-8"),
+			).presets as Record<string, any[]>;
+			for (const [os, entries] of Object.entries(presets)) {
+				const known = new Set(
+					firefoxGpus(
+						os === "windows" ? "win" : os === "macos" ? "mac" : "lin",
+					).map((gpu) => JSON.stringify(gpu)),
+				);
+				entries.forEach((preset, i) => {
+					const gpu = [
+						preset.webgl.unmaskedVendor,
+						preset.webgl.unmaskedRenderer,
+					];
 					expect(
-						coherence.gpuFitsOs(row.renderer, os),
-						`${row.renderer} offered to ${os} at ${row[os]}`,
+						known.has(JSON.stringify(gpu)),
+						`${file} ${os}[${i}]: ${gpu[1]} has no WebGL data`,
 					).toBe(true);
-				}
+				});
 			}
-		}
-	});
-
-	it("each OS still has GPUs to draw from", () => {
-		const rows = loadWebGLRecords();
-		for (const os of ["win", "mac", "lin"] as const) {
-			expect(rows.filter((r) => r[os] > 0).length, os).toBeGreaterThanOrEqual(
-				2,
-			);
-		}
-	});
+		});
+	}
 });
