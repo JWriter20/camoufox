@@ -17,6 +17,7 @@ import * as nodeOs from "node:os";
 import * as path from "node:path";
 import { supported as cpuAffinitySupported } from "./cpu_affinity.js";
 import { Generator, InvalidConstraints } from "./fpgen/index.js";
+import { validateIP, validIPv4 } from "./ip.js";
 import { normalizeLocale } from "./locale.js";
 import { LOCAL_DATA } from "./pkgman.js";
 import {
@@ -2438,11 +2439,17 @@ export function buildInitScript(values: InitValues): string {
 
 	// WebRTC IP
 	const ip = values.webrtcIP;
-	lines.push(
-		pyTruthy(ip)
-			? `  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4(${pyJsonDumps(ip)});`
-			: '  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4("");',
-	);
+	if (pyTruthy(ip)) {
+		validateIP(ip as string);
+		const fnName = validIPv4(ip as string) ? "setWebRTCIPv4" : "setWebRTCIPv6";
+		lines.push(
+			`  if (typeof w.${fnName} === "function") w.${fnName}(${pyJsonDumps(ip)});`,
+		);
+	} else {
+		lines.push(
+			'  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4("");',
+		);
+	}
 
 	// Font list (comma-separated)
 	const fontList = values.fontList;

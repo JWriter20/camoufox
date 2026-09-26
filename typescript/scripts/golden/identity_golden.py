@@ -734,6 +734,7 @@ def record_init_script():
         {'screenWidth': 1920, 'screenHeight': None, 'screenColorDepth': 24, 'webrtcIP': '', 'fontList': [],
          'speechVoices': [], 'timezone': ''},
         {'navigatorUserAgent': 'emoji 😀   \x7f tab\t', 'hardwareConcurrency': None},
+        {'webrtcIP': '2001:db8::7'},
     ]
     out = [{'values': v, 'script': fp._build_init_script(v)} for v in cases]
     write('init-script.json', {'cases': out}, compress=False)

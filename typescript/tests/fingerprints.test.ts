@@ -7,6 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { InvalidIP } from "../src/exceptions.js";
 import {
 	appVersionFromUserAgent,
 	audioSeedFromIdentity,
@@ -763,6 +764,22 @@ describe("buildInitScript", () => {
 		expect(script).toContain('w.setWebRTCIPv4("")');
 		expect(buildInitScript({})).not.toContain("setFontList");
 	});
+
+	it("hands an IPv4 WebRTC address to the IPv4 setter", () => {
+		const script = buildInitScript({ webrtcIP: "203.0.113.7" });
+		expect(script).toContain('w.setWebRTCIPv4("203.0.113.7")');
+		expect(script).not.toContain("setWebRTCIPv6(");
+	});
+
+	it("hands an IPv6 WebRTC address to the IPv6 setter", () => {
+		const script = buildInitScript({ webrtcIP: "2001:db8::7" });
+		expect(script).toContain('w.setWebRTCIPv6("2001:db8::7")');
+		expect(script.split("setWebRTCIPv6")[0]).not.toContain("2001:db8::7");
+	});
+
+	it("refuses an invalid WebRTC address", () => {
+		expect(() => buildInitScript({ webrtcIP: "not-an-ip" })).toThrow(InvalidIP);
+	});
 });
 
 describe("fromFpgen", () => {
@@ -808,6 +825,20 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 			expect(String(f.navigator.platform)).toContain(platform);
 			expect(String(f.navigator.userAgent)).toContain("Firefox");
 		}
+	});
+
+	it("does not carry a drawn scroll offset into the config", () => {
+		// The browser returns screen.pageYOffset from scrollY on every read, so
+		// a drawn value froze the page at one scroll position.
+		const fingerprint = generateFingerprint({ os: "windows" });
+		fingerprint.window = {
+			...fingerprint.window,
+			pageXOffset: 17,
+			pageYOffset: 528,
+		};
+		const config = fromFpgen(fingerprint, "152");
+		expect("screen.pageXOffset" in config).toBe(false);
+		expect("screen.pageYOffset" in config).toBe(false);
 	});
 
 	it("honours the screen bound, best-effort", () => {
