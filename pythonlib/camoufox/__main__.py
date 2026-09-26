@@ -680,7 +680,7 @@ def _list_installed(show_paths: bool):
         rprint("    └── Not configured", fg="yellow")
 
 
-def _list_all(_show_paths: bool):
+def _list_all(show_paths: bool):
     """
     List all available versions from synced repos
     """
@@ -720,6 +720,8 @@ def _list_all(_show_paths: bool):
                     click.secho(" (installed, active)", fg="green", bold=True, nl=False)
                 else:
                     click.secho(" (installed)", fg="green", nl=False)
+                if show_paths:
+                    click.secho(f" -> {inst.path}", fg="bright_black", nl=False)
 
             click.echo()
 
