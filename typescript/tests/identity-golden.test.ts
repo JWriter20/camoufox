@@ -301,11 +301,23 @@ describe("voice draws", () => {
 		for (const [osKey, name, lang, uri] of fx.uris) {
 			expect(fp.voiceUri(osKey, name, lang)).toBe(uri);
 		}
-		const raw = JSON.parse(
-			fs.readFileSync(path.join(LOCAL_DATA, "voices.json"), "utf-8"),
-		) as Record<string, string[]>;
-		for (const [osKey, entries] of Object.entries(raw)) {
-			const uris = entries.map((e) => {
+		// Every "Name:lang:type" entry in a voice manifest, in document order.
+		const entriesOf = (node: unknown): string[] => {
+			if (Array.isArray(node))
+				return node.flatMap((item) =>
+					typeof item === "string" && item.split(":").length >= 3
+						? [item]
+						: entriesOf(item),
+				);
+			if (node && typeof node === "object")
+				return Object.values(node).flatMap(entriesOf);
+			return [];
+		};
+		const manifests = JSON.parse(
+			fs.readFileSync(path.join(LOCAL_DATA, "voice-manifests.json"), "utf-8"),
+		) as Record<string, unknown>;
+		for (const [osKey, manifest] of Object.entries(manifests)) {
+			const uris = entriesOf(manifest).map((e) => {
 				const parts = e.split(":");
 				const lang = parts[parts.length - 2];
 				const name = parts.slice(0, -2).join(":");

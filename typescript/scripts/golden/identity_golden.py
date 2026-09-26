@@ -283,6 +283,17 @@ def record_fonts():
 VOICE_LOCALES = (None, 'en-US', 'en-GB', 'de-DE', 'fr-FR', 'zh-TW', 'ja-JP', 'pt-BR', 'es', 'xx-YY')
 
 
+def manifest_voice_entries(node):
+    """Every "Name:lang:type" entry in a voice manifest, in document order."""
+    if isinstance(node, dict):
+        return [e for value in node.values() for e in manifest_voice_entries(value)]
+    if isinstance(node, list):
+        return [e for item in node
+                for e in ([item] if isinstance(item, str) and item.count(':') >= 2
+                          else manifest_voice_entries(item))]
+    return []
+
+
 def record_voices():
     cases = []
     for os_name in OS_NAMES + ('plan9',):
@@ -294,9 +305,9 @@ def record_voices():
                     case['voices'] = voices
                 cases.append(case)
     uris = []
-    raw = json.loads((Path(fp.__file__).parent / 'voices.json').read_text())
     uri_hashes = {}
-    for os_key, entries in raw.items():
+    for os_key, manifest in fp._load_voice_manifests().items():
+        entries = manifest_voice_entries(manifest)
         per = []
         for entry in entries:
             name, lang, _ = entry.rsplit(':', 2)

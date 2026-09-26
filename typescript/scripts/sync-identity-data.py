@@ -29,7 +29,6 @@ COPIED = (
     'fonts.json',
     'font-bases.json',
     'font-groups.json',
-    'voices.json',
     'voice-manifests.json',
     'voice-uris.json',
     'media-devices.json',
