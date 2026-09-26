@@ -558,7 +558,7 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
     """
     # Manual locale setting
     if is_domain_set(
-        config, 'navigator.language', 'navigator.languages', 'headers.Accept-Language', 'locale:'
+        config, 'navigator.language', 'headers.Accept-Language', 'locale:'
     ):
         LeakWarning.warn('locale', False)
     # Manual geolocation and timezone setting
