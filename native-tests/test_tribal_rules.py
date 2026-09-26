@@ -542,6 +542,19 @@ def test_a_sandbox_held_over_a_page_window_is_nuked_not_just_dropped():
     )
 
 
+def test_instant_animations_are_an_opt_in():
+    patch = (REPO_ROOT / "patches" / "no-css-animations.patch").read_text(encoding="utf-8")
+    assert 'MaskConfig::GetBool("instantAnimations")' in patch, explain("animations-run-on-stock-timing")
+    assert "disableInstantAnimations" not in patch, explain("animations-run-on-stock-timing")
+
+
+def test_spoofed_voices_complete_without_a_config_switch():
+    patch = (REPO_ROOT / "patches" / "voice-spoofing.patch").read_text(encoding="utf-8")
+    assert "fakeCompletion" not in patch and "DispatchError(0, 0)" not in patch, (
+        explain("spoofed-voices-speak")
+    )
+
+
 def test_no_glyph_spacing_seed_anywhere():
     """No config key, no setter, no shaper hook."""
     declared = {

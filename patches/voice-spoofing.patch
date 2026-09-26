@@ -1,27 +1,29 @@
 diff --git a/dom/media/webspeech/synth/moz.build b/dom/media/webspeech/synth/moz.build
+index ca6ffacb21..fb661fd69e 100644
 --- a/dom/media/webspeech/synth/moz.build
 +++ b/dom/media/webspeech/synth/moz.build
-@@ -63,2 +63,5 @@
+@@ -62,3 +62,6 @@ LOCAL_INCLUDES += [
+     "/dom/base",
      "ipc",
  ]
 +
 +# DOM Mask
 +LOCAL_INCLUDES += ['/camoucfg']
-
 diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
-index e5a1353d6b..4a4a5b080b 100644
+index 3648239545..48e195a684 100644
 --- a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
 +++ b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
-@@ -26,7 +26,8 @@
+@@ -23,7 +23,9 @@
+ #include "nsServiceManagerUtils.h"
  #include "nsSpeechTask.h"
  #include "nsString.h"
++#include "nsThreadUtils.h"
  
 +#include "MaskConfig.hpp"
  using mozilla::intl::LocaleService;
  
- namespace mozilla::dom {
- 
-@@ -169,6 +171,20 @@
+ #undef LOG
+@@ -165,6 +167,20 @@ nsSynthVoiceRegistry* nsSynthVoiceRegistry::GetInstance() {
        // Start up all speech synth services.
        NS_CreateServicesFromCategory(NS_SPEECH_SYNTH_STARTED, nullptr,
                                      NS_SPEECH_SYNTH_STARTED);
@@ -42,7 +44,7 @@ index e5a1353d6b..4a4a5b080b 100644
      }
    }
  
-@@ -305,6 +320,21 @@ nsSynthVoiceRegistry::AddVoice(nsISpeechService* aService,
+@@ -301,6 +317,21 @@ nsSynthVoiceRegistry::AddVoice(nsISpeechService* aService,
      return NS_ERROR_NOT_AVAILABLE;
    }
  
@@ -64,7 +66,7 @@ index e5a1353d6b..4a4a5b080b 100644
    return AddVoiceImpl(aService, aUri, aName, aLang, aLocalService,
                        aQueuesUtterances);
  }
-@@ -779,6 +796,35 @@ void nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice, nsSpeechTask* aTask,
+@@ -775,6 +806,30 @@ void nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice, nsSpeechTask* aTask,
         NS_ConvertUTF16toUTF8(aText).get(),
         NS_ConvertUTF16toUTF8(aVoice->mUri).get(), aRate, aPitch));
  
@@ -72,26 +74,21 @@ index e5a1353d6b..4a4a5b080b 100644
 +  if (auto voices = MaskConfig::MVoices()) {
 +    for (const auto& [lang, name, uri, isDefault, isLocal] : voices.value()) {
 +      if (NS_ConvertUTF8toUTF16(uri).Equals(aVoice->mUri)) {
-+        printf_stderr("Tried to speak a fake voice: %s",
-+                      NS_ConvertUTF16toUTF8(aVoice->mUri).get());
++        // A spoofed voice has no engine behind it. Speak it silently for as
++        // long as the text takes at ~150 words per minute, so start and end
++        // arrive when they would from a real voice.
 +        aTask->Init();
-+        // If fake completion is disabled, throw an error
-+        if (!MaskConfig::GetBool("voices:fakeCompletion")) {
-+          aTask->DispatchError(0, 0);
-+          return;
-+        }
-+        float charsPerSecond;
-+        if (auto value =
-+                MaskConfig::GetDouble("voices:fakeCompletion:charsPerSecond")) {
-+          charsPerSecond = value.value();
-+        } else {
-+          charsPerSecond = 12.5f;
-+        }
-+        // Return a fake success with a speach rate of 150wpm
 +        aTask->DispatchStart();
-+        float fakeElapsedTime =
-+            static_cast<float>(aText.Length()) / (charsPerSecond * aRate);
-+        aTask->DispatchEnd(fakeElapsedTime, aText.Length());
++        const float elapsed =
++            static_cast<float>(aText.Length()) / (12.5f * aRate);
++        RefPtr<nsSpeechTask> task = aTask;
++        const uint32_t length = aText.Length();
++        NS_DelayedDispatchToCurrentThread(
++            NS_NewRunnableFunction("CamouFakeSpeechEnd",
++                                   [task, elapsed, length]() {
++                                     (void)task->DispatchEnd(elapsed, length);
++                                   }),
++            static_cast<uint32_t>(elapsed * 1000));
 +        return;
 +      }
 +    }

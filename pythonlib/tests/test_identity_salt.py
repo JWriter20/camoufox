@@ -194,3 +194,10 @@ def test_config_overrides_reach_the_config_and_the_init_script():
     context = fp.generate_context_fingerprint(os="linux", config_overrides={"audio:seed": 7})
     assert context["config"]["audio:seed"] == 7
     assert "setAudioFingerprintSeed(7)" in context["init_script"]
+
+
+def test_instant_animations_warn_that_they_are_detectable():
+    from camoufox._warnings import LeakWarning
+
+    with pytest.warns(LeakWarning, match="getComputedTiming"):
+        launch(config={"instantAnimations": True}, i_know_what_im_doing=False)

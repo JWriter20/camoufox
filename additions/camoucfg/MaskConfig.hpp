@@ -212,18 +212,6 @@ inline std::optional<std::array<uint32_t, 4>> GetRect(
   return result;
 }
 
-inline std::optional<std::array<int32_t, 4>> GetInt32Rect(
-    const std::string& left, const std::string& top, const std::string& width,
-    const std::string& height) {
-  if (auto optValue = GetRect(left, top, width, height)) {
-    std::array<int32_t, 4> result;
-    std::transform(optValue->begin(), optValue->end(), result.begin(),
-                   [](const auto& val) { return static_cast<int32_t>(val); });
-    return result;
-  }
-  return std::nullopt;
-}
-
 // Helpers for WebGL
 
 inline std::optional<nlohmann::json> GetNested(const std::string& domain,

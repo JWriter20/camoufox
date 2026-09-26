@@ -575,6 +575,8 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
     # CSS pointer media queries and the TouchEvent interfaces.
     if is_domain_set(config, 'navigator.maxTouchPoints'):
         LeakWarning.warn('max_touch_points', False)
+    if config.get('instantAnimations'):
+        LeakWarning.warn('instant_animations', False)
     # Manual screen/window setting
     if is_domain_set(config, 'screen.', 'window.', 'document.body.'):
         LeakWarning.warn('viewport', False)
@@ -585,8 +587,6 @@ _WINDOW_DIM_KEYS = (
     'window.outerHeight',
     'window.innerWidth',
     'window.innerHeight',
-    'document.body.clientWidth',
-    'document.body.clientHeight',
 )
 
 

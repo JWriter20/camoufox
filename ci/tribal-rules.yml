@@ -159,6 +159,32 @@ rules:
   # Measurement
   # -------------------------------------------------------------------------
 
+  - id: animations-run-on-stock-timing
+    title: Animations run on stock timing unless the caller opts into instantAnimations
+    check: automated
+    evidence:
+      - "measured on v152.0.4-beta.31: el.animate(frames, 1000).effect.getComputedTiming().duration returned 0, a 500ms transition 0"
+      - "the finished promise still resolved after ~1000ms, so the only saving was Playwright's stability wait"
+    rationale: >-
+      Instant animations were the default so Playwright never waited on one,
+      but any page reads the zero duration back in one line. Reporting the
+      real duration while not rendering the animation does not hide it
+      either: getComputedStyle or getBoundingClientRect sampled mid-animation
+      returns the end state. So the saving costs stealth, and it is the
+      caller's choice: `instantAnimations: True` turns it on and warns.
+
+  - id: spoofed-voices-speak
+    title: speak() on a spoofed voice starts, then ends after the text's duration
+    check: automated
+    evidence:
+      - "measured on v152.0.4-beta.31: speak() on a spoofed voice fired `error` after 3ms"
+      - "voices:fakeCompletion, the opt-out, fired start and end in the same tick"
+    rationale: >-
+      A spoofed voice has no engine behind it, and a real voice never errors
+      on a plain utterance or ends the instant it starts. So the browser
+      speaks it silently for as long as the text takes at ~150 words per
+      minute. The two config keys that chose between the two tells are gone.
+
   - id: no-glyph-spacing-noise
     title: Text is shaped exactly as stock Firefox shapes it; there is no spacing seed
     check: automated
