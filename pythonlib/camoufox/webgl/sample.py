@@ -78,40 +78,41 @@ def sample_webgl(
 
     # Connect to database
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    if vendor and renderer:
-        # Get specific vendor/renderer pair and verify it exists for this OS
-        cursor.execute(
-            f'SELECT vendor, renderer, data, {os} FROM webgl_fingerprints '  # nosec
-            'WHERE vendor = ? AND renderer = ?',
-            (vendor, renderer),
-        )
-        result = cursor.fetchone()
-
-        if not result:
-            raise ValueError(f'No WebGL data found for vendor "{vendor}" and renderer "{renderer}"')
-
-        if result[3] <= 0:  # Check OS-specific probability
-            # Get a list of possible (vendor, renderer) pairs for this OS
+        if vendor and renderer:
+            # Get specific vendor/renderer pair and verify it exists for this OS
             cursor.execute(
-                f'SELECT DISTINCT vendor, renderer FROM webgl_fingerprints WHERE {os} > 0'  # nosec
+                f'SELECT vendor, renderer, data, {os} FROM webgl_fingerprints '  # nosec
+                'WHERE vendor = ? AND renderer = ?',
+                (vendor, renderer),
             )
-            possible_pairs = cursor.fetchall()
-            raise ValueError(
-                f'Vendor "{vendor}" and renderer "{renderer}" combination not valid for {os.title()}.\n'
-                f'Possible pairs: {", ".join(str(pair) for pair in possible_pairs)}'
-            )
+            result = cursor.fetchone()
 
+            if not result:
+                raise ValueError(f'No WebGL data found for vendor "{vendor}" and renderer "{renderer}"')
+
+            if result[3] <= 0:  # Check OS-specific probability
+                # Get a list of possible (vendor, renderer) pairs for this OS
+                cursor.execute(
+                    f'SELECT DISTINCT vendor, renderer FROM webgl_fingerprints WHERE {os} > 0'  # nosec
+                )
+                possible_pairs = cursor.fetchall()
+                raise ValueError(
+                    f'Vendor "{vendor}" and renderer "{renderer}" combination not valid for {os.title()}.\n'
+                    f'Possible pairs: {", ".join(str(pair) for pair in possible_pairs)}'
+                )
+
+            return _load_webgl_data(result[2], os)
+
+        # Get all vendor/renderer pairs and their probabilities for this OS
+        cursor.execute(
+            f'SELECT vendor, renderer, data, {os} FROM webgl_fingerprints WHERE {os} > 0'  # nosec
+        )
+        results = cursor.fetchall()
+    finally:
         conn.close()
-        return _load_webgl_data(result[2], os)
-
-    # Get all vendor/renderer pairs and their probabilities for this OS
-    cursor.execute(
-        f'SELECT vendor, renderer, data, {os} FROM webgl_fingerprints WHERE {os} > 0'  # nosec
-    )
-    results = cursor.fetchall()
-    conn.close()
 
     if not results:
         raise ValueError(f'No WebGL data found for OS: {os}')
