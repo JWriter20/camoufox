@@ -1176,8 +1176,6 @@ export interface LaunchOptions {
 	/** Pin the browser to navigator.hardwareConcurrency cores (Linux/Windows).
 	 * OFF by default -- it costs real CPU and serializes concurrent launches. */
 	pin_cpu_cores?: boolean;
-	/** Backwards-compatible inverse of block_webgl. */
-	allow_webgl?: boolean;
 	/** Additional Firefox launch options, passed straight through to Playwright. */
 	[key: string]: any;
 }
@@ -1659,18 +1657,7 @@ export async function launchOptions({
 			false;
 	}
 
-	// Allow allow_webgl parameter for backwards compatibility
-	// (Python's `block_webgl or launch_options.pop('allow_webgl', True) is
-	// False` short-circuits: with block_webgl set, allow_webgl is not popped
-	// and passes through to Playwright.)
-	let webglDisabled = Boolean(block_webgl);
-	if (!webglDisabled) {
-		const allowWebgl =
-			"allow_webgl" in passthrough ? passthrough.allow_webgl : true;
-		delete passthrough.allow_webgl;
-		webglDisabled = allowWebgl === false;
-	}
-	if (webglDisabled) {
+	if (block_webgl) {
 		firefox_user_prefs["webgl.disabled"] = true;
 		LeakWarning.warn("block_webgl", i_know_what_im_doing);
 	} else {

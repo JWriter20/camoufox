@@ -55,13 +55,6 @@ export class UnsupportedOS extends Error {
 	}
 }
 
-export class UnknownProperty extends Error {
-	constructor(message?: string) {
-		super(message ?? "The property is unknown.");
-		this.name = "UnknownProperty";
-	}
-}
-
 export class InvalidPropertyType extends Error {
 	constructor(message?: string) {
 		super(message ?? "The property type is invalid.");
@@ -73,20 +66,6 @@ export class InvalidAddonPath extends FileNotFoundError {
 	constructor(message?: string) {
 		super(message ?? "The addon path is invalid.");
 		this.name = "InvalidAddonPath";
-	}
-}
-
-export class InvalidDebugPort extends Error {
-	constructor(message?: string) {
-		super(message ?? "The debug port is invalid.");
-		this.name = "InvalidDebugPort";
-	}
-}
-
-export class MissingDebugPort extends Error {
-	constructor(message?: string) {
-		super(message ?? "The debug port is missing.");
-		this.name = "MissingDebugPort";
 	}
 }
 

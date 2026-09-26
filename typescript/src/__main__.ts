@@ -864,7 +864,7 @@ program
 	.option("--path", "Show full paths")
 	.action((mode: string, { path: showPaths }: { path?: boolean }) => {
 		if (mode === "all") {
-			listAll();
+			listAll(Boolean(showPaths));
 		} else {
 			listInstalledVersions(Boolean(showPaths));
 		}
@@ -894,7 +894,7 @@ function listInstalledVersions(showPaths: boolean): void {
 	}
 }
 
-function listAll(): void {
+function listAll(showPaths: boolean): void {
 	if (!ensureSynced()) return;
 
 	const cache = loadRepoCache();
@@ -932,6 +932,9 @@ function listAll(): void {
 					secho(" (installed, active)", { fg: "green", bold: true, nl: false });
 				} else {
 					secho(" (installed)", { fg: "green", nl: false });
+				}
+				if (showPaths) {
+					secho(` -> ${inst.path}`, { fg: "bright_black", nl: false });
 				}
 			}
 
