@@ -2,9 +2,11 @@
 #
 # fpgen (scrapfly/fingerprint-generator) replaced BrowserForge/Apify as the
 # generator. The field set below is the one BrowserForge used to supply -- the
-# rest of what fpgen carries (fonts, voices, WebGL parameters, system styles,
-# permissions, RTC capabilities, audio) is NOT mapped here yet; Camoufox still
-# draws those from its own catalogues. Wiring those through is the follow-up.
+# rest of what fpgen carries (fonts, voices, system styles, permissions, RTC
+# capabilities, audio) is NOT mapped here yet; Camoufox still draws those from
+# its own catalogues. Wiring those through is the follow-up. WebGL is not
+# mapped here either: camoufox/webgl.py draws it from fpgen, conditioned on
+# the GPU, so presets get their own GPU's parameters too.
 #
 # Shape differences from browserforge.yml:
 #   - window geometry is its own `window` node, not part of `screen`

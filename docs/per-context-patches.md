@@ -612,7 +612,7 @@ bundles are shipped in the wheel.
 |----------|--------|-------|
 | UA, platform, HWC, oscpu | fpgen or preset | UA version patched to the browser's Firefox version (NewContext reads it from Playwright's `browser.version` unless `ff_version` is given) |
 | Screen dims, colorDepth | fpgen or preset | Viewport adjusted by -28px for browser chrome |
-| WebGL vendor/renderer | `sample_webgl()` from `webgl_data.db` | OS-weighted probability sampling. fpgen's own WebGL fields are not mapped in `fpgen.yml` yet, so both paths call `sample_webgl()`. |
+| WebGL vendor/renderer | Preset, or `sample_webgl_for_screen()` in `webgl.py` | A generated identity draws a GPU weighted by fpgen's share of Firefox on the OS, never a software rasteriser or a discrete GPU behind a netbook screen. `launch_options()` adds that GPU's recorded parameters, extensions and shader precisions from fpgen (`webgl_for_gpu()`), WebGL2 from the same device as WebGL1. |
 | Font list | `_generate_random_font_subset()` | One weighted OS-version base in full, plus each addition unit at its measured probability; marker fonts always included. See [FONTS.md](FONTS.md). NOT from presets. |
 | Audio seed | Derived from the identity (NewBrowser) or `randint(1, 2^32-1)` (NewContext) | Never 0 |
 | Timezone | From preset, or `timezone` in `CAMOU_CONFIG` | The init script calls `setTimezone()` only for an explicit value; otherwise the C++ side falls back to `CAMOU_CONFIG` (set from geoip at launch) or the browser default. |
@@ -634,10 +634,10 @@ bundles are shipped in the wheel.
 - `launch_options()` — builds CAMOU_CONFIG env var, Playwright args, and Firefox prefs
 - Font subset generated via same `_generate_random_font_subset()` function
 - Voice subset generated via same `_generate_random_voice_subset()` function
-- WebGL sampled via same `sample_webgl()` function
+- WebGL drawn via the same `webgl.py` functions
 - Config validated against `properties.json` before serialization
 
-**`fingerprint-presets.json`** — Original bundled real fingerprints organized by OS (macOS 18, Windows 73, Linux 18). Each preset includes navigator properties, screen dimensions, WebGL params, and speech voices. Used for Firefox < 149 binaries. Font and voice data not used from presets — generated fresh per launch.
+**`fingerprint-presets.json`** — Original bundled real fingerprints organized by OS (macOS 18, Windows 73, Linux 18). Each preset includes navigator properties, screen dimensions, the WebGL vendor/renderer, and speech voices. Used for Firefox < 149 binaries. Font and voice data not used from presets — generated fresh per launch.
 
 **`fingerprint-presets-v150.json`** — Newer bundle covering Firefox v149–v152 (macOS 45, Windows 178, Linux 65; 288 total). Same schema as the original. Auto-selected by `load_presets()` when the active binary reports Firefox ≥ 149.
 

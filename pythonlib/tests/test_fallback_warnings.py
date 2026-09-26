@@ -5,8 +5,6 @@ a page can see. Each site warns with a report block the user can paste into a
 GitHub issue, so the failure reaches us instead of shipping silently.
 """
 
-import sqlite3
-
 import pytest
 from test_identity_salt import launch
 
@@ -56,7 +54,6 @@ def test_preset_voice_draw(monkeypatch):
     [
         ("_generate_random_font_subset", OSError("fonts.json missing"), "fonts"),
         ("_generate_random_voice_subset", ValueError("bad manifest"), "voices"),
-        ("sample_webgl_for_screen", sqlite3.OperationalError("no such table"), "webGl:renderer"),
     ],
 )
 def test_context_draws(monkeypatch, target, error, key):
@@ -83,14 +80,3 @@ def test_launch_font_draw(monkeypatch):
     with pytest.warns(FallbackWarning, match=REPORT):
         config = launch()
     assert config["fonts"]
-
-
-def test_preset_gpu_not_in_webgl_data():
-    # Windows reports every GPU through ANGLE, so only an ANGLE string reaches the lookup.
-    GPU = "ANGLE (Acme, Acme GPU 9000 Direct3D11 vs_5_0 ps_5_0)"
-    preset = fp.load_presets("152")["presets"]["windows"][0]
-    preset = {**preset, "webgl": {"unmaskedVendor": "Google Inc. (Acme)", "unmaskedRenderer": GPU}}
-    with pytest.warns(FallbackWarning, match=REPORT) as record:
-        config = launch(os="windows", fingerprint_preset=preset)
-    assert GPU in _report(record)
-    assert config["webGl:renderer"] != GPU

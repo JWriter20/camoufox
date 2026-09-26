@@ -1,7 +1,7 @@
 """Every identity Camoufox can produce has to be a machine that could exist.
 
 The pools are sampled independently -- navigator and screen from fpgen, the GPU
-from webgl_data.db, fonts and voices from their own catalogues -- so an
+from fpgen's WebGL records, fonts and voices from their own catalogues -- so an
 incoherent identity is assembled rather than inherited, and cleaning the pools
 cannot prevent it. These tests run the assembled identity, from every source, past
 camoufox.coherence.
@@ -36,7 +36,8 @@ class TestRules:
         assert config["navigator.hardwareConcurrency"] == 8
 
     def test_a_mac_cannot_report_a_braswell_atom_igp(self):
-        # webgl_data.db once weighted this at 7.4% of the macOS pool.
+        # The retired WebGL database weighted this at 7.4% of the macOS pool,
+        # and fpgen records it from macOS too.
         config = {"webGl:renderer": "Intel(R) HD Graphics 400, or similar"}
         assert [v.rule for v in coherence.validate(config, "mac")] == ["gpu-matches-os"]
 

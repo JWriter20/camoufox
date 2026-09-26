@@ -18,12 +18,6 @@ What it covers:
       invented value ("what core count does a 2-core Apple M1 really have?")
       into a file whose entire purpose is being real.
 
-  webgl/webgl_data.db
-      Each (vendor, renderer) pair carries a probability per OS. A pair the OS
-      cannot report has that probability zeroed, which keeps the row for the
-      platforms where it IS real -- "Radeon R9 200 Series" is a genuine Linux
-      and Windows GPU, it simply never shipped in a Mac.
-
 Usage:
     python3 scripts/clean-fingerprint-data.py            # report only
     python3 scripts/clean-fingerprint-data.py --write    # rewrite the files
@@ -35,7 +29,6 @@ reintroduces a bad row fails CI rather than shipping.
 
 import argparse
 import json
-import sqlite3
 import sys
 from collections import Counter
 from pathlib import Path
@@ -44,13 +37,13 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / 'pythonlib'))
 
 from camoufox import coherence  # noqa: E402
-from camoufox.fingerprints import firefox_gpus, from_preset  # noqa: E402
+from camoufox.fingerprints import from_preset  # noqa: E402
+from camoufox.webgl import firefox_gpus  # noqa: E402
 
 PRESET_FILES = (
     REPO / 'pythonlib' / 'camoufox' / 'fingerprint-presets.json',
     REPO / 'pythonlib' / 'camoufox' / 'fingerprint-presets-v150.json',
 )
-WEBGL_DB = REPO / 'pythonlib' / 'camoufox' / 'webgl' / 'webgl_data.db'
 OS_KEY = {'macos': 'mac', 'windows': 'win', 'linux': 'lin'}
 # The Firefox version only decides the UA rewrite, which no rule reads.
 FF_VERSION = '152'
@@ -104,30 +97,6 @@ def clean_presets(path, write):
     return dropped_total
 
 
-def clean_webgl_db(write):
-    connection = sqlite3.connect(WEBGL_DB)
-    cursor = connection.cursor()
-    cursor.execute('SELECT rowid, vendor, renderer, win, mac, lin FROM webgl_fingerprints')
-    rows = cursor.fetchall()
-    zeroed = 0
-    for rowid, vendor, renderer, *weights in rows:
-        for column, weight in zip(('win', 'mac', 'lin'), weights):
-            if weight and weight > 0 and not coherence.gpu_fits_os(renderer, column):
-                zeroed += 1
-                print(f'  zero webgl_data.db {column}={weight:.3f} for {renderer[:58]!r}')
-                if write:
-                    cursor.execute(
-                        f'UPDATE webgl_fingerprints SET {column} = 0 WHERE rowid = ?',  # nosec
-                        (rowid,),
-                    )
-    if write and zeroed:
-        connection.commit()
-    connection.close()
-    print(f'webgl_data.db: {zeroed} impossible OS weight(s)'
-          + (' zeroed' if write and zeroed else ''))
-    return zeroed
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--write', action='store_true', help='rewrite the data files')
@@ -135,7 +104,6 @@ def main():
     args = parser.parse_args()
 
     total = sum(clean_presets(path, args.write) for path in PRESET_FILES)
-    total += clean_webgl_db(args.write)
 
     if not total:
         print('\nEvery shipped identity is coherent.')
