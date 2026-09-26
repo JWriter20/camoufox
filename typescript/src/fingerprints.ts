@@ -67,7 +67,6 @@ export const FPGEN_DATA: Readonly<Record<string, Record<string, string>>> = {
 		outerWidth: "window.outerWidth",
 		screenX: "window.screenX",
 		screenY: "window.screenY",
-		pageYOffset: "screen.pageYOffset",
 	},
 	headers: {
 		"accept-encoding": "headers.Accept-Encoding",

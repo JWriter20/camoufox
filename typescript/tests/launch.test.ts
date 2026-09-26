@@ -379,7 +379,6 @@ describe("test_viewport_default", () => {
 	it.each([
 		['{"window.outerWidth": 360}', true],
 		['{"window.innerHeight": 740}', true],
-		['{"document.body.clientWidth": 360}', true],
 		['{"screen.width": 360}', false],
 		['{"navigator.userAgent": "x"}', false],
 		["{}", false],
@@ -746,6 +745,25 @@ describe.skipIf(!modelReady)(
 			});
 			expect(context.config["audio:seed"]).toBe(7);
 			expect(context.init_script).toContain("setAudioFingerprintSeed(7)");
+		});
+
+		it("instantAnimations warns that it is detectable", async () => {
+			const { warnings: caught } = await warnings.recordWarnings(() =>
+				utils.launchOptions({
+					env: { HOME },
+					os: "windows",
+					executable_path: BUNDLE_EXE,
+					config: { instantAnimations: true },
+					i_know_what_im_doing: false,
+				}),
+			);
+			expect(
+				caught.some(
+					(w) =>
+						w.category === "LeakWarning" &&
+						w.message.includes("getComputedTiming"),
+				),
+			).toBe(true);
 		});
 
 		it("keeps the caller's seeds", async () => {

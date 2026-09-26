@@ -361,7 +361,7 @@ scenario('config_header_ua', fingerprint=FP['linux'], os='linux', config={'heade
 scenario('config_locale_keys', fingerprint=FP['linux'], os='linux',
          config={'locale:language': 'pt', 'locale:region': 'BR', 'headers.Accept-Language': 'pt-BR'})
 scenario('config_screen', fingerprint=FP['macos'], os='macos',
-         config={'screen.width': 1440, 'screen.height': 900, 'window.outerWidth': 1200, 'document.body.clientWidth': 1180})
+         config={'screen.width': 1440, 'screen.height': 900, 'window.outerWidth': 1200})
 scenario('config_touch', fingerprint=FP['windows'], os='windows', config={'navigator.maxTouchPoints': 5})
 scenario('config_dnt_gpc', fingerprint=FP['windows'], os='windows',
          config={'navigator.doNotTrack': '1', 'navigator.globalPrivacyControl': True})

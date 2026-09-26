@@ -849,6 +849,9 @@ export function warnManualConfig(config: Record<string, any>): void {
 	if (isDomainSet(config, "navigator.maxTouchPoints")) {
 		LeakWarning.warn("max_touch_points", false);
 	}
+	if (isTruthy(config.instantAnimations)) {
+		LeakWarning.warn("instant_animations", false);
+	}
 	// Manual screen/window setting
 	if (isDomainSet(config, "screen.", "window.", "document.body.")) {
 		LeakWarning.warn("viewport", false);
@@ -860,8 +863,6 @@ const WINDOW_DIM_KEYS = [
 	"window.outerHeight",
 	"window.innerWidth",
 	"window.innerHeight",
-	"document.body.clientWidth",
-	"document.body.clientHeight",
 ];
 
 /** The CAMOU_CONFIG chunks of a set of launch options, reassembled in order. */
