@@ -1645,9 +1645,6 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None, salt: Optional[i
         config['webGl:renderer'] = webgl['unmaskedRenderer']
 
     # Generate a unique audio seed per launch (1 to 2^32-1, excluding 0 which is a no-op in C++)
-    # fonts:spacing_seed stays 0 (off): glyph-advance perturbation produces text
-    # widths no real machine emits (see launch_options in utils.py).
-    config['fonts:spacing_seed'] = 0
     config['audio:seed'] = randint(1, 4_294_967_295)  # nosec
 
     if preset.get('timezone'):
@@ -1697,7 +1694,6 @@ def _build_init_script(values: Dict[str, Any]) -> str:
     lines = ['(function(v) {', '  var w = window;']
 
     setters = [
-        ('fontSpacingSeed', 'setFontSpacingSeed', '{val}'),
         ('audioFingerprintSeed', 'setAudioFingerprintSeed', '{val}'),
         ('navigatorPlatform', 'setNavigatorPlatform', '{val}'),
         ('navigatorOscpu', 'setNavigatorOscpu', '{val}'),
@@ -1798,8 +1794,7 @@ def generate_context_fingerprint(
             normalize_locale() and injected into config. Also sets
             context_options['locale'] for Playwright.
         config_overrides: Dict of CAMOU_CONFIG keys to override after config
-            is built but before init_script is rendered. Useful for disabling
-            perturbation (e.g. {'fonts:spacing_seed': 0}).
+            is built but before init_script is rendered (e.g. {'audio:seed': 7}).
     """
     if preset is not None:
         # Use real fingerprint preset
@@ -1816,7 +1811,6 @@ def generate_context_fingerprint(
         _salt = identity_salt()
 
         # Add seeds (the generator doesn't produce these)
-        config.setdefault('fonts:spacing_seed', 0)  # perturbation off; see utils.launch_options
         config.setdefault('audio:seed', randint(1, 4_294_967_295))  # nosec
 
         # Determine target OS from platform for font/voice generation
@@ -1912,7 +1906,6 @@ def generate_context_fingerprint(
 
     # Build the values dict for the init script (works for both paths)
     init_values: Dict[str, Any] = {
-        'fontSpacingSeed': config.get('fonts:spacing_seed'),
         'audioFingerprintSeed': config.get('audio:seed'),
         'navigatorPlatform': nav.get('platform'),
         'navigatorOscpu': config.get('navigator.oscpu'),

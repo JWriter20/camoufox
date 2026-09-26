@@ -5,7 +5,7 @@ Camoufox spoofs fingerprints globally via `CAMOU_CONFIG` — every browser conte
 ### The Patches
 
 **Per-context patches (with a `window.setXxx()` API):**
-- `anti-font-fingerprinting.patch` — per-context `measureText()` spacing seed; also adds `RoverfoxStorageManager` (the shared per-context store) and puts the userContextId in `WordCacheKey` so the glyph cache never serves one context's result to another
+- `anti-font-fingerprinting.patch` — adds `RoverfoxStorageManager` (the shared per-context store) and gives each font group its context's userContextId, which `font-list-spoofing.patch` uses to pick that context's font list
 - `audio-fingerprint-manager.patch` — per-context audio fingerprint seeding (all 6 AudioBuffer + AnalyserNode methods)
 - `timezone-spoofing.patch` — true per-realm timezone isolation via SpiderMonkey DateTimeInfo
 - `screen-spoofing.patch` — per-context screen dimensions and color depth via `ScreenDimensionManager`
@@ -25,7 +25,6 @@ output as the GPU and fonts produce it.
 
 | Function | Patch | What it controls |
 |----------|-------|-----------------|
-| `window.setFontSpacingSeed(seed)` | `anti-font-fingerprinting.patch` | Canvas `measureText()` letter spacing |
 | `window.setAudioFingerprintSeed(seed)` | `audio-fingerprint-manager.patch` | Audio buffer/analyser fingerprint hash |
 | `window.setTimezone(tz)` | `timezone-spoofing.patch` | `Date`, `Intl.DateTimeFormat`, all time APIs |
 | `window.setScreenDimensions(w, h)` | `screen-spoofing.patch` | `screen.width`, `screen.height` |
@@ -64,9 +63,6 @@ const context = await browser.newContext({
 await context.addInitScript((values) => {
   const w = window;
 
-  if (typeof w.setFontSpacingSeed === 'function') {
-    w.setFontSpacingSeed(values.fontSpacingSeed);
-  }
   if (typeof w.setAudioFingerprintSeed === 'function') {
     w.setAudioFingerprintSeed(values.audioFingerprintSeed);
   }
@@ -107,7 +103,6 @@ await context.addInitScript((values) => {
     w.setSpeechVoices(values.speechVoices);
   }
 }, {
-  fontSpacingSeed: 12345678,
   audioFingerprintSeed: 87654321,
   timezone: 'America/New_York',
   screenWidth: 1920,
@@ -232,23 +227,16 @@ The `camoufox.cfg` file sets Firefox preferences at startup (before `prefs.js` i
 
 ### 1. anti-font-fingerprinting.patch
 
-**Controls:** Canvas `measureText()` letter spacing — makes text width measurements unique per context. The Python library sets the seed to 0 (off) by default: perturbed widths are something no stock Firefox produces. Pass `fonts:spacing_seed` to opt in.
+**Controls:** nothing a page can see by itself. It is the groundwork the other per-context patches build on.
 
-**How it works:** Stores a seed per context, then applies a deterministic spacing transformation in HarfBuzz (the text shaping engine). The seed is propagated through the entire text rendering pipeline: `nsTextFrame` → `gfxFont` → `gfxTextRun` → `gfxHarfBuzzShaper`.
+**Provides:**
+- `RoverfoxStorageManager`, the shared storage layer used by all other per-context patches. See the [Cross-Process Storage](#cross-process-storage-cross-process-storagepatch) section for how it works across processes.
+- The userContextId on each `gfxFontGroup`, read from the document's `BrowsingContext` through a `GetDocument()` hook on `FontVisibilityProvider`. `font-list-spoofing.patch` uses it to apply that context's font list.
 
-The transformation adds ~0.0-0.1 em of extra spacing using a Linear Congruential Generator seeded with the profile's value. Same seed always produces the same spacing.
+Text is shaped exactly as stock Firefox shapes it. An earlier glyph-spacing seed was removed because the widths it produced match no real installation (`ci/tribal-rules.yml`: `no-glyph-spacing-noise`).
 
-**Also provides:** `RoverfoxStorageManager` — the shared storage layer used by all other per-context patches. See the [Cross-Process Storage](#cross-process-storage-cross-process-storagepatch) section for how it works across processes.
-
-**WordCacheKey fix:** Added `mUserContextId` to the `WordCacheKey` struct in `gfxFont.h`. Without this, Firefox's shaped word cache shared results across contexts — context 1's font spacing result would be returned for context 2 (a cache hit based on text content alone). The fix adds `mUserContextId` to both constructors, the hash computation (via `* 0x1000000`), and the `match()` comparison, ensuring each context has its own cache entries. Also adds `GetUserContextId()` virtual method to `gfxShapedText` and `gfxShapedWord` so the context ID propagates through the text run pipeline.
-
-**API:**
-```javascript
-window.setFontSpacingSeed(12345678); // uint32 seed
-```
-
-**New C++ files:** `FontSpacingSeedManager.h/cpp`, `RoverfoxStorageManager.h/cpp`
-**Modified Firefox files (22):** `nsGlobalWindowInner.cpp/h`, `CanvasRenderingContext2D.cpp`, `OffscreenCanvas.cpp`, `WorkerPrivate.h`, `Window.webidl`, `moz.build` (dom/base), `gfxHarfBuzzShaper.cpp`, `gfxTextRun.cpp/h`, `gfxFont.cpp/h`, `nsFontMetrics.cpp/h`, `nsLayoutUtils.cpp/h`, `nsPresContext.cpp`, `nsTextFrame.cpp`, `MathMLTextRunFactory.cpp`, `nsTextRunTransformations.cpp`, `nsMathMLChar.cpp`, `FontVisibilityProvider.h`
+**New C++ files:** `RoverfoxStorageManager.h/cpp`
+**Modified Firefox files:** `moz.build` (dom/base), `nsGlobalWindowInner.cpp`, `OffscreenCanvas.cpp`, `WorkerPrivate.h`, `gfxPlatformFontList.cpp`, `gfxTextRun.cpp/h`, `nsPresContext.cpp`, `FontVisibilityProvider.h`
 
 ---
 
@@ -535,7 +523,7 @@ For per-context geolocation, use Playwright's built-in `context.setGeolocation()
 
 ## Build Notes
 
-**SOURCES vs UNIFIED_SOURCES:** Most new `.cpp` manager files use `SOURCES` (separate compilation) in `moz.build` to avoid namespace pollution (`mozilla::dom::mozilla::dom::`) that occurs when files including `RoverfoxStorageManager.h` are concatenated in unified builds. Currently in `SOURCES`: `AudioFingerprintManager.cpp`, `WebRTCIPManager.cpp`, `NavigatorManager.cpp`, `WebGLParamsManager.cpp`, `FontListManager.cpp`, `SpeechVoicesManager.cpp`, `ScreenDimensionManager.cpp`. Three files use `UNIFIED_SOURCES` and compile without namespace issues in their alphabetical position: `FontSpacingSeedManager.cpp`, `RoverfoxStorageManager.cpp` (both from `anti-font-fingerprinting.patch`) and `TimezoneManager.cpp` (from `timezone-spoofing.patch`).
+**SOURCES vs UNIFIED_SOURCES:** Most new `.cpp` manager files use `SOURCES` (separate compilation) in `moz.build` to avoid namespace pollution (`mozilla::dom::mozilla::dom::`) that occurs when files including `RoverfoxStorageManager.h` are concatenated in unified builds. Currently in `SOURCES`: `AudioFingerprintManager.cpp`, `WebRTCIPManager.cpp`, `NavigatorManager.cpp`, `WebGLParamsManager.cpp`, `FontListManager.cpp`, `SpeechVoicesManager.cpp`, `ScreenDimensionManager.cpp`. Two files use `UNIFIED_SOURCES` and compile without namespace issues in their alphabetical position: `RoverfoxStorageManager.cpp` (from `anti-font-fingerprinting.patch`) and `TimezoneManager.cpp` (from `timezone-spoofing.patch`).
 
 **EXPORTS sort conflicts:** Each patch uses a separate `EXPORTS.mozilla.dom += ["Header.h"]` statement near its `SOURCES` block, rather than inserting into the main sorted EXPORTS list. This avoids sort conflicts when multiple patches add headers at similar alphabetical positions.
 
@@ -626,7 +614,6 @@ bundles are shipped in the wheel.
 | Screen dims, colorDepth | fpgen or preset | Viewport adjusted by -28px for browser chrome |
 | WebGL vendor/renderer | `sample_webgl()` from `webgl_data.db` | OS-weighted probability sampling. fpgen's own WebGL fields are not mapped in `fpgen.yml` yet, so both paths call `sample_webgl()`. |
 | Font list | `_generate_random_font_subset()` | One weighted OS-version base in full, plus each addition unit at its measured probability; marker fonts always included. See [FONTS.md](FONTS.md). NOT from presets. |
-| Font spacing seed | `0` | Off by default (0 = no-op in C++); pass `fonts:spacing_seed` to opt in |
 | Audio seed | Derived from the identity (NewBrowser) or `randint(1, 2^32-1)` (NewContext) | Never 0 |
 | Timezone | From preset, or `timezone` in `CAMOU_CONFIG` | The init script calls `setTimezone()` only for an explicit value; otherwise the C++ side falls back to `CAMOU_CONFIG` (set from geoip at launch) or the browser default. |
 | Speech voices | `_generate_random_voice_subset()` | Follows the measured model in `voice-manifests.json`: Windows gets the display language's OneCore pack plus its legacy Desktop voices at their measured rate; macOS the compact + Eloquence base plus rare downloads; Linux speech-dispatcher's espeak-ng list. Seeded by the identity. NOT from presets. |

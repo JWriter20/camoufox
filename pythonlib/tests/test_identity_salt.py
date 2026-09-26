@@ -178,3 +178,19 @@ def test_fingerprint_preset_off_never_draws_a_preset(off):
     checked with `is not None`, so False drew a random bundled preset."""
     with mock.patch.object(utils, "get_random_preset", side_effect=AssertionError("preset drawn")):
         launch(fingerprint_preset=off)
+
+
+def test_no_glyph_spacing_seed_is_generated():
+    """Glyph-spacing noise moved every measured text width off what the same
+    font gives on a real machine, so it was itself a fingerprint; the feature
+    is gone from the browser, and the launcher sends nothing for it."""
+    assert "fonts:spacing_seed" not in launch()
+    context = fp.generate_context_fingerprint(os="linux")
+    assert "fonts:spacing_seed" not in context["config"]
+    assert "setFontSpacingSeed" not in context["init_script"]
+
+
+def test_config_overrides_reach_the_config_and_the_init_script():
+    context = fp.generate_context_fingerprint(os="linux", config_overrides={"audio:seed": 7})
+    assert context["config"]["audio:seed"] == 7
+    assert "setAudioFingerprintSeed(7)" in context["init_script"]

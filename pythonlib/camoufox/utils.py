@@ -1267,18 +1267,12 @@ def launch_options(
     if not _user_set_accept_encoding:
         config.pop('headers.Accept-Encoding', None)
 
-    # Set random seeds for fingerprint noise (per launch)
-    # Glyph-advance perturbation is OFF by default (seed 0): it moves every
-    # measured text width off the value the same font produces on a real
-    # machine (measured 2026-09-14: +1 px per ~100 glyphs, fractional deltas
-    # on every measureText), which is a fingerprint no stock Firefox emits.
-    # Pass fonts:spacing_seed explicitly to opt back in.
-    set_into(config, 'fonts:spacing_seed', 0)
     # The audio noise seed follows the identity: a returning "same device" must
     # reproduce its audio hash (#442/#765). Never 0 (0 disables the noise). A
     # preset draws its own random seed; it is replaced here too so a pinned
     # preset reproduces it, but a seed the caller set is kept. There is no
-    # canvas seed: the browser adds no canvas noise (#528).
+    # canvas seed: the browser adds no canvas noise (#528), and no glyph-spacing
+    # noise either (ci/tribal-rules.yml: no-glyph-spacing-noise).
     if not _user_set_audio_seed:
         _ident = identity_seed(config, _identity_salt)
         config['audio:seed'] = ((_ident * 2654435761 + 97) & 0xFFFFFFFF) or 1

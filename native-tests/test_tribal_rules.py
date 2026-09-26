@@ -542,6 +542,21 @@ def test_a_sandbox_held_over_a_page_window_is_nuked_not_just_dropped():
     )
 
 
+def test_no_glyph_spacing_seed_anywhere():
+    """No config key, no setter, no shaper hook."""
+    declared = {
+        entry["property"]
+        for entry in json.loads((REPO_ROOT / "settings" / "properties.json").read_text())
+    }
+    assert "fonts:spacing_seed" not in declared, explain("no-glyph-spacing-noise")
+    for source in [*sorted((REPO_ROOT / "patches").rglob("*.patch")),
+                   REPO_ROOT / "pythonlib" / "camoufox" / "fingerprints.py"]:
+        assert "FontSpacingSeed" not in source.read_text(encoding="utf-8", errors="ignore"), (
+            f"{source.relative_to(REPO_ROOT)} still carries the spacing seed"
+            + explain("no-glyph-spacing-noise")
+        )
+
+
 def test_no_canvas_seed_is_declared_or_sent():
     """Nothing in the browser reads a canvas seed, so neither launcher sends one."""
     declared = {

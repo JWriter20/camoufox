@@ -159,6 +159,21 @@ rules:
   # Measurement
   # -------------------------------------------------------------------------
 
+  - id: no-glyph-spacing-noise
+    title: Text is shaped exactly as stock Firefox shapes it; there is no spacing seed
+    check: automated
+    evidence:
+      - "#779 (6daae88): measured +1 px per ~100 glyphs and fractional deltas on every measureText; defaulted the seed to 0"
+      - "issue #741 / ad697a8: the perturbation detached combining marks in Thai, Lao, Arabic, Devanagari and Hebrew"
+    rationale: >-
+      The feature added a seeded amount to every glyph advance so that text
+      widths differed per context. No real machine produces those widths:
+      the same font on the same OS measures the same everywhere, so a width
+      that matches no real installation is a fingerprint, not a disguise. It
+      was defaulted off in #779 and kept as an opt-in, but an opt-in whose
+      only effect is to become detectable is not a feature, so the manager,
+      the window setter, the shaper hook and the config key are gone.
+
   - id: canvas-is-not-noised
     title: The canvas is rendered, not noised, and there is no canvas seed
     check: automated

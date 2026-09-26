@@ -22,7 +22,6 @@ be listed there.
 
 | Patch | Config keys |
 |-------|-------------|
-| `anti-font-fingerprinting.patch` | `fonts:spacing_seed` |
 | `audio-context-spoofing.patch` | `AudioContext:outputLatency` |
 | `audio-fingerprint-manager.patch` | `audio:seed` |
 | `chromeutil.patch` | `debug` |
@@ -50,7 +49,7 @@ To regenerate the list: `grep -l 'MaskConfig::' patches/*.patch`.
 
 ## RoverfoxStorageManager
 
-Per-context values set from Playwright (font spacing seed, WebRTC IP, timezone,
+Per-context values set from Playwright (audio seed, WebRTC IP, timezone,
 screen, navigator, voices, ...) are kept in `RoverfoxStorageManager`, which
 `anti-font-fingerprinting.patch` adds under `dom/base/`. Its cross-process
 put/get IPC lives in `cross-process-storage.patch`. Any patch that uses the

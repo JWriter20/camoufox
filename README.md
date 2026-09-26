@@ -447,7 +447,7 @@ Below is a list of patches and features implemented in Camoufox.
 
 - Automatically uses the correct system fonts for your User Agent
 - Bundled with Windows, Mac, and Linux system fonts
-- Letter-spacing noise is available (`fonts:spacing_seed`) but off by default, because no real machine produces it
+- No glyph-spacing noise: measured text widths are the ones the same font gives on a real machine
 
 ### Playwright support
 

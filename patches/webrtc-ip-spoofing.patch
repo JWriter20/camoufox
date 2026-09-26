@@ -262,10 +262,10 @@ index 0000000000..c9810a06d2
 +
 +#endif // mozilla_dom_WebRTCIPManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index b718f44036..52a61b0ca1 100644
+index ba674a00d9..ef7c9bdff2 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -297,10 +297,15 @@ EXPORTS.mozilla.dom += [
+@@ -296,10 +296,15 @@ EXPORTS.mozilla.dom += [
      "VideoFrameProvider.h",
      "ViewportMetaData.h",
      "VisualViewport.h",
@@ -282,10 +282,10 @@ index b718f44036..52a61b0ca1 100644
  # in unified builds (it includes RoverfoxStorageManager.h which can affect
  # alphabetically-later files like BarProps.cpp)
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 007e8f5eae..7cdaf2767c 100644
+index 740c59ed8b..4b7d3d1297 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -335,6 +335,10 @@
+@@ -334,6 +334,10 @@
  #include "xpcprivate.h"
  #include "xpcpublic.h"
  
@@ -296,7 +296,7 @@ index 007e8f5eae..7cdaf2767c 100644
  #ifdef NS_PRINTING
  #  include "nsIPrintSettings.h"
  #endif
-@@ -7826,6 +7830,42 @@ void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aR
+@@ -7810,6 +7814,42 @@ void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aR
    }
  }
  
@@ -340,11 +340,11 @@ index 007e8f5eae..7cdaf2767c 100644
    MOZ_ASSERT(aSharedWorker);
    MOZ_ASSERT(!mSharedWorkers.Contains(aSharedWorker));
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 17e00f408f..d709b07f7d 100644
+index 9199f08fdf..66f858aad5 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -687,6 +687,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
-   void SetFontSpacingSeed(uint32_t seed, mozilla::ErrorResult& aRv);
+@@ -685,6 +685,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+ 
    void SetTimezone(const nsAString& timezone, mozilla::ErrorResult& aRv);
  
 +  // WebRTC IP addresses for privacy-preserving IP spoofing
@@ -1117,10 +1117,10 @@ index d32e08c2b0..40a750196a 100644
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index 3a13d4963f..6b4c7101fa 100644
+index 2471488e16..b7833efded 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
-@@ -964,6 +964,17 @@ partial interface Window {
+@@ -958,6 +958,17 @@ partial interface Window {
    undefined setTimezone(DOMString timezone);
  };
  

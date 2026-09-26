@@ -65,7 +65,6 @@ SETTERS = [
     "setWebRTCIPv4",
     "setWebRTCIPv6",
     "setFontList",
-    "setFontSpacingSeed",
     "setAudioFingerprintSeed",
     "setSpeechVoices",
     "setTimezone",
