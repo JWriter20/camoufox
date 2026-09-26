@@ -610,7 +610,7 @@ bundles are shipped in the wheel.
 
 | Property | Source | Notes |
 |----------|--------|-------|
-| UA, platform, HWC, oscpu | fpgen or preset | UA version patched to match Camoufox Firefox version |
+| UA, platform, HWC, oscpu | fpgen or preset | UA version patched to the browser's Firefox version (NewContext reads it from Playwright's `browser.version` unless `ff_version` is given) |
 | Screen dims, colorDepth | fpgen or preset | Viewport adjusted by -28px for browser chrome |
 | WebGL vendor/renderer | `sample_webgl()` from `webgl_data.db` | OS-weighted probability sampling. fpgen's own WebGL fields are not mapped in `fpgen.yml` yet, so both paths call `sample_webgl()`. |
 | Font list | `_generate_random_font_subset()` | One weighted OS-version base in full, plus each addition unit at its measured probability; marker fonts always included. See [FONTS.md](FONTS.md). NOT from presets. |
