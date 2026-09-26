@@ -3,12 +3,14 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import unicodedata
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from random import Random, choice, randint, randrange
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
+from camoufox._warnings import FallbackWarning
 from camoufox.pkgman import load_yaml
 from camoufox.webgl import sample_webgl
 
@@ -399,7 +401,10 @@ def _load_font_groups() -> Dict[str, List[Dict[str, Any]]]:
         try:
             with open(path, 'rb') as f:
                 _FONT_GROUPS_CACHE = json.loads(f.read())
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            FallbackWarning.warn(
+                'Reading font-groups.json', 'an OS-version base with no font additions', e
+            )
             _FONT_GROUPS_CACHE = {}
     return _FONT_GROUPS_CACHE
 
@@ -422,7 +427,10 @@ def _load_font_bases() -> Dict[str, List[Dict[str, Any]]]:
         try:
             with open(path, 'rb') as f:
                 _FONT_BASES_CACHE = json.loads(f.read())
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            FallbackWarning.warn(
+                'Reading font-bases.json', 'only the always-present core fonts as its OS base', e
+            )
             _FONT_BASES_CACHE = {}
     return _FONT_BASES_CACHE
 
@@ -1660,10 +1668,16 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None, salt: Optional[i
         target_os = 'linux'
     else:
         target_os = 'macos'
+    preset_key = f"{config.get('navigator.userAgent')} / {config.get('webGl:renderer')}"
     try:
         config['fonts'] = _generate_random_font_subset(target_os, seed=identity_seed(config, salt))
-    except Exception:
-        # Fallback to preset fonts if font generation fails
+    except (OSError, ValueError) as e:
+        FallbackWarning.warn(
+            'Drawing the font list',
+            "the preset's recorded fonts" if preset.get('fonts') else "the browser's own fonts",
+            e,
+            preset_key,
+        )
         if preset.get('fonts'):
             fonts = list(preset['fonts'])
             _ensure_marker_fonts(fonts, {
@@ -1675,7 +1689,13 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None, salt: Optional[i
     # Generate a unique random voice subset from the OS voice list
     try:
         config['voices'] = _generate_random_voice_subset(target_os, seed=identity_seed(config, salt))
-    except Exception:
+    except (OSError, ValueError, KeyError) as e:
+        FallbackWarning.warn(
+            'Drawing the speech voices',
+            "the preset's recorded voices" if preset.get('speechVoices') else "the browser's own voices",
+            e,
+            preset_key,
+        )
         if preset.get('speechVoices'):
             config['voices'] = _normalize_preset_voices(
                 preset['speechVoices'], target_os
@@ -1825,15 +1845,21 @@ def generate_context_fingerprint(
         if 'fonts' not in config:
             try:
                 config['fonts'] = _generate_random_font_subset(os_name, seed=identity_seed(config, _salt))
-            except Exception:
-                pass
+            except (OSError, ValueError) as e:
+                FallbackWarning.warn(
+                    'Drawing the font list', "the browser's launch-time fonts", e,
+                    config.get('navigator.userAgent'),
+                )
 
         # Add voices (fpgen.yml does not map these yet)
         if 'voices' not in config:
             try:
                 config['voices'] = _generate_random_voice_subset(os_name, seed=identity_seed(config, _salt))
-            except Exception:
-                pass
+            except (OSError, ValueError, KeyError) as e:
+                FallbackWarning.warn(
+                    'Drawing the speech voices', "the browser's launch-time voices", e,
+                    config.get('navigator.userAgent'),
+                )
 
         # Derive oscpu if the fingerprint didn't provide it
         if 'navigator.oscpu' not in config:
@@ -1857,19 +1883,23 @@ def generate_context_fingerprint(
                     _target_os = 'lin'
                 else:
                     _target_os = 'mac'
+            # Same coherence treatment launch_options applies (#729): lift
+            # netbook geometry, then keep the GPU consistent with whatever
+            # screen this identity ended up with. This path has no real
+            # display to reconcile against, so the floor is unconditional.
+            raise_screen_to_modern_floor(config)
             try:
-                # Same coherence treatment launch_options applies (#729): lift
-                # netbook geometry, then keep the GPU consistent with whatever
-                # screen this identity ended up with. This path has no real
-                # display to reconcile against, so the floor is unconditional.
-                raise_screen_to_modern_floor(config)
                 webgl_fp = sample_webgl_for_screen(
                     _target_os, config.get('screen.width'), config.get('screen.height')
                 )
+            except (ValueError, sqlite3.Error) as e:
+                FallbackWarning.warn(
+                    'Drawing the WebGL GPU', "the browser's launch-time GPU", e,
+                    config.get('navigator.userAgent'),
+                )
+            else:
                 webgl_fp.pop('webGl2Enabled', None)
                 config.update(webgl_fp)
-            except Exception:
-                pass
 
         # Build source dicts from the fingerprint config for init_values
         nav = {
