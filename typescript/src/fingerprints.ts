@@ -2286,8 +2286,7 @@ export function fromPreset(
 	if (pyTruthy(webgl.unmaskedRenderer))
 		config["webGl:renderer"] = webgl.unmaskedRenderer;
 
-	// A unique audio seed per launch; fonts:spacing_seed stays 0 (off).
-	config["fonts:spacing_seed"] = 0;
+	// A unique audio seed per launch.
 	config["audio:seed"] = pyRandom.randint(1, 4_294_967_295);
 
 	if (pyTruthy(preset.timezone)) config.timezone = preset.timezone;
@@ -2337,7 +2336,6 @@ export function fromPreset(
 // ---------------------------------------------------------------------------
 
 export interface InitValues {
-	fontSpacingSeed?: number;
 	audioFingerprintSeed?: number;
 	navigatorPlatform?: string;
 	navigatorOscpu?: string;
@@ -2363,7 +2361,6 @@ export function buildInitScript(values: InitValues): string {
 	const lines = ["(function(v) {", "  var w = window;"];
 
 	const setters: Array<[keyof InitValues, string]> = [
-		["fontSpacingSeed", "setFontSpacingSeed"],
 		["audioFingerprintSeed", "setAudioFingerprintSeed"],
 		["navigatorPlatform", "setNavigatorPlatform"],
 		["navigatorOscpu", "setNavigatorOscpu"],
@@ -2515,7 +2512,6 @@ export function generateContextFingerprint({
 		// A fresh identity: every seeded draw below gets its own salt.
 		const salt = identitySalt();
 
-		if (!("fonts:spacing_seed" in config)) config["fonts:spacing_seed"] = 0;
 		if (!("audio:seed" in config))
 			config["audio:seed"] = pyRandom.randint(1, 4_294_967_295);
 
@@ -2614,7 +2610,6 @@ export function generateContextFingerprint({
 	if (config_overrides) Object.assign(config, config_overrides);
 
 	const initValues: InitValues = {
-		fontSpacingSeed: config["fonts:spacing_seed"],
 		audioFingerprintSeed: config["audio:seed"],
 		navigatorPlatform: nav.platform,
 		navigatorOscpu: config["navigator.oscpu"],

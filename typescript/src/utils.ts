@@ -1508,13 +1508,10 @@ export async function launchOptions({
 		delete config["headers.Accept-Encoding"];
 	}
 
-	// Glyph-advance perturbation is OFF by default (seed 0): it moves every
-	// measured text width off the value the same font produces on a real
-	// machine. Pass fonts:spacing_seed explicitly to opt back in.
-	setInto(config, "fonts:spacing_seed", 0);
 	// The audio noise seed follows the identity: a returning "same device" must
 	// reproduce its audio hash (#442/#765). Never 0 (0 disables the noise).
-	// There is no canvas seed: the browser adds no canvas noise (#528).
+	// There is no canvas seed: the browser adds no canvas noise (#528), and no
+	// glyph-spacing noise either (ci/tribal-rules.yml: no-glyph-spacing-noise).
 	if (!userSetAudioSeed) {
 		config["audio:seed"] = audioSeedFromIdentity(
 			utilsDeps.identitySeed(config, salt),

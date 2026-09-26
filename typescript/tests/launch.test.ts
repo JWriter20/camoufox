@@ -731,6 +731,23 @@ describe.skipIf(!modelReady)(
 			await launchConfig({ os: "linux", fingerprint_preset: off });
 		});
 
+		it("generates no glyph-spacing seed", async () => {
+			// The noise was itself a fingerprint; the browser no longer has it.
+			expect("fonts:spacing_seed" in (await launchConfig({}))).toBe(false);
+			const context = fingerprints.generateContextFingerprint({ os: "linux" });
+			expect("fonts:spacing_seed" in context.config).toBe(false);
+			expect(context.init_script).not.toContain("setFontSpacingSeed");
+		});
+
+		it("config_overrides reach the config and the init script", () => {
+			const context = fingerprints.generateContextFingerprint({
+				os: "linux",
+				config_overrides: { "audio:seed": 7 },
+			});
+			expect(context.config["audio:seed"]).toBe(7);
+			expect(context.init_script).toContain("setAudioFingerprintSeed(7)");
+		});
+
 		it("keeps the caller's seeds", async () => {
 			const config = await launchConfig({
 				os: "linux",

@@ -851,7 +851,7 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		const fromP = generateContextFingerprint({
 			preset,
 			timezone: "Europe/Paris",
-			config_overrides: { "fonts:spacing_seed": 0 },
+			config_overrides: { "audio:seed": 7 },
 		});
 		expect(fromP.context_options.timezoneId).toBe("Europe/Paris");
 		expect(fromP.config["navigator.platform"]).toBe("MacIntel");
