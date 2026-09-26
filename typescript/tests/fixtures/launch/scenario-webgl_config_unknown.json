@@ -85,7 +85,7 @@
  "special": {},
  "error": {
   "type": "ValueError",
-  "message": "No WebGL data found for vendor \"Nope\" and renderer \"Nope GPU\""
+  "message": "No recorded WebGL data for vendor 'Nope' and renderer 'Nope GPU' from Firefox on Linux. Possible pairs: [('AMD', 'Radeon HD 3200 Graphics, or similar'), ('AMD', 'Radeon R9 200 Series, or similar'), ('Broadcom', 'Generic Renderer'), ('Google Inc. (Intel)', 'ANGLE (Intel, Intel(R) HD Graphics 400 Direct3D11 vs_5_0 ps_5_0), or similar'), ('Intel', 'Intel(R) HD Graphics 400, or similar'), ('Intel', 'Intel(R) HD Graphics, or similar'), ('Intel Open Source Technology Center', 'Intel(R) HD Graphics, or similar'), ('Mesa', 'GeForce GTX 480, or similar'), ('Mesa', 'Radeon HD 3200 Graphics, or similar'), ('Mesa', 'llvmpipe, or similar'), ('Mozilla', 'Mozilla'), ('NVIDIA Corporation', 'GeForce GTX 980, or similar'), ('NVIDIA Corporation', 'NVIDIA GeForce GTX 480, or similar'), ('NVIDIA Corporation', 'NVIDIA GeForce GTX 980, or similar'), ('nouveau', 'GeForce GTX 980, or similar')]"
  },
  "warnings": [
   {

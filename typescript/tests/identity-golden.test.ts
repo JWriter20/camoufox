@@ -12,6 +12,7 @@ import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import * as coherence from "../src/coherence.js";
 import * as fp from "../src/fingerprints.js";
+import { pairwiseSum } from "../src/locales.js";
 import { LOCAL_DATA } from "../src/pkgman.js";
 import {
 	crc32,
@@ -26,13 +27,7 @@ import {
 	pySumFloats,
 } from "../src/pycompat.js";
 import { PyRandom, pyRandom } from "../src/pyrandom.js";
-import { NumpyGenerator, npSum, PCG64 } from "../src/webgl/nprandom.js";
-import {
-	getPossiblePairs,
-	loadWebGLData,
-	loadWebGLRecords,
-	sampleWebGL,
-} from "../src/webgl/sample.js";
+import * as webgl from "../src/webgl.js";
 
 const FIXTURES = path.join(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -173,37 +168,11 @@ describe("pyrandom (CPython random.Random)", () => {
 	});
 });
 
-describe("numpy default_rng / choice / sum", () => {
+describe("numpy sum", () => {
 	const fx = load("numpy.json.gz");
-	it("PCG64 streams", () => {
-		for (const s of fx.streams) {
-			const g = new NumpyGenerator(BigInt(s.seed));
-			expect(
-				Array.from({ length: 5 }, () => g.random()),
-				s.seed,
-			).toEqual(s.random);
-			const bits = new PCG64(BigInt(s.seed));
-			expect(Array.from({ length: 4 }, () => bits.next64().toString())).toEqual(
-				s.raw,
-			);
-		}
-	});
-	it("weighted choice over the WebGL pools and synthetic vectors", () => {
-		for (const c of fx.choices) {
-			const total = npSum(c.probs);
-			expect(total, c.os).toBe(c.sum);
-			const normalized = c.probs.map((p: number) => p / total);
-			c.idx.forEach((want: number, seed: number) => {
-				expect(
-					new NumpyGenerator(seed).choiceIndex(normalized),
-					`${c.os} seed ${seed}`,
-				).toBe(want);
-			});
-		}
-	});
 	it("pairwise float64 sum", () => {
 		for (const s of fx.sums)
-			expect(npSum(s.values), `n=${s.values.length}`).toBe(s.sum);
+			expect(pairwiseSum(s.values), `n=${s.values.length}`).toBe(s.sum);
 	});
 });
 
@@ -369,56 +338,56 @@ describe("media devices", () => {
 	});
 });
 
+/** Python's exact(): sha256 of the orjson bytes, key order and number types included. */
+function exact(value: unknown): string {
+	return createHash("sha256")
+		.update(Buffer.from(orjsonDumps(value, false), "utf-8"))
+		.digest("hex")
+		.slice(0, 20);
+}
+
 describe("webgl", () => {
-	const fx = load("webgl.json.gz");
-	it("ships the same table, in the same order, as webgl_data.db", () => {
-		const rows = loadWebGLRecords();
-		expect(
-			rows.map((r) => [r.vendor, r.renderer, r.win, r.mac, r.lin, h(r.data)]),
-		).toEqual(fx.table);
-	});
-	it(`reproduces ${fx.samples.length} seeded draws`, () => {
-		for (const c of fx.samples) {
-			const out = sampleWebGL(c.os, null, null, big(c.seed));
-			expect(out["webGl:renderer"], `${c.os} ${c.seed}`).toBe(c.renderer);
-			expect(h(out)).toBe(c.hash);
-		}
-	});
-	it("vendor/renderer lookups and errors", () => {
-		for (const c of fx.pairs) {
-			let got: any;
-			try {
-				const out = sampleWebGL(c.os, c.vendor, c.renderer);
-				got = { ok: h(out) };
-			} catch (e) {
-				got = { message: (e as Error).message };
-			}
-			if ("ok" in c) expect(got).toEqual({ ok: c.ok });
-			else expect(got).toEqual({ message: c.message });
+	// Read as Python reads it: the recorded device's 1.0 must stay a float.
+	const fx = load("webgl.json.gz", true);
+	it("traces the same GPUs, in the same order", () => {
+		for (const [osKey, gpus] of Object.entries(fx.gpus)) {
+			expect(webgl.firefoxGpus(osKey), osKey).toEqual(gpus);
 		}
 	});
 	it(`reproduces ${fx.forScreen.length} screen-coherent draws`, () => {
 		for (const c of fx.forScreen) {
-			const out = fp.sampleWebGLForScreen(
-				c.os,
-				c.w,
-				c.h,
-				c.attempts ?? 32,
-				c.seed,
-			);
-			expect(out["webGl:renderer"], `${c.os} ${c.w}x${c.h} ${c.seed}`).toBe(
-				c.renderer,
-			);
-			expect(h(out)).toBe(c.hash);
+			const out = webgl.sampleWebglForScreen(c.os, c.w, c.h, big(c.seed));
+			const label = `${c.os} ${c.w}x${c.h} seed ${c.seed}`;
+			expect(out["webGl:renderer"], label).toBe(c.renderer);
+			expect(exact(out), label).toBe(c.hash);
 		}
 	});
-	it("possible pairs and the extension filter", () => {
-		const pairs = getPossiblePairs();
-		for (const [osKey, list] of Object.entries(fx.possiblePairs)) {
-			expect(pairs[osKey].map((p) => [p.vendor, p.renderer])).toEqual(list);
+	it(`reproduces ${fx.forGpu.length} draws for a named GPU`, () => {
+		for (const c of fx.forGpu) {
+			let got: any;
+			try {
+				const out = webgl.webglForGpu(c.os, c.vendor, c.renderer, c.seed);
+				got = { ok: exact(out) };
+			} catch (e) {
+				got = { error: (e as Error).name, message: (e as Error).message };
+			}
+			expect(got, `${c.os} ${c.renderer} seed ${c.seed}`).toEqual(
+				"ok" in c ? { ok: c.ok } : { error: c.error, message: c.message },
+			);
 		}
-		for (const [osKey, want] of Object.entries(fx.filtered)) {
-			expect(loadWebGLData(fx.filterBlob, osKey)).toEqual(want);
+	});
+	it("raises as Python does", () => {
+		const { error, message } = fx.errors.unknownOs;
+		expect(() => webgl.sampleWebglForScreen("bsd", 1920, 1080, 0)).toThrow(
+			expect.objectContaining({ name: error, message }),
+		);
+	});
+	it("converts a recorded device, filtering extensions per OS", () => {
+		for (const c of fx.converted) {
+			expect(
+				exact(webgl.toConfig(fx.recorded, c.webgl2, c.os)),
+				`${c.os} webgl2=${Array.isArray(c.webgl2) ? "[]" : "dict"}`,
+			).toBe(c.hash);
 		}
 	});
 });

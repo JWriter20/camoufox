@@ -111,10 +111,6 @@ function firstDiff(have: string, want: string): string {
 }
 
 /** Python exception type -> the TS error name it corresponds to. */
-const ERROR_NAMES: Record<string, string> = {
-	ValueError: "Error",
-};
-
 let mods: {
 	utils: typeof import("../src/utils.js");
 	fingerprints: typeof import("../src/fingerprints.js");
@@ -309,9 +305,7 @@ describe.skipIf(process.platform !== "linux")(
 				if (scenario.error) {
 					expect(got.error, "expected an error").toBeDefined();
 					const err = got.error as Error;
-					expect(err.name).toBe(
-						ERROR_NAMES[scenario.error.type] ?? scenario.error.type,
-					);
+					expect(err.name).toBe(scenario.error.type);
 					expect(mask(err.message)).toBe(scenario.error.message);
 				} else if (got.error) {
 					throw got.error;

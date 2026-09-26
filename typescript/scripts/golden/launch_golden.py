@@ -169,25 +169,28 @@ def load_inputs():
     if path.exists() and '--regen-inputs' not in sys.argv:
         return json.loads(path.read_text())
     presets = orjson.loads((Path(fingerprints.__file__).parent / 'fingerprint-presets-v150.json').read_bytes())['presets']
-    from camoufox.webgl.sample import get_possible_pairs
+    from camoufox.webgl import firefox_gpus
 
-    pairs = get_possible_pairs()
-    known = {tuple(x) for v in pairs.values() for x in v}
+    pairs = {os_key: sorted(firefox_gpus(os_key)) for os_key in ('win', 'mac', 'lin')}
+    known = {x for v in pairs.values() for x in v}
 
-    def pick(os_key, want_known):
+    def pick(os_key):
         for p in presets[os_key]:
             gl = p.get('webgl') or {}
-            if ((gl.get('unmaskedVendor'), gl.get('unmaskedRenderer')) in known) == want_known:
+            if (gl.get('unmaskedVendor'), gl.get('unmaskedRenderer')) in known:
                 return p
-        raise SystemExit(f'no preset for {os_key} known={want_known}')
+        raise SystemExit(f'no preset for {os_key} with a recorded GPU')
 
     inputs = {
         'fingerprints': {o: make_fingerprint(o) for o in ('linux', 'windows', 'macos')},
         'presets': {
-            'windows': pick('windows', True),
-            'macos': pick('macos', True),
-            'linux': pick('linux', True),
-            'windows_unknown_gpu': pick('windows', False),
+            'windows': pick('windows'),
+            'macos': pick('macos'),
+            'linux': pick('linux'),
+            # A GPU fpgen has never seen, which launch_options must refuse.
+            'windows_unknown_gpu': {**pick('windows'), 'webgl': {
+                'unmaskedVendor': 'Google Inc. (Acme)',
+                'unmaskedRenderer': 'ANGLE (Acme, Acme GPU 9000 Direct3D11 vs_5_0 ps_5_0)'}},
         },
         'webgl_pairs': {k: [list(x) for x in v[:2]] for k, v in pairs.items()},
     }

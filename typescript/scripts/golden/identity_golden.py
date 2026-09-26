@@ -44,7 +44,7 @@ import pyrandom_cases  # noqa: E402
 from camoufox import coherence  # noqa: E402
 from camoufox import cpu_affinity  # noqa: E402
 from camoufox import fingerprints as fp  # noqa: E402
-from camoufox.webgl import sample as ws  # noqa: E402
+from camoufox import webgl  # noqa: E402
 
 OS_NAMES = ('windows', 'macos', 'linux')
 OS_KEYS = ('win', 'mac', 'lin')
@@ -105,56 +105,14 @@ def record_pyrandom():
     write('pyrandom.json', {'cases': pyrandom_cases.cases()})
 
 
-def webgl_os_probs(os_key):
-    """The probability vector sample_webgl normalizes, per OS."""
-    import sqlite3
-
-    con = sqlite3.connect(ws.DB_PATH)
-    rows = con.execute(f'SELECT vendor, renderer, data, {os_key} FROM webgl_fingerprints WHERE {os_key} > 0').fetchall()
-    con.close()
-    coherent = [r for r in rows if coherence.gpu_fits_os(r[1], os_key)]
-    rows = coherent or rows
-    return [r[3] for r in rows]
-
-
 def record_numpy():
+    """np.sum over a float64 array, which the locale selector normalises by."""
     rng = random.Random(20260924)
-    seeds = [0, 1, 2, 42, 2**32 - 1, 2**32 + 5, 2**63, 2**64 + 1, 12345678901234567890123, 3735928559]
-    streams = []
-    for s in seeds:
-        g = np.random.default_rng(s)
-        raw = [str(int(x)) for x in np.random.default_rng(s).bit_generator.random_raw(4)]
-        streams.append({'seed': str(s), 'random': [float(g.random()) for _ in range(5)], 'raw': raw})
-    choices = []
-    for os_key in OS_KEYS:
-        probs = webgl_os_probs(os_key)
-        arr = np.array(probs, dtype=np.float64)
-        total = float(arr.sum())
-        normalized = arr / arr.sum()
-        choices.append({
-            'os': os_key,
-            'probs': probs,
-            'sum': total,
-            'cdf': [float(x) for x in (normalized.cumsum() / normalized.cumsum()[-1])],
-            'idx': [int(np.random.default_rng(s).choice(len(normalized), p=normalized)) for s in range(300)],
-        })
-    # Synthetic p vectors, including uneven and many-element ones.
-    for n in (1, 2, 3, 7, 8, 9, 16, 17, 33, 100, 130):
-        probs = [rng.random() ** 3 + 1e-6 for _ in range(n)]
-        arr = np.array(probs, dtype=np.float64)
-        normalized = arr / arr.sum()
-        choices.append({
-            'os': f'synthetic-{n}',
-            'probs': probs,
-            'sum': float(arr.sum()),
-            'cdf': [float(x) for x in (normalized.cumsum() / normalized.cumsum()[-1])],
-            'idx': [int(np.random.default_rng(s).choice(n, p=normalized)) for s in range(40)],
-        })
     sums = []
     for n in (0, 1, 2, 5, 7, 8, 9, 15, 16, 17, 31, 64, 100, 127, 128, 129, 200, 255, 256, 257, 600):
         vals = [rng.uniform(-1, 1) * 10 ** rng.randint(-8, 8) for _ in range(n)]
         sums.append({'values': vals, 'sum': float(np.array(vals, dtype=np.float64).sum())})
-    write('numpy.json', {'streams': streams, 'choices': choices, 'sums': sums})
+    write('numpy.json', {'sums': sums})
 
 
 SALT_OBJECTS = [
@@ -360,51 +318,64 @@ def record_media():
     write('media.json', {'cases': cases, 'defaults': defaults})
 
 
+def exact(o) -> str:
+    """sha256 of the exact orjson bytes: key order, int vs float and all."""
+    return hashlib.sha256(orjson.dumps(o)).hexdigest()[:20]
+
+
+WEBGL_SCREENS = [(1024, 600), (800, 480), (1366, 768), (1280, 800), (1920, 1080), (2560, 1440), (None, None)]
+
+
 def record_webgl():
-    import sqlite3
+    gpus = {os_key: [[r.value['vendor'], r.value['renderer']] for r in webgl._trace('gpu', os_key)]
+            for os_key in OS_KEYS}
 
-    con = sqlite3.connect(ws.DB_PATH)
-    rows = con.execute('SELECT vendor, renderer, win, mac, lin, data FROM webgl_fingerprints ORDER BY rowid').fetchall()
-    con.close()
-    table = [[v, r, w, m, l, h(orjson.loads(d))] for v, r, w, m, l, d in rows]
-
-    samples = []
-    for os_key in OS_KEYS:
-        for seed in list(range(200)) + [2**32 - 1, 2**40]:
-            out = ws.sample_webgl(os_key, seed=seed)
-            samples.append({'os': os_key, 'seed': str(seed), 'renderer': out['webGl:renderer'], 'hash': h(out)})
-
-    pairs = []
-    for v, r, *_ in rows:
-        for os_key in OS_KEYS:
-            res = err(lambda: h(ws.sample_webgl(os_key, v, r)))
-            pairs.append({'os': os_key, 'vendor': v, 'renderer': r, **res})
-    pairs.append({'os': 'win', 'vendor': 'Nope', 'renderer': 'Nope', **err(lambda: ws.sample_webgl('win', 'Nope', 'Nope'))})
-    pairs.append({'os': 'bsd', 'vendor': None, 'renderer': None, **err(lambda: ws.sample_webgl('bsd'))})
-
-    screens = [(1024, 600), (800, 480), (1024, 576), (1366, 768), (1280, 800), (1920, 1080), (None, None)]
     for_screen = []
     for os_key in OS_KEYS:
-        for w, hh in screens:
-            for seed in range(40):
-                out = fp.sample_webgl_for_screen(os_key, w, hh, seed=seed)
-                for_screen.append({'os': os_key, 'w': w, 'h': hh, 'seed': seed,
-                                   'renderer': out['webGl:renderer'], 'hash': h(out)})
-        out = fp.sample_webgl_for_screen(os_key, 1024, 600, attempts=3, seed=11)
-        for_screen.append({'os': os_key, 'w': 1024, 'h': 600, 'seed': 11, 'attempts': 3,
-                           'renderer': out['webGl:renderer'], 'hash': h(out)})
+        for w, hh in WEBGL_SCREENS:
+            for seed in range(60):
+                out = webgl.sample_webgl_for_screen(os_key, w, hh, seed=seed)
+                for_screen.append({'os': os_key, 'w': w, 'h': hh, 'seed': str(seed),
+                                   'renderer': out['webGl:renderer'], 'hash': exact(out)})
+        for seed in (2**32 - 1, 2**40, 2**64 + 1, 12345678901234567890123):
+            out = webgl.sample_webgl_for_screen(os_key, 1920, 1080, seed=seed)
+            for_screen.append({'os': os_key, 'w': 1920, 'h': 1080, 'seed': str(seed),
+                               'renderer': out['webGl:renderer'], 'hash': exact(out)})
 
-    blob = {
-        'webGl:supportedExtensions': ['ANGLE_instanced_arrays', 'WEBGL_multi_draw', 'OVR_multiview2'],
-        'webGl2:supportedExtensions': ['EXT_texture_norm16', 'WEBGL_clip_cull_distance', 'OVR_multiview2',
-                                       'WEBGL_compressed_texture_etc1', 'EXT_color_buffer_float'],
-        'other': 1,
+    # Every GPU fpgen records for each OS, and every bundled preset's GPU.
+    for_gpu = []
+    targets = {(os_key, v, r) for os_key in OS_KEYS for v, r in gpus[os_key]}
+    for fname in ('fingerprint-presets.json', 'fingerprint-presets-v150.json'):
+        presets = json.loads((Path(fp.__file__).parent / fname).read_text())['presets']
+        for os_name, entries in presets.items():
+            os_key = {'windows': 'win', 'macos': 'mac', 'linux': 'lin'}[os_name]
+            for preset in entries:
+                targets.add((os_key, preset['webgl']['unmaskedVendor'], preset['webgl']['unmaskedRenderer']))
+    for os_key, v, r in sorted(targets):
+        for seed in range(5):
+            for_gpu.append({'os': os_key, 'vendor': v, 'renderer': r, 'seed': seed,
+                            **err(lambda: exact(webgl.webgl_for_gpu(os_key, v, r, seed=seed)))})
+    for os_key, v, r in (('win', 'Nope', 'Nope GPU'), ('lin', 'Apple', 'Apple M1, or similar')):
+        for_gpu.append({'os': os_key, 'vendor': v, 'renderer': r, 'seed': 0,
+                        **err(lambda: webgl.webgl_for_gpu(os_key, v, r, seed=0))})
+    errors = {
+        'unknownOs': err(lambda: webgl.sample_webgl_for_screen('bsd', 1920, 1080, seed=0)),
     }
-    filtered = {os_key: ws._load_webgl_data(orjson.dumps(blob), os_key) for os_key in OS_KEYS}
 
-    write('webgl.json', {'table': table, 'samples': samples, 'pairs': pairs, 'forScreen': for_screen,
-                         'possiblePairs': {k: [list(p) for p in v] for k, v in ws.get_possible_pairs().items()},
-                         'filterBlob': blob, 'filtered': filtered})
+    recorded = {
+        'vendor': 'v', 'renderer': 'r', 'contextAttributes': {'alpha': True}, 'params': {'3379': {'value': 1.0}},
+        'shaderPrecisionFormats': [{'shaderType': 35633, 'precisionType': 36336,
+                                    'shaderPrecisionFormat': {'rangeMin': 127, 'rangeMax': 127, 'precision': 23}}],
+        'supportedExtensions': ['ANGLE_instanced_arrays', 'WEBGL_multi_draw', 'OVR_multiview2',
+                                'WEBGL_compressed_texture_etc1'],
+    }
+    recorded2 = {**recorded, 'supportedExtensions': ['EXT_texture_norm16', 'WEBGL_clip_cull_distance',
+                                                     'OVR_multiview2', 'EXT_color_buffer_float']}
+    converted = [{'os': os_key, 'webgl2': w2, 'hash': exact(webgl.to_config(recorded, w2, os_key))}
+                 for os_key in OS_KEYS for w2 in (recorded2, [])]
+
+    write('webgl.json', {'gpus': gpus, 'forScreen': for_screen, 'forGpu': for_gpu, 'errors': errors,
+                         'recorded': recorded, 'recorded2': recorded2, 'converted': converted})
 
 
 # ---------------------------------------------------------------------------
@@ -518,13 +489,10 @@ def record_geometry():
     write('geometry.json', {'cases': cases, 'arch': arch, 'hardwareConcurrency': hc})
 
 
-def db_renderers():
-    import sqlite3
-
-    con = sqlite3.connect(ws.DB_PATH)
-    rows = con.execute('SELECT DISTINCT renderer FROM webgl_fingerprints ORDER BY rowid').fetchall()
-    con.close()
-    return [r[0] for r in rows]
+def fpgen_renderers():
+    """Every renderer fpgen records from Firefox, once each, in trace order."""
+    renderers = [r.value['renderer'] for os_key in OS_KEYS for r in webgl._trace('gpu', os_key)]
+    return list(dict.fromkeys(renderers))
 
 
 EXTRA_RENDERERS = [
@@ -541,7 +509,7 @@ EXTRA_RENDERERS = [
 
 
 def record_coherence():
-    renderers = db_renderers() + EXTRA_RENDERERS
+    renderers = fpgen_renderers() + EXTRA_RENDERERS
     rng = random.Random(9001)
     fits = [[r, os_key, coherence.gpu_fits_os(r, os_key)] for r in renderers + [None] for os_key in OS_KEYS + ('bsd',)]
     gpu = []
@@ -714,8 +682,6 @@ def record_constants():
         'maxTouchPoints': coherence.MAX_PLAUSIBLE_TOUCH_POINTS,
         'browserChromeHeight': coherence.BROWSER_CHROME_HEIGHT,
         'rules': [r.name for r in coherence.RULES],
-        'neverExposed': sorted(ws._NEVER_EXPOSED_EXTENSIONS),
-        'hostDependent': sorted(ws._HOST_DEPENDENT_EXTENSIONS),
         'macNovelty': sorted(fp._MAC_NOVELTY_VOICES),
         'macEloquence': sorted(fp._MAC_ELOQUENCE_VOICES),
         'presetsV150MinFf': fp.PRESETS_V150_MIN_FF,
