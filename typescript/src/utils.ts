@@ -825,7 +825,6 @@ export function warnManualConfig(config: Record<string, any>): void {
 		isDomainSet(
 			config,
 			"navigator.language",
-			"navigator.languages",
 			"headers.Accept-Language",
 			"locale:",
 		)
