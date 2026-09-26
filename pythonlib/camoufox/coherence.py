@@ -1,9 +1,9 @@
 """Whole-identity coherence: the checks that look at more than one field.
 
 Camoufox assembles an identity from several pools -- the navigator and screen
-from the fingerprint generator, the GPU from `webgl_data.db`, fonts and voices
-from its own catalogues, media devices from `media-devices.json`. Each pool is
-sampled on its own, so a combination that no machine has ever had can be built
+from the fingerprint generator, the GPU from fpgen's WebGL records, fonts and
+voices from its own catalogues, media devices from `media-devices.json`. Each
+pool is sampled on its own, so a combination that no machine has ever had can be built
 out of individually plausible parts: an Apple M1 with 2 cores, a Mac reporting a
 Braswell Atom GPU, a Linux identity whose platform says armv81 while its user
 agent says x86_64.
@@ -84,8 +84,8 @@ BROWSER_CHROME_HEIGHT = 86
 # GPU strings that are not possible on macOS. Firefox on a Mac reports Apple
 # Silicon as "Apple M1, or similar", and Intel Macs as an Intel Iris/UHD/HD
 # 4000-6000 part; ANGLE is Windows-only (Direct3D), and the other two, which
-# webgl_data.db once offered to macOS, are a Braswell Atom IGP and a desktop PC
-# card, neither of which shipped in any Mac.
+# fpgen records from macOS, are a Braswell Atom IGP and a desktop PC card,
+# neither of which shipped in any Mac.
 _NOT_A_MAC_GPU = ('ANGLE', 'Intel(R) HD Graphics 400', 'Radeon R9 200 Series', 'llvmpipe')
 
 
@@ -133,7 +133,7 @@ def _repair_apple_silicon_cores(config: Dict[str, Any], target_os: str) -> None:
 def gpu_fits_os(renderer: Optional[str], target_os: str) -> bool:
     """Whether this renderer string is one the OS can report.
 
-    Used both to check a finished identity and to filter `webgl_data.db` before
+    Used both to check a finished identity and to filter fpgen's GPUs before
     sampling, so the two can never disagree about what a Mac may claim.
     """
     renderer = str(renderer or '')

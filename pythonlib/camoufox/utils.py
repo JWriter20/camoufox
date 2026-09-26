@@ -931,6 +931,8 @@ def launch_options(
             which is equally coherent, just less diverse.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
+            The pair must be one fpgen has recorded from Firefox on `os`
+            (camoufox.webgl.firefox_gpus); any other raises ValueError.
         **launch_options (Dict[str, Any]):
             Additional Firefox launch options.
     """
