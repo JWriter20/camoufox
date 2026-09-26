@@ -11,6 +11,7 @@ from random import Random, choice, randint, randrange
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from camoufox._warnings import FallbackWarning
+from camoufox.ip import valid_ipv4, validate_ip
 from camoufox.pkgman import load_yaml
 from camoufox.webgl import sample_webgl
 
@@ -1759,8 +1760,10 @@ def _build_init_script(values: Dict[str, Any]) -> str:
     # WebRTC IP
     ip = values.get('webrtcIP')
     if ip:
+        validate_ip(ip)
+        fn_name = 'setWebRTCIPv4' if valid_ipv4(ip) else 'setWebRTCIPv6'
         lines.append(
-            f'  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4({_json.dumps(ip)});'
+            f'  if (typeof w.{fn_name} === "function") w.{fn_name}({_json.dumps(ip)});'
         )
     else:
         lines.append(

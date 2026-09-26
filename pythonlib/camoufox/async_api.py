@@ -204,7 +204,7 @@ async def AsyncNewContext(
         preset: A fingerprint preset dict to use. If None, fpgen draws a new identity.
         os: Target OS for the drawn identity ("windows", "macos", "linux").
         ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
-        webrtc_ip: IPv4 address to spoof for WebRTC ICE candidates.
+        webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
             Unless webrtc_ip and timezone_id are both given, they are looked up from the
             proxy's exit IP; InvalidIP is raised if that lookup fails.

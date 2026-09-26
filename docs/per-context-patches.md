@@ -617,7 +617,7 @@ bundles are shipped in the wheel.
 | Audio seed | Derived from the identity (NewBrowser) or `randint(1, 2^32-1)` (NewContext) | Never 0 |
 | Timezone | From preset, or `timezone` in `CAMOU_CONFIG` | The init script calls `setTimezone()` only for an explicit value; otherwise the C++ side falls back to `CAMOU_CONFIG` (set from geoip at launch) or the browser default. |
 | Speech voices | `_generate_random_voice_subset()` | Follows the measured model in `voice-manifests.json`: Windows gets the display language's OneCore pack plus its legacy Desktop voices at their measured rate; macOS the compact + Eloquence base plus rare downloads; Linux speech-dispatcher's espeak-ng list. Seeded by the identity. NOT from presets. |
-| WebRTC IP | Not set by default | User sets via `window.setWebRTCIPv4()`. NewContext init script defaults to empty string `""` |
+| WebRTC IP | Not set by default | NewContext's `webrtc_ip` (or the proxy's exit IP) goes to `window.setWebRTCIPv4()` or `window.setWebRTCIPv6()` by address family; an invalid address raises `InvalidIP`. Without one, the init script calls `setWebRTCIPv4("")` |
 | Geolocation | User parameter or geoip detection | Via Playwright `context.setGeolocation()` |
 
 ### Key Files
