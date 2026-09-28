@@ -1,0 +1,152 @@
+# Headless launch smoke test of a published release on real Windows and macOS.
+# The release build cross-compiles every target on Linux, so nothing in it ever
+# starts the Windows or macOS binaries. This does.
+name: Smoke test release binaries
+
+on:
+  push:
+    branches: ["smoke/**"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "daijro/camoufox release tag"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || 'v152.0.4-beta.31' }}
+  SOURCE_REPO: daijro/camoufox
+
+jobs:
+  smoke:
+    name: smoke (${{ matrix.asset }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, asset: win.x86_64 }
+          - { os: macos-15, asset: mac.arm64 }
+          - { os: macos-15-intel, asset: mac.x86_64 }
+          - { os: ubuntu-24.04, asset: lin.x86_64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: daijro/camoufox
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${TAG#v}"
+          name="camoufox-${ver}-${{ matrix.asset }}.zip"
+          gh release download "$TAG" -R "$SOURCE_REPO" -p "$name" -D dl
+          ls -la dl
+          mkdir cf
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z x -y -ocf "dl/$name" > /dev/null
+          else
+            unzip -q "dl/$name" -d cf
+          fi
+          case "$RUNNER_OS" in
+            Windows) exe="$(pwd -W)/cf/camoufox.exe" ;;
+            macOS)   exe="$(pwd)/$(find cf -maxdepth 4 -path '*Contents/MacOS/camoufox' | head -1)" ;;
+            Linux)   exe="$(pwd)/cf/camoufox-bin" ;;
+          esac
+          test -f "$exe" || { echo "no executable found"; find cf -maxdepth 3 | head -50; exit 1; }
+          echo "CAMOUFOX_EXE=$exe" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            xattr -cr cf || true
+            file "$exe"
+            codesign -dv "$exe" 2>&1 || true
+          fi
+
+      - name: Install Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-0t64 libasound2t64 libx11-xcb1 libdbus-glib-1-2
+
+      - name: Install the Python library from the same tag
+        shell: bash
+        run: |
+          python -m pip install -q --upgrade pip
+          python -m pip install -q ./pythonlib
+          python -m pip show playwright | head -2
+
+      - name: Headless launch and page load
+        shell: bash
+        run: |
+          cat > smoke.py <<'PY'
+          import http.server, json, os, sys, threading, time
+          from pathlib import Path
+
+          PAGE = b"<html><head><title>cf-smoke</title></head><body><h1 id=h>ok</h1></body></html>"
+
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  self.send_response(200); self.send_header("Content-Type", "text/html")
+                  self.end_headers(); self.wfile.write(PAGE)
+              def log_message(self, *a): pass
+
+          srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+          threading.Thread(target=srv.serve_forever, daemon=True).start()
+          url = f"http://localhost:{srv.server_address[1]}/"
+          exe = os.environ["CAMOUFOX_EXE"]
+          probe = """() => ({
+              ua: navigator.userAgent, platform: navigator.platform,
+              title: document.title, h: document.getElementById('h').textContent,
+              webdriver: navigator.webdriver, secure: isSecureContext,
+              serial: typeof navigator.serial, webgl: (() => {
+                  const g = document.createElement('canvas').getContext('webgl');
+                  return g ? g.getParameter(g.RENDERER) : null; })(),
+          })"""
+          out = {}
+
+          # 1. Raw Playwright, no Camoufox config: does the binary start and speak Juggler?
+          from playwright.sync_api import sync_playwright
+          t = time.time()
+          with sync_playwright() as p:
+              b = p.firefox.launch(executable_path=exe, headless=True, timeout=120_000)
+              out["raw_version"] = b.version
+              pg = b.new_page(); pg.goto(url); out["raw"] = pg.evaluate(probe)
+              pg.screenshot(path="raw.png"); b.close()
+          out["raw_seconds"] = round(time.time() - t, 1)
+
+          # 2. Through the Python library with a generated fingerprint (the shipped path).
+          from camoufox.sync_api import Camoufox
+          t = time.time()
+          with Camoufox(executable_path=exe, headless=True) as b:
+              pg = b.new_page(); pg.goto(url); out["lib"] = pg.evaluate(probe)
+              pg.screenshot(path="lib.png")
+          out["lib_seconds"] = round(time.time() - t, 1)
+
+          print(json.dumps(out, indent=2))
+          assert out["raw"]["title"] == "cf-smoke" and out["raw"]["h"] == "ok", out
+          assert out["lib"]["title"] == "cf-smoke" and out["lib"]["h"] == "ok", out
+          want = os.environ["TAG"].lstrip("v").split("-")[0]
+          assert out["raw_version"] == want, (out["raw_version"], want)
+          assert out["lib"]["webdriver"] is False, out["lib"]["webdriver"]
+          Path("smoke.json").write_text(json.dumps(out, indent=2))
+          print("SMOKE OK")
+          PY
+          python smoke.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ matrix.asset }}
+          path: |
+            smoke.json
+            raw.png
+            lib.png
+          if-no-files-found: ignore
