@@ -23,9 +23,15 @@ permissions:
   contents: write
 
 env:
-  TAG: ${{ inputs.tag || 'v152.0.4-beta.30' }}
-  SOURCE_REPO: ${{ inputs.repo || 'daijro/camoufox' }}
-  CODE_TAG: ${{ inputs.tag || 'v152.0.4-beta.30' }}
+  # TAG: the build's version and the daijro tag its pythonlib is checked out from.
+  # RELEASE/SOURCE_REPO: where the zips are. Upstream's 156.0.1-beta.32 release
+  # is still a draft, which the fork's token cannot read, so its assets (sha256
+  # checked) are mirrored to a *draft* release on this fork; a draft creates no
+  # tag, so nothing here triggers build.yml.
+  TAG: ${{ inputs.tag || 'v156.0.1-beta.32' }}
+  RELEASE: ${{ inputs.tag || 'smoke-mirror-156.0.1-beta.32' }}
+  SOURCE_REPO: ${{ inputs.repo || github.repository }}
+  CODE_TAG: ${{ inputs.tag || 'v156.0.1-beta.32' }}
 
 jobs:
   smoke:
@@ -58,7 +64,8 @@ jobs:
         run: |
           ver="${TAG#v}"
           name="camoufox-${ver}-${{ matrix.asset }}.zip"
-          gh release download "$TAG" -R "$SOURCE_REPO" -p "$name" -D dl
+          gh release download "$RELEASE" -R "$SOURCE_REPO" -p "$name" -D dl
+          (cd dl && sha256sum "$name" 2>/dev/null || shasum -a 256 "$name")
           ls -la dl
           mkdir cf
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -141,7 +148,7 @@ jobs:
           print(json.dumps(out, indent=2))
           assert out["raw"]["title"] == "cf-smoke" and out["raw"]["h"] == "ok", out
           assert out["lib"]["title"] == "cf-smoke" and out["lib"]["h"] == "ok", out
-          want = os.environ["TAG"].lstrip("v").split("-")[0]
+          want = os.environ["TAG"].lstrip("v")
           assert out["raw_version"] == want, (out["raw_version"], want)
           assert out["lib"]["webdriver"] is False, out["lib"]["webdriver"]
           Path("smoke.json").write_text(json.dumps(out, indent=2))
