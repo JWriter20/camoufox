@@ -90,6 +90,14 @@ jobs:
         run: |
           python -m pip install -q --upgrade pip
           python -m pip install -q ./pythonlib
+          # The tag's resolve_verstr() cannot read a macOS bundle's version
+          # (application.ini is in Contents/Resources), so on macOS the library
+          # launch uses the fix from fix/macos-executable-path-verstr (3d5a5430).
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            git -c advice.detachedHead=false clone -q https://github.com/JWriter20/camoufox.git fixlib
+            git -C fixlib checkout -q 3d5a5430fc9dd30b6540c64e31334ab8d01512bb
+            python -m pip install -q ./fixlib/pythonlib
+          fi
           python -m pip show playwright camoufox | grep -E '^(Name|Version)'
 
       - name: Headless launch and page load
