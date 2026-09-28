@@ -51,6 +51,8 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "force-scope-access",
         "humanize-edge-deadlock",
         "humanize-mouse-trajectory",
+        "humanize-pacing",
+        "humanize-seam",
         "input-ack-backstop",
         "isolated-evaluate",
         "main-world-eval",

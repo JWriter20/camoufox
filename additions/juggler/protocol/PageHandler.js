@@ -10,7 +10,7 @@ const {NetworkObserver, PageNetwork} = ChromeUtils.importESModule('chrome://jugg
 const {PageTarget} = ChromeUtils.importESModule('chrome://juggler/content/TargetRegistry.js');
 const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
 const {MouseDispatch} = ChromeUtils.importESModule('chrome://juggler/content/input/MouseDispatch.js');
-const {humanizedSteps} = ChromeUtils.importESModule('chrome://juggler/content/input/CursorTrajectory.js');
+const {humanizeSeam} = ChromeUtils.importESModule('chrome://juggler/content/input/HumanizeSeam.js');
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
@@ -104,6 +104,10 @@ export class PageHandler {
     helper.decorateAsEventEmitter(this._pageEventSink);
 
     this._pendingEventWatchers = new Set();
+    this._humanizeAbort = new AbortController();
+    // Per-page typing state a keyboard engine plans against (held keys, the
+    // time of the previous keydown).
+    this._keyboardState = {};
     this._eventListeners = [
       helper.on(this._pageTarget, PageTarget.Events.DialogOpened, this._onDialogOpened.bind(this)),
       helper.on(this._pageTarget, PageTarget.Events.DialogClosed, this._onDialogClosed.bind(this)),
@@ -158,6 +162,9 @@ export class PageHandler {
   }
 
   async dispose() {
+    // Stop any humanized plan still playing; nothing more dispatches to a page
+    // that is going away.
+    this._humanizeAbort.abort();
     this._contentPage.dispose();
     for (const watcher of this._pendingEventWatchers)
       watcher.dispose();
@@ -499,6 +506,23 @@ export class PageHandler {
     return await this._pageTarget.setInitScripts(scripts);
   }
 
+  _playHumanized(planned, command, dispatchStep) {
+    return humanizeSeam().play(planned, dispatchStep, {
+      command,
+      page: this._pageTarget.id(),
+      signal: this._humanizeAbort.signal,
+    });
+  }
+
+  // Key and text steps of a keyboard plan go through the stock content
+  // dispatch, one step at a time.
+  _dispatchPlannedKeyStep(step) {
+    if (step.kind === 'text')
+      return this._contentPage.send('insertText', {text: step.text});
+    const {type, key, code, keyCode, location, text} = step;
+    return this._contentPage.send('dispatchKeyEvent', {type, key, code, keyCode, location, repeat: false, text});
+  }
+
   async ['Page.dispatchKeyEvent']({type, keyCode, code, key, repeat, location, text}) {
     // key events don't fire if we are dragging.
     if (this._isDragging) {
@@ -514,7 +538,11 @@ export class PageHandler {
       }
       return;
     }
-    return await this._contentPage.send('dispatchKeyEvent', {type, keyCode, code, key, repeat, location, text});
+    const keyEvent = {type, keyCode, code, key, repeat, location, text};
+    const planned = humanizeSeam().plan('keyboard', 'planKey', {keyboardState: this._keyboardState}, keyEvent);
+    if (!planned)
+      return await this._contentPage.send('dispatchKeyEvent', keyEvent);
+    await this._playHumanized(planned, 'Page.dispatchKeyEvent', step => this._dispatchPlannedKeyStep(step));
   }
 
   async ['Page.dispatchTouchEvent'](options) {
@@ -550,17 +578,16 @@ export class PageHandler {
       const watcher = new EventWatcher(this._pageEventSink, types, this._pendingEventWatchers);
       const promises = [];
       for (const eventType of types) {
-        // Camoufox: when humanize is enabled, expand a direct mousemove into a
-        // human-like trajectory of intermediate mousemoves, replayed from a
-        // recording of a real hand (input/CursorTrajectory.js -> Cursory).
-        if (eventType === 'mousemove' && ChromeUtils.camouGetBool('humanize', false)) {
-          // The endpoints are excluded: the cursor is already on the first, and
-          // the last is the destination dispatched explicitly below.
-          const {steps, trailingDelayMs} =
-              humanizedSteps(this._lastTrackedPos.x, this._lastTrackedPos.y, x, y);
-          await dispatch.sendTrajectoryAcked(watcher, 'mousemove', steps, trailingDelayMs);
-          // Always finish exactly on the requested destination.
-          promises.push(dispatch.sendAcked(watcher, 'mousemove', x, y));
+        // Camoufox: with a mouse engine on (input/HumanizeSeam.js), a direct
+        // mousemove becomes a human-like trajectory of intermediate mousemoves
+        // that ends exactly on the requested destination.
+        const planned = eventType === 'mousemove' && humanizeSeam().plan('mouse', 'planMove', {
+          cursor: this._lastTrackedPos,
+          viewport: {width: dispatch.boundingBox.width, height: dispatch.boundingBox.height},
+        }, {x, y});
+        if (planned) {
+          await dispatch.sendTrajectoryAcked(watcher, 'mousemove', planned.plan,
+              (plan, dispatchStep) => this._playHumanized(planned, 'Page.dispatchMouseEvent', dispatchStep));
         } else {
           promises.push(dispatch.sendAcked(watcher, eventType, x, y));
         }
@@ -680,29 +707,6 @@ export class PageHandler {
   }
 
   async ['Page.dispatchWheelEvent']({x, y, button, deltaX, deltaY, deltaZ, modifiers }) {
-    // Camoufox: with humanize on, scroll the way a physical wheel does, in
-    // notches. Each notch is its own event of 3 LINES carrying one native tick,
-    // so the page sees deltaMode 1, DOMMouseScroll.detail 3 and wheelDelta -120
-    // per notch, and a longer scroll arrives as several such events a few tens
-    // of ms apart. Playwright's pixel delta gives detail = 100 and no line
-    // delta; lines without ticks give wheelDelta -396 for one notch and one big
-    // event for several (measured against XTEST input). 100 px == one notch.
-    //
-    // Off by default: mouse.wheel(0, 100) has to deliver deltaY 100 in
-    // deltaMode 0, which is the delta the caller asked for and what upstream's
-    // own suite asserts. Quantising into notches changes the number the page
-    // sees, so it is opt-in with the rest of the humanized input.
-    const nativeNotches = ChromeUtils.camouGetBool('humanize', false);
-    const PX_PER_NOTCH = 100;
-    const LINES_PER_NOTCH = 3;
-    const toNotches = (d) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / PX_PER_NOTCH)));
-    const notchesX = nativeNotches ? toNotches(deltaX) : 0;
-    const notchesY = nativeNotches ? toNotches(deltaY) : 0;
-    const notchCount = nativeNotches ? Math.max(1, Math.abs(notchesX), Math.abs(notchesY)) : 1;
-    // Upstream's conversion, used when the notches are off.
-    const pixelLineOrPageDeltaX = deltaX > 0 ? Math.floor(deltaX) : Math.ceil(deltaX);
-    const pixelLineOrPageDeltaY = deltaY > 0 ? Math.floor(deltaY) : Math.ceil(deltaY);
-
     await this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
 
@@ -713,37 +717,46 @@ export class PageHandler {
       // 3. Make sure compositor is flushed after scrolling.
       if (win.windowUtils.flushApzRepaints())
         await helper.awaitTopic('apz-repaints-flushed');
-      for (let i = 0; i < notchCount; i++) {
-        if (i)
-          await new Promise(resolve => setTimeout(resolve, 18 + Math.random() * 42));
-        const stepX = i < Math.abs(notchesX) ? Math.sign(notchesX) * LINES_PER_NOTCH : 0;
-        const stepY = i < Math.abs(notchesY) ? Math.sign(notchesY) * LINES_PER_NOTCH : 0;
-        // Camoufox: measure after the await, like Page.dispatchMouseEvent does.
-        const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers});
-        // Same conversion as a mouse event: a wheel at relative y == 0 would
-        // otherwise land on the chrome/content boundary and scroll the tab strip.
-        dispatch.sendWheel(x, y, nativeNotches ? {
-          deltaX: stepX,
-          deltaY: stepY,
-          deltaZ: i ? 0 : deltaZ,
-          deltaMode: 1 /* WheelEvent.DOM_DELTA_LINE */,
-          lineOrPageDeltaX: stepX,
-          lineOrPageDeltaY: stepY,
-          nativeNotches: true,
-        } : {
-          deltaX,
-          deltaY,
-          deltaZ,
-          deltaMode: 0 /* WheelEvent.DOM_DELTA_PIXEL */,
-          lineOrPageDeltaX: pixelLineOrPageDeltaX,
-          lineOrPageDeltaY: pixelLineOrPageDeltaY,
+      // Camoufox: measure at each dispatch, after any await, like
+      // Page.dispatchMouseEvent does. Same conversion as a mouse event: a wheel
+      // at relative y == 0 would otherwise land on the chrome/content boundary
+      // and scroll the tab strip.
+      const dispatchFor = () => MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers});
+
+      // Camoufox: a scroll engine (input/HumanizeSeam.js; `notches` by
+      // default with humanize on) turns one wheel call into the events a
+      // physical wheel produces.
+      const planned = humanizeSeam().plan('scroll', 'planWheel', {}, {x, y}, {deltaX, deltaY, deltaZ});
+      if (planned) {
+        await this._playHumanized(planned, 'Page.dispatchWheelEvent', step => {
+          dispatchFor().sendWheel(step.x, step.y, {
+            deltaX: step.dx,
+            deltaY: step.dy,
+            deltaZ: step.dz,
+            deltaMode: step.mode,
+            lineOrPageDeltaX: step.ticks?.x ?? 0,
+            lineOrPageDeltaY: step.ticks?.y ?? 0,
+            nativeNotches: Boolean(step.ticks),
+          });
         });
+        return;
       }
+      dispatchFor().sendWheel(x, y, {
+        deltaX,
+        deltaY,
+        deltaZ,
+        deltaMode: 0 /* WheelEvent.DOM_DELTA_PIXEL */,
+        lineOrPageDeltaX: deltaX > 0 ? Math.floor(deltaX) : Math.ceil(deltaX),
+        lineOrPageDeltaY: deltaY > 0 ? Math.floor(deltaY) : Math.ceil(deltaY),
+      });
     }, { muteNotificationsPopup: true });
   }
 
   async ['Page.insertText'](options) {
-    return await this._contentPage.send('insertText', options);
+    const planned = humanizeSeam().plan('keyboard', 'planInsert', {keyboardState: this._keyboardState}, options.text);
+    if (!planned)
+      return await this._contentPage.send('insertText', options);
+    await this._playHumanized(planned, 'Page.insertText', step => this._dispatchPlannedKeyStep(step));
   }
 
   async ['Page.crash'](options) {

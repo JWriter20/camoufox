@@ -25,6 +25,7 @@ from .exceptions import (
 from .fingerprints import Screen, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
 from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
+from .humanize import HumanizeSetting, humanize_config
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
 from .locales import handle_locales
 import warnings
@@ -348,6 +349,22 @@ def _load_properties(path: Optional[Path] = None) -> Dict[str, str]:
         prop_dict = orjson.loads(f.read())
 
     return {prop['property']: prop['type'] for prop in prop_dict}
+
+
+def _load_humanize_engines(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """
+    Loads humanize-engines.json, found the same way as properties.json. None
+    for a build that predates it.
+    """
+    if path:
+        manifest = path.parent / "humanize-engines.json"
+        if not manifest.exists():
+            manifest = path.parent.parent / "Resources" / "humanize-engines.json"
+    else:
+        manifest = Path(get_path("humanize-engines.json"))
+    if not manifest.exists():
+        return None
+    return orjson.loads(manifest.read_bytes())
 
 
 def validate_config(config_map: Dict[str, str], path: Optional[Path] = None) -> None:
@@ -827,7 +844,7 @@ def launch_options(
     webgl_config: Optional[Tuple[str, str]] = None,
     geoip: Optional[Union[str, bool]] = None,
     geoip_db: Optional[str] = None,
-    humanize: Optional[Union[bool, float]] = None,
+    humanize: HumanizeSetting = None,
     locale: Optional[Union[str, List[str]]] = None,
     addons: Optional[List[str]] = None,
     fonts: Optional[List[str]] = None,
@@ -880,10 +897,12 @@ def launch_options(
         geoip_db (Optional[str]):
             Name of the GeoIP database to use (e.g., "MaxMind").
             If not specified, uses the configured default.
-        humanize (Optional[Union[bool, float]]):
-            Humanize the cursor movement.
-            Takes either `True`, or the MAX duration in seconds of the cursor movement.
-            The cursor typically takes up to 1.5 seconds to move across the window.
+        humanize (Optional[Union[bool, float, dict]]):
+            Humanize mouse, keyboard and scroll input, per channel.
+            `True` uses the best engine the build offers on every channel; a number is the
+            MAX duration in seconds of a cursor movement (typically up to 1.5 seconds across
+            the window); a dict picks an engine per channel with the factories in
+            `camoufox.humanize`, e.g. `{"mouse": cursory(max_time=1.0), "scroll": raw(), "seed": 1234}`.
         locale (Optional[Union[str, List[str]]]):
             Locale(s) to use in Camoufox. The first listed locale will be used for the Intl API.
         addons (Optional[List[str]]):
@@ -1413,13 +1432,11 @@ def launch_options(
     # leaves an explicit caller value alone.
     set_into(config, 'voices:blockIfNotDefined', True)
 
-    # Pass the humanize option
-    if humanize:
-        set_into(config, 'humanize', True)
-        # bool is a subclass of int, but MaskConfig expects maxTime to be a
-        # JSON number with a floating-point representation.
-        if isinstance(humanize, (int, float)) and not isinstance(humanize, bool):
-            set_into(config, 'humanize:maxTime', float(humanize))
+    # Pass the humanize option, checked against the engines the build ships
+    for key, value in humanize_config(
+        humanize, _load_humanize_engines(executable_path), i_know_what_im_doing
+    ).items():
+        set_into(config, key, value)
 
     # Enable the main world context creation
     if main_world_eval:

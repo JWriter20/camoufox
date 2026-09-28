@@ -1,0 +1,121 @@
+# Humanized input: engines and `humanize-engines.json`
+
+`humanize` picks an engine per input channel (`mouse`, `keyboard`, `scroll`).
+The browser applies it to the Juggler input commands Playwright already sends,
+so the same Playwright script drives every build, humanized or not. This page
+is for whoever adds an engine to a build. The user-facing API is in the README
+("Choosing an engine per channel").
+
+## Where it runs
+
+`additions/juggler/input/HumanizeSeam.js` is the only place that knows about
+engines. `PageHandler` asks it for a plan at four command sites:
+
+| Command | Engine method | Channel |
+|---|---|---|
+| `Page.dispatchMouseEvent` `mousemove` | `planMove(ctx, to)` | mouse |
+| `Page.dispatchWheelEvent` | `planWheel(ctx, at, {deltaX, deltaY, deltaZ})` | scroll |
+| `Page.dispatchKeyEvent` | `planKey(ctx, keyEvent)` | keyboard |
+| `Page.insertText` | `planInsert(ctx, text)` | keyboard |
+
+A `null` plan, a `raw` channel, or an engine without that method leaves the
+stock dispatch in charge, byte for byte.
+
+## Writing an engine
+
+An engine is an object exported under its own name from an ES module that
+Juggler can import. Its methods are pure planners. They return
+`{steps, endState}` or `null` to decline. Each step carries `t`, the time in
+ms from the start of the action, and the values in `t` never decrease. The step
+kinds are:
+
+- `move` (`x`, `y`)
+- `wheel` (`x`, `y`, `dx`, `dy`, `dz`, `mode`, `ticks`)
+- `key` (`type`, `key`, `code`, `keyCode`, `location`, `text`)
+- `text` (`text`)
+
+A move plan ends exactly on its target.
+
+`ctx` holds:
+
+- `rng`: the channel's seeded stream, the only randomness a planner may use.
+- `options`: the engine's options, read from their config keys.
+- `budgetMs`: the time the plan must fit in.
+- `seed`: the launch's 64-bit seed.
+- `cursor`, `viewport` and `keyboardState`: per-page state.
+
+A planner uses no clock and no `Math.random`.
+
+An engine can also define two optional methods:
+
+- `available()`: return `false` when the engine cannot run right now. `auto`
+  then skips it, and an explicit request for it falls back with a warning.
+- `budgetMs(options)`: the engine's own time budget. Without it, the budget is
+  the `budgetSeconds` option, or 8 s by default.
+
+The seam plays plans with `Pacer.js`: every step is due at `start + t`, so a
+slow ack delays only its own step. A plan over its budget is compressed. One
+still playing past 1.5x its budget fast-forwards: it skips the remaining waits
+and every step not marked `essential: true`, but always dispatches the last
+step. An engine that throws falls back to the channel's last `auto` choice.
+
+## `humanize-engines.json`
+
+Each build ships one beside `properties.json`. `settings/humanize-engines.json`
+is this repository's:
+
+```json
+{
+  "version": 1,
+  "mouse": ["raw", "cursory"],
+  "keyboard": ["raw"],
+  "scroll": ["raw", "notches"],
+  "auto": {"mouse": ["cursory"], "keyboard": ["raw"], "scroll": ["notches"]},
+  "engines": {
+    "cursory": {
+      "module": "chrome://juggler/content/input/CursorTrajectory.js",
+      "options": {
+        "maxTime": {"key": "humanize:maxTime", "min": 0},
+        "minTime": {"key": "humanize:minTime", "min": 0}
+      }
+    },
+    "notches": {"module": "chrome://juggler/content/input/WheelNotches.js"}
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `mouse` / `keyboard` / `scroll` | The engines the channel may name. `raw` is always allowed. |
+| `auto` | What `auto()` tries, in order: the first engine whose `available()` is not `false`. The last entry is the fallback for a failed or unavailable engine. |
+| `engines.<name>.module` | The chrome URL of the module that exports the engine as `<name>`. |
+| `engines.<name>.options` | Option name → `{key, min, max}`. The launchers accept only these options, check the range (`min` defaults to 0), and write each one as a double under `key`. The browser hands them to the engine as `ctx.options`. |
+| `engines.<name>.movesCursor` | The scroll engine moves the cursor before it scrolls. With a `raw()` mouse, the launcher warns that the move is a jump. |
+
+To add an engine to a build, package its module in a `jar.mn`, add its entry
+and its channels to the build's `humanize-engines.json`, and declare its option
+keys in `properties.json`. Neither the seam nor the launchers change.
+
+A binary without the file predates per-channel humanize. The launchers then
+write only `humanize` and `humanize:maxTime`/`minTime`, and refuse a setting
+that such a binary cannot run.
+
+## Seeds and the trace
+
+`humanize:seed` is a decimal uint64 string, because Juggler reads config numbers
+only as doubles. Each channel's stream is
+`Mulberry32(splitmix64(seed ^ tag) & 0xffffffff)`, with tags `0x6d6f7573`
+(mouse), `0x6b657962` (keyboard) and `0x7363726f` (scroll). Without a seed, each
+launch draws a random one.
+
+With `CAMOU_HUMANIZE_TRACE=<file>` in the browser's environment, the seam
+appends one JSON line per humanized action with these fields:
+
+- `channel`, `engine`, `command`
+- `seedStreamPos`, `budgetMs`
+- `plan`
+- `dispatched`: `[{i, tPlanned, tActual}]`
+- `outcome`
+
+The unit tests are in `tests/juggler/` (`node --test tests/juggler/*.test.mjs`),
+and the browser guard is `tests/patches/humanize-seam.py`.

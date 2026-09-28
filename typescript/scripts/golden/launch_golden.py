@@ -318,6 +318,19 @@ scenario('humanize_true', fingerprint=FP['linux'], os='linux', humanize=True)
 scenario('humanize_float', fingerprint=FP['linux'], os='linux', humanize=1.5)
 scenario('humanize_int', fingerprint=FP['linux'], os='linux', humanize=2)
 scenario('humanize_false', fingerprint=FP['linux'], os='linux', humanize=False)
+scenario('humanize_channels', fingerprint=FP['linux'], os='linux',
+         humanize={'mouse': {'engine': 'cursory', 'options': {'maxTime': 1.0, 'minTime': 0.25}},
+                   'scroll': 'raw', 'seed': 1234})
+scenario('humanize_engine_unavailable', fingerprint=FP['linux'], os='linux',
+         humanize={'keyboard': {'engine': 'fancy', 'options': {'speed': 1.5}}})
+scenario('humanize_option_unknown', fingerprint=FP['linux'], os='linux',
+         humanize={'mouse': {'engine': 'cursory', 'options': {'speed': 1.5}}})
+scenario('humanize_option_range', fingerprint=FP['linux'], os='linux',
+         humanize={'mouse': {'engine': 'cursory', 'options': {'maxTime': -0.5}}})
+scenario('humanize_old_build', fingerprint=FP['linux'], os='linux', humanize=1.5,
+         executable_path='<BUNDLE_OLD>/camoufox-bin')
+scenario('humanize_old_build_mixed', fingerprint=FP['linux'], os='linux', humanize={'scroll': 'raw'},
+         executable_path='<BUNDLE_OLD>/camoufox-bin')
 
 # block_* and friends
 scenario('block_all', fingerprint=FP['windows'], os='windows', block_images=True, block_webrtc=True,

@@ -107,6 +107,21 @@ The returned launch options use Playwright's camelCase keys
 Python, `headless: "virtual"` is handled by `Camoufox()`, `NewBrowser()` and
 `launchServer()`, not by `launchOptions()`.
 
+`humanize` takes one engine per input channel, built with the factories the
+package exports (`auto`, `raw`, `cursory`, `notches`, and `engine(name,
+options)` for any engine a build lists in its `humanize-engines.json`), which
+take their options in camelCase:
+
+```ts
+import { Camoufox, cursory, raw } from "@camoufox/camoufox";
+
+const browser = await Camoufox({
+	humanize: { mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 },
+});
+```
+
+A `seed` above `Number.MAX_SAFE_INTEGER` must be passed as a `bigint`.
+
 ## CLI
 
 ```

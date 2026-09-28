@@ -17,6 +17,15 @@ export {
 	Screen,
 } from "./fingerprints.js";
 export {
+	auto,
+	cursory,
+	type Engine,
+	engine,
+	type HumanizeSetting,
+	notches,
+	raw,
+} from "./humanize.js";
+export {
 	findInstalledVersion,
 	listInstalled,
 	printTree,

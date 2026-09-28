@@ -10,6 +10,10 @@ juggler.jar:
   content/Helper.js (Helper.js)
   content/input/MouseDispatch.js (input/MouseDispatch.js)
   content/input/CursorTrajectory.js (input/CursorTrajectory.js)
+  content/input/HumanizeRng.js (input/HumanizeRng.js)
+  content/input/HumanizeSeam.js (input/HumanizeSeam.js)
+  content/input/Pacer.js (input/Pacer.js)
+  content/input/WheelNotches.js (input/WheelNotches.js)
   # Cursory, vendored -- LGPLv3-or-later, not MPL-2.0. LICENSE and NOTICE ship
   # alongside the code so every build carries them; see input/cursory/README.md.
   content/input/cursory/LICENSE (input/cursory/LICENSE)

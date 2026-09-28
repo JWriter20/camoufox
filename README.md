@@ -526,6 +526,34 @@ Camoufox ships [cursory-js](https://github.com/JWriter20/cursory-js), a TypeScri
 
 However, this isn't perfect. It may still be detected with sophisticated enough analysis. (WIP for the future)
 
+#### Choosing an engine per channel
+
+`humanize` also takes one engine per input channel, so mouse, keyboard and scroll can be set separately. The browser applies them to the input commands Playwright already sends, so the Playwright code stays the same:
+
+```python
+from camoufox import Camoufox
+from camoufox.humanize import cursory, notches, raw
+
+with Camoufox(humanize={"mouse": cursory(max_time=1.0), "scroll": raw(), "seed": 1234}) as browser:
+    ...
+```
+
+```ts
+import { Camoufox, cursory, raw } from "@camoufox/camoufox";
+
+const browser = await Camoufox({ humanize: { mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 } });
+```
+
+| Channel | Engines | `auto()` means |
+|---|---|---|
+| `mouse` | `raw()`, `cursory(max_time=, min_time=)` | `cursory()` |
+| `scroll` | `raw()`, `notches()`: a wheel turn arrives as 3-line notches, tens of ms apart | `notches()` |
+| `keyboard` | `raw()` | `raw()` |
+
+An omitted channel is `auto()`. `humanize=True` is `auto()` on every channel, and a number is `{"mouse": cursory(max_time=<number>)}`, as before. `seed` (an integer below 2^64) makes the humanized input repeatable: the same seed and the same actions give the same cursor paths and wheel timing, and each channel has its own random stream, so typing does not change the mouse paths. Without a seed, every launch draws a new one.
+
+The table is what this repository's build ships. A build lists its engines, and the options each takes, in `humanize-engines.json` beside `properties.json` ([docs/humanize.md](docs/humanize.md)). `engine(name, **options)` names any of them, and the launcher checks the setting against that file, raising `HumanizeEngineUnavailable` for an engine the build does not have. Set the environment variable `CAMOU_HUMANIZE_TRACE` to a file path to have the browser write every humanized action and its plan there as JSON lines.
+
 ---
 
 ## How Camoufox rotates identities
