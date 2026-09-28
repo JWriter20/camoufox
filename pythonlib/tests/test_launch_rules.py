@@ -9,6 +9,7 @@ unaffected.
 """
 
 import json
+import warnings
 
 import pytest
 
@@ -155,3 +156,70 @@ class TestContextScreenAvailRect:
             f"{config['screen.availWidth']}, {config['screen.availHeight']});"
         )
         assert expected in fp["init_script"]
+
+
+# A feature that must exist on exactly one target/host pairing: here, a
+# Windows identity on a Linux host. The rule is `exclusive`, so the variable
+# cannot reach another pairing through the caller's environment, and the one
+# host that cannot support it is warned instead of degrading quietly.
+EXCLUSIVE_RULES = {
+    "rules": [
+        {
+            "target": ["win"],
+            "host": ["lin"],
+            "exclusive": True,
+            "envPaths": {"EXAMPLE_DLL": "lib/example.dll"},
+        },
+        {
+            "target": ["win"],
+            "host": ["mac"],
+            "warn": "example.dll cannot load on a macOS host",
+        },
+    ]
+}
+OSES = ("win", "mac", "lin")
+
+
+@pytest.fixture
+def exclusive_build(build):
+    (build.parent / "launch.json").write_text(json.dumps(EXCLUSIVE_RULES))
+    return build
+
+
+@pytest.mark.parametrize("host", OSES)
+@pytest.mark.parametrize("target", OSES)
+def test_exclusive_rule_matrix(exclusive_build, monkeypatch, target, host):
+    """Every target/host pairing: the variable is set iff win on lin."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _, env = _apply(exclusive_build, target, host=host, monkeypatch=monkeypatch)
+    if (target, host) == ("win", "lin"):
+        assert env == {"EXAMPLE_DLL": str(exclusive_build.parent / "lib" / "example.dll")}
+    else:
+        assert env == {}
+    warned = [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)]
+    assert warned == (["example.dll cannot load on a macOS host"] if (target, host) == ("win", "mac") else [])
+
+
+@pytest.mark.parametrize("host", OSES)
+@pytest.mark.parametrize("target", OSES)
+def test_exclusive_rule_strips_an_inherited_variable(exclusive_build, monkeypatch, target, host):
+    """A variable left in the caller's environment reaches only the rule's own pairing."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, env = _apply(
+            exclusive_build, target, host=host, monkeypatch=monkeypatch,
+            env={"EXAMPLE_DLL": "/inherited.dll", "UNRELATED": "1"},
+        )
+    if (target, host) == ("win", "lin"):
+        assert env == {"EXAMPLE_DLL": "/inherited.dll", "UNRELATED": "1"}
+    else:
+        assert env == {"UNRELATED": "1"}
+
+
+def test_exclusive_rule_keeps_a_variable_another_matching_rule_sets(exclusive_build, monkeypatch):
+    rules = json.loads((exclusive_build.parent / "launch.json").read_text())
+    rules["rules"].append({"target": ["lin"], "env": {"EXAMPLE_DLL": "/other.dll"}})
+    (exclusive_build.parent / "launch.json").write_text(json.dumps(rules))
+    _, env = _apply(exclusive_build, "lin", host="lin", monkeypatch=monkeypatch)
+    assert env == {"EXAMPLE_DLL": "/other.dll"}

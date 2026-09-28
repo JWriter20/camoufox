@@ -605,6 +605,8 @@ interface LaunchRule {
 	env?: Record<string, string>;
 	envPaths?: Record<string, string>;
 	envFromConfig?: Record<string, string>;
+	exclusive?: boolean;
+	warn?: string;
 }
 
 /**
@@ -619,6 +621,11 @@ interface LaunchRule {
  * and `envFromConfig` to the value of a config key when the identity has one.
  * A pref the caller set, or a variable already in the environment, is never
  * replaced.
+ *
+ * An `exclusive` rule owns its variables: where it does not apply they are
+ * removed from the environment, the caller's included, so a feature meant for
+ * one target/host pairing cannot leak into another through an inherited
+ * variable. A rule's `warn` is emitted as a RuntimeWarning when it applies.
  */
 export function applyLaunchRules(
 	targetOs: string,
@@ -635,9 +642,26 @@ export function applyLaunchRules(
 	).rules;
 
 	const hostOs = utilsDeps.hostOsKey();
+	const applies = (rule: LaunchRule): boolean =>
+		!(rule.target && !rule.target.includes(targetOs)) &&
+		!(rule.host && !(hostOs && rule.host.includes(hostOs)));
+	const owned = (rule: LaunchRule): string[] => [
+		...Object.keys(rule.env ?? {}),
+		...Object.keys(rule.envPaths ?? {}),
+		...Object.keys(rule.envFromConfig ?? {}),
+	];
+
+	const matched = rules.filter(applies);
+	const claimed = new Set(matched.flatMap(owned));
 	for (const rule of rules) {
-		if (rule.target && !rule.target.includes(targetOs)) continue;
-		if (rule.host && !(hostOs && rule.host.includes(hostOs))) continue;
+		if (!rule.exclusive || applies(rule)) continue;
+		for (const key of owned(rule)) {
+			if (!claimed.has(key)) delete env[key];
+		}
+	}
+
+	for (const rule of matched) {
+		if (rule.warn) warn(String(rule.warn), "RuntimeWarning");
 		for (const [key, value] of Object.entries(rule.prefs ?? {})) {
 			if (!userPrefKeys.has(key)) firefoxUserPrefs[key] = value;
 		}

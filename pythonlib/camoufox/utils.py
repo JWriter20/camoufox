@@ -404,6 +404,11 @@ def apply_launch_rules(
     and `envFromConfig` to the value of a config key when the identity has one.
     A pref the caller set, or a variable already in the environment, is never
     replaced.
+
+    An `exclusive` rule owns its variables: where it does not apply they are
+    removed from the environment, the caller's included, so a feature meant for
+    one target/host pairing cannot leak into another through an inherited
+    variable. A rule's `warn` is emitted as a RuntimeWarning when it applies.
     """
     launch_file = _settings_file("launch.json", path)
     if not os.path.exists(launch_file):
@@ -412,11 +417,29 @@ def apply_launch_rules(
         rules = orjson.loads(f.read())['rules']
 
     host_os = _host_os_key()
+
+    def applies(rule: Dict[str, Any]) -> bool:
+        return target_os in rule.get('target', [target_os]) and host_os in rule.get(
+            'host', [host_os]
+        )
+
+    def owned(rule: Dict[str, Any]) -> set:
+        return {
+            key
+            for field in ('env', 'envPaths', 'envFromConfig')
+            for key in rule.get(field, {})
+        }
+
+    matched = [rule for rule in rules if applies(rule)]
+    claimed = set().union(*(owned(rule) for rule in matched))
     for rule in rules:
-        if target_os not in rule.get('target', [target_os]):
-            continue
-        if host_os not in rule.get('host', [host_os]):
-            continue
+        if rule.get('exclusive') and not applies(rule):
+            for key in owned(rule) - claimed:
+                env.pop(key, None)
+
+    for rule in matched:
+        if rule.get('warn'):
+            warnings.warn(str(rule['warn']), RuntimeWarning, stacklevel=3)
         for key, value in rule.get('prefs', {}).items():
             if key not in user_pref_keys:
                 firefox_user_prefs[key] = value

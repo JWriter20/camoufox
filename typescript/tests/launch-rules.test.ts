@@ -15,6 +15,7 @@ import {
 	SCRATCH,
 	stubHost,
 	utils,
+	warnings,
 } from "./launch-host.js";
 import { prerequisite } from "./prereq.js";
 
@@ -159,6 +160,80 @@ describe("applyLaunchRules", () => {
 		expect(prefs).toEqual({});
 		expect(env).toEqual({});
 	});
+});
+
+const EXCLUSIVE_RULES = {
+	rules: [
+		{
+			target: ["win"],
+			host: ["lin"],
+			exclusive: true,
+			envPaths: { EXAMPLE_DLL: "lib/example.dll" },
+		},
+		{
+			target: ["win"],
+			host: ["mac"],
+			warn: "example.dll cannot load on a macOS host",
+		},
+	],
+};
+const EXCLUSIVE_BUILD = path.join(SCRATCH, "exclusive-build");
+const EXCLUSIVE_EXE = path.join(EXCLUSIVE_BUILD, "camoufox-bin");
+const EXCLUSIVE_DLL = path.join(EXCLUSIVE_BUILD, "lib", "example.dll");
+const OSES = ["win", "mac", "lin"] as const;
+
+/**
+ * A feature that must exist on exactly one target/host pairing: here, a
+ * Windows identity on a Linux host. The rule is `exclusive`, so the variable
+ * cannot reach another pairing through the caller's environment, and the one
+ * host that cannot support it is warned instead of degrading quietly.
+ */
+describe("exclusive rule, every target/host pairing", () => {
+	beforeAll(() => {
+		fs.cpSync(BUNDLE, EXCLUSIVE_BUILD, { recursive: true });
+		fs.writeFileSync(
+			path.join(EXCLUSIVE_BUILD, "launch.json"),
+			JSON.stringify(EXCLUSIVE_RULES),
+		);
+		fs.mkdirSync(path.dirname(EXCLUSIVE_DLL), { recursive: true });
+		fs.writeFileSync(EXCLUSIVE_DLL, "MZ");
+	});
+
+	for (const target of OSES) {
+		for (const host of OSES) {
+			const wanted = target === "win" && host === "lin";
+			it(`${target} identity on a ${host} host ${wanted ? "sets" : "does not set"} the variable`, async () => {
+				const { warnings: caught, result } = await warnings.recordWarnings(() =>
+					apply(target, {}, {}, host, EXCLUSIVE_EXE),
+				);
+				expect(result.env).toEqual(
+					wanted ? { EXAMPLE_DLL: EXCLUSIVE_DLL } : {},
+				);
+				expect(caught.map((w) => w.message)).toEqual(
+					target === "win" && host === "mac"
+						? ["example.dll cannot load on a macOS host"]
+						: [],
+				);
+			});
+
+			it(`${target} identity on a ${host} host ${wanted ? "keeps" : "strips"} an inherited variable`, async () => {
+				const { result } = await warnings.recordWarnings(() =>
+					apply(
+						target,
+						{},
+						{ EXAMPLE_DLL: "/inherited.dll", UNRELATED: "1" },
+						host,
+						EXCLUSIVE_EXE,
+					),
+				);
+				expect(result.env).toEqual(
+					wanted
+						? { EXAMPLE_DLL: "/inherited.dll", UNRELATED: "1" }
+						: { UNRELATED: "1" },
+				);
+			});
+		}
+	}
 });
 
 describe("property floor", () => {

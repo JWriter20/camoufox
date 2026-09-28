@@ -55,10 +55,36 @@ in but stays off until a pref or an environment variable turns it on:
 - `envFromConfig` sets each variable to the value of a config key, only when
   the identity has that key.
 
+- `warn` is a message emitted as a `RuntimeWarning` when the rule applies. Use
+  it for a pairing the build cannot support, so the caller hears about it
+  instead of getting a quietly degraded browser.
+- `exclusive: true` makes the rule own the variables it names in `env`,
+  `envPaths` and `envFromConfig`. Where the rule does not apply, those
+  variables are removed from the launch environment, the caller's included,
+  unless another rule that does apply sets them.
+
 A rule with `target` applies only when the identity's OS is one of those
 listed, and a rule with `host` only when the machine running the browser is.
 Both use `win`, `mac` and `lin`. A rule with neither always applies.
 
-The caller always wins. A pref passed in `firefox_user_prefs` is never
-replaced, and neither is a variable that is already in the launch environment:
-the process environment, or `env` when the caller passes one.
+```json
+{
+  "rules": [
+    {
+      "target": ["win"],
+      "host": ["lin"],
+      "exclusive": true,
+      "envPaths": { "EXAMPLE_LIB": "lib/example.so" }
+    },
+    {
+      "target": ["win"],
+      "host": ["mac"],
+      "warn": "lib/example.so does not load on macOS; this identity renders without it."
+    }
+  ]
+}
+```
+
+Where a rule applies, the caller wins. A pref passed in `firefox_user_prefs` is
+never replaced, and neither is a variable that is already in the launch
+environment: the process environment, or `env` when the caller passes one.
