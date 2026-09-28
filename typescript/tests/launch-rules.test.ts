@@ -37,9 +37,16 @@ const RULES = {
 			host: ["lin", "mac"],
 			prefs: { "example.cross-os-feature": true },
 			env: { EXAMPLE_CROSS_OS: "1" },
+			envFromConfig: { EXAMPLE_ARCH: "example:arch" },
+		},
+		{
+			target: ["win"],
+			host: ["lin"],
+			envPaths: { EXAMPLE_LIB: "lib/example.dll" },
 		},
 	],
 };
+const LIB = path.join(SCRATCH, "rules-build", "lib", "example.dll");
 
 /** A copy of the fixture bundle that declares launch rules and a floored key. */
 const BUILD = path.join(SCRATCH, "rules-build");
@@ -53,6 +60,8 @@ beforeAll(() => {
 	props.push({ property: "window.history.length", type: "uint", min: 2 });
 	fs.writeFileSync(path.join(BUILD, "properties.json"), JSON.stringify(props));
 	fs.writeFileSync(path.join(BUILD, "launch.json"), JSON.stringify(RULES));
+	fs.mkdirSync(path.dirname(LIB));
+	fs.writeFileSync(LIB, "MZ");
 });
 
 afterEach(() => restoreDeps());
@@ -63,10 +72,12 @@ function apply(
 	env: Record<string, any> = {},
 	host: "lin" | "mac" | "win" = "lin",
 	exe: string = BUILD_EXE,
+	config: Record<string, any> = {},
 ) {
 	deps.hostOsKey = () => host;
 	utils.applyLaunchRules(
 		targetOs,
+		config,
 		prefs,
 		new Set(Object.keys(prefs)),
 		env,
@@ -85,7 +96,23 @@ describe("applyLaunchRules", () => {
 	it("applies a conditional rule when target and host match", () => {
 		const { prefs, env } = apply("win");
 		expect(prefs["example.cross-os-feature"]).toBe(true);
-		expect(env).toEqual({ EXAMPLE_CROSS_OS: "1" });
+		expect(env).toEqual({ EXAMPLE_CROSS_OS: "1", EXAMPLE_LIB: LIB });
+	});
+
+	it("sets env from config only when the identity has the key", () => {
+		const { env } = apply("win", {}, {}, "mac", BUILD_EXE, {
+			"example:arch": "blackwell",
+		});
+		expect(env).toEqual({ EXAMPLE_CROSS_OS: "1", EXAMPLE_ARCH: "blackwell" });
+	});
+
+	it("fails loudly on a missing env path", () => {
+		fs.rmSync(LIB);
+		try {
+			expect(() => apply("win")).toThrow(/example\.dll/);
+		} finally {
+			fs.writeFileSync(LIB, "MZ");
+		}
 	});
 
 	it("skips a conditional rule on its own host", () => {
@@ -101,13 +128,24 @@ describe("applyLaunchRules", () => {
 				"browser.sessionhistory.max_entries": 50,
 				"example.cross-os-feature": false,
 			},
-			{ EXAMPLE_CROSS_OS: "0" },
+			{
+				EXAMPLE_CROSS_OS: "0",
+				EXAMPLE_LIB: "/elsewhere.dll",
+				EXAMPLE_ARCH: "ampere",
+			},
+			"lin",
+			BUILD_EXE,
+			{ "example:arch": "blackwell" },
 		);
 		expect(prefs).toEqual({
 			"browser.sessionhistory.max_entries": 50,
 			"example.cross-os-feature": false,
 		});
-		expect(env).toEqual({ EXAMPLE_CROSS_OS: "0" });
+		expect(env).toEqual({
+			EXAMPLE_CROSS_OS: "0",
+			EXAMPLE_LIB: "/elsewhere.dll",
+			EXAMPLE_ARCH: "ampere",
+		});
 	});
 
 	it("gives a build without launch.json nothing", () => {
@@ -165,6 +203,7 @@ describe.runIf(modelReady)(
 			);
 			expect(opts.firefoxUserPrefs["example.cross-os-feature"]).toBe(false);
 			expect(opts.env.EXAMPLE_CROSS_OS).toBe("1");
+			expect(opts.env.EXAMPLE_LIB).toBe(LIB);
 			expect(configOf(opts)["window.history.length"]).toBe(2);
 		});
 	},

@@ -35,11 +35,25 @@ in but stays off until a pref or an environment variable turns it on:
       "target": ["win"],
       "host": ["lin", "mac"],
       "prefs": { "example.feature": true },
-      "env": { "EXAMPLE_FEATURE": "1" }
+      "env": { "EXAMPLE_FEATURE": "1" },
+      "envFromConfig": { "EXAMPLE_ARCH": "example:arch" }
+    },
+    {
+      "target": ["win"],
+      "host": ["lin"],
+      "envPaths": { "EXAMPLE_LIB": "lib/example.so" }
     }
   ]
 }
 ```
+
+- `prefs` are Firefox prefs.
+- `env` sets environment variables verbatim.
+- `envPaths` sets each variable to a file relative to the directory holding
+  `launch.json`. The launch fails (`FileNotFoundError` in Python) if the file is
+  missing: a feature the build needs and cannot find must not degrade quietly.
+- `envFromConfig` sets each variable to the value of a config key, only when
+  the identity has that key.
 
 A rule with `target` applies only when the identity's OS is one of those
 listed, and a rule with `host` only when the machine running the browser is.

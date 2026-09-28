@@ -603,6 +603,8 @@ interface LaunchRule {
 	host?: string[];
 	prefs?: Record<string, any>;
 	env?: Record<string, string>;
+	envPaths?: Record<string, string>;
+	envFromConfig?: Record<string, string>;
 }
 
 /**
@@ -612,11 +614,15 @@ interface LaunchRule {
  * any particular build. Most builds ship no launch.json.
  *
  * Each rule may restrict itself to identity OSes (`target`) and host OSes
- * (`host`), both in 'win'/'mac'/'lin' terms. A pref the caller set, or a
- * variable already in the environment, is never replaced.
+ * (`host`), both in 'win'/'mac'/'lin' terms. `env` sets variables verbatim,
+ * `envPaths` to a file relative to the build's directory, which must exist,
+ * and `envFromConfig` to the value of a config key when the identity has one.
+ * A pref the caller set, or a variable already in the environment, is never
+ * replaced.
  */
 export function applyLaunchRules(
 	targetOs: string,
+	config: Record<string, any>,
 	firefoxUserPrefs: Record<string, any>,
 	userPrefKeys: Set<string>,
 	env: Record<string, any>,
@@ -637,6 +643,21 @@ export function applyLaunchRules(
 		}
 		for (const [key, value] of Object.entries(rule.env ?? {})) {
 			if (!(key in env)) env[key] = value;
+		}
+		for (const [key, relative] of Object.entries(rule.envPaths ?? {})) {
+			if (key in env) continue;
+			const resolved = path.join(path.dirname(launchFile), relative);
+			if (!fs.existsSync(resolved)) {
+				throw new Error(
+					`${launchFile} needs ${resolved} for ${key}, and it does not exist.`,
+				);
+			}
+			env[key] = resolved;
+		}
+		for (const [key, configKey] of Object.entries(rule.envFromConfig ?? {})) {
+			if (configKey in config && !(key in env)) {
+				env[key] = pyStr(config[configKey]);
+			}
 		}
 	}
 }
@@ -1842,6 +1863,7 @@ export async function launchOptions({
 
 	applyLaunchRules(
 		targetOs,
+		config,
 		firefox_user_prefs,
 		userPrefKeys,
 		env,

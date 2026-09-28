@@ -22,7 +22,9 @@ RULES = {
             "host": ["lin", "mac"],
             "prefs": {"example.cross-os-feature": True},
             "env": {"EXAMPLE_CROSS_OS": "1"},
+            "envFromConfig": {"EXAMPLE_ARCH": "example:arch"},
         },
+        {"target": ["win"], "host": ["lin"], "envPaths": {"EXAMPLE_LIB": "lib/example.dll"}},
     ]
 }
 
@@ -35,14 +37,16 @@ def build(tmp_path):
         {"property": "screen.width", "type": "uint"},
     ]))
     (tmp_path / "launch.json").write_text(json.dumps(RULES))
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "example.dll").write_bytes(b"MZ")
     return tmp_path / "camoufox-bin"
 
 
-def _apply(build, target_os, prefs=None, env=None, host="lin", monkeypatch=None):
+def _apply(build, target_os, prefs=None, env=None, host="lin", monkeypatch=None, config=None):
     monkeypatch.setattr(utils, "_host_os_key", lambda: host)
     prefs = {} if prefs is None else prefs
     env = {} if env is None else env
-    utils.apply_launch_rules(target_os, prefs, set(prefs), env, path=build)
+    utils.apply_launch_rules(target_os, config or {}, prefs, set(prefs), env, path=build)
     return prefs, env
 
 
@@ -55,7 +59,18 @@ def test_unconditional_rule_applies_to_every_identity(build, monkeypatch):
 def test_conditional_rule_applies_when_target_and_host_match(build, monkeypatch):
     prefs, env = _apply(build, "win", host="lin", monkeypatch=monkeypatch)
     assert prefs["example.cross-os-feature"] is True
-    assert env == {"EXAMPLE_CROSS_OS": "1"}
+    assert env == {"EXAMPLE_CROSS_OS": "1", "EXAMPLE_LIB": str(build.parent / "lib" / "example.dll")}
+
+
+def test_env_from_config_only_when_the_identity_has_the_key(build, monkeypatch):
+    _, env = _apply(build, "win", host="mac", monkeypatch=monkeypatch, config={"example:arch": "blackwell"})
+    assert env == {"EXAMPLE_CROSS_OS": "1", "EXAMPLE_ARCH": "blackwell"}
+
+
+def test_missing_env_path_fails_loudly(build, monkeypatch):
+    (build.parent / "lib" / "example.dll").unlink()
+    with pytest.raises(FileNotFoundError, match="example.dll"):
+        _apply(build, "win", host="lin", monkeypatch=monkeypatch)
 
 
 def test_conditional_rule_skipped_on_its_own_host(build, monkeypatch):
@@ -68,11 +83,12 @@ def test_callers_pref_and_environment_win(build, monkeypatch):
     prefs, env = _apply(
         build, "win",
         prefs={"browser.sessionhistory.max_entries": 50, "example.cross-os-feature": False},
-        env={"EXAMPLE_CROSS_OS": "0"},
+        env={"EXAMPLE_CROSS_OS": "0", "EXAMPLE_LIB": "/elsewhere.dll", "EXAMPLE_ARCH": "ampere"},
         monkeypatch=monkeypatch,
+        config={"example:arch": "blackwell"},
     )
     assert prefs == {"browser.sessionhistory.max_entries": 50, "example.cross-os-feature": False}
-    assert env == {"EXAMPLE_CROSS_OS": "0"}
+    assert env == {"EXAMPLE_CROSS_OS": "0", "EXAMPLE_LIB": "/elsewhere.dll", "EXAMPLE_ARCH": "ampere"}
 
 
 def test_build_without_launch_json_gets_nothing(tmp_path, monkeypatch):
@@ -98,6 +114,7 @@ def test_launch_options_applies_the_rules_of_the_supplied_build(build, monkeypat
     assert opts["firefox_user_prefs"]["browser.sessionhistory.max_entries"] == 10
     assert opts["firefox_user_prefs"]["example.cross-os-feature"] is False
     assert opts["env"]["EXAMPLE_CROSS_OS"] == "1"
+    assert opts["env"]["EXAMPLE_LIB"] == str(build.parent / "lib" / "example.dll")
     assert sent["window.history.length"] == 2
 
 

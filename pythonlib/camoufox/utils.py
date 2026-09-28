@@ -386,6 +386,7 @@ def validate_config(config_map: Dict[str, Any], path: Optional[Path] = None) -> 
 
 def apply_launch_rules(
     target_os: str,
+    config: Dict[str, Any],
     firefox_user_prefs: Dict[str, Any],
     user_pref_keys: set,
     env: Dict[str, Union[str, float, bool]],
@@ -398,8 +399,11 @@ def apply_launch_rules(
     any particular build. Most builds ship no launch.json.
 
     Each rule may restrict itself to identity OSes (`target`) and host OSes
-    (`host`), both in 'win'/'mac'/'lin' terms. A pref the caller set, or a
-    variable already in the environment, is never replaced.
+    (`host`), both in 'win'/'mac'/'lin' terms. `env` sets variables verbatim,
+    `envPaths` to a file relative to the build's directory, which must exist,
+    and `envFromConfig` to the value of a config key when the identity has one.
+    A pref the caller set, or a variable already in the environment, is never
+    replaced.
     """
     launch_file = _settings_file("launch.json", path)
     if not os.path.exists(launch_file):
@@ -418,6 +422,18 @@ def apply_launch_rules(
                 firefox_user_prefs[key] = value
         for key, value in rule.get('env', {}).items():
             env.setdefault(key, value)
+        for key, relative in rule.get('envPaths', {}).items():
+            if key in env:
+                continue
+            resolved = os.path.normpath(os.path.join(os.path.dirname(launch_file), relative))
+            if not os.path.exists(resolved):
+                raise FileNotFoundError(
+                    f"{launch_file} needs {resolved} for {key}, and it does not exist."
+                )
+            env[key] = resolved
+        for key, config_key in rule.get('envFromConfig', {}).items():
+            if config_key in config:
+                env.setdefault(key, str(config[config_key]))
 
 
 def validate_type(value: Any, expected_type: str) -> bool:
@@ -1558,7 +1574,9 @@ def launch_options(
         print('[DEBUG] Config:')
         pprint(config)
 
-    apply_launch_rules(target_os, firefox_user_prefs, _user_pref_keys, env, path=executable_path)
+    apply_launch_rules(
+        target_os, config, firefox_user_prefs, _user_pref_keys, env, path=executable_path
+    )
 
     # Validate the config
     warn_if_executable_predates_playwright(executable_path)
