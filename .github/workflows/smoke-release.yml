@@ -23,14 +23,9 @@ permissions:
   contents: write
 
 env:
-  # TAG: the build's version and the daijro tag its pythonlib is checked out from.
-  # RELEASE/SOURCE_REPO: where the zips are. Upstream's 156.0.1-beta.32 release
-  # is still a draft, which the fork's token cannot read, so its assets (sha256
-  # checked) are mirrored to a *draft* release on this fork; a draft creates no
-  # tag, so nothing here triggers build.yml.
   TAG: ${{ inputs.tag || 'v156.0.1-beta.32' }}
-  RELEASE: ${{ inputs.tag || 'smoke-mirror-156.0.1-beta.32' }}
-  SOURCE_REPO: ${{ inputs.repo || github.repository }}
+  RELEASE: ${{ inputs.tag || 'v156.0.1-beta.32' }}
+  SOURCE_REPO: ${{ inputs.repo || 'daijro/camoufox' }}
   CODE_TAG: ${{ inputs.tag || 'v156.0.1-beta.32' }}
 
 jobs:
