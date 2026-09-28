@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 from . import results as evidence
 from ._util import CI_DIR, RESULTS_DIR, REPO_ROOT, WORK_DIR, read_json, run
@@ -83,14 +83,74 @@ def check_passed(meta: dict, section: str, category: str, check: str, payload: d
     return False
 
 
+def _category_labels() -> Dict[str, str]:
+    """build-tester's {result key: display label}, e.g. firefoxAPIs -> "Firefox APIs"."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_bt_constants", BUILD_TESTER / "scripts" / "constants.py"
+    )
+    if spec is None or spec.loader is None:
+        return {}
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return dict(getattr(module, "CATEGORY_LABELS", {}))
+
+
+def resolve_categories(
+    required: List[str], labels: Optional[Dict[str, str]] = None
+) -> Tuple[Set[str], List[str]]:
+    """Map build-tester.yml's category names onto the keys the results use.
+
+    The config names categories by their display label ("Firefox APIs") while
+    the result tree is keyed by identifier ("firefoxAPIs"). Comparing the two
+    directly matched nothing, which switched the required-category gate off
+    without a word. Both spellings are accepted; anything that resolves to
+    neither is returned as unknown so the caller can fail loudly on it.
+    """
+    labels = _category_labels() if labels is None else labels
+    by_name: Dict[str, str] = {}
+    for key, label in labels.items():
+        by_name[key.lower()] = key
+        by_name[label.lower()] = key
+    keys: Set[str] = set()
+    unknown: List[str] = []
+    for name in required:
+        key = by_name.get(str(name).lower())
+        if key is None:
+            unknown.append(str(name))
+        else:
+            keys.add(key.lower())
+    return keys, unknown
+
+
+def _slots(full: dict) -> List[str]:
+    """One stable, unique slot id per profile: os-mode-N.
+
+    Identify by os+mode+ordinal, never by the display name, which carries a
+    random letter suffix and would churn every run. build-tester does not put an
+    index in the profile metadata, so the ordinal is counted here; defaulting it
+    to 0 folded the three per-context profiles of an OS into one id, and a
+    failure in all three was recorded once.
+    """
+    seen: Dict[str, int] = {}
+    out: List[str] = []
+    for profile in full.get("profiles") or []:
+        meta = profile.get("profile") or {}
+        base = f"{meta.get('os', '?')}-{meta.get('mode', '?')}"
+        index = meta.get("index", profile.get("index"))
+        if index is None:
+            index = seen.get(base, 0)
+        seen[base] = int(index) + 1
+        out.append(f"{base}-{index}")
+    return out
+
+
 def flatten(full: dict) -> Dict[str, str]:
     """The whole result tree -> {check_id: pass|fail}."""
     tests: Dict[str, str] = {}
-    for profile in full.get("profiles") or []:
+    for slot, profile in zip(_slots(full), full.get("profiles") or []):
         meta = profile.get("profile") or {}
-        # Identify by os+mode+index, never by the display name, which carries a
-        # random letter suffix and would churn every run.
-        slot = f"{meta.get('os', '?')}-{meta.get('mode', '?')}-{meta.get('index', profile.get('index', 0))}"
         results = profile.get("results") or {}
         if profile.get("error"):
             tests[f"{slot}/launch"] = evidence.ERROR
@@ -124,8 +184,11 @@ def flatten(full: dict) -> Dict[str, str]:
 
 
 def category_failures(full: dict, required: List[str]) -> Dict[str, int]:
-    """Failing check counts for the categories policy insists must be clean."""
-    wanted = {c.lower() for c in required}
+    """Failing check counts for the categories policy insists must be clean.
+
+    `required` may name a category by result key or by display label.
+    """
+    wanted, _ = resolve_categories(required)
     out: Dict[str, int] = {}
     for profile in full.get("profiles") or []:
         meta = profile.get("profile") or {}
@@ -243,7 +306,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     # fails the run on these even when the previous release was equally dirty.
     violations: List[str] = []
 
-    failures = category_failures(full, cfg.get("required_categories") or [])
+    required = cfg.get("required_categories") or []
+    _, unknown = resolve_categories(required)
+    if unknown:
+        result.note("required_categories names no build-tester category: " + ", ".join(unknown))
+        violations.append(
+            "ci/build-tester.yml required_categories has names that match no category, "
+            "which would silently exempt them: " + ", ".join(unknown)
+        )
+        status = evidence.FAIL
+
+    # Any failing check fails the gate unless build-tester.yml tolerates it by
+    # name with a reason. Only gating the required categories let a run report
+    # "478 passed, 4 failed" under a pass.
+    tolerated = cfg.get("tolerated_checks") or {}
+    failing = sorted(t for t, v in result.tests.items() if v != evidence.PASS)
+    untolerated = [t for t in failing if t.split("/", 1)[-1] not in tolerated]
+    if untolerated:
+        shown = ", ".join(untolerated[:10]) + (f" (+{len(untolerated) - 10} more)" if len(untolerated) > 10 else "")
+        result.note(f"{len(untolerated)} failing check(s): {shown}")
+        violations.append(f"{len(untolerated)} failing check(s) not in tolerated_checks: {shown}")
+        status = evidence.FAIL
+    if len(failing) > len(untolerated):
+        result.note(f"{len(failing) - len(untolerated)} failing check(s) tolerated by ci/build-tester.yml")
+
+    failures = category_failures(full, required)
     if failures:
         pretty = ", ".join(f"{k}: {v}" for k, v in sorted(failures.items()))
         result.note(f"categories policy requires clean have failing checks -- {pretty}")

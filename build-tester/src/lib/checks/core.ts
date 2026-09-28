@@ -538,12 +538,20 @@ export async function runCoreChecks(): Promise<
         : "PRESENT (Chrome-only)",
   };
 
-  result.firefoxAPIs.noWebSerial = {
-    passed: typeof (navigator as any).serial === "undefined",
-    detail:
-      typeof (navigator as any).serial === "undefined"
-        ? "Not present (correct)"
-        : "PRESENT (Chrome-only)",
+  // Web Serial is no longer Chrome-only: desktop Firefox exposes
+  // navigator.serial in secure contexts (dom.webserial.enabled, add-on gated
+  // for port access). Stock Firefox 152.0.4 and 156.0.1 both report "object"
+  // on a localhost page, so its absence is now the tell, not its presence.
+  const hasSerial = typeof (navigator as any).serial !== "undefined";
+  result.firefoxAPIs.webSerialMatchesFirefox = {
+    passed: hasSerial === window.isSecureContext,
+    detail: hasSerial
+      ? window.isSecureContext
+        ? "Present in a secure context (matches desktop Firefox)"
+        : "PRESENT outside a secure context (Firefox hides it there)"
+      : window.isSecureContext
+        ? "MISSING in a secure context (desktop Firefox exposes it)"
+        : "Not present outside a secure context (correct)",
   };
 
   result.firefoxAPIs.hasBuildID = {

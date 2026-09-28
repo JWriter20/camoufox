@@ -2770,3 +2770,113 @@ def test_memory_growth_runs_on_pull_requests_and_gates_the_merge():
     assert shards == [f"{i}/{n}" for i in range(1, n + 1)]
     assert "growth" in jobs["gate"]["needs"]
     assert "growth" in jobs["summary"]["needs"]
+
+
+def _bt_firefox_api_failure(n_profiles: int = 3) -> dict:
+    """n per-context Linux profiles with no index, each failing one Firefox API check.
+
+    Shaped like build-tester's real output for 156.0.1-beta.32 (CI run
+    36374833026): the profile metadata carries no "index".
+    """
+    return {
+        "overallGrade": "A",
+        "totalPassed": 2 * n_profiles - n_profiles,
+        "totalChecks": 2 * n_profiles,
+        "profiles": [
+            {
+                "profile": {"os": "linux", "mode": "per-context", "name": f"Linux Per-Context {c}"},
+                "results": {
+                    "core": {
+                        "firefoxAPIs": {
+                            "noWebUSB": {"passed": True, "detail": "Not present (correct)"},
+                            "noWebSerial": {"passed": False, "detail": "PRESENT (Chrome-only)"},
+                        }
+                    }
+                },
+            }
+            for c in "ABC"[:n_profiles]
+        ],
+    }
+
+
+def test_required_categories_resolve_by_display_label():
+    """ci/build-tester.yml names categories by label; results key them by id.
+
+    Comparing the two directly matched nothing, so no required category was ever
+    enforced -- a run with "Firefox APIs" failures still passed.
+    """
+    import yaml
+    from ci.run_build_tester import CONFIG_PATH, category_failures, resolve_categories
+
+    required = yaml.safe_load(CONFIG_PATH.read_text())["required_categories"]
+    keys, unknown = resolve_categories(required)
+    assert unknown == []
+    assert "firefoxapis" in keys
+    assert category_failures(_bt_firefox_api_failure(), required) == {"firefoxAPIs": 3}
+
+
+def test_an_unknown_required_category_is_reported():
+    from ci.run_build_tester import resolve_categories
+
+    _, unknown = resolve_categories(["Firefox APIs", "No Such Category"])
+    assert unknown == ["No Such Category"]
+
+
+def test_profiles_without_an_index_get_distinct_slots():
+    """Three per-context profiles are three slots, not one slot written three times."""
+    from ci.run_build_tester import flatten
+
+    tests = flatten(_bt_firefox_api_failure())
+    failing = sorted(t for t, v in tests.items() if v == "fail")
+    assert failing == [
+        f"linux-per-context-{i}/core/firefoxAPIs/noWebSerial" for i in range(3)
+    ]
+
+
+def _run_gate(monkeypatch, tmp_path, full: dict, cfg_extra: str = "") -> tuple:
+    import json
+
+    import ci.run_build_tester as rbt
+
+    work = tmp_path / "work"
+    work.mkdir()
+    cfg = tmp_path / "build-tester.yml"
+    cfg.write_text(rbt.CONFIG_PATH.read_text() + cfg_extra)
+
+    def fake_run(*_a, **_k):
+        (work / "build-tester-result.json").write_text(json.dumps(full))
+
+        class P:
+            code = 1
+        return P()
+
+    monkeypatch.setattr(rbt, "WORK_DIR", work)
+    monkeypatch.setattr(rbt, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(rbt, "run", fake_run)
+    evidence_dir = tmp_path / "ev"
+    code = rbt.main(["--binary", str(tmp_path / "camoufox-bin"), "--evidence-dir", str(evidence_dir)])
+    saved = json.loads((evidence_dir / "build_tester.json").read_text())
+    return code, saved
+
+
+def test_a_failing_check_fails_the_gate(monkeypatch, tmp_path):
+    """The gate reported "478 passed, 4 failed" as a pass; any failure must fail it."""
+    full = _bt_firefox_api_failure()
+    full["profiles"][0]["results"]["core"]["firefoxAPIs"] = {"noWebUSB": {"passed": True}}
+    full["profiles"] = full["profiles"][:1]
+    # A non-required category, so only the any-failure rule can catch it.
+    full["profiles"][0]["results"]["extended"] = {"mathEngine": {"tan": {"passed": False}}}
+    code, saved = _run_gate(monkeypatch, tmp_path, full)
+    assert code == 1
+    assert saved["status"] == "fail"
+
+
+def test_a_tolerated_check_does_not_fail_the_gate(monkeypatch, tmp_path):
+    full = _bt_firefox_api_failure()
+    full["profiles"][0]["results"]["core"]["firefoxAPIs"] = {"noWebUSB": {"passed": True}}
+    full["profiles"] = full["profiles"][:1]
+    full["profiles"][0]["results"]["extended"] = {"mathEngine": {"tan": {"passed": False}}}
+    extra = '\ntolerated_checks:\n  extended/mathEngine/tan: "test"\n'
+    code, saved = _run_gate(monkeypatch, tmp_path, full, extra)
+    assert code == 0, saved
+    assert saved["status"] == "pass"

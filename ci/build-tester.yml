@@ -21,6 +21,11 @@ required_categories:
   - Canvas Noise
   - WebGL Render
 
+# Every failing check fails the gate unless it is listed here, keyed by
+# "section/category/check" (no profile slot), with the reason it is tolerated.
+# Checks in required_categories cannot be tolerated.
+tolerated_checks: {}
+
 # Cross-profile uniqueness is judged by what each slot actually promises, not by
 # one count across all of them (see ci/run_build_tester.py):
 #
