@@ -4,7 +4,8 @@ This is the JavaScript/TypeScript client for Camoufox. It is a port of the
 Python wrapper in [`../pythonlib`](../pythonlib) — it does **not** shell out
 to Python.
 
-The two launchers are twins: they read the same `properties.json`, write the
+The two launchers are twins: they read the same `properties.json` and
+[`launch.json`](../docs/launch-rules.md), write the
 same chunked `CAMOU_CONFIG`, share the same browser install directory, and
 ship the same fingerprint presets, font/voice lists and GeoIP configuration.
 They draw the same identities too: fingerprints and WebGL devices come from a

@@ -720,6 +720,7 @@ def record_init_script():
          'speechVoices': [], 'timezone': ''},
         {'navigatorUserAgent': 'emoji 😀   \x7f tab\t', 'hardwareConcurrency': None},
         {'webrtcIP': '2001:db8::7'},
+        {'screenWidth': 1920, 'screenHeight': 1080, 'screenAvailWidth': 1920, 'screenAvailHeight': 1040},
     ]
     out = [{'values': v, 'script': fp._build_init_script(v)} for v in cases]
     write('init-script.json', {'cases': out}, compress=False)

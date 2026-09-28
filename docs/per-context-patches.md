@@ -27,7 +27,7 @@ output as the GPU and fonts produce it.
 |----------|-------|-----------------|
 | `window.setAudioFingerprintSeed(seed)` | `audio-fingerprint-manager.patch` | Audio buffer/analyser fingerprint hash |
 | `window.setTimezone(tz)` | `timezone-spoofing.patch` | `Date`, `Intl.DateTimeFormat`, all time APIs |
-| `window.setScreenDimensions(w, h)` | `screen-spoofing.patch` | `screen.width`, `screen.height` |
+| `window.setScreenDimensions(w, h[, availW, availH])` | `screen-spoofing.patch` | `screen.width`, `screen.height`. The launchers also pass the identity's available rect; the stock build ignores it and reports the full size |
 | `window.setScreenColorDepth(depth)` | `screen-spoofing.patch` | `screen.colorDepth` |
 | `window.setNavigatorPlatform(platform)` | `navigator-spoofing.patch` | `navigator.platform` |
 | `window.setNavigatorOscpu(oscpu)` | `navigator-spoofing.patch` | `navigator.oscpu` |

@@ -330,45 +330,94 @@ def get_env_vars(
     return env_vars
 
 
-def _load_properties(path: Optional[Path] = None) -> Dict[str, str]:
+def _settings_file(name: str, path: Optional[Path] = None) -> str:
     """
-    Loads the properties.json file.
+    Where a settings file the build ships (properties.json, launch.json) lives:
+    beside the caller's own binary when they supplied one, else in the managed
+    install.
     """
-    if path:
-        prop_file = str(path.parent / "properties.json")
-        if not os.path.exists(prop_file):
-            # macOS app bundle: the binary is Contents/MacOS/camoufox, the
-            # packaged settings live in Contents/Resources/.
-            bundled = path.parent.parent / "Resources" / "properties.json"
-            if bundled.exists():
-                prop_file = str(bundled)
-    else:
-        prop_file = get_path("properties.json")
-    with open(prop_file, "rb") as f:
+    if not path:
+        return get_path(name)
+    beside = path.parent / name
+    if not beside.exists():
+        # macOS app bundle: the binary is Contents/MacOS/camoufox, the
+        # packaged settings live in Contents/Resources/.
+        bundled = path.parent.parent / "Resources" / name
+        if bundled.exists():
+            return str(bundled)
+    return str(beside)
+
+
+def _load_properties(path: Optional[Path] = None) -> Dict[str, Dict[str, Any]]:
+    """
+    Loads the properties.json file, keyed by property name.
+    """
+    with open(_settings_file("properties.json", path), "rb") as f:
         prop_dict = orjson.loads(f.read())
 
-    return {prop['property']: prop['type'] for prop in prop_dict}
+    return {prop['property']: prop for prop in prop_dict}
 
 
-def validate_config(config_map: Dict[str, str], path: Optional[Path] = None) -> None:
+def validate_config(config_map: Dict[str, Any], path: Optional[Path] = None) -> None:
     """
-    Validates the config map.
+    Validates the config map against the build's properties.json, and lifts a
+    numeric value below its declared `min` up to it.
     """
-    property_types = _load_properties(path=path)
+    properties = _load_properties(path=path)
 
     for key, value in config_map.items():
-        expected_type = property_types.get(key)
-        if not expected_type:
+        prop = properties.get(key)
+        if not prop:
             print(f'Skipping unknown patch {key} : {value}')
             continue  # Property not supported by this browser version; skip silently
 
+        expected_type = prop['type']
         if not validate_type(value, expected_type):
             raise InvalidPropertyType(
                 f"Invalid type for property {key}. Expected {expected_type}, got {type(value).__name__}"
             )
 
+        if 'min' in prop and value < prop['min']:
+            config_map[key] = prop['min']
+
         if key == 'voices':
             validate_voices(value)
+
+
+def apply_launch_rules(
+    target_os: str,
+    firefox_user_prefs: Dict[str, Any],
+    user_pref_keys: set,
+    env: Dict[str, Union[str, float, bool]],
+    path: Optional[Path] = None,
+) -> None:
+    """
+    Applies the prefs and environment variables the build declares in its
+    launch.json. A build that needs a pref or variable set at launch for a
+    feature it compiles in says so there, so the launcher needs no knowledge of
+    any particular build. Most builds ship no launch.json.
+
+    Each rule may restrict itself to identity OSes (`target`) and host OSes
+    (`host`), both in 'win'/'mac'/'lin' terms. A pref the caller set, or a
+    variable already in the environment, is never replaced.
+    """
+    launch_file = _settings_file("launch.json", path)
+    if not os.path.exists(launch_file):
+        return
+    with open(launch_file, "rb") as f:
+        rules = orjson.loads(f.read())['rules']
+
+    host_os = _host_os_key()
+    for rule in rules:
+        if target_os not in rule.get('target', [target_os]):
+            continue
+        if host_os not in rule.get('host', [host_os]):
+            continue
+        for key, value in rule.get('prefs', {}).items():
+            if key not in user_pref_keys:
+                firefox_user_prefs[key] = value
+        for key, value in rule.get('env', {}).items():
+            env.setdefault(key, value)
 
 
 def validate_type(value: Any, expected_type: str) -> bool:
@@ -972,6 +1021,9 @@ def launch_options(
         args = []
     if firefox_user_prefs is None:
         firefox_user_prefs = {}
+    # The caller's own prefs, before the launcher adds any: a pref the build
+    # declares in launch.json never replaces one of these.
+    _user_pref_keys = set(firefox_user_prefs)
     if custom_fonts_only is None:
         custom_fonts_only = False
     if i_know_what_im_doing is None:
@@ -1138,8 +1190,9 @@ def launch_options(
     # Pinning it on top of that is strictly worse than leaving it alone: the
     # value would no longer move across navigations, and a fresh tab would claim
     # a depth of, say, 4 while history.back() -- which reads the real session
-    # history -- does nothing. Any page can check that pair. The property stays
-    # in properties.json for callers who want to override it by hand.
+    # history -- does nothing. Any page can check that pair. A build that
+    # implements the key declares it in its own properties.json, with the floor
+    # it needs, and callers set it by hand.
 
     # Update fonts list
     if fonts:
@@ -1504,6 +1557,8 @@ def launch_options(
     if debug:
         print('[DEBUG] Config:')
         pprint(config)
+
+    apply_launch_rules(target_os, firefox_user_prefs, _user_pref_keys, env, path=executable_path)
 
     # Validate the config
     warn_if_executable_predates_playwright(executable_path)
