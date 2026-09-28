@@ -22,9 +22,11 @@
  *
  * Each returns `{steps, endState}` or `null` to decline. Steps carry `t`, ms
  * from the start of the action, non-decreasing; a planner uses no randomness
- * but `ctx.rng` and no clock at all. An engine may implement any subset, and
- * may also define `available()` (false: not usable right now) and
- * `budgetMs(options)` (its own time budget).
+ * but `ctx.rng` and reads no clock: `ctx.now` is the time the action was
+ * planned at, for engines that pace against earlier actions. An engine may
+ * implement any subset, and may also define `available(channel)` (false: not
+ * usable on that channel right now) and `budgetMs(options)` (its own time
+ * budget).
  *
  * Which engines exist is the build's humanize-engines.json (docs/humanize.md),
  * beside properties.json: the engines each channel may name, what `auto`
@@ -142,8 +144,8 @@ export class HumanizeSeam {
     return engine;
   }
 
-  _usable(name) {
-    return name === 'raw' || this._engine(name).available?.() !== false;
+  _usable(name, channel) {
+    return name === 'raw' || this._engine(name).available?.(streamChannel(channel)) !== false;
   }
 
   /** The last `auto` choice: what an unusable or failing engine falls back to. */
@@ -168,15 +170,24 @@ export class HumanizeSeam {
     if (name === 'raw')
       return name;
     if (name === 'auto')
-      return (this.manifest.auto?.[streamChannel(channel)] ?? []).find(n => this._usable(n)) ?? 'raw';
+      return (this.manifest.auto?.[streamChannel(channel)] ?? []).find(n => this._usable(n, channel)) ?? 'raw';
     if (!(this.manifest[streamChannel(channel)] ?? []).includes(name))
       throw new Error(`${kChannelKeys[channel]} names "${name}", which ${kManifestName} does not list for ${streamChannel(channel)}`);
-    if (!this._usable(name)) {
+    if (!this._usable(name, channel)) {
       const fallback = this._fallback(channel);
       this._warnOnce('humanize_engine_unavailable', `${channel} runs ${fallback}: ${name} is not available`);
       return fallback;
     }
     return name;
+  }
+
+  /**
+   * Whether `channel` has an engine other than `raw` for the next action. A
+   * command site checks this before gathering context that only an engine
+   * needs, such as what has focus.
+   */
+  active(channel) {
+    return this.resolve(channel) !== 'raw';
   }
 
   _stream(channel) {
@@ -233,7 +244,7 @@ export class HumanizeSeam {
         (options.budgetSeconds ?? kDefaultBudgetSeconds) * 1000;
     const rng = this._stream(channel);
     const seedStreamPos = rng.position;
-    const ctx = {...context, channel, rng, options, budgetMs, seed: this._seed};
+    const ctx = {...context, channel, rng, options, budgetMs, seed: this._seed, now: this._pacing.clock?.()};
     let plan;
     try {
       plan = engine[method](ctx, ...args);
@@ -297,6 +308,7 @@ export function humanizeSeam() {
       manifest: loadGeckoManifest,
       importModule: url => ChromeUtils.importESModule(url),
       trace: geckoTraceSink(),
+      clock: () => ChromeUtils.now(),
       warn: message => dump(`[juggler] WARN ${message}\n`),
     });
   }

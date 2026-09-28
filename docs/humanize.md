@@ -42,14 +42,25 @@ A move plan ends exactly on its target.
 - `options`: the engine's options, read from their config keys.
 - `budgetMs`: the time the plan must fit in.
 - `seed`: the launch's 64-bit seed.
-- `cursor`, `viewport` and `keyboardState`: per-page state.
+- `now`: the time the action was planned at (ms, monotonic). A keyboard engine
+  paces a keydown against the previous one on the page with it, so the time
+  the client spent between two commands is absorbed rather than added.
+- `cursor`, `viewport` and `keyboardState`: per-page state. `keyboardState` is
+  one object per page that a keyboard engine may keep its own state in.
+- `focus` (keyboard, on keydowns and `insertText`): the focused element as
+  `{editable, multiline, type, maxLength}`. `editable` is true for a text
+  `input`, a `textarea` or a contenteditable host that accepts input.
 
-A planner uses no clock and no `Math.random`.
+A planner reads no clock other than `ctx.now`, and uses no `Math.random`.
+Everything it draws from `ctx.rng` must not depend on `ctx.now`, so a seeded
+session draws the same numbers however late its commands arrive.
 
 An engine can also define two optional methods:
 
-- `available()`: return `false` when the engine cannot run right now. `auto`
-  then skips it, and an explicit request for it falls back with a warning.
+- `available(channel)`: return `false` when the engine cannot run on that
+  channel right now. `auto` then skips it, and an explicit request for it falls
+  back with a warning. An engine listed on several channels can be ready on
+  some of them only.
 - `budgetMs(options)`: the engine's own time budget. Without it, the budget is
   the `budgetSeconds` option, or 8 s by default.
 

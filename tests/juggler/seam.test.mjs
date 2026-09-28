@@ -120,6 +120,32 @@ test('auto takes the first available engine the manifest lists, per action', () 
   assert.equal(s.plan('mouse', 'planMove', page, {x: 3, y: 4}).engine, 'cursory');
 });
 
+test('availability is per channel: an engine can be ready on one channel only', () => {
+  const asked = [];
+  const planKey = () => ({steps: [{t: 0, kind: 'key', type: 'keydown', key: 'a'}], endState: {}});
+  const s = seam({'humanize': true, 'humanize:mouse': 'auto', 'humanize:mouse:internal': 'auto', 'humanize:keyboard': 'auto', 'humanize:scroll': 'fancy'},
+      {manifest: withFancy({planKey, available: channel => (asked.push(channel), channel === 'keyboard')})});
+  assert.equal(s.resolve('keyboard'), 'fancy');
+  assert.equal(s.resolve('mouse'), 'cursory');
+  assert.equal(s.resolve('mouse:internal'), 'cursory');
+  assert.equal(s.resolve('scroll'), 'notches');
+  assert.deepEqual([...new Set(asked)].sort(), ['keyboard', 'mouse', 'scroll']);
+  assert.equal(s.active('keyboard'), true);
+  assert.equal(seam({'humanize:keyboard': 'raw'}).active('keyboard'), false);
+});
+
+test('ctx.now is the seam clock at planning time, and absent without one', () => {
+  let seen;
+  const planKey = ctx => (seen = ctx.now, null);
+  const clock = () => 1000;
+  seam({'humanize:keyboard': 'fancy'}, {manifest: withFancy({planKey}), clock})
+      .plan('keyboard', 'planKey', {keyboardState: {}}, {type: 'keydown', key: 'a'});
+  assert.equal(seen, 1000);
+  seam({'humanize:keyboard': 'fancy'}, {manifest: withFancy({planKey})})
+      .plan('keyboard', 'planKey', {keyboardState: {}}, {type: 'keydown', key: 'a'});
+  assert.equal(seen, undefined);
+});
+
 test('raw and engines without the command leave the stock dispatch in charge', () => {
   const s = seam({'humanize:mouse': 'raw', 'humanize:keyboard': 'raw', 'humanize:scroll': 'notches'});
   assert.equal(s.plan('mouse', 'planMove', page, {x: 5, y: 5}), null);

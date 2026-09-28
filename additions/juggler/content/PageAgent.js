@@ -153,6 +153,7 @@ export class PageAgent {
         getContentQuads: this._getContentQuads.bind(this),
         getFullAXTree: this._getFullAXTree.bind(this),
         insertText: this._insertText.bind(this),
+        humanizeFocus: this._humanizeFocus.bind(this),
         scrollIntoViewIfNeeded: this._scrollIntoViewIfNeeded.bind(this),
         setFileInputFiles: this._setFileInputFiles.bind(this),
         evaluate: this._runtime.evaluate.bind(this._runtime),
@@ -615,6 +616,28 @@ export class PageAgent {
       session?.endDragSession(true);
       return;
     }
+  }
+
+  // Camoufox: what a keyboard engine needs to know about the focused element
+  // (input/HumanizeSeam.js): whether typed text lands in an editable text
+  // control, whether Enter there is a line break, and any length limit.
+  _humanizeFocus() {
+    let active = this._frameTree.mainFrame().domWindow().document.activeElement;
+    // Descend into same-process frames; an out-of-process one reads as not
+    // editable, so an engine only paces keys into it.
+    while (active && (active.tagName === 'IFRAME' || active.tagName === 'FRAME') && active.contentDocument)
+      active = active.contentDocument.activeElement;
+    if (!active)
+      return {editable: false, multiline: false, type: '', maxLength: -1};
+    const isInput = active.tagName === 'INPUT' && /^(text|search|url|tel|email|password|number|)$/i.test(active.type || '');
+    const isTextArea = active.tagName === 'TEXTAREA';
+    const editable = ((isInput || isTextArea) && !active.readOnly && !active.disabled) || !!active.isContentEditable;
+    return {
+      editable,
+      multiline: editable && !isInput,
+      type: isInput ? (active.type || 'text').toLowerCase() : isTextArea ? 'textarea' : (active.isContentEditable ? 'contenteditable' : ''),
+      maxLength: (isInput || isTextArea) ? active.maxLength : -1,
+    };
   }
 
   async _insertText({text}) {

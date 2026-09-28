@@ -523,6 +523,17 @@ export class PageHandler {
     return this._contentPage.send('dispatchKeyEvent', {type, key, code, keyCode, location, repeat: false, text});
   }
 
+  // What a keyboard engine plans against: the page's typing state, and what
+  // has focus (it only injects a slip it can correct into an editable text
+  // control). Focus is asked of the content process only when an engine will
+  // use it.
+  async _keyboardContext(needsFocus) {
+    const context = {keyboardState: this._keyboardState};
+    if (needsFocus && humanizeSeam().active('keyboard'))
+      context.focus = await this._contentPage.send('humanizeFocus');
+    return context;
+  }
+
   async ['Page.dispatchKeyEvent']({type, keyCode, code, key, repeat, location, text}) {
     // key events don't fire if we are dragging.
     if (this._isDragging) {
@@ -539,7 +550,7 @@ export class PageHandler {
       return;
     }
     const keyEvent = {type, keyCode, code, key, repeat, location, text};
-    const planned = humanizeSeam().plan('keyboard', 'planKey', {keyboardState: this._keyboardState}, keyEvent);
+    const planned = humanizeSeam().plan('keyboard', 'planKey', await this._keyboardContext(type === 'keydown'), keyEvent);
     if (!planned)
       return await this._contentPage.send('dispatchKeyEvent', keyEvent);
     await this._playHumanized(planned, 'Page.dispatchKeyEvent', step => this._dispatchPlannedKeyStep(step));
@@ -753,7 +764,7 @@ export class PageHandler {
   }
 
   async ['Page.insertText'](options) {
-    const planned = humanizeSeam().plan('keyboard', 'planInsert', {keyboardState: this._keyboardState}, options.text);
+    const planned = humanizeSeam().plan('keyboard', 'planInsert', await this._keyboardContext(true), options.text);
     if (!planned)
       return await this._contentPage.send('insertText', options);
     await this._playHumanized(planned, 'Page.insertText', step => this._dispatchPlannedKeyStep(step));
