@@ -9,16 +9,23 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "daijro/camoufox release tag"
+        description: "Release tag (its version must match the browser's)"
         required: true
+        type: string
+      repo:
+        description: "Repository holding the release. Upstream publishes drafts, which only a
+          token with push access can read, so a draft is mirrored to this fork first."
+        required: false
         type: string
 
 permissions:
-  contents: read
+  # write, because reading a *draft* release on this repository needs it.
+  contents: write
 
 env:
-  TAG: ${{ inputs.tag || 'v152.0.4-beta.31' }}
-  SOURCE_REPO: daijro/camoufox
+  TAG: ${{ inputs.tag || 'v152.0.4-beta.30' }}
+  SOURCE_REPO: ${{ inputs.repo || 'daijro/camoufox' }}
+  CODE_TAG: ${{ inputs.tag || 'v152.0.4-beta.30' }}
 
 jobs:
   smoke:
@@ -37,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: daijro/camoufox
-          ref: ${{ env.TAG }}
+          ref: ${{ env.CODE_TAG }}
           persist-credentials: false
 
       - uses: actions/setup-python@v5
