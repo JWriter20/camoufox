@@ -12,6 +12,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
+from . import _humanize_custom
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
@@ -98,6 +99,15 @@ async def AsyncNewBrowser(
         **kwargs:
             All other keyword arugments passed to `launch_options()`.
     """
+    # custom() humanize engines run in this process: checked before the launch,
+    # attached to the browser after it (also with from_options).
+    _humanize_custom.check(kwargs.get('humanize'), is_async=True)
+
+    def attach(target: Any) -> Any:
+        return _humanize_custom.attach(
+            target, kwargs.get('humanize'), i_know_what_im_doing=kwargs.get('i_know_what_im_doing')
+        )
+
     if headless == 'virtual':
         virtual_display = VirtualDisplay(debug=debug)
         kwargs['virtual_display'] = virtual_display.get()
@@ -126,14 +136,14 @@ async def AsyncNewBrowser(
     pin_to = pinned_core_count(from_options)
     pid = driver_pid(playwright) if pin_to else None
     if not pid:
-        return await _launch(playwright, from_options, persistent_context, no_viewport_default, virtual_display)
+        return attach(await _launch(playwright, from_options, persistent_context, no_viewport_default, virtual_display))
     # The browser inherits the driver's mask at spawn, so two concurrent launches
     # on one driver must not interleave pin/restore: the second pin would land on
     # the first browser, and the first restore would leave the driver pinned.
     async with _pin_lock(pid):
         previous = cpu_affinity.pin(pid, pin_to)
         try:
-            return await _launch(playwright, from_options, persistent_context, no_viewport_default, virtual_display)
+            return attach(await _launch(playwright, from_options, persistent_context, no_viewport_default, virtual_display))
         finally:
             cpu_affinity.restore(pid, previous)
 

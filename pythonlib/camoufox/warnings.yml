@@ -79,3 +79,7 @@ fallback: |-
 humanize_scroll_teleports: >-
     humanize has mouse=raw() with a scroll engine that moves the cursor over the page before it scrolls.
     With a raw mouse that move is a single jump.
+
+humanize_custom_remote: >-
+    humanize has a custom() engine on a remote browser. Each event it plays is a round trip over the network,
+    so network jitter lands between the events. Built-in engines run inside the browser and avoid it.

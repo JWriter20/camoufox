@@ -12,6 +12,11 @@
  * (docs/humanize.md); `engine(name, options)` names any of them. A factory
  * returns plain data, never behaviour.
  *
+ * A channel may also run a client-side engine, `custom(fn)`: a function in this
+ * process plans the channel's input and plays it through Playwright's own
+ * input methods, with schedule pacing and a seeded stream (humanize-custom.ts).
+ * The browser then runs that channel raw, so input is never humanized twice.
+ *
  * `humanize` itself may also be:
  *
  *     undefined / false   every channel raw(): Playwright's own dispatch
@@ -29,7 +34,17 @@ export type Channel = (typeof CHANNELS)[number];
 export interface Engine {
 	engine: string;
 	options: Record<string, number>;
+	/** The function of a custom() engine. */
+	fn?: CustomEngineFn;
 }
+
+/** A client-side engine's function. Per channel it receives:
+ *
+ *     mouse     (page, x, y, { original, rng, play })
+ *     keyboard  (page, text, { original, rng, play, kind })  kind: "type" | "press" | "fill"
+ *     scroll    (page, target, { original, rng, play })       target: a Locator or [dx, dy]
+ */
+export type CustomEngineFn = (...args: any[]) => unknown;
 
 export type HumanizeSetting =
 	| undefined
@@ -123,6 +138,19 @@ export function notches(): Engine {
 	return engine("notches");
 }
 
+/** A client-side engine: `fn` plans the channel's input in this process and
+ *  plays it through Playwright. `original` runs Playwright's own behaviour for
+ *  the call, `rng` is the channel's seeded stream (the browser's own
+ *  derivation), and `play(steps)` dispatches steps on a schedule. */
+export function custom(fn: CustomEngineFn): Engine {
+	if (typeof fn !== "function") {
+		throw new ValueError(
+			`custom() takes the function that plans the input, got ${pyRepr(fn)}`,
+		);
+	}
+	return { engine: "custom", options: {}, fn };
+}
+
 function asEngine(channel: Channel, value: unknown): Engine {
 	const candidate = typeof value === "string" ? engine(value) : value;
 	if (
@@ -132,10 +160,24 @@ function asEngine(channel: Channel, value: unknown): Engine {
 		typeof (candidate as Engine).engine !== "string"
 	) {
 		throw new ValueError(
-			`humanize["${channel}"] must be an engine such as auto(), raw() or cursory(), got ${pyRepr(value)}`,
+			`humanize["${channel}"] must be an engine such as auto(), raw(), cursory() or custom(fn), got ${pyRepr(value)}`,
 		);
 	}
 	const name = (candidate as Engine).engine;
+	if (name === "custom") {
+		const fn = (candidate as Engine).fn;
+		if (typeof fn !== "function") {
+			throw new ValueError(
+				`humanize["${channel}"]: a custom engine needs its function, as custom(fn)`,
+			);
+		}
+		if (Object.keys((candidate as Engine).options ?? {}).length) {
+			throw new ValueError(
+				`humanize["${channel}"]: custom() takes no options; the function is the engine`,
+			);
+		}
+		return { engine: "custom", options: {}, fn };
+	}
 	const options = { ...((candidate as Engine).options ?? {}) };
 	for (const [key, option] of Object.entries(options)) {
 		if (!isNumber(option)) {
@@ -249,8 +291,12 @@ export function humanizeConfig(
 	iKnowWhatImDoing?: boolean,
 ): Record<string, unknown> {
 	const { engines, seed } = normalize(humanize);
+	// A custom channel runs client-side, so the browser runs it raw.
 	const names = Object.fromEntries(
-		CHANNELS.map((c) => [c, engines[c].engine]),
+		CHANNELS.map((c) => [
+			c,
+			engines[c].engine === "custom" ? "raw" : engines[c].engine,
+		]),
 	) as Record<Channel, string>;
 	const legacy = manifest === null;
 	const available = manifest ?? LEGACY_MANIFEST;
@@ -263,7 +309,11 @@ export function humanizeConfig(
 		}
 	}
 
-	if (available.engines?.[names.scroll]?.movesCursor && names.mouse === "raw") {
+	// A custom mouse leaves the browser's own cursor moves to mouse:internal.
+	if (
+		available.engines?.[names.scroll]?.movesCursor &&
+		engines.mouse.engine === "raw"
+	) {
 		LeakWarning.warn("humanize_scroll_teleports", iKnowWhatImDoing);
 	}
 
@@ -320,6 +370,11 @@ export function humanizeConfig(
 	const config: Record<string, unknown> = { humanize: enabled };
 	for (const channel of CHANNELS)
 		config[`humanize:${channel}`] = names[channel];
+	if (engines.mouse.engine === "custom") {
+		// Moves the browser originates (the cursor move before a planned
+		// scroll) still get a humanized path, not a jump.
+		config["humanize:mouse:internal"] = "auto";
+	}
 	Object.assign(config, floats);
 	if (seed !== undefined) {
 		// A string: Juggler reads config numbers as doubles, which cannot hold
@@ -327,4 +382,73 @@ export function humanizeConfig(
 		config["humanize:seed"] = String(seed);
 	}
 	return config;
+}
+
+/** The functions of a `humanize` setting's custom channels, by channel. */
+export function customEngines(
+	humanize: HumanizeSetting,
+): Partial<Record<Channel, CustomEngineFn>> {
+	const { engines } = normalize(humanize);
+	return Object.fromEntries(
+		CHANNELS.filter((c) => engines[c].engine === "custom").map((c) => [
+			c,
+			engines[c].fn as CustomEngineFn,
+		]),
+	);
+}
+
+// The seeded streams. The browser draws its engines' randomness from the same
+// derivation (additions/juggler/input/HumanizeRng.js), so a custom engine gets
+// the stream a built-in engine on that channel would:
+//
+//   stream(channel) = Mulberry32(splitmix64(seed ^ TAG[channel]) & 0xffffffff)
+
+const MASK64 = (1n << 64n) - 1n;
+
+export const CHANNEL_TAGS: Readonly<Record<Channel, bigint>> = Object.freeze({
+	mouse: 0x6d6f7573n,
+	keyboard: 0x6b657962n,
+	scroll: 0x7363726fn,
+});
+
+/** One splitmix64 output for the 64-bit state `x`. */
+export function splitmix64(x: bigint): bigint {
+	let z = (BigInt.asUintN(64, x) + 0x9e3779b97f4a7c15n) & MASK64;
+	z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & MASK64;
+	z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & MASK64;
+	return z ^ (z >> 31n);
+}
+
+/** Mulberry32 over a 32-bit seed. Calling it returns a float in [0, 1), bit
+ *  for bit what the browser's stream returns; `position` counts the draws. */
+export interface SeededRng {
+	(): number;
+	random(): number;
+	uniform(low: number, high: number): number;
+	position: number;
+}
+
+export function seededRng(seed32: number): SeededRng {
+	let a = seed32 | 0;
+	const rng = (() => {
+		rng.position++;
+		a = (a + 0x6d2b79f5) | 0;
+		let t = Math.imul(a ^ (a >>> 15), 1 | a);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	}) as SeededRng;
+	rng.position = 0;
+	rng.random = () => rng();
+	rng.uniform = (low, high) => low + (high - low) * rng();
+	return rng;
+}
+
+/** The stream a channel draws from for the 64-bit master `seed`. */
+export function channelStream(seed: bigint, channel: Channel): SeededRng {
+	const tag = CHANNEL_TAGS[channel];
+	if (tag === undefined)
+		throw new ValueError(`unknown humanize channel: ${channel}`);
+	return seededRng(
+		Number(splitmix64(BigInt.asUintN(64, seed) ^ tag) & 0xffffffffn),
+	);
 }

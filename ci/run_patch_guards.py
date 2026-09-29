@@ -49,6 +49,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
     "automation": (
         "addons-install-once",
         "force-scope-access",
+        "humanize-custom",
         "humanize-edge-deadlock",
         "humanize-mouse-trajectory",
         "humanize-pacing",

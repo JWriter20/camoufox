@@ -122,6 +122,34 @@ const browser = await Camoufox({
 
 A `seed` above `Number.MAX_SAFE_INTEGER` must be passed as a `bigint`.
 
+`custom(fn)` runs a channel with a function of yours in this process (see the
+repository README, "Writing your own engine"). The function receives its
+extras as one object, and `play()` takes arrays:
+
+```ts
+import { Camoufox, custom } from "@camoufox/camoufox";
+
+const browser = await Camoufox({
+	humanize: {
+		keyboard: custom(async (page, text, { original, rng, play, kind }) => {
+			if (kind === "press") return original();
+			let t = 0;
+			const steps = [];
+			for (const ch of text) {
+				steps.push(["key", ch, "down", t]);
+				t += 40 + rng() * 60;
+				steps.push(["key", ch, "up", t]);
+			}
+			return play(steps);
+		}),
+		seed: 1234,
+	},
+});
+```
+
+A scroll function gets `[dx, dy]` for a wheel call, and a `Locator` otherwise.
+The same seed and function give the same events as the Python launcher.
+
 ## CLI
 
 ```

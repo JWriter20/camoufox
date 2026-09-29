@@ -57,3 +57,11 @@ test('seeds are decimal uint64 strings', () => {
 });
 
 const PINNED = {mouse: 833145829, keyboard: 912731910, scroll: 1748142523};
+
+test('the launchers\' vectors are what this module produces', async () => {
+  // tests/humanize/rng-vectors.json is what the Python and TypeScript
+  // launchers' client-side streams are tested against.
+  const fs = await import('node:fs');
+  const {OUT, vectors} = await import('./gen-rng-vectors.mjs');
+  assert.deepEqual(JSON.parse(fs.readFileSync(OUT, 'utf8')), vectors());
+});

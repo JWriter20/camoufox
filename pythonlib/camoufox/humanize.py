@@ -16,6 +16,11 @@ options each takes, is the build's humanize-engines.json (docs/humanize.md);
 `engine(name, **options)` names any of them. A factory returns plain data,
 never behaviour, so a humanize setting can also come from JSON.
 
+A channel may also run a client-side engine, `custom(fn)`: a function in this
+process plans the channel's input and plays it through Playwright's own input
+methods, with schedule pacing and a seeded stream (camoufox._humanize_custom).
+The browser then runs that channel raw, so input is never humanized twice.
+
 `humanize` itself may also be:
 
     None / False    every channel raw(): Playwright's own dispatch
@@ -24,7 +29,7 @@ never behaviour, so a humanize setting can also come from JSON.
     a dict          per channel; an omitted channel is auto()
 """
 
-from typing import Any, Dict, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
 
 from ._warnings import LeakWarning
 from .exceptions import HumanizeEngineUnavailable
@@ -83,12 +88,36 @@ def notches() -> Engine:
     return engine('notches')
 
 
+def custom(fn: Callable[..., Any]) -> Engine:
+    """
+    A client-side engine: `fn` plans the channel's input in this process and
+    plays it through Playwright. Its signature, per channel:
+
+        mouse     fn(page, x, y, *, original, rng, play)
+        keyboard  fn(page, text, *, original, rng, play, kind)   kind: 'type', 'press' or 'fill'
+        scroll    fn(page, target, *, original, rng, play)       target: a Locator or (dx, dy)
+
+    `original` runs Playwright's own behaviour for the call, `rng` is the
+    channel's seeded stream (the browser's own derivation), and `play(steps)`
+    dispatches steps on a schedule. With the async API `fn` may be async.
+    """
+    if not callable(fn):
+        raise ValueError(f'custom() takes the function that plans the input, got {fn!r}')
+    return {'engine': 'custom', 'options': {}, 'fn': fn}
+
+
 def _as_engine(channel: str, value: Any) -> Engine:
     candidate = engine(value) if isinstance(value, str) else value
     if not isinstance(candidate, Mapping) or not isinstance(candidate.get('engine'), str):
         raise ValueError(
-            f'humanize["{channel}"] must be an engine such as auto(), raw() or cursory(), got {value!r}'
+            f'humanize["{channel}"] must be an engine such as auto(), raw(), cursory() or custom(fn), got {value!r}'
         )
+    if candidate['engine'] == 'custom':
+        if not callable(candidate.get('fn')):
+            raise ValueError(f'humanize["{channel}"]: a custom engine needs its function, as custom(fn)')
+        if candidate.get('options'):
+            raise ValueError(f'humanize["{channel}"]: custom() takes no options; the function is the engine')
+        return {'engine': 'custom', 'options': {}, 'fn': candidate['fn']}
     options = dict(candidate.get('options') or {})
     for key, option in options.items():
         if isinstance(option, bool) or not isinstance(option, (int, float)):
@@ -145,7 +174,8 @@ def humanize_config(
     Raises HumanizeEngineUnavailable for an engine the build does not ship.
     """
     engines, seed = normalize(humanize)
-    names = {channel: engines[channel]['engine'] for channel in CHANNELS}
+    # A custom channel runs client-side, so the browser runs it raw.
+    names = {channel: _binary_name(engines[channel]) for channel in CHANNELS}
     legacy = manifest is None
     available = LEGACY_MANIFEST if legacy else manifest
 
@@ -154,7 +184,8 @@ def humanize_config(
             raise HumanizeEngineUnavailable(channel, names[channel], list(available.get(channel, ())))
 
     scroll = available.get('engines', {}).get(names['scroll']) or {}
-    if scroll.get('movesCursor') and names['mouse'] == 'raw':
+    # A custom mouse leaves the browser's own cursor moves to mouse:internal.
+    if scroll.get('movesCursor') and engines['mouse']['engine'] == 'raw':
         LeakWarning.warn('humanize_scroll_teleports', i_know_what_im_doing)
 
     options: Dict[str, float] = {}
@@ -186,9 +217,89 @@ def humanize_config(
     config: Dict[str, Any] = {'humanize': enabled}
     for channel in CHANNELS:
         config[f'humanize:{channel}'] = names[channel]
+    if engines['mouse']['engine'] == 'custom':
+        # Moves the browser originates (the cursor move before a planned
+        # scroll) still get a humanized path, not a jump.
+        config['humanize:mouse:internal'] = 'auto'
     config.update(options)
     if seed is not None:
         # A string: Juggler reads config numbers as doubles, which cannot hold
         # every 64-bit seed exactly.
         config['humanize:seed'] = str(seed)
     return config
+
+
+def attach_custom(target: Any, humanize: HumanizeSetting, i_know_what_im_doing: Optional[bool] = None) -> Any:
+    """
+    Run the custom() engines of `humanize` on a Browser or BrowserContext that
+    camoufox did not launch in this process, e.g. one from `connect()`. Launch
+    that browser with raw() on those channels. Camoufox()/NewBrowser() call this
+    themselves.
+    """
+    from ._humanize_custom import attach
+
+    return attach(target, humanize, i_know_what_im_doing=i_know_what_im_doing)
+
+
+def _binary_name(entry: Engine) -> str:
+    return 'raw' if entry['engine'] == 'custom' else entry['engine']
+
+
+def custom_engines(humanize: HumanizeSetting) -> Dict[str, Callable[..., Any]]:
+    """The functions of a `humanize` setting's custom channels, by channel."""
+    engines, _seed = normalize(humanize)
+    return {channel: engines[channel]['fn'] for channel in CHANNELS if engines[channel]['engine'] == 'custom'}
+
+
+# The seeded streams. The browser draws its engines' randomness from the same
+# derivation (additions/juggler/input/HumanizeRng.js), so a custom engine gets
+# the stream a built-in engine on that channel would:
+#
+#   stream(channel) = Mulberry32(splitmix64(seed ^ TAG[channel]) & 0xffffffff)
+
+_MASK32 = 0xFFFFFFFF
+_MASK64 = 0xFFFFFFFFFFFFFFFF
+CHANNEL_TAGS = {'mouse': 0x6D6F7573, 'keyboard': 0x6B657962, 'scroll': 0x7363726F}
+
+
+def splitmix64(x: int) -> int:
+    """One splitmix64 output for the 64-bit state `x`."""
+    z = ((x & _MASK64) + 0x9E3779B97F4A7C15) & _MASK64
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _MASK64
+    return z ^ (z >> 31)
+
+
+class SeededRng:
+    """
+    Mulberry32 over a 32-bit seed. Calling it (or `random()`) returns a float
+    in [0, 1), bit for bit what the browser's stream returns; `position`
+    counts the draws.
+    """
+
+    __slots__ = ('_a', 'position')
+
+    def __init__(self, seed32: int) -> None:
+        self._a = seed32 & _MASK32
+        self.position = 0
+
+    def random(self) -> float:
+        self.position += 1
+        a = self._a = (self._a + 0x6D2B79F5) & _MASK32
+        t = ((a ^ (a >> 15)) * (1 | a)) & _MASK32
+        t = ((t + (((t ^ (t >> 7)) * (61 | t)) & _MASK32)) & _MASK32) ^ t
+        return ((t ^ (t >> 14)) & _MASK32) / 4294967296
+
+    __call__ = random
+
+    def uniform(self, low: float, high: float) -> float:
+        """low + (high - low) * one draw."""
+        return low + (high - low) * self.random()
+
+
+def channel_stream(seed: int, channel: str) -> SeededRng:
+    """The stream a channel draws from for the 64-bit master `seed`."""
+    tag = CHANNEL_TAGS.get(channel)
+    if tag is None:
+        raise ValueError(f'unknown humanize channel: {channel}')
+    return SeededRng(splitmix64((seed & _MASK64) ^ tag) & _MASK32)
