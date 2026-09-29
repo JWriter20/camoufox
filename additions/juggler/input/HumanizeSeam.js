@@ -17,10 +17,12 @@
  *
  *   planMove(ctx, to)                  Page.dispatchMouseEvent mousemove
  *   planWheel(ctx, at, delta)          Page.dispatchWheelEvent
+ *   planIntoView(ctx, probe)           Page.scrollIntoViewIfNeeded, in rounds
  *   planKey(ctx, keyEvent)             Page.dispatchKeyEvent
  *   planInsert(ctx, text)              Page.insertText
  *
- * Each returns `{steps, endState}` or `null` to decline. Steps carry `t`, ms
+ * Each returns `{steps, endState}` or `null` to decline. A planIntoView plan
+ * that ends in a `probe` step asks for another round with a fresh probe. Steps carry `t`, ms
  * from the start of the action, non-decreasing; a planner uses no randomness
  * but `ctx.rng` and reads no clock: `ctx.now` is the time the action was
  * planned at, for engines that pace against earlier actions. An engine may
@@ -188,6 +190,16 @@ export class HumanizeSeam {
    */
   active(channel) {
     return this.resolve(channel) !== 'raw';
+  }
+
+  /**
+   * Whether the engine for `channel`'s next action implements `method`. A
+   * command site checks this before a round trip that only such an engine
+   * needs, such as the scroll probe.
+   */
+  handles(channel, method) {
+    const name = this.resolve(channel);
+    return name !== 'raw' && typeof this._engine(name)[method] === 'function';
   }
 
   _stream(channel) {

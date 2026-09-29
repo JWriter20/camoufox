@@ -9,12 +9,13 @@ is for whoever adds an engine to a build. The user-facing API is in the README
 ## Where it runs
 
 `additions/juggler/input/HumanizeSeam.js` is the only place that knows about
-engines. `PageHandler` asks it for a plan at four command sites:
+engines. `PageHandler` asks it for a plan at five command sites:
 
 | Command | Engine method | Channel |
 |---|---|---|
 | `Page.dispatchMouseEvent` `mousemove` | `planMove(ctx, to)` | mouse |
 | `Page.dispatchWheelEvent` | `planWheel(ctx, at, {deltaX, deltaY, deltaZ})` | scroll |
+| `Page.scrollIntoViewIfNeeded` | `planIntoView(ctx, probe)`, in rounds | scroll |
 | `Page.dispatchKeyEvent` | `planKey(ctx, keyEvent)` | keyboard |
 | `Page.insertText` | `planInsert(ctx, text)` | keyboard |
 
@@ -33,6 +34,7 @@ kinds are:
 - `wheel` (`x`, `y`, `dx`, `dy`, `dz`, `mode`, `ticks`)
 - `key` (`type`, `key`, `code`, `keyCode`, `location`, `text`)
 - `text` (`text`)
+- `probe` (`planIntoView` only, last): measure again and plan another round
 
 A move plan ends exactly on its target.
 
@@ -69,6 +71,29 @@ slow ack delays only its own step. A plan over its budget is compressed. One
 still playing past 1.5x its budget fast-forwards: it skips the remaining waits
 and every step not marked `essential: true`, but always dispatches the last
 step. An engine that throws falls back to the channel's last `auto` choice.
+
+### Scrolling into view
+
+`Page.scrollIntoViewIfNeeded` (the scroll inside `click`, `hover` and `fill`)
+runs in rounds when the scroll engine has `planIntoView`. Each round the page
+reports a probe, the engine plans wheel steps from it, and the browser first
+moves the cursor to the first wheel's position (with the `mouse:internal`
+engine, a single `mousemove` when that is `raw`), then plays the wheels. A plan
+that ends in a `probe` step asks for another round, up to 4. The stock scroll
+always runs last: it does nothing when the element is already in view, and it
+raises the same errors as without an engine. The probe, in top-level viewport
+CSS pixels:
+
+| Field | Meaning |
+|---|---|
+| `targetRect` | The element (or the requested rect within it), or `null` when it cannot be scrolled to. |
+| `clip` | The band the element can be seen in: the viewport inset by 20 px (10 px at the sides), minus fixed or sticky bars at the element's column, intersected with each scrollable ancestor. |
+| `region` | The element's visible part of `clip`, or `null`. |
+| `hitTestable`, `occluder` | Whether a fixed or sticky element covers `region` (hit-tested at five points), and its rect. |
+| `scrollers` | The ancestors that can move the element, innermost first, then the page if it can: `{isPage, rect, band, scrollTop, maxScroll, wheelPoint: {down, up}}`, where `rect` is the scroller's box (`null` for the page) and `band` the part of it that is visible. `wheelPoint` is the point nearest the cursor from which a wheel in that direction scrolls this scroller rather than one inside it. |
+| `viewport` | `{width, height}`. |
+
+`ctx.round` is the round number, from 0.
 
 ## `humanize-engines.json`
 

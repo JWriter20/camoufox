@@ -153,6 +153,15 @@ test('raw and engines without the command leave the stock dispatch in charge', (
   assert.equal(s.plan('keyboard', 'planInsert', {keyboardState: {}}, 'hello'), null);
 });
 
+test('handles: whether the resolved engine plans a command, so a site can skip its probe', () => {
+  assert.equal(seam({humanize: false}).handles('scroll', 'planIntoView'), false);
+  assert.equal(seam({humanize: true}).handles('scroll', 'planWheel'), true);
+  assert.equal(seam({humanize: true}).handles('scroll', 'planIntoView'), false, 'notches does not plan into-view');
+  const manifest = withFancy({planIntoView: () => null});
+  assert.equal(seam({'humanize': true, 'humanize:scroll': 'fancy'}, {manifest}).handles('scroll', 'planIntoView'), true);
+  assert.equal(seam({'humanize': true, 'humanize:scroll': 'raw'}, {manifest}).handles('scroll', 'planIntoView'), false);
+});
+
 test('same seed, same plans; a different seed, different plans', () => {
   const values = {'humanize': true, 'humanize:mouse': 'cursory', 'humanize:scroll': 'notches', 'humanize:seed': '1234'};
   const first = session(seam(values));

@@ -12,6 +12,10 @@ const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sy
 const {MouseDispatch} = ChromeUtils.importESModule('chrome://juggler/content/input/MouseDispatch.js');
 const {humanizeSeam} = ChromeUtils.importESModule('chrome://juggler/content/input/HumanizeSeam.js');
 
+// Probe rounds for a humanized scrollIntoViewIfNeeded (see
+// _humanizedScrollIntoView) before the stock scroll takes over.
+const kScrollIntoViewRounds = 4;
+
 const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
@@ -499,7 +503,95 @@ export class PageHandler {
   }
 
   async ['Page.scrollIntoViewIfNeeded'](options) {
+    // Camoufox: a scroll engine that plans this (planIntoView,
+    // input/HumanizeSeam.js) brings the element into view with wheel input
+    // first. The stock scroll still runs last: it does nothing once the element
+    // is in view, finishes the job if the wheel fell short, and raises the
+    // stock errors (detached, no layout object) either way.
+    if (!this._isDragging && humanizeSeam().handles('scroll', 'planIntoView'))
+      await this._humanizedScrollIntoView(options);
     return await this._contentPage.send('scrollIntoViewIfNeeded', options);
+  }
+
+  // Probe, plan, wheel, and probe again, up to kScrollIntoViewRounds times:
+  // fixed headers, lazy content and scroll anchoring move targets while they
+  // scroll. The engine declines once the target is in view, and a plan that
+  // does not end in a `probe` step is the last round.
+  async _humanizedScrollIntoView(options) {
+    for (let round = 0; round < kScrollIntoViewRounds; round++) {
+      let probe;
+      try {
+        probe = await this._contentPage.send('humanizeScrollProbe', {...options, from: this._lastTrackedPos});
+      } catch (e) {
+        return;
+      }
+      if (!probe.targetRect)
+        return;
+      const planned = humanizeSeam().plan('scroll', 'planIntoView',
+          {cursor: this._lastTrackedPos, viewport: probe.viewport, round}, probe);
+      if (!planned)
+        return;
+      const firstWheel = planned.plan.steps.find(step => step.kind === 'wheel');
+      await this._pageTarget.activateAndRun(async () => {
+        this._pageTarget.ensureContextMenuClosed();
+        // A wheel scrolls what is under the cursor, so the cursor goes there
+        // first, moved by the engine for moves the browser originates.
+        if (firstWheel)
+          await this._moveCursorForScroll(firstWheel.x, firstWheel.y);
+        await this._playWheelPlan(planned, 'Page.scrollIntoViewIfNeeded', 0);
+      }, { muteNotificationsPopup: true });
+      if (planned.plan.steps.at(-1)?.kind !== 'probe')
+        return;
+    }
+  }
+
+  // Inside activateAndRun. The mouse:internal engine plans the move; with a
+  // raw mouse it is a single mousemove.
+  async _moveCursorForScroll(x, y) {
+    const from = this._lastTrackedPos;
+    if (Math.round(x) === Math.round(from.x) && Math.round(y) === Math.round(from.y))
+      return;
+    const win = this._pageTarget._window;
+    if (win.windowUtils.flushApzRepaints())
+      await helper.awaitTopic('apz-repaints-flushed');
+    const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {button: 0, clickCount: 0, modifiers: 0, buttons: 0});
+    const watcher = new EventWatcher(this._pageEventSink, ['mousemove'], this._pendingEventWatchers);
+    const planned = Number.isFinite(from.x) && humanizeSeam().plan('mouse:internal', 'planMove', {
+      cursor: from,
+      viewport: {width: dispatch.boundingBox.width, height: dispatch.boundingBox.height},
+    }, {x, y});
+    if (planned) {
+      await dispatch.sendTrajectoryAcked(watcher, 'mousemove', planned.plan,
+          (plan, dispatchStep) => this._playHumanized(planned, 'Page.scrollIntoViewIfNeeded', dispatchStep));
+    } else {
+      await dispatch.sendAcked(watcher, 'mousemove', x, y);
+    }
+    await watcher.dispose();
+    this._lastTrackedPos = { x, y };
+    this._lastMousePosition = { x, y };
+  }
+
+  // Inside activateAndRun: play a scroll engine's plan. Wheel steps are
+  // dispatched; a `probe` step only marks when the plan is done.
+  async _playWheelPlan(planned, command, modifiers) {
+    const win = this._pageTarget._window;
+    if (win.windowUtils.flushApzRepaints())
+      await helper.awaitTopic('apz-repaints-flushed');
+    await this._playHumanized(planned, command, step => {
+      if (step.kind !== 'wheel')
+        return;
+      // Camoufox: measure at each dispatch, after any await, like
+      // Page.dispatchMouseEvent does.
+      MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers}).sendWheel(step.x, step.y, {
+        deltaX: step.dx,
+        deltaY: step.dy,
+        deltaZ: step.dz,
+        deltaMode: step.mode,
+        lineOrPageDeltaX: step.ticks?.x ?? 0,
+        lineOrPageDeltaY: step.ticks?.y ?? 0,
+        nativeNotches: Boolean(step.ticks),
+      });
+    });
   }
 
   async ['Page.setInitScripts']({ scripts }) {
@@ -723,36 +815,23 @@ export class PageHandler {
 
       // 1. Scroll element to the desired location first; the coordinates are relative to the element.
       this._pageTarget._linkedBrowser.scrollRectIntoViewIfNeeded(x, y, 0, 0);
-      // 2. Get element's bounding box in the browser after the scroll is completed.
-      const win = this._pageTarget._window;
-      // 3. Make sure compositor is flushed after scrolling.
-      if (win.windowUtils.flushApzRepaints())
-        await helper.awaitTopic('apz-repaints-flushed');
-      // Camoufox: measure at each dispatch, after any await, like
-      // Page.dispatchMouseEvent does. Same conversion as a mouse event: a wheel
-      // at relative y == 0 would otherwise land on the chrome/content boundary
-      // and scroll the tab strip.
-      const dispatchFor = () => MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers});
-
       // Camoufox: a scroll engine (input/HumanizeSeam.js; `notches` by
       // default with humanize on) turns one wheel call into the events a
       // physical wheel produces.
       const planned = humanizeSeam().plan('scroll', 'planWheel', {}, {x, y}, {deltaX, deltaY, deltaZ});
       if (planned) {
-        await this._playHumanized(planned, 'Page.dispatchWheelEvent', step => {
-          dispatchFor().sendWheel(step.x, step.y, {
-            deltaX: step.dx,
-            deltaY: step.dy,
-            deltaZ: step.dz,
-            deltaMode: step.mode,
-            lineOrPageDeltaX: step.ticks?.x ?? 0,
-            lineOrPageDeltaY: step.ticks?.y ?? 0,
-            nativeNotches: Boolean(step.ticks),
-          });
-        });
+        await this._playWheelPlan(planned, 'Page.dispatchWheelEvent', modifiers);
         return;
       }
-      dispatchFor().sendWheel(x, y, {
+      // 2. Get element's bounding box in the browser after the scroll is completed.
+      const win = this._pageTarget._window;
+      // 3. Make sure compositor is flushed after scrolling.
+      if (win.windowUtils.flushApzRepaints())
+        await helper.awaitTopic('apz-repaints-flushed');
+      // Camoufox: measured after the await, like Page.dispatchMouseEvent does.
+      // Same conversion as a mouse event: a wheel at relative y == 0 would
+      // otherwise land on the chrome/content boundary and scroll the tab strip.
+      MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers}).sendWheel(x, y, {
         deltaX,
         deltaY,
         deltaZ,
