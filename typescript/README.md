@@ -100,8 +100,9 @@ snake_case names: `os`, `config`, `block_images`, `block_webrtc`,
 `window`, `fingerprint`, `fingerprint_preset`, `ff_version`, `headless`,
 `main_world_eval`, `allow_addon_new_tab`, `executable_path`, `browser`,
 `firefox_user_prefs`, `proxy`, `enable_cache`, `args`, `env`,
-`i_know_what_im_doing`, `debug`, `virtual_display`, `pin_cpu_cores`. Anything else is passed
-straight through to Playwright.
+`i_know_what_im_doing`, `debug`, `virtual_display`, `pin_cpu_cores`, `pro_key`. Anything else is passed
+straight through to Playwright. `pro_key` is the Camoufox Pro key for a Pro
+build ([docs/pro.md](../docs/pro.md)).
 
 The returned launch options use Playwright's camelCase keys
 (`executablePath`, `firefoxUserPrefs`) rather than Python's snake_case. As in
@@ -122,6 +123,8 @@ camoufox path                     # print the install directory
 camoufox version                  # version / storage info
 camoufox test [url]               # open the Playwright inspector
 camoufox server                   # launch a Playwright server
+camoufox login                    # sign in to Camoufox Pro on this machine
+camoufox logout                   # delete the stored Camoufox Pro key
 ```
 
 The commands and pickers match the Python CLI. The one exception is `gui`, a

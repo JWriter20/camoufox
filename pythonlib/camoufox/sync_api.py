@@ -10,6 +10,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
+from . import pro
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
@@ -127,6 +128,7 @@ def NewBrowser(
     from . import cpu_affinity
     from .utils import driver_pid, pinned_core_count
 
+    lease = pro.claim(from_options)
     pin_to = pinned_core_count(from_options)
     pid = driver_pid(playwright) if pin_to else None
     previous = cpu_affinity.pin(pid, pin_to) if pid else None
@@ -142,15 +144,22 @@ def NewBrowser(
                 **from_options,
             }
             context = playwright.firefox.launch_persistent_context(**from_options)
+            if lease:
+                pro.release_on_close(lease, context, 'close')
             return sync_attach_vd(context, virtual_display)
 
         # Browser
         browser = playwright.firefox.launch(**from_options)
+        if lease:
+            pro.release_on_close(lease, browser, 'disconnected')
         if no_viewport_default:
             attach_no_viewport_default(browser)
         attach_stock_media_defaults(browser)
         attach_desktop_only_warning(browser)
         return sync_attach_vd(browser, virtual_display)
+    except Exception as error:
+        pro.launch_failed(lease, error)
+        raise
     finally:
         if pid:
             cpu_affinity.restore(pid, previous)

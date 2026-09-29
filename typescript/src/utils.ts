@@ -71,6 +71,7 @@ import {
 	resolvedPlaywrightVersionStr,
 	Version,
 } from "./pkgman.js";
+import * as pro from "./pro.js";
 import {
 	formatPyFloatRepr,
 	isPyError,
@@ -1309,6 +1310,12 @@ export interface LaunchOptions {
 	/** Pin the browser to navigator.hardwareConcurrency cores (Linux/Windows).
 	 * OFF by default -- it costs real CPU and serializes concurrent launches. */
 	pin_cpu_cores?: boolean;
+	/** Camoufox Pro key (cfp_live_...) for a Pro build. Defaults to
+	 * CAMOUFOX_PRO_KEY, then the key `camoufox login` stored. A Pro build is
+	 * launched with a lease minted with it (see docs/pro.md); the lease is
+	 * released when the browser closes, or at exit when these options are
+	 * launched without NewBrowser/Camoufox. */
+	pro_key?: string;
 	/** Additional Firefox launch options, passed straight through to Playwright. */
 	[key: string]: any;
 }
@@ -1354,6 +1361,7 @@ export async function launchOptions({
 	debug,
 	virtual_display,
 	pin_cpu_cores,
+	pro_key,
 	...passthrough
 }: LaunchOptions = {}): Promise<Record<string, any>> {
 	utilsDeps.ensureBrowserProfileDir(env);
@@ -1920,6 +1928,17 @@ export async function launchOptions({
 		resolvedExecutable = utilsDeps.launchPath(browserPath);
 	} else {
 		resolvedExecutable = utilsDeps.launchPath();
+	}
+
+	// A Pro build does not start without a lease. The caller's own lease file,
+	// if they hold one, wins, as every other variable in the environment does.
+	const proBuild = pro.readBuild(
+		settingsFile("pro-build.json", resolvedExecutable),
+	);
+	if (proBuild && !(pro.LEASE_FILE_ENV in envVars)) {
+		envVars[pro.LEASE_FILE_ENV] = (
+			await pro.acquire(proBuild, targetOs, pro_key)
+		).path;
 	}
 
 	const result: Record<string, any> = {

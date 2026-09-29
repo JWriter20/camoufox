@@ -9,6 +9,9 @@ A build that compiles in extra features declares them in these files. The
 launchers then configure it without knowing anything about that build, and
 every other build is unaffected.
 
+A Camoufox Pro build also ships `pro-build.json` there, which makes the
+launchers start it with a lease: see [pro.md](pro.md).
+
 ## `properties.json`: the config keys the build reads
 
 Every `CAMOU_CONFIG` key the build reads, with its type. A key that is not

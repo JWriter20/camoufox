@@ -64,6 +64,22 @@ export function userCacheDir(appName: string): string {
 	return path.join(base, appName);
 }
 
+/**
+ * platformdirs' user_config_dir(appName), so both launchers read one stored
+ * Camoufox Pro key.
+ */
+export function userConfigDir(appName: string): string {
+	if (OS_NAME === "win") {
+		return path.dirname(userCacheDir(appName));
+	}
+	if (OS_NAME === "mac") {
+		return path.join(os.homedir(), "Library", "Application Support", appName);
+	}
+	const xdg = process.env.XDG_CONFIG_HOME ?? "";
+	const base = xdg.trim() ? xdg : path.join(os.homedir(), ".config");
+	return path.join(base, appName);
+}
+
 export const INSTALL_DIR: string = userCacheDir("camoufox");
 
 /**

@@ -23,7 +23,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
 )
 from .fingerprints import Screen, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
-from . import coherence
+from . import coherence, pro
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
 from .locales import handle_locales
@@ -940,6 +940,7 @@ def launch_options(
     debug: Optional[bool] = None,
     virtual_display: Optional[str] = None,
     pin_cpu_cores: Optional[bool] = None,
+    pro_key: Optional[str] = None,
     **launch_options: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
@@ -1038,6 +1039,12 @@ def launch_options(
             told. OFF by default -- it costs real CPU and serializes concurrent
             launches. Without it the host's own (snapped) count is reported,
             which is equally coherent, just less diverse.
+        pro_key (Optional[str]):
+            Camoufox Pro key (cfp_live_...) for a Pro build. Defaults to
+            CAMOUFOX_PRO_KEY, then the key `camoufox login` stored. A Pro build
+            is launched with a lease minted with it (see docs/pro.md); the lease
+            is released when the browser closes, or at exit when these options
+            are launched without NewBrowser/Camoufox.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
             The pair must be one fpgen has recorded from Firefox on `os`
@@ -1626,6 +1633,12 @@ def launch_options(
         executable_path = launch_path(browser_path)
     else:
         executable_path = launch_path()
+
+    # A Pro build does not start without a lease. The caller's own lease file,
+    # if they hold one, wins, as every other variable in the environment does.
+    pro_build = pro.read_build(_settings_file("pro-build.json", Path(executable_path)))
+    if pro_build and pro.LEASE_FILE_ENV not in env_vars:
+        env_vars[pro.LEASE_FILE_ENV] = str(pro.acquire(pro_build, target_os, pro_key).path)
 
     result = {
         "executable_path": executable_path,

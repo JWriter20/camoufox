@@ -18,6 +18,7 @@ import * as cpuAffinity from "./cpu_affinity.js";
 import { generateContextFingerprint } from "./fingerprints.js";
 import { ensureModel } from "./fpgen/index.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
+import { claim, type Lease, launchFailed, releaseOnClose } from "./pro.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
@@ -98,6 +99,7 @@ export async function NewBrowser(
 	}
 
 	let fromOptions = from_options;
+	let lease: Lease | null = null;
 	try {
 		if (!fromOptions || !Object.keys(fromOptions).length) {
 			// Opt-in (2026-09-17). Pinning keeps the identity's core count by
@@ -111,6 +113,7 @@ export async function NewBrowser(
 				debug,
 			});
 		}
+		lease = claim(fromOptions);
 	} catch (error) {
 		// A failed launch must not leave the Xvfb process behind.
 		virtualDisplay?.kill();
@@ -132,6 +135,7 @@ export async function NewBrowser(
 			Boolean(persistent_context),
 			noViewportDefault,
 			virtualDisplay,
+			lease,
 		);
 	try {
 		if (!pinTo) {
@@ -150,6 +154,7 @@ export async function NewBrowser(
 		});
 	} catch (error) {
 		virtualDisplay?.kill();
+		await launchFailed(lease, error);
 		throw error;
 	}
 }
@@ -160,6 +165,7 @@ async function launchWith(
 	persistentContext: boolean,
 	noViewportDefault: boolean,
 	virtualDisplay: VirtualDisplay | null,
+	lease: Lease | null,
 ): Promise<Browser | BrowserContext> {
 	// Persistent context. Python passes user_data_dir inside the options; the
 	// JS API takes it positionally. A user_data_dir alone also selects it.
@@ -185,11 +191,13 @@ async function launchWith(
 			userDataDir ?? "",
 			options,
 		);
+		if (lease) releaseOnClose(lease, context, "close");
 		return attachVirtualDisplay(context, virtualDisplay);
 	}
 
 	// Browser
 	const browser = await playwright.launch(fromOptions);
+	if (lease) releaseOnClose(lease, browser, "disconnected");
 	if (noViewportDefault) {
 		attachNoViewportDefault(browser);
 	}

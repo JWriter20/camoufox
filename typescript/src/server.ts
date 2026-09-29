@@ -10,6 +10,7 @@
  */
 import { type BrowserServer, firefox } from "playwright-core";
 import { withUnpinnedLaunch } from "./cpu_affinity.js";
+import { claim, type Lease, launchFailed, releaseOnClose } from "./pro.js";
 import { camelCase } from "./sync_api.js";
 import { type LaunchOptions, launchOptions } from "./utils.js";
 import { VirtualDisplay } from "./virtdisplay.js";
@@ -72,13 +73,16 @@ export async function launchServer({
 		headlessBool = headless;
 	}
 
+	let lease: Lease | null = null;
 	try {
 		const config = await launchOptions({ ...options, headless: headlessBool });
+		lease = claim(config);
 		// The server's browser is spawned from this process too, so it must not
 		// start inside another launch's CPU pin.
 		const server = await withUnpinnedLaunch(() =>
 			firefox.launchServer(toCamelCaseDict(config)),
 		);
+		if (lease) releaseOnClose(lease, server, "close");
 
 		if (virtualDisplay) {
 			// BrowserServer has no "disconnected" event; "close" fires on shutdown.
@@ -89,6 +93,7 @@ export async function launchServer({
 		return server;
 	} catch (error) {
 		virtualDisplay?.kill();
+		await launchFailed(lease, error);
 		throw error;
 	}
 }

@@ -192,3 +192,87 @@ export class ProfileDirectoryError extends Error {
 		this.name = "ProfileDirectoryError";
 	}
 }
+
+export interface ProErrorFields {
+	code?: string | null;
+	status?: number | null;
+	resolution_url?: string | null;
+	retry_after?: number | null;
+	details?: Record<string, any> | null;
+}
+
+/**
+ * Raised when Camoufox Pro cannot start a session. `code` is the API's stable
+ * error code, `message` its explanation, and `resolution_url` the page that
+ * fixes it, when there is one.
+ */
+export class ProError extends Error {
+	readonly code: string | null;
+	readonly status: number | null;
+	readonly resolution_url: string | null;
+	readonly retry_after: number | null;
+	readonly details: Record<string, any>;
+	readonly detail: string;
+
+	constructor(message: string, fields: ProErrorFields = {}) {
+		super(
+			fields.resolution_url ? `${message} ${fields.resolution_url}` : message,
+		);
+		this.name = new.target.name;
+		this.detail = message;
+		this.code = fields.code ?? null;
+		this.status = fields.status ?? null;
+		this.resolution_url = fields.resolution_url ?? null;
+		this.retry_after = fields.retry_after ?? null;
+		this.details = fields.details ?? {};
+	}
+}
+
+/** No Camoufox Pro key, or the API does not accept it. */
+export class NotSignedIn extends ProError {}
+/** The API rejected the lease request itself. */
+export class InvalidRequest extends ProError {}
+/** The account has no active Camoufox Pro subscription. */
+export class SubscriptionRequired extends ProError {}
+/** A metered allowance is used up and usage-based billing is off. */
+export class AllowanceExhausted extends ProError {}
+/** The account is suspended. */
+export class AccountSuspended extends ProError {}
+/** The browser is not a published Camoufox Pro release, or was revoked. */
+export class BuildNotAllowlisted extends ProError {}
+/** Every concurrent browser the plan includes is already running. */
+export class LeaseLimitReached extends ProError {}
+/** This machine cannot present the requested identity. */
+export class CapabilityMismatch extends ProError {}
+/** The API still refuses for rate after the retries. */
+export class RateLimited extends ProError {}
+/** The Camoufox Pro API cannot be reached, or fails, after the retries. */
+export class ProUnavailable extends ProError {}
+
+/** This machine's clock is so far from the API's that a fresh lease would
+ * look expired to the browser. */
+export class ProClockSkew extends ProError {
+	readonly skew: number;
+
+	constructor(skew: number) {
+		const rounded = Math.round(skew);
+		super(
+			`This machine's clock is ${rounded >= 0 ? "+" : ""}${rounded} s off the Camoufox Pro API's. ` +
+				"Lease expiry is evaluated on this machine's clock; fix NTP.",
+			{ code: "clock_skew" },
+		);
+		this.skew = skew;
+	}
+}
+
+/** A Camoufox Pro browser refused the lease it was started with. */
+export class LeaseRefused extends ProError {
+	readonly reason: string;
+
+	constructor(reason: string) {
+		super(`The browser refused its Camoufox Pro lease (${reason}).`, {
+			code: "lease_refused",
+		});
+		this.reason = reason;
+	}
+}

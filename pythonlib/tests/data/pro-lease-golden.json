@@ -1,0 +1,32 @@
+{
+  "lease_files": [
+    {
+      "token": "cfl1_AQABkfOifB57UpoQP55tWhwiAAAAAAAAACoAAAAAAAAAAAAAAAAAAAAAnNkZsyN4_keKjji_CrNoDCa5_ebdI_ggwc_iSMP39EkAAAAAaqr_kwAAAABqqwabAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "os": "windows",
+      "fidelity": "layout",
+      "written_at": 1789591444,
+      "file": "{\"v\":1,\"lease_id\":\"0191f3a2-7c1e-7b52-9a10-3f9e6d5a1c22\",\"account_id\":42,\"profile_id\":null,\"build_hash\":\"9cd919b32378fe478a8e38bf0ab3680c26b9fde6dd23f820c1cfe248c3f7f449\",\"issued_at\":1789591443,\"expires_at\":1789593243,\"token\":\"cfl1_AQABkfOifB57UpoQP55tWhwiAAAAAAAAACoAAAAAAAAAAAAAAAAAAAAAnNkZsyN4_keKjji_CrNoDCa5_ebdI_ggwc_iSMP39EkAAAAAaqr_kwAAAABqqwabAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"os\":\"windows\",\"fidelity\":\"layout\",\"paths\":{\"identity_bundle\":null,\"font_metrics\":null,\"scene_cache_dir\":null,\"gpu_bundle\":null},\"written_at\":1789591444}"
+    },
+    {
+      "token": "cfl1_AQABkfOifB57UpoQP55tWhwjAAAAAAAAACoBkeDEEap9PoxEDyp7nB1VnNkZsyN4_keKjji_CrNoDCa5_ebdI_ggwc_iSMP39EkAAAAAaqr_kwAAAABqqwabAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "os": "linux",
+      "fidelity": "native",
+      "written_at": 1789591444,
+      "file": "{\"v\":1,\"lease_id\":\"0191f3a2-7c1e-7b52-9a10-3f9e6d5a1c23\",\"account_id\":42,\"profile_id\":\"0191e0c4-11aa-7d3e-8c44-0f2a7b9c1d55\",\"build_hash\":\"9cd919b32378fe478a8e38bf0ab3680c26b9fde6dd23f820c1cfe248c3f7f449\",\"issued_at\":1789591443,\"expires_at\":1789593243,\"token\":\"cfl1_AQABkfOifB57UpoQP55tWhwjAAAAAAAAACoBkeDEEap9PoxEDyp7nB1VnNkZsyN4_keKjji_CrNoDCa5_ebdI_ggwc_iSMP39EkAAAAAaqr_kwAAAABqqwabAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"os\":\"linux\",\"fidelity\":\"native\",\"paths\":{\"identity_bundle\":null,\"font_metrics\":null,\"scene_cache_dir\":null,\"gpu_bundle\":null},\"written_at\":1789591444}"
+    }
+  ],
+  "host_fingerprints": [
+    {
+      "host_id": "8f0e2c4b6a1d3f5e7c9b0a2d4f6e8c1a",
+      "os": "linux",
+      "username": "runner",
+      "fingerprint": "f3f3bece070cce19d1b46ec67f0af5fe9876b20656a421ed4e58cf70116185e2"
+    },
+    {
+      "host_id": "0123456789abcdef0123456789abcdef",
+      "os": "windows",
+      "username": "Zoë",
+      "fingerprint": "00a26d5fd8dae4cc81ba16ec5608377876586ac965abde9c5f01a7c7e9d0a072"
+    }
+  ]
+}

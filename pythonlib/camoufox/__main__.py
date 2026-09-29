@@ -816,6 +816,44 @@ def server():
     launch_server()
 
 
+@cli.command(name="login")
+def login():
+    """
+    Sign in to Camoufox Pro on this machine
+    """
+    from .exceptions import ProError
+    from .pro import login as device_login
+
+    try:
+        signed_in = device_login(echo=click.echo)
+    except ProError as error:
+        rprint(str(error), fg="red")
+        raise SystemExit(1) from None
+    rprint(
+        f"Signed in to {signed_in['account']['name']} as {signed_in['user']['github_login']}. "
+        f"The key is stored in {signed_in['path']}.",
+        fg="green",
+    )
+
+
+@cli.command(name="logout")
+def logout():
+    """
+    Delete the Camoufox Pro key stored on this machine
+    """
+    from .pro import forget_key
+
+    forgotten = forget_key()
+    if forgotten is None:
+        rprint("No Camoufox Pro key is stored on this machine.", fg="yellow")
+        return
+    rprint(
+        f"Deleted {forgotten} from this machine. It stays valid until you revoke it "
+        "in the Camoufox Pro dashboard.",
+        fg="green",
+    )
+
+
 @cli.command(name="gui")
 @click.option("--debug", is_flag=True, help="Enable debug options in the GUI.")
 def gui(debug):
