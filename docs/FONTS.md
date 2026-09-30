@@ -263,3 +263,4 @@ and no basename collisions within a package's group set.
   verified at the fontconfig layer, which is the gate on Linux packages. On
   macOS and Windows hosts the gate is the allowlist patch instead, and that has
   not been exercised against the flattened group layout.
+
