@@ -1,4 +1,5 @@
 from .addons import DefaultAddons
+# scope demo: a pythonlib-only change
 from .async_api import AsyncCamoufox, AsyncNewBrowser, AsyncNewContext
 from .sync_api import Camoufox, NewBrowser, NewContext
 from .utils import launch_options
