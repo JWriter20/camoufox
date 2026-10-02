@@ -62,12 +62,20 @@ in but stays off until a pref or an environment variable turns it on:
   the identity has that key.
 - `config` sets config keys (which must be declared in `properties.json`) that
   the caller did not set.
+- `ldPreload` lists libraries, relative to the directory holding
+  `launch.json`, to append to `LD_PRELOAD` when they exist. Appended, never
+  replacing a preload the caller already has; a library already listed is not
+  added twice.
+- `envCacheDirs` sets each variable to a per-user cache directory named
+  `camoufox-<name>` (platformdirs' `user_cache_dir`), created on demand. Use it
+  for state that must survive between launches but must not live in the build,
+  which may be read-only, or in the install directory, which an update replaces.
 
 - `warn` is a message emitted as a `RuntimeWarning` when the rule applies. Use
   it for a pairing the build cannot support, so the caller hears about it
   instead of getting a quietly degraded browser.
 - `exclusive: true` makes the rule own the variables it names in `env`,
-  `envPaths`, `envPathsOptional` and `envFromConfig`. Where the rule does not apply, those
+  `envPaths`, `envPathsOptional`, `envFromConfig` and `envCacheDirs`. Where the rule does not apply, those
   variables are removed from the launch environment, the caller's included,
   unless another rule that does apply sets them.
 
