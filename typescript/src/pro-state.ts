@@ -1177,3 +1177,246 @@ export async function restore(
 		throw error;
 	}
 }
+
+// ── cfp-dir/1: state the API serves in the clear ────────────────────────────
+//
+// A profile whose state is sealed under the warm pool's key never has that key
+// here: the API restores it and sends the directory over TLS, and takes the
+// directory back the same way. The format is the server's cfp.state.archive:
+//
+//   gzip("cfp-dir/1\n" { be32(len(header)) header_json [size bytes] } be32(0))
+//
+// with headers {"path", "type": "file"|"dir", "size", "mode", "mtime"}.
+
+export const ARCHIVE_MAGIC = Buffer.from("cfp-dir/1\n");
+const ARCHIVE_HEADER_CAP = 64 << 10;
+
+export class ArchiveError extends Error {
+	name = "ArchiveError";
+}
+
+function archiveHeader(header: Record<string, unknown>): Buffer {
+	const body = Buffer.from(JSON.stringify(header));
+	const length = Buffer.alloc(4);
+	length.writeUInt32BE(body.length);
+	return Buffer.concat([length, body]);
+}
+
+/** Write what `snapshot` captured as cfp-dir/1 to the file `out`. Resolves to the raw bytes written. */
+export async function writeArchive(
+	out: string,
+	snapshot: Snapshot,
+): Promise<number> {
+	const { pipeline } = await import("node:stream/promises");
+	const { Readable } = await import("node:stream");
+	let total = 0;
+	async function* entries(): AsyncGenerator<Buffer> {
+		yield ARCHIVE_MAGIC;
+		for (const dir of snapshot.dirs) {
+			yield archiveHeader({
+				path: dir,
+				type: "dir",
+				size: 0,
+				mode: 0o700,
+				mtime: 0,
+			});
+		}
+		for (const file of snapshot.files) {
+			yield archiveHeader({ ...file, type: "file" });
+			let copied = 0;
+			if (file.size > 0) {
+				for await (const block of fs.createReadStream(
+					path.join(snapshot.root, file.path),
+					{ start: 0, end: file.size - 1 },
+				)) {
+					copied += block.length;
+					yield block as Buffer;
+				}
+			}
+			if (copied !== file.size) {
+				throw new ArchiveError(`${file.path} changed size after capture`);
+			}
+			total += copied;
+		}
+		yield Buffer.alloc(4);
+	}
+	await pipeline(
+		Readable.from(entries()),
+		zlib.createGzip({ level: 6 }),
+		fs.createWriteStream(out, { mode: 0o600 }),
+	);
+	return total;
+}
+
+/**
+ * Write the cfp-dir/1 file `source` out at `target`, which must not exist.
+ * Nothing lands there unless the whole stream reads cleanly, and no entry can
+ * write outside it. Resolves to the file paths.
+ */
+export async function readArchive(
+	source: string,
+	target: string,
+	cap: number = HARD_CAP,
+): Promise<string[]> {
+	if (fs.existsSync(target)) {
+		throw new Error(
+			`${target} exists; a restore never replaces a profile directory`,
+		);
+	}
+	const staging = path.join(
+		path.dirname(target),
+		`.${path.basename(target)}.partial`,
+	);
+	fs.mkdirSync(staging, { mode: 0o700 });
+	const written: string[] = [];
+	let openFd: number | null = null;
+	try {
+		let buffer = Buffer.alloc(0);
+		let state: "magic" | "length" | "header" | "body" | "end" = "magic";
+		let need = ARCHIVE_MAGIC.length;
+		let total = 0;
+		let current: {
+			path: string;
+			size: number;
+			mode: number;
+			mtime: number;
+			fd: number;
+			left: number;
+		} | null = null;
+		const finishFile = () => {
+			if (!current) return;
+			fs.closeSync(current.fd);
+			openFd = null;
+			const destination = path.join(staging, current.path);
+			fs.chmodSync(destination, (current.mode & 0o777) | 0o600);
+			fs.utimesSync(destination, current.mtime, current.mtime);
+			written.push(current.path);
+			current = null;
+		};
+		const natural = (value: unknown, name: string, where: string): number => {
+			if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+				throw new ArchiveError(`${where}: ${name} is a non-negative integer`);
+			}
+			return value;
+		};
+		const gunzip = fs.createReadStream(source).pipe(zlib.createGunzip());
+		for await (const block of gunzip) {
+			buffer = Buffer.concat([buffer, block as Buffer]);
+			for (;;) {
+				if (state === "body" && current) {
+					const open = current as NonNullable<typeof current>;
+					const take = Math.min(open.left, buffer.length);
+					if (take > 0) {
+						fs.writeSync(open.fd, buffer.subarray(0, take));
+						buffer = buffer.subarray(take);
+						open.left -= take;
+					}
+					if (open.left > 0) break;
+					finishFile();
+					state = "length";
+					need = 4;
+					continue;
+				}
+				if (state === "end") {
+					if (buffer.length) {
+						throw new ArchiveError("bytes follow the end of the archive");
+					}
+					break;
+				}
+				if (buffer.length < need) break;
+				const chunk = buffer.subarray(0, need);
+				buffer = buffer.subarray(need);
+				if (state === "magic") {
+					if (!chunk.equals(ARCHIVE_MAGIC)) {
+						throw new ArchiveError("not a cfp-dir/1 archive");
+					}
+					state = "length";
+					need = 4;
+				} else if (state === "length") {
+					const length = chunk.readUInt32BE(0);
+					if (length === 0) {
+						state = "end";
+						need = 0;
+					} else {
+						if (length > ARCHIVE_HEADER_CAP) {
+							throw new ArchiveError("an entry header is too large");
+						}
+						state = "header";
+						need = length;
+					}
+				} else if (state === "header") {
+					let header: any;
+					try {
+						header = JSON.parse(chunk.toString("utf-8"));
+					} catch {
+						throw new ArchiveError("an entry header is not JSON");
+					}
+					const relpath = header?.path;
+					if (typeof relpath !== "string" || !relpath) {
+						throw new ArchiveError("an entry has no path");
+					}
+					try {
+						checkRelpath(relpath);
+					} catch (error) {
+						throw new ArchiveError((error as Error).message);
+					}
+					const size = natural(header.size, "size", relpath);
+					const mode = natural(header.mode ?? 0o600, "mode", relpath);
+					const mtime = natural(header.mtime ?? 0, "mtime", relpath);
+					const destination = path.join(staging, relpath);
+					if (header.type === "dir") {
+						fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
+						state = "length";
+						need = 4;
+						continue;
+					}
+					if (header.type !== "file") {
+						throw new ArchiveError(
+							`${relpath}: only files and directories are allowed`,
+						);
+					}
+					total += size;
+					if (total > cap) {
+						throw new ArchiveError(`the archive holds more than ${cap} bytes`);
+					}
+					fs.mkdirSync(path.dirname(destination), {
+						recursive: true,
+						mode: 0o700,
+					});
+					openFd = fs.openSync(destination, "wx", 0o600);
+					current = {
+						path: relpath,
+						size,
+						mode,
+						mtime,
+						fd: openFd,
+						left: size,
+					};
+					state = "body";
+				}
+			}
+		}
+		if ((state as string) !== "end") {
+			throw new ArchiveError("the archive ends early");
+		}
+		fs.renameSync(staging, target);
+	} catch (error) {
+		if (openFd !== null) fs.closeSync(openFd);
+		fs.rmSync(staging, { recursive: true, force: true });
+		if (error instanceof ArchiveError) throw error;
+		const code = (error as NodeJS.ErrnoException).code;
+		if (
+			code === "Z_DATA_ERROR" ||
+			code === "Z_BUF_ERROR" ||
+			code === "EEXIST" ||
+			code === "ENOTDIR" ||
+			code === "EISDIR"
+		) {
+			throw new ArchiveError(
+				`the archive is malformed: ${(error as Error).message}`,
+			);
+		}
+		throw error;
+	}
+	return written;
+}

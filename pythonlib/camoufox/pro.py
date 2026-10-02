@@ -67,6 +67,12 @@ KEY_PREFIX = "cfp_live_"
 # thresholds (the last is the lease grace, past which a fresh token already
 # looks expired to the browser).
 MINT_RETRY_S = (1, 2, 4)
+# A profile another session holds: how long a mint waits for it (its commit
+# releases the lease), polling at most this often. CAMOUFOX_PRO_PROFILE_WAIT
+# overrides the wait, in seconds; 0 refuses at once.
+PROFILE_WAIT_S = 120.0
+PROFILE_POLL_S = 5.0
+PROFILE_WAIT_ENV = "CAMOUFOX_PRO_PROFILE_WAIT"
 HEARTBEAT_BACKOFF_S = (5, 10, 20, 40, 60)
 HEARTBEAT_TIMEOUT_S = 10
 RELEASE_TIMEOUT_S = 5
@@ -274,6 +280,16 @@ def _transient(error: ProError) -> bool:
     return isinstance(error, (ProUnavailable, RateLimited))
 
 
+def profile_wait_s() -> float:
+    raw = os.environ.get(PROFILE_WAIT_ENV, "").strip()
+    if not raw:
+        return PROFILE_WAIT_S
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        raise ValueError(f"{PROFILE_WAIT_ENV} must be a number of seconds, not {raw!r}") from None
+
+
 # ── sign-in: RFC 8628's device flow ──────────────────────────────────────────
 
 
@@ -458,7 +474,11 @@ class Lease:
         self.render_path: Optional[Path] = None
         # Run in place of a plain release when the browser closes.
         self.on_close: Optional[Callable[["Lease"], None]] = None
-        # Directories that go with the lease: deleted when it ends.
+        # Run when the process exits with the browser never closed, before the release.
+        self.on_abort: Optional[Callable[["Lease"], None]] = None
+        # Sent with each heartbeat once set: whether the profile has state not yet committed.
+        self.state_dirty: Optional[bool] = None
+        # Directories and files that go with the lease: deleted when it ends.
         self.scratch: List[Path] = []
         self._close_lock = threading.Lock()
         self._closed = False
@@ -480,6 +500,38 @@ class Lease:
         """Call the API with this lease's key."""
         return call(method, route, payload, key=self._key)
 
+    def send(
+        self,
+        method: str,
+        route: str,
+        params: Dict[str, str],
+        *,
+        data: Any = None,
+        content_type: Optional[str] = None,
+        stream: bool = False,
+        timeout: float = 600,
+    ) -> requests.Response:
+        """
+        An API call whose body or answer is not JSON (a profile's served state),
+        with this lease's key. Refusals raise as `call` raises them.
+        """
+        headers = {"User-Agent": client_name(), "Authorization": f"Bearer {self._key}"}
+        if content_type:
+            headers["Content-Type"] = content_type
+        try:
+            response = requests.request(
+                method, f"{api_base()}{route}", params=params, data=data, headers=headers, stream=stream, timeout=timeout
+            )
+        except requests.RequestException as error:
+            raise ProUnavailable(f"The Camoufox Pro API at {api_base()} could not be reached: {error}") from None
+        if response.status_code >= 400:
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            raise _error(response.status_code, body if isinstance(body, dict) else {}, response.headers.get("Retry-After"))
+        return response
+
     def _mint(self) -> None:
         body = {
             **self.request,
@@ -495,11 +547,25 @@ class Lease:
             # response gets the same lease back rather than a second one.
             "idempotency_key": uuid.uuid4().hex,
         }
-        for delay in (*MINT_RETRY_S, None):
+        retries = iter(MINT_RETRY_S)
+        waited, patience = 0.0, profile_wait_s()
+        while True:
             try:
                 lease = post("/api/v1/leases", body, key=self._key)
                 break
             except ProError as error:
+                if error.code == "lease_conflict":
+                    # Another session holds the profile, most often the last one
+                    # still committing its state: its commit releases the lease.
+                    pause = min(float(error.retry_after or PROFILE_POLL_S), PROFILE_POLL_S)
+                    if waited + pause > patience:
+                        raise
+                    if not waited:
+                        log.info("camoufox-pro: the profile is held by another session; waiting up to %.0f s", patience)
+                    time.sleep(pause)
+                    waited += pause
+                    continue
+                delay = next(retries, None)
                 if delay is None or not _transient(error):
                     raise
                 time.sleep(error.retry_after or delay)
@@ -553,7 +619,11 @@ class Lease:
             try:
                 answer = post(
                     f"/api/v1/leases/{self.lease_id}/heartbeat",
-                    {"seq": self._seq + 1, "host": {"fingerprint": self._host}},
+                    {
+                        "seq": self._seq + 1,
+                        "host": {"fingerprint": self._host},
+                        **({} if self.state_dirty is None else {"state_dirty": self.state_dirty}),
+                    },
                     key=self._key,
                     timeout=HEARTBEAT_TIMEOUT_S,
                 )
@@ -636,8 +706,11 @@ class Lease:
             for path in (self.path, self.render_path):
                 if path is not None:
                     path.unlink(missing_ok=True)
-            for directory in self.scratch:
-                shutil.rmtree(directory, ignore_errors=True)
+            for path in self.scratch:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
             return done
 
     def close(self) -> None:
@@ -665,6 +738,11 @@ _LIVE: Dict[str, Lease] = {}
 
 def _release_all() -> None:
     for lease in list(_LIVE.values()):
+        if lease.on_abort is not None:
+            try:
+                lease.on_abort(lease)
+            except Exception as error:  # an exit hook must not stop the others' releases
+                log.warning("camoufox-pro: keeping lease %s's state for the next launch failed: %s", lease.lease_id, error)
         lease.release("driver_shutdown")
 
 

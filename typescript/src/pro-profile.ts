@@ -1,9 +1,12 @@
 /**
  * Launching a Camoufox Pro profile: its identity bundle, and its browser
  * state restored before the launch and synced back when the browser closes.
- * The state is sealed with the account's content key, which never leaves the
- * account's machines. TypeScript twin of pythonlib/camoufox/pro_profile.py;
- * see docs/pro.md, "Profiles".
+ * A `warm_plan: none` profile's state is sealed with the account's content
+ * key, which never leaves the account's machines. A warmed profile's state is
+ * sealed with the warm pool's key, which never reaches this machine: the API
+ * restores it and serves the directory, and takes it back the same way.
+ * TypeScript twin of pythonlib/camoufox/pro_profile.py; see docs/pro.md,
+ * "Profiles".
  */
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
@@ -14,12 +17,15 @@ import { OS_NAME, userCacheDir, userConfigDir } from "./paths.js";
 import {
 	clientName,
 	type Lease,
+	LIVE,
 	proTiming,
 	sleepS,
+	transient,
 	writePrivate,
 } from "./pro.js";
 import {
 	AccountKeys,
+	ArchiveError,
 	type CapturedFile,
 	CHUNKING,
 	canonical,
@@ -28,18 +34,22 @@ import {
 	chunkIdText,
 	chunkLengths,
 	decodeManifest,
+	HARD_CAP,
 	manifestOf,
 	POLICY_VERSION,
+	readArchive,
 	restore,
 	StateIntegrityError,
 	StateTooLarge,
 	WORKERS,
+	writeArchive,
 } from "./pro-state.js";
 
 export const CONTENT_KEY_ENV = "CAMOUFOX_PRO_CONTENT_KEY";
 /** The most chunks one uploads call may list. */
 const UPLOAD_BATCH = 2000;
 const FF_PLACEHOLDER = "{FF}";
+const ARCHIVE_TYPE = "application/x-cfp-dir+gzip";
 
 // ── the content key ─────────────────────────────────────────────────────────
 
@@ -181,6 +191,48 @@ function profileHome(profileId: string): string {
 	return path.join(userCacheDir("camoufox"), "pro", "profiles", profileId);
 }
 
+/**
+ * Each session directory and kept capture has a mark under the profile's
+ * marks/ folder: the version it was restored from, which decides whether it
+ * can still be committed.
+ */
+function marker(dir: string): string {
+	return path.join(
+		path.dirname(path.dirname(dir)),
+		"marks",
+		`${path.basename(path.dirname(dir))}-${path.basename(dir)}.json`,
+	);
+}
+
+function mark(dir: string, baseVersion: number, served: boolean): void {
+	fs.mkdirSync(path.dirname(marker(dir)), { recursive: true, mode: 0o700 });
+	writePrivate(
+		marker(dir),
+		JSON.stringify({ base_version: baseVersion, served }),
+	);
+}
+
+function readMark(dir: string): { base_version: number } | null {
+	try {
+		const found = JSON.parse(fs.readFileSync(marker(dir), "utf-8"));
+		return Number.isInteger(found?.base_version) ? found : null;
+	} catch {
+		return null;
+	}
+}
+
+function move(dir: string, destination: string): void {
+	fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+	fs.renameSync(dir, destination);
+	if (fs.existsSync(marker(dir))) {
+		fs.mkdirSync(path.dirname(marker(destination)), {
+			recursive: true,
+			mode: 0o700,
+		});
+		fs.renameSync(marker(dir), marker(destination));
+	}
+}
+
 /** Move a capture that was not committed aside, where it is kept, and say so. */
 function keep(
 	dir: string,
@@ -193,8 +245,7 @@ function keep(
 		kind,
 		new Date().toISOString().replace(/[:.]/g, "-"),
 	);
-	fs.mkdirSync(path.dirname(kept), { recursive: true, mode: 0o700 });
-	fs.renameSync(dir, kept);
+	move(dir, kept);
 	console.warn(
 		`camoufox-pro: profile ${profileId}'s state was not synced (${why}); this session's state is kept at ${kept}`,
 	);
@@ -295,7 +346,11 @@ async function commitState(
 	baseVersion: number,
 	dir: string,
 	ffVersion: string,
-): Promise<void> {
+	{
+		release = true,
+		crashed = false,
+	}: { release?: boolean; crashed?: boolean } = {},
+): Promise<number> {
 	const snapshot = await capture(dir);
 	const sealedDir = `${dir}.sealed`;
 	lease.scratch.push(sealedDir);
@@ -401,7 +456,7 @@ async function commitState(
 		version,
 		base_version: baseVersion,
 		captured_at: new Date().toISOString(),
-		crashed: false,
+		crashed,
 		integrity: snapshot.suspectFiles.length ? "suspect" : "ok",
 		suspect_files: snapshot.suspectFiles,
 		ff_version: ffVersion,
@@ -426,7 +481,7 @@ async function commitState(
 		lease_id: lease.leaseId,
 		base_version: baseVersion,
 		version,
-		release: true,
+		release,
 		manifest: {
 			sha256: sha256(body).toString("hex"),
 			size: body.length,
@@ -454,6 +509,174 @@ async function commitState(
 		await upload(lost.map((id) => claims.get(id) as Claim));
 		await lease.api("PUT", route, commit);
 	}
+	return version;
+}
+
+// ── state the API serves ────────────────────────────────────────────────────
+
+/** Download a warmed profile's state as the API restored it, into `target`. Resolves to its version. */
+async function restoreServed(
+	lease: Lease,
+	section: Record<string, any>,
+	target: string,
+	ffVersion: string,
+): Promise<number> {
+	const response = await lease.send("GET", section.state.archive, {
+		lease_id: lease.leaseId,
+		ff_version: ffVersion,
+	});
+	const download = `${target}.cfpdir.gz`;
+	lease.scratch.push(download);
+	fs.writeFileSync(download, Buffer.from(await response.arrayBuffer()), {
+		mode: 0o600,
+	});
+	try {
+		await readArchive(download, target, HARD_CAP);
+	} catch (error) {
+		if (error instanceof ArchiveError) {
+			throw new StateIntegrityError(
+				`the served state is not a cfp-dir/1 archive: ${error.message}`,
+			);
+		}
+		throw error;
+	} finally {
+		fs.rmSync(download, { force: true });
+	}
+	return Number(
+		response.headers.get("x-cfp-state-version") ?? section.state.version,
+	);
+}
+
+/** Capture a warmed profile and send it to the API, which commits it as the next version. */
+async function commitServed(
+	lease: Lease,
+	section: Record<string, any>,
+	baseVersion: number,
+	dir: string,
+	ffVersion: string,
+	{
+		release = true,
+		crashed = false,
+	}: { release?: boolean; crashed?: boolean } = {},
+): Promise<number> {
+	const snapshot = await capture(dir);
+	const packed = `${dir}.cfpdir.gz`;
+	lease.scratch.push(packed);
+	await writeArchive(packed, snapshot);
+	const params = {
+		lease_id: lease.leaseId,
+		base_version: String(baseVersion),
+		ff_version: ffVersion,
+		release: release ? "1" : "0",
+		crashed: crashed ? "1" : "0",
+	};
+	for (const delay of [...proTiming.mintRetryS, null]) {
+		try {
+			const response = await lease.send("PUT", section.state.archive, params, {
+				body: fs.readFileSync(packed),
+				contentType: ARCHIVE_TYPE,
+			});
+			const answer = (await response.json()) as Record<string, any>;
+			fs.rmSync(packed, { force: true });
+			return Number(answer.version);
+		} catch (error) {
+			if (delay === null || !transient(error)) throw error;
+			await sleepS((error as ProError).retry_after || delay);
+		}
+	}
+	throw new Error("unreachable");
+}
+
+// ── a session that never closed ─────────────────────────────────────────────
+
+/**
+ * Commit the newest capture an earlier session left behind (a crash, or a
+ * commit that failed and was kept to retry) before anything is restored, so a
+ * launch never starts from older state than this machine holds. It is used
+ * only when it was restored from the version the API still has as its head;
+ * anything else is kept as a conflict, never merged. On success the capture
+ * becomes this session's directory, at `target`, and its version is returned.
+ */
+async function recover(
+	lease: Lease,
+	section: Record<string, any>,
+	keys: AccountKeys | null,
+	baseVersion: number,
+	target: string,
+	ffVersion: string,
+): Promise<number | null> {
+	const home = profileHome(section.id);
+	const live = new Set(
+		[...LIVE.values()].flatMap((held) => held.scratch.map(String)),
+	);
+	const candidates: { mtime: number; dir: string; base: number }[] = [];
+	for (const kind of ["pending", "sessions"]) {
+		const folder = path.join(home, kind);
+		if (!fs.existsSync(folder)) continue;
+		for (const name of fs.readdirSync(folder)) {
+			const dir = path.join(folder, name);
+			if (dir === target || name.startsWith(".")) continue;
+			if (!fs.statSync(dir).isDirectory()) continue;
+			if (kind === "sessions" && live.has(dir)) continue;
+			const found = readMark(dir);
+			if (found) {
+				candidates.push({
+					mtime: fs.statSync(dir).mtimeMs,
+					dir,
+					base: found.base_version,
+				});
+			}
+		}
+	}
+	if (!candidates.length) return null;
+	candidates.sort((a, b) => b.mtime - a.mtime);
+	for (const stale of candidates.slice(1)) {
+		keep(
+			stale.dir,
+			section.id,
+			"conflicts",
+			"a newer capture of this profile was left behind as well",
+		);
+	}
+	const { dir, base } = candidates[0];
+	if (base !== baseVersion) {
+		keep(
+			dir,
+			section.id,
+			"conflicts",
+			`it was restored from v${base} and the profile is at v${baseVersion} now`,
+		);
+		return null;
+	}
+	console.warn(
+		`camoufox-pro: profile ${section.key}: committing the state a session left behind at ${dir}`,
+	);
+	let version: number;
+	try {
+		version = keys
+			? await commitState(
+					lease,
+					section.id,
+					keys,
+					new Map(),
+					baseVersion,
+					dir,
+					ffVersion,
+					{ release: false, crashed: true },
+				)
+			: await commitServed(lease, section, baseVersion, dir, ffVersion, {
+					release: false,
+					crashed: true,
+				});
+	} catch (error) {
+		if (error instanceof ProError && CONFLICT.has(error.code ?? "")) {
+			keep(dir, section.id, "conflicts", error.message);
+			return null;
+		}
+		throw error;
+	}
+	move(dir, target);
+	return version;
 }
 
 /** The refusals after which a capture is kept as a conflict, never merged, and those after which it is kept to retry. */
@@ -483,37 +706,55 @@ export async function openProfile(
 	const home = profileHome(section.id);
 	fs.mkdirSync(path.join(home, "sessions"), { recursive: true, mode: 0o700 });
 	const userDataDir = path.join(home, "sessions", lease.leaseId);
-	lease.scratch.push(userDataDir);
-	if (section.key_class !== "account") {
+	lease.scratch.push(userDataDir, marker(userDataDir));
+	const served = section.state?.transport === "server";
+	if (section.key_class !== "account" && !served) {
 		console.warn(
 			`camoufox-pro: profile ${section.key} keeps its identity, but its browser state is not synced: ` +
-				`only a profile whose state is sealed with the account's own key is (this one is "${section.key_class}")`,
+				"this deployment does not serve warmed profiles' state",
 		);
 		fs.mkdirSync(userDataDir, { mode: 0o700 });
 		return { identity, userDataDir };
 	}
-	const keys = AccountKeys.derive(contentKey(lease.accountId), lease.accountId);
-	const known = await restoreState(
+	const keys = served
+		? null
+		: AccountKeys.derive(contentKey(lease.accountId), lease.accountId);
+	let baseVersion: number = section.state.version;
+	let known = new Map<string, Stored>();
+	const recovered = await recover(
 		lease,
 		section,
 		keys,
+		baseVersion,
 		userDataDir,
 		ffVersion,
 	);
-	const baseVersion: number = section.state.version;
+	if (recovered !== null) {
+		baseVersion = recovered;
+	} else if (keys === null) {
+		baseVersion = await restoreServed(lease, section, userDataDir, ffVersion);
+	} else {
+		known = await restoreState(lease, section, keys, userDataDir, ffVersion);
+	}
+	mark(userDataDir, baseVersion, served);
+	lease.stateDirty = true;
 	lease.onClose = async () => {
 		// The commit releases the lease, so a renewal racing it must not mint a new one.
 		lease.stopRenewing();
 		try {
-			await commitState(
-				lease,
-				section.id,
-				keys,
-				known,
-				baseVersion,
-				userDataDir,
-				ffVersion,
-			);
+			if (keys === null) {
+				await commitServed(lease, section, baseVersion, userDataDir, ffVersion);
+			} else {
+				await commitState(
+					lease,
+					section.id,
+					keys,
+					known,
+					baseVersion,
+					userDataDir,
+					ffVersion,
+				);
+			}
 		} catch (error) {
 			const code = error instanceof ProError ? (error.code ?? "") : "";
 			const kept =
@@ -532,6 +773,13 @@ export async function openProfile(
 			throw error;
 		}
 		await lease.forget();
+	};
+	// The process is exiting with the browser never closed: keep the directory
+	// where the next launch of this profile finds and commits it.
+	lease.onAbort = () => {
+		lease.scratch = lease.scratch.filter(
+			(entry) => entry !== userDataDir && entry !== marker(userDataDir),
+		);
 	};
 	return { identity, userDataDir };
 }

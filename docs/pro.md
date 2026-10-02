@@ -254,10 +254,22 @@ The browser state of a `warm_plan: "none"` profile syncs through this machine:
    that, and the directory is deleted.
 
 `"none"` is the default for a new profile launched with your own `proxy`. A
-`"standard"` or `"continuous"` profile is kept warm in the cloud: it launches
-with its identity, on an empty directory, and its state does not sync to this
-machine (a warning says so). A profile asked for with another `os` or
-`warm_plan` than it has fails with `ProfileMismatch`.
+`"standard"` or `"continuous"` profile is one we warmed before handing it to
+you: `"standard"` comes with three warmed sessions and is not warmed again,
+`"continuous"` (an add-on) keeps being warmed between your sessions. Its state
+is held under our key, which never reaches this machine, so the API sends the
+state over TLS before the launch and takes it back when the context closes;
+otherwise it syncs exactly as above, with nothing encrypted or uploaded here. A
+profile asked for with another `os` or `warm_plan` than it has fails with
+`ProfileMismatch`.
+
+**A session that never closed** (the process was killed, or exited with the
+browser still open) keeps its directory. The next launch of that profile
+commits it before restoring anything, so no state is lost, as long as nothing
+else committed the profile in between; if something did, it is kept under
+`conflicts/` instead. A launch whose profile another session still holds
+waits for it, up to 120 seconds (`CAMOUFOX_PRO_PROFILE_WAIT`, in seconds; `0`
+fails at once with `lease_conflict`).
 
 **The content key.** State is encrypted on this machine with your account's
 content key, which never leaves your machines: the API stores only ciphertext
@@ -276,9 +288,9 @@ kept, and a warning names the place:
 | `pending/` | Another lease holds the profile now, the state is over 1 GiB, or the sync failed |
 
 Both are under `camoufox/pro/profiles/<profile id>/` in the camoufox cache. The
-launcher does not retry them later. `close()` raises when the sync failed for
-any other reason, and `StatePoolSealed` when the API holds the profile's state
-for the warm pool. State written by a newer Firefox than the build's is never
+next launch of the profile commits the newest one, as above. `close()` raises when the sync failed for
+any other reason, and `StatePoolSealed` when an older launcher tries to sync a
+warmed profile itself. State written by a newer Firefox than the build's is never
 opened: the launch fails with `StateNewerThanBrowser`.
 
 In Python, profile sync needs the `pro` extra:
@@ -330,7 +342,7 @@ Python and from `@camoufox/camoufox` in TypeScript. Each carries the API's
 | `ProUnavailable` | The API could not be reached, or failed, through three retries (1, 2 and 4 seconds apart) | Check the network; see the API status |
 | `ProfileMismatch` | The profile exists with another `os` or `warm_plan`, or another egress regime, than the launch asked for | Launch it as it was created, or use another profile name |
 | `GpuUnavailable` | No remote GPU can serve this Windows identity now | Retry after `retry_after`, or pass `gpu: false` |
-| `StatePoolSealed` | The profile's state is held for the warm pool, so it cannot sync through this machine | Launch it without expecting its state, or use a `warm_plan: "none"` profile |
+| `StatePoolSealed` | The API refused to take a warmed profile's state through the chunk routes; it only takes it back through the route it served it from | Update the launcher |
 | `ProClockSkew` | This machine's clock is more than 3 minutes off the API's, so a fresh lease would look expired | Fix the clock (NTP). Over one minute off logs a warning |
 | `LeaseRefused` | The browser refused the lease it was started with, and exited with status 78. `reason` is the browser's own | Report it with the reason |
 
