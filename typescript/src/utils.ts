@@ -74,6 +74,7 @@ import {
 	launchPath,
 	OS_NAME,
 	resolvedPlaywrightVersionStr,
+	userCacheDir,
 	Version,
 } from "./pkgman.js";
 import * as pro from "./pro.js";
@@ -642,6 +643,8 @@ interface LaunchRule {
 	envPathsOptional?: Record<string, string>;
 	envFromConfig?: Record<string, string>;
 	config?: Record<string, any>;
+	ldPreload?: string[];
+	envCacheDirs?: Record<string, string>;
 	exclusive?: boolean;
 	warn?: string;
 }
@@ -657,8 +660,11 @@ interface LaunchRule {
  * `envPaths` to a file relative to the build's directory, which must exist,
  * `envPathsOptional` likewise but only when the file exists, and
  * `envFromConfig` to the value of a config key when the identity has one.
- * `config` sets config keys. A pref or config key the caller set, or a
- * variable already in the environment, is never replaced.
+ * `config` sets config keys. `ldPreload` appends each build-relative
+ * library that exists to LD_PRELOAD (appended, never replacing one the
+ * caller has), and `envCacheDirs` points each variable at a per-user cache
+ * directory of that name, created on demand. A pref or config key the caller
+ * set, or a variable already in the environment, is never replaced.
  *
  * An `exclusive` rule owns its variables: where it does not apply they are
  * removed from the environment, the caller's included, so a feature meant for
@@ -688,6 +694,7 @@ export function applyLaunchRules(
 		...Object.keys(rule.envPaths ?? {}),
 		...Object.keys(rule.envPathsOptional ?? {}),
 		...Object.keys(rule.envFromConfig ?? {}),
+		...Object.keys(rule.envCacheDirs ?? {}),
 	];
 
 	const matched = rules.filter(applies);
@@ -725,6 +732,22 @@ export function applyLaunchRules(
 		}
 		for (const [key, value] of Object.entries(rule.config ?? {})) {
 			if (!(key in config)) config[key] = value;
+		}
+		// `env` is the caller's environment (a copy of process.env by default)
+		// and is spread last into the launch environment, so appending here is
+		// what keeps an LD_PRELOAD someone already has.
+		for (const relative of rule.ldPreload ?? []) {
+			const resolved = path.join(path.dirname(launchFile), relative);
+			const preload = env.LD_PRELOAD ? String(env.LD_PRELOAD) : "";
+			if (fs.existsSync(resolved) && !preload.split(":").includes(resolved)) {
+				env.LD_PRELOAD = preload ? `${preload}:${resolved}` : resolved;
+			}
+		}
+		for (const [key, name] of Object.entries(rule.envCacheDirs ?? {})) {
+			if (key in env) continue;
+			const cacheDir = userCacheDir(`camoufox-${name}`);
+			fs.mkdirSync(cacheDir, { recursive: true });
+			env[key] = cacheDir;
 		}
 		for (const [key, configKey] of Object.entries(rule.envFromConfig ?? {})) {
 			if (configKey in config && !(key in env)) {

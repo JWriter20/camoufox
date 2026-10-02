@@ -147,6 +147,63 @@ describe("applyLaunchRules", () => {
 		}
 	});
 
+	it("appends an existing library to LD_PRELOAD, keeping the caller's", () => {
+		const launch = path.join(BUILD, "launch.json");
+		fs.writeFileSync(
+			launch,
+			JSON.stringify({
+				rules: [
+					{
+						target: ["win"],
+						host: ["lin"],
+						ldPreload: ["lib/example.dll", "lib/missing.so"],
+					},
+				],
+			}),
+		);
+		try {
+			expect(apply("win").env).toEqual({ LD_PRELOAD: LIB });
+			expect(
+				apply("win", {}, { LD_PRELOAD: "/opt/other.so" }).env.LD_PRELOAD,
+			).toBe(`/opt/other.so:${LIB}`);
+			expect(apply("win", {}, { LD_PRELOAD: LIB }).env.LD_PRELOAD).toBe(LIB);
+			expect(apply("win", {}, {}, "win").env).toEqual({});
+		} finally {
+			fs.writeFileSync(launch, JSON.stringify(RULES));
+		}
+	});
+
+	it("points a variable at a per-user cache directory it creates", () => {
+		const launch = path.join(BUILD, "launch.json");
+		const cacheHome = path.join(SCRATCH, "rules-cache");
+		const prevXdg = process.env.XDG_CACHE_HOME;
+		process.env.XDG_CACHE_HOME = cacheHome;
+		fs.writeFileSync(
+			launch,
+			JSON.stringify({
+				rules: [
+					{
+						target: ["win"],
+						host: ["lin"],
+						envCacheDirs: { EXAMPLE_CACHE: "example-cache" },
+					},
+				],
+			}),
+		);
+		try {
+			const dir = path.join(cacheHome, "camoufox-example-cache");
+			expect(apply("win").env).toEqual({ EXAMPLE_CACHE: dir });
+			expect(fs.statSync(dir).isDirectory()).toBe(true);
+			expect(apply("win", {}, { EXAMPLE_CACHE: "/mine" }).env).toEqual({
+				EXAMPLE_CACHE: "/mine",
+			});
+		} finally {
+			if (prevXdg === undefined) delete process.env.XDG_CACHE_HOME;
+			else process.env.XDG_CACHE_HOME = prevXdg;
+			fs.writeFileSync(launch, JSON.stringify(RULES));
+		}
+	});
+
 	it("skips a conditional rule on its own host", () => {
 		const { prefs, env } = apply("win", {}, {}, "win");
 		expect("example.cross-os-feature" in prefs).toBe(false);

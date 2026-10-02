@@ -42,6 +42,7 @@ from .pkgman import (
     launch_path,
 )
 from .virtdisplay import VirtualDisplay
+from platformdirs import user_cache_dir
 from ._warnings import FallbackWarning, LeakWarning
 from .webgl import sample_webgl_for_screen, webgl_for_gpu
 
@@ -416,8 +417,11 @@ def apply_launch_rules(
     `envPaths` to a file relative to the build's directory, which must exist,
     `envPathsOptional` likewise but only when the file exists, and
     `envFromConfig` to the value of a config key when the identity has one.
-    `config` sets config keys. A pref or config key the caller set, or a
-    variable already in the environment, is never replaced.
+    `config` sets config keys. `ldPreload` appends each build-relative
+    library that exists to LD_PRELOAD (appended, never replacing one the
+    caller has), and `envCacheDirs` points each variable at a per-user cache
+    directory of that name, created on demand. A pref or config key the
+    caller set, or a variable already in the environment, is never replaced.
 
     An `exclusive` rule owns its variables: where it does not apply they are
     removed from the environment, the caller's included, so a feature meant for
@@ -440,7 +444,7 @@ def apply_launch_rules(
     def owned(rule: Dict[str, Any]) -> set:
         return {
             key
-            for field in ('env', 'envPaths', 'envPathsOptional', 'envFromConfig')
+            for field in ('env', 'envPaths', 'envPathsOptional', 'envFromConfig', 'envCacheDirs')
             for key in rule.get(field, {})
         }
 
@@ -474,6 +478,19 @@ def apply_launch_rules(
                 env[key] = resolved
         for key, value in rule.get('config', {}).items():
             config.setdefault(key, value)
+        # `env` is the caller's environment (a copy of os.environ by default)
+        # and is spread last into the launch environment, so appending here is
+        # what keeps an LD_PRELOAD someone already has.
+        for relative in rule.get('ldPreload', []):
+            resolved = os.path.normpath(os.path.join(os.path.dirname(launch_file), relative))
+            preload = str(env.get('LD_PRELOAD') or '')
+            if os.path.exists(resolved) and resolved not in preload.split(':'):
+                env['LD_PRELOAD'] = f'{preload}:{resolved}' if preload else resolved
+        for key, name in rule.get('envCacheDirs', {}).items():
+            if key not in env:
+                cache_dir = user_cache_dir(f'camoufox-{name}')
+                os.makedirs(cache_dir, exist_ok=True)
+                env[key] = cache_dir
         for key, config_key in rule.get('envFromConfig', {}).items():
             if config_key in config:
                 env.setdefault(key, str(config[config_key]))

@@ -246,3 +246,34 @@ def test_rule_config_fills_keys_the_caller_did_not_set(build, monkeypatch):
     other = {}
     _apply(build, "win", host="win", monkeypatch=monkeypatch, config=other)
     assert other == {}
+
+
+def test_ld_preload_is_appended_only_when_the_library_exists(build, monkeypatch):
+    launch = build.parent / "launch.json"
+    launch.write_text(json.dumps({"rules": [{
+        "target": ["win"], "host": ["lin"],
+        "ldPreload": ["lib/example.dll", "lib/missing.so"],
+    }]}))
+    lib = str(build.parent / "lib" / "example.dll")
+    _, env = _apply(build, "win", monkeypatch=monkeypatch)
+    assert env == {"LD_PRELOAD": lib}
+    _, env = _apply(build, "win", env={"LD_PRELOAD": "/opt/other.so"}, monkeypatch=monkeypatch)
+    assert env["LD_PRELOAD"] == f"/opt/other.so:{lib}"
+    _, env = _apply(build, "win", env={"LD_PRELOAD": lib}, monkeypatch=monkeypatch)
+    assert env["LD_PRELOAD"] == lib
+    _, env = _apply(build, "win", host="win", monkeypatch=monkeypatch)
+    assert env == {}
+
+
+def test_env_cache_dir_is_created_under_the_user_cache(build, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    launch = build.parent / "launch.json"
+    launch.write_text(json.dumps({"rules": [{
+        "target": ["win"], "host": ["lin"],
+        "envCacheDirs": {"EXAMPLE_CACHE": "example-cache"},
+    }]}))
+    _, env = _apply(build, "win", monkeypatch=monkeypatch)
+    assert env == {"EXAMPLE_CACHE": str(tmp_path / "cache" / "camoufox-example-cache")}
+    assert (tmp_path / "cache" / "camoufox-example-cache").is_dir()
+    _, env = _apply(build, "win", env={"EXAMPLE_CACHE": "/mine"}, monkeypatch=monkeypatch)
+    assert env == {"EXAMPLE_CACHE": "/mine"}
