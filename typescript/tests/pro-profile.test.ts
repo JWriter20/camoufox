@@ -1103,6 +1103,20 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 		expect(opts.proxy).toEqual(proxy);
 	});
 
+	it("refuses a proxy and an egress request together", async () => {
+		const proxy = { server: "http://my.proxy:8080" };
+		await expect(
+			launch({ proxy, egress: { provider: "evomi" } }),
+		).rejects.toThrow(/proxy and egress conflict/);
+		await launch({ proxy, egress: false });
+		expect(mint().egress).toBe(false);
+	});
+
+	it("asks for a partner provider by name", async () => {
+		await launch({ egress: { provider: "evomi", country: "US" } });
+		expect(mint().egress).toEqual({ provider: "evomi", country: "US" });
+	});
+
 	it("points the browser at the render document and sets the farm prefs", async () => {
 		cloud.sections = { gpu: GPU };
 		const opts = await launch();

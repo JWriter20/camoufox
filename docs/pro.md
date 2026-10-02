@@ -154,13 +154,26 @@ set it:
 |---|---|---|
 | `profile` | a name, up to 64 characters | the [profile](#profiles) of that name, created on first use |
 | `warm_plan` | `"none"`, `"standard"`, `"continuous"` | the plan a new profile is created with (with `profile` only) |
-| `egress` | `false`, or `{class, country, sticky}` | no [managed egress](#managed-egress), or the egress wanted |
+| `egress` | `false`, or `{class, country, sticky, provider}` | no [managed egress](#managed-egress), or the egress wanted |
 | `gpu` | `false` | no [remote GPU](#remote-rendering): render on this machine |
 
 They need a Pro build; on a stock build, or with a `CAMOU_LEASE_FILE` of your
 own, they raise `ValueError`.
 
 ### Managed egress
+
+There are three ways a Pro browser reaches the network:
+
+- **Your own proxy.** Pass `proxy` exactly as for any camoufox launch. Nothing
+  else is needed and nothing is configured on our side; the lease carries no
+  egress. A profile first launched this way keeps using your own proxy.
+- **A partner provider.** Name it in `egress: { provider: "<code>" }`. We hold
+  the integration and the provider's credentials, and the lease still hands the
+  browser only our proxy address. No partner is available yet.
+- **CamouProxy**, the default. Leave `egress` out, or name
+  `provider: "camouproxy"`: our own Starlink network, plus partner Starlink
+  exits we fold into it. A profile keeps the exit it was warmed on, or one in
+  the same Starlink point of presence, for life.
 
 Unless you pass your own `proxy` or `egress: false`, the lease carries a proxy
 for the browser, and the launcher routes the browser through it:
@@ -181,7 +194,7 @@ WebRTC match the exit. A `geoip` you pass yourself wins. `localhost`,
 destinations.
 
 Your own `proxy` is never replaced: with one, the launcher asks for no managed
-egress.
+egress. Passing both `proxy` and an `egress` object raises `ValueError`.
 
 ### Remote rendering
 

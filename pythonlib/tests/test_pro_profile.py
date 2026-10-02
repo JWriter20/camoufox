@@ -751,6 +751,20 @@ def test_the_caller_s_own_proxy_is_never_replaced(cloud, launch):
     assert opts["proxy"] == proxy
 
 
+def test_a_proxy_and_an_egress_request_together_are_refused(cloud, launch):
+    proxy = {"server": "http://my.proxy:8080"}
+    with pytest.raises(ValueError, match="proxy and egress conflict"):
+        launch(proxy=proxy, egress={"provider": "evomi"})
+    # egress=False beside a proxy says the same thing twice, which is fine.
+    launch(proxy=proxy, egress=False)
+    assert launch.mint()["egress"] is False
+
+
+def test_a_partner_provider_is_asked_for_by_name(cloud, launch):
+    launch(egress={"provider": "evomi", "country": "US"})
+    assert launch.mint()["egress"] == {"provider": "evomi", "country": "US"}
+
+
 def test_the_browser_is_pointed_at_the_render_document(cloud, launch):
     cloud.sections = {"gpu": GPU}
     opts = launch()
