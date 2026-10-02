@@ -1,9 +1,11 @@
 """
 Launching a Camoufox Pro profile: its identity bundle, and its browser state
-restored before the launch and synced back when the browser closes. The state
-is sealed with the account's content key, which never leaves the account's
-machines. Python twin of typescript/src/pro-profile.ts; see docs/pro.md,
-"Profiles".
+restored before the launch and synced back when the browser closes. A
+`warm_plan: none` profile's state is sealed with the account's content key,
+which never leaves the account's machines. A warmed profile's state is sealed
+with the warm pool's key, which never reaches this machine: the API restores it
+and serves the directory, and takes it back the same way. Python twin of
+typescript/src/pro-profile.ts; see docs/pro.md, "Profiles".
 """
 
 import base64
@@ -26,9 +28,11 @@ from .addons import DefaultAddons
 from .exceptions import ProError, StatePoolSealed
 from .pro_state import (
     CHUNKING,
+    HARD_CAP,
     POLICY_VERSION,
     WORKERS,
     AccountKeys,
+    ArchiveError,
     StateIntegrityError,
     StateTooLarge,
     canonical,
@@ -38,7 +42,9 @@ from .pro_state import (
     chunk_lengths,
     decode_manifest,
     manifest_of,
+    read_archive,
     restore,
+    write_archive,
 )
 
 CONTENT_KEY_ENV = "CAMOUFOX_PRO_CONTENT_KEY"
@@ -49,6 +55,10 @@ FF_PLACEHOLDER = "{FF}"
 # those after which it is kept to retry.
 CONFLICT = frozenset({"lease_not_holder", "state_window_expired", "state_conflict"})
 PENDING = frozenset({"lease_conflict", "state_too_large"})
+ARCHIVE_TYPE = "application/x-cfp-dir+gzip"
+# Each session directory and kept capture has a mark under the profile's
+# marks/ folder: the version it was restored from, which decides whether it can
+# still be committed.
 
 log = logging.getLogger("camoufox.pro")
 
@@ -154,12 +164,38 @@ def _profile_home(profile_id: str) -> Path:
     return Path(user_cache_dir("camoufox")) / "pro" / "profiles" / profile_id
 
 
+def _marker(directory: Path) -> Path:
+    """Where a session or kept directory's mark lives: beside its kind's folder, so the folders hold only state."""
+    return directory.parent.parent / "marks" / f"{directory.parent.name}-{directory.name}.json"
+
+
+def _mark(directory: Path, base_version: int, served: bool) -> None:
+    """Record the version a session directory was restored from."""
+    _marker(directory).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pro.write_private(_marker(directory), json.dumps({"base_version": base_version, "served": served}).encode())
+
+
+def _read_mark(directory: Path) -> Optional[Dict[str, Any]]:
+    try:
+        mark = json.loads(_marker(directory).read_text())
+    except (OSError, ValueError):
+        return None
+    return mark if isinstance(mark, dict) and isinstance(mark.get("base_version"), int) else None
+
+
+def _move(directory: Path, destination: Path) -> None:
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.rename(destination)
+    if _marker(directory).exists():
+        _marker(destination).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _marker(directory).rename(_marker(destination))
+
+
 def _keep(directory: Path, profile_id: str, kind: str, why: str) -> None:
     """Move a capture that was not committed aside, where it is kept, and say so."""
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
     kept = _profile_home(profile_id) / kind / stamp
-    kept.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory.rename(kept)
+    _move(directory, kept)
     log.warning(
         "camoufox-pro: profile %s's state was not synced (%s); this session's state is kept at %s",
         profile_id,
@@ -218,10 +254,13 @@ def _commit_state(
     base_version: int,
     directory: Path,
     ff_version: str,
-) -> None:
+    release: bool = True,
+    crashed: bool = False,
+) -> int:
     """
     Chunk and seal a captured profile, upload what the store does not hold, and
-    commit it as the next version, releasing the lease with the commit.
+    commit it as the next version, releasing the lease with the commit unless
+    `release` is false. Returns the committed version.
     """
     snapshot = capture(directory)
     sealed_dir = directory.with_name(directory.name + ".sealed")
@@ -300,7 +339,7 @@ def _commit_state(
             "version": version,
             "base_version": base_version,
             "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-            "crashed": False,
+            "crashed": crashed,
             "integrity": "suspect" if snapshot.suspect_files else "ok",
             "suspect_files": list(snapshot.suspect_files),
             "ff_version": ff_version,
@@ -325,7 +364,7 @@ def _commit_state(
         "lease_id": lease.lease_id,
         "base_version": base_version,
         "version": version,
-        "release": True,
+        "release": release,
         "manifest": {
             "sha256": _sha256(body).hex(),
             "size": len(body),
@@ -348,6 +387,125 @@ def _commit_state(
             raise
         upload([claims[chunk_id] for chunk_id in error.details.get("chunk_ids", [])])
         lease.api("PUT", route, commit)
+    return version
+
+
+# ── state the API serves ─────────────────────────────────────────────────────
+
+
+def _restore_served(lease: pro.Lease, section: Dict[str, Any], target: Path, ff_version: str) -> int:
+    """Download a warmed profile's state as the API restored it, into `target`. Returns its version."""
+    response = lease.send(
+        "GET",
+        section["state"]["archive"],
+        {"lease_id": str(lease.lease_id), "ff_version": ff_version},
+        stream=True,
+    )
+    response.raw.decode_content = False
+    try:
+        read_archive(response.raw, target, HARD_CAP)
+    except ArchiveError as error:
+        raise StateIntegrityError(f"the served state is not a cfp-dir/1 archive: {error}") from None
+    finally:
+        response.close()
+    return int(response.headers.get("x-cfp-state-version", section["state"]["version"]))
+
+
+def _commit_served(
+    lease: pro.Lease,
+    section: Dict[str, Any],
+    base_version: int,
+    directory: Path,
+    ff_version: str,
+    release: bool = True,
+    crashed: bool = False,
+) -> int:
+    """Capture a warmed profile and send it to the API, which commits it as the next version."""
+    snapshot = capture(directory)
+    packed = directory.with_name(directory.name + ".cfpdir.gz")
+    lease.scratch.append(packed)
+    with packed.open("wb") as out:
+        write_archive(out, snapshot)
+    params = {
+        "lease_id": str(lease.lease_id),
+        "base_version": str(base_version),
+        "ff_version": ff_version,
+        "release": "1" if release else "0",
+        "crashed": "1" if crashed else "0",
+    }
+    for delay in (*pro.MINT_RETRY_S, None):
+        try:
+            with packed.open("rb") as body:
+                answer = lease.send("PUT", section["state"]["archive"], params, data=body, content_type=ARCHIVE_TYPE).json()
+            packed.unlink(missing_ok=True)
+            return int(answer["version"])
+        except ProError as error:
+            if delay is None or not pro._transient(error):
+                raise
+            time.sleep(error.retry_after or delay)
+    raise AssertionError("unreachable")
+
+
+# ── a session that never closed ──────────────────────────────────────────────
+
+
+def _recover(
+    lease: pro.Lease,
+    section: Dict[str, Any],
+    keys: Optional[AccountKeys],
+    base_version: int,
+    target: Path,
+    ff_version: str,
+) -> Optional[int]:
+    """
+    Commit the newest capture an earlier session left behind (a crash, or a
+    commit that failed and was kept to retry) before anything is restored, so
+    a launch never starts from older state than this machine holds. It is used
+    only when it was restored from the version the API still has as its head;
+    anything else is kept as a conflict, never merged. On success the capture
+    becomes this session's directory, at `target`, and its version is returned.
+    """
+    home = _profile_home(section["id"])
+    candidates = []
+    for kind in ("pending", "sessions"):
+        folder = home / kind
+        if not folder.is_dir():
+            continue
+        for directory in folder.iterdir():
+            if not directory.is_dir() or directory == target or directory.name.startswith("."):
+                continue
+            if kind == "sessions" and str(directory) in {str(path) for live in pro._LIVE.values() for path in live.scratch}:
+                continue
+            mark = _read_mark(directory)
+            if mark is not None:
+                candidates.append((directory.stat().st_mtime, directory, mark))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda found: found[0], reverse=True)
+    for _, stale, _ in candidates[1:]:
+        _keep(stale, section["id"], "conflicts", "a newer capture of this profile was left behind as well")
+    _, directory, mark = candidates[0]
+    if mark["base_version"] != base_version:
+        _keep(
+            directory,
+            section["id"],
+            "conflicts",
+            f"it was restored from v{mark['base_version']} and the profile is at v{base_version} now",
+        )
+        return None
+    log.warning("camoufox-pro: profile %s: committing the state a session left behind at %s", section["key"], directory)
+    try:
+        if keys is None:
+            version = _commit_served(lease, section, base_version, directory, ff_version, release=False, crashed=True)
+        else:
+            version = _commit_state(lease, section["id"], keys, {}, base_version, directory, ff_version, release=False, crashed=True)
+    except ProError as error:
+        if error.code in CONFLICT:
+            _keep(directory, section["id"], "conflicts", str(error))
+            return None
+        raise
+    _move(directory, target)
+    return version
 
 
 # ── a profile launch ─────────────────────────────────────────────────────────
@@ -364,25 +522,38 @@ def open_profile(lease: pro.Lease, ff_version: str) -> Tuple[Dict[str, Any], Pat
     home = _profile_home(section["id"])
     (home / "sessions").mkdir(mode=0o700, parents=True, exist_ok=True)
     user_data_dir = home / "sessions" / str(lease.lease_id)
-    lease.scratch.append(user_data_dir)
-    if section["key_class"] != "account":
+    lease.scratch.extend([user_data_dir, _marker(user_data_dir)])
+    served = section["state"].get("transport") == "server"
+    if section["key_class"] != "account" and not served:
         log.warning(
-            "camoufox-pro: profile %s keeps its identity, but its browser state is not synced: only a "
-            "profile whose state is sealed with the account's own key is (this one is %r)",
+            "camoufox-pro: profile %s keeps its identity, but its browser state is not synced: this "
+            "deployment does not serve warmed profiles' state",
             section["key"],
-            section["key_class"],
         )
         user_data_dir.mkdir(mode=0o700)
         return identity, user_data_dir
-    keys = AccountKeys.derive(content_key(lease.account_id), lease.account_id)
-    known = _restore_state(lease, section, keys, user_data_dir, ff_version)
+    keys = None if served else AccountKeys.derive(content_key(lease.account_id), lease.account_id)
     base_version = section["state"]["version"]
+    known: Dict[str, Stored] = {}
+    recovered = _recover(lease, section, keys, base_version, user_data_dir, ff_version)
+    if recovered is not None:
+        base_version = recovered
+    elif served:
+        base_version = _restore_served(lease, section, user_data_dir, ff_version)
+    else:
+        assert keys is not None
+        known = _restore_state(lease, section, keys, user_data_dir, ff_version)
+    _mark(user_data_dir, base_version, served)
+    lease.state_dirty = True
 
     def sync(lease: pro.Lease) -> None:
         # The commit releases the lease, so a renewal racing it must not mint a new one.
         lease.stop_renewing()
         try:
-            _commit_state(lease, section["id"], keys, known, base_version, user_data_dir, ff_version)
+            if keys is None:
+                _commit_served(lease, section, base_version, user_data_dir, ff_version)
+            else:
+                _commit_state(lease, section["id"], keys, known, base_version, user_data_dir, ff_version)
         except Exception as error:
             code = error.code if isinstance(error, ProError) else None
             kept = isinstance(error, StateTooLarge) or code in PENDING or code in CONFLICT
@@ -395,5 +566,13 @@ def open_profile(lease: pro.Lease, ff_version: str) -> Tuple[Dict[str, Any], Pat
             raise
         lease.forget()
 
+    def abort(lease: pro.Lease) -> None:
+        # The process is exiting with the browser never closed: keep the
+        # directory where the next launch of this profile finds and commits it.
+        for path in (user_data_dir, _marker(user_data_dir)):
+            if path in lease.scratch:
+                lease.scratch.remove(path)
+
     lease.on_close = sync
+    lease.on_abort = abort
     return identity, user_data_dir

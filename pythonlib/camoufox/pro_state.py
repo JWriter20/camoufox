@@ -548,3 +548,130 @@ def restore(
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+
+
+# ── cfp-dir/1: state the API serves in the clear ─────────────────────────────
+#
+# A profile whose state is sealed under the warm pool's key never has that key
+# here: the API restores it and sends the directory over TLS, and takes the
+# directory back the same way. The format is the server's cfp.state.archive:
+#
+#   gzip(b"cfp-dir/1\n" { be32(len(header)) header_json [size bytes] } be32(0))
+#
+# with headers {"path", "type": "file"|"dir", "size", "mode", "mtime"}.
+
+ARCHIVE_MAGIC = b"cfp-dir/1\n"
+_ARCHIVE_HEADER_CAP = 64 << 10
+_COPY = 1 << 20
+
+
+class ArchiveError(ValueError):
+    pass
+
+
+def _archive_header(stream: Any, header: Dict[str, Any]) -> None:
+    body = json.dumps(header, separators=(",", ":")).encode()
+    stream.write(len(body).to_bytes(4, "big") + body)
+
+
+def _copy_exact(source: Any, sink: Any, size: int) -> int:
+    copied = 0
+    while copied < size:
+        block = source.read(min(_COPY, size - copied))
+        if not block:
+            break
+        sink.write(block)
+        copied += len(block)
+    return copied
+
+
+def write_archive(out: Any, snapshot: Snapshot) -> int:
+    """Write what `snapshot` captured as cfp-dir/1 to the binary file `out`. Returns the raw bytes written."""
+    import gzip
+
+    total = 0
+    with gzip.GzipFile(fileobj=out, mode="wb", compresslevel=6, mtime=0) as stream:
+        stream.write(ARCHIVE_MAGIC)
+        for directory in snapshot.dirs:
+            _archive_header(stream, {"path": directory, "type": "dir", "size": 0, "mode": 0o700, "mtime": 0})
+        for captured in snapshot.files:
+            _archive_header(
+                stream,
+                {"path": captured.path, "type": "file", "size": captured.size, "mode": captured.mode, "mtime": captured.mtime},
+            )
+            with (snapshot.root / captured.path).open("rb") as source:
+                if _copy_exact(source, stream, captured.size) != captured.size:
+                    raise ArchiveError(f"{captured.path} changed size after capture")
+            total += captured.size
+        stream.write((0).to_bytes(4, "big"))
+    return total
+
+
+def _exact(stream: Any, size: int) -> bytes:
+    data = stream.read(size)
+    if len(data) != size:
+        raise ArchiveError("the archive ends early")
+    return data
+
+
+def read_archive(source: Any, target: Path, cap: int = HARD_CAP) -> List[str]:
+    """
+    Write a cfp-dir/1 stream out at `target`, which must not exist. Nothing
+    lands there unless the whole stream reads cleanly, and no entry can write
+    outside it. Returns the file paths.
+    """
+    import gzip
+    import zlib
+
+    if target.exists():
+        raise FileExistsError(f"{target} exists; a restore never replaces a profile directory")
+    staging = target.with_name(f".{target.name}.partial")
+    staging.mkdir(mode=0o700)
+    written: List[str] = []
+    total = 0
+    try:
+        with gzip.GzipFile(fileobj=source, mode="rb") as stream:
+            if _exact(stream, len(ARCHIVE_MAGIC)) != ARCHIVE_MAGIC:
+                raise ArchiveError("not a cfp-dir/1 archive")
+            while True:
+                length = int.from_bytes(_exact(stream, 4), "big")
+                if length == 0:
+                    break
+                if length > _ARCHIVE_HEADER_CAP:
+                    raise ArchiveError("an entry header is too large")
+                header = json.loads(_exact(stream, length))
+                path = header.get("path") if isinstance(header, dict) else None
+                if not isinstance(path, str) or not path:
+                    raise ArchiveError("an entry has no path")
+                _check_relpath(path)
+                size, mode, mtime = header.get("size"), header.get("mode", 0o600), header.get("mtime", 0)
+                if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in (size, mode, mtime)):
+                    raise ArchiveError(f"{path}: size, mode and mtime are non-negative integers")
+                destination = staging / path
+                if header.get("type") == "dir":
+                    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    continue
+                if header.get("type") != "file":
+                    raise ArchiveError(f"{path}: only files and directories are allowed")
+                total += size
+                if total > cap:
+                    raise ArchiveError(f"the archive holds more than {cap} bytes")
+                destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                with destination.open("xb") as out:
+                    if _copy_exact(stream, out, size) != size:
+                        raise ArchiveError("the archive ends early")
+                os.chmod(destination, (mode & 0o777) | 0o600)
+                os.utime(destination, ns=(mtime * 10**9, mtime * 10**9))
+                written.append(path)
+            if stream.read(1):
+                raise ArchiveError("bytes follow the end of the archive")
+        staging.rename(target)
+    except (EOFError, OSError, zlib.error, ValueError) as error:
+        shutil.rmtree(staging, ignore_errors=True)
+        if isinstance(error, (ArchiveError, FileNotFoundError, PermissionError)):
+            raise
+        raise ArchiveError(f"the archive is malformed: {error}") from None
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return written

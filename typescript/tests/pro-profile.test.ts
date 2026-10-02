@@ -14,6 +14,7 @@ import * as http from "node:http";
 import type { AddressInfo } from "node:net";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import {
 	afterAll,
 	afterEach,
@@ -122,6 +123,9 @@ class FakeCloud {
 	heartbeat: Record<string, any> = {};
 	heartbeatS = 60;
 	keyClass = "account";
+	transport = "direct";
+	served = new Map<number, Buffer>();
+	archiveCommits: Record<string, string>[] = [];
 	objects = new Map<string, Buffer>();
 	head = 0;
 	versions = new Map<number, { manifest: string; chunks: string[] }>();
@@ -156,6 +160,20 @@ class FakeCloud {
 				res.writeHead(object ? 200 : 404).end(object);
 				return;
 			}
+			if (url.includes("/state/archive")) {
+				this.requests.push({
+					method: req.method as string,
+					path: url,
+					body: null,
+				});
+				const [status, payload, extra] = this.archive(
+					req.method as string,
+					url,
+					raw,
+				);
+				res.writeHead(status, extra).end(payload);
+				return;
+			}
 			const body = raw.length ? JSON.parse(raw.toString()) : null;
 			this.requests.push({ method: req.method as string, path: url, body });
 			const [status, answer] = this.answer(req.method as string, url, body);
@@ -163,6 +181,34 @@ class FakeCloud {
 			res.end(JSON.stringify(answer));
 		});
 	});
+
+	/** The served-state route: the head as a cfp-dir/1 archive, and a commit of one. */
+	archive(
+		method: string,
+		url: string,
+		raw: Buffer,
+	): [number, Buffer, Record<string, string>] {
+		const query = Object.fromEntries(new URL(url, "http://x").searchParams);
+		if (method === "GET") {
+			return [
+				200,
+				this.served.get(this.head) ?? EMPTY_ARCHIVE,
+				{ "x-cfp-state-version": String(this.head) },
+			];
+		}
+		if (Number(query.base_version) !== this.head) {
+			const refusal = {
+				error: "state_conflict",
+				message: "moved",
+				details: { current_version: this.head },
+			};
+			return [409, Buffer.from(JSON.stringify(refusal)), {}];
+		}
+		this.head += 1;
+		this.served.set(this.head, raw);
+		this.archiveCommits.push(query);
+		return [200, Buffer.from(JSON.stringify({ version: this.head })), {}];
+	}
 
 	script(route: string, ...answers: [number, Record<string, any>][]) {
 		this.scripted.push([new RegExp(`^${route}$`), answers]);
@@ -242,7 +288,17 @@ class FakeCloud {
 							cache_key: `bundles/${sha256(this.bundle)}`,
 						},
 						bundle_version: 1,
-						state: this.stateBlock(this.head),
+						state:
+							this.transport === "server"
+								? {
+										version: this.head,
+										manifest: null,
+										chunk_count: 0,
+										total_bytes: 0,
+										transport: "server",
+										archive: `/api/v1/profiles/${PROFILE_ID}/state/archive`,
+									}
+								: this.stateBlock(this.head),
 						launch_count: 1,
 					}
 				: null;
@@ -354,6 +410,11 @@ class FakeCloud {
 		return [404, { error: "not_found", message: url }];
 	}
 }
+
+// gzip("cfp-dir/1\n" be32(0)): a profile with nothing in it.
+const EMPTY_ARCHIVE = gzipSync(
+	Buffer.concat([Buffer.from("cfp-dir/1\n"), Buffer.alloc(4)]),
+);
 
 let cloud: FakeCloud;
 const TIMING = { ...pro.proTiming };
@@ -841,6 +902,182 @@ describe("a profile's state", () => {
 		expect(fs.existsSync(opened.userDataDir)).toBe(false);
 	});
 
+	it("serves and commits a warmed profile's state through the API", async () => {
+		cloud.keyClass = "pool";
+		cloud.transport = "server";
+		const first = await profileLease();
+		const opened = await profiles.openProfile(first, "152.0.4");
+		expect(fs.readdirSync(opened.userDataDir)).toEqual([]);
+		await realisticProfile(opened.userDataDir);
+		await first.close();
+		expect(cloud.head).toBe(1);
+		expect(cloud.archiveCommits).toEqual([
+			{
+				lease_id: first.leaseId,
+				base_version: "0",
+				ff_version: "152.0.4",
+				release: "1",
+				crashed: "0",
+			},
+		]);
+		// Nothing sealed or uploaded here, and no content key made: this machine never holds the pool's.
+		expect(cloud.calls("PUT", "/store/chunks/.*")).toHaveLength(0);
+		expect(fs.existsSync(profiles.contentKeyPath(ACCOUNT))).toBe(false);
+		expect(cloud.calls("POST", ".*/release")).toHaveLength(0);
+		expect(fs.existsSync(opened.userDataDir)).toBe(false);
+
+		const expectedDir = fs.mkdtempSync(path.join(SCRATCH, "expected-"));
+		await realisticProfile(expectedDir);
+		await state.capture(expectedDir);
+		for (const name of [
+			"cache2",
+			"user.js",
+			"big-at-root.bin",
+			"cookies.sqlite-wal",
+			"cookies.sqlite-shm",
+		]) {
+			fs.rmSync(path.join(expectedDir, name), { recursive: true, force: true });
+		}
+		const second = await profileLease();
+		const reopened = await profiles.openProfile(second, "152.0.4");
+		expect(tree(reopened.userDataDir)).toEqual(tree(expectedDir));
+		await second.close();
+		expect(cloud.head).toBe(2);
+		expect(cloud.archiveCommits[1].base_version).toBe("1");
+	});
+
+	it("refuses served state that would write outside its directory", async () => {
+		cloud.keyClass = "pool";
+		cloud.transport = "server";
+		const header = Buffer.from(
+			JSON.stringify({
+				path: "../escaped",
+				type: "file",
+				size: 1,
+				mode: 0o600,
+				mtime: 0,
+			}),
+		);
+		const length = Buffer.alloc(4);
+		length.writeUInt32BE(header.length);
+		cloud.head = 1;
+		cloud.served.set(
+			1,
+			gzipSync(
+				Buffer.concat([
+					Buffer.from("cfp-dir/1\n"),
+					length,
+					header,
+					Buffer.from("x"),
+					Buffer.alloc(4),
+				]),
+			),
+		);
+		const lease = await profileLease();
+		await expect(profiles.openProfile(lease, "152.0.4")).rejects.toThrow(
+			/cfp-dir\/1/,
+		);
+		const home = path.join(
+			SCRATCH,
+			"xdg-cache",
+			"camoufox",
+			"pro",
+			"profiles",
+			PROFILE_ID,
+		);
+		expect(fs.existsSync(path.join(home, "sessions", "escaped"))).toBe(false);
+		expect(fs.existsSync(path.join(home, "escaped"))).toBe(false);
+	});
+
+	for (const transport of ["direct", "server"]) {
+		it(`commits a ${transport} session that never closed before the next launch restores`, async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			if (transport === "server") {
+				cloud.keyClass = "pool";
+				cloud.transport = "server";
+			}
+			const crashed = await profileLease();
+			const left = (await profiles.openProfile(crashed, "152.0.4")).userDataDir;
+			fs.writeFileSync(path.join(left, "times.json"), '{"crashed":true}');
+			// The process exits with the browser never closed.
+			crashed.onAbort?.(crashed);
+			await crashed.release("driver_shutdown");
+			expect(fs.existsSync(left)).toBe(true);
+			expect(cloud.head).toBe(0);
+
+			const lease = await profileLease();
+			const opened = await profiles.openProfile(lease, "152.0.4");
+			expect(cloud.head).toBe(1);
+			expect(
+				fs.readFileSync(path.join(opened.userDataDir, "times.json"), "utf-8"),
+			).toBe('{"crashed":true}');
+			expect(fs.existsSync(left)).toBe(false);
+			if (transport === "server") {
+				expect(cloud.archiveCommits[0]).toMatchObject({
+					release: "0",
+					crashed: "1",
+				});
+			} else {
+				const commit = cloud.calls(
+					"PUT",
+					`/api/v1/profiles/${PROFILE_ID}/state`,
+				)[0];
+				expect(commit.body).toMatchObject({ release: false, crashed: true });
+			}
+			await lease.close();
+			expect(cloud.head).toBe(2);
+		});
+	}
+
+	it("keeps a session left behind on an older version as a conflict", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const crashed = await profileLease();
+		const left = (await profiles.openProfile(crashed, "152.0.4")).userDataDir;
+		fs.writeFileSync(path.join(left, "times.json"), "{}");
+		crashed.onAbort?.(crashed);
+		await crashed.release("driver_shutdown");
+		const home = path.join(
+			SCRATCH,
+			"xdg-cache",
+			"camoufox",
+			"pro",
+			"profiles",
+			PROFILE_ID,
+		);
+		const marks = fs
+			.readdirSync(path.join(home, "marks"))
+			.filter((n) => n.startsWith("sessions-"));
+		expect(marks).toHaveLength(1);
+		fs.writeFileSync(
+			path.join(home, "marks", marks[0]),
+			JSON.stringify({ base_version: 7, served: false }),
+		);
+		const lease = await profileLease();
+		const opened = await profiles.openProfile(lease, "152.0.4");
+		expect(cloud.head).toBe(0);
+		const kept = fs.readdirSync(path.join(home, "conflicts"));
+		expect(kept).toHaveLength(1);
+		expect(
+			fs.readFileSync(
+				path.join(home, "conflicts", kept[0], "times.json"),
+				"utf-8",
+			),
+		).toBe("{}");
+		expect(fs.readdirSync(opened.userDataDir)).toEqual([]);
+		await lease.release();
+	});
+
+	it("reports its state dirty in heartbeats", async () => {
+		cloud.heartbeatS = 0.05;
+		const lease = await profileLease();
+		await profiles.openProfile(lease, "152.0.4");
+		await vi.waitFor(() => {
+			expect(cloud.calls("POST", ".*/heartbeat").length).toBeGreaterThan(0);
+		});
+		expect(cloud.calls("POST", ".*/heartbeat")[0].body.state_dirty).toBe(true);
+		await lease.release();
+	});
+
 	it("refuses a bundle that is not the one the lease names", async () => {
 		const lease = await profileLease();
 		cloud.objects.set("/store/bundle", Buffer.from('{"tampered":1}'));
@@ -940,6 +1177,41 @@ const GPU = {
 		"privacy.resistFingerprinting": false,
 	},
 };
+
+describe("a profile another session holds", () => {
+	const held: [number, Record<string, any>] = [
+		409,
+		{
+			error: "lease_conflict",
+			message: "held",
+			retry_after: 30,
+			details: { holder: {} },
+		},
+	];
+
+	it("is waited for until that session lets go, with one mint asked again", async () => {
+		Object.assign(pro.proTiming, { profilePollS: 0 });
+		cloud.script("/api/v1/leases", held, held);
+		const lease = await profileLease();
+		const mints = cloud.calls("POST", "/api/v1/leases");
+		expect(mints).toHaveLength(3);
+		expect(new Set(mints.map((m) => m.body.idempotency_key)).size).toBe(1);
+		await lease.release();
+	});
+
+	it("is refused once the wait runs out", async () => {
+		process.env[pro.PROFILE_WAIT_ENV] = "0";
+		try {
+			cloud.script("/api/v1/leases", held);
+			await expect(profileLease()).rejects.toMatchObject({
+				code: "lease_conflict",
+			});
+			expect(cloud.calls("POST", "/api/v1/leases")).toHaveLength(1);
+		} finally {
+			delete process.env[pro.PROFILE_WAIT_ENV];
+		}
+	});
+});
 
 describe("remote rendering", () => {
 	it("writes the render document verbatim, privately, and rewrites it on each heartbeat", async () => {

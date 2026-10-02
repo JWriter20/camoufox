@@ -58,7 +58,27 @@ export const proTiming = {
 	skewWarnS: 60,
 	skewRefuseS: 180,
 	staleLeaseS: 24 * 3600,
+	/**
+	 * A profile another session holds: how long a mint waits for it (its commit
+	 * releases the lease), polling at most this often. CAMOUFOX_PRO_PROFILE_WAIT
+	 * overrides the wait, in seconds; 0 refuses at once.
+	 */
+	profileWaitS: 120,
+	profilePollS: 5,
 };
+export const PROFILE_WAIT_ENV = "CAMOUFOX_PRO_PROFILE_WAIT";
+
+export function profileWaitS(): number {
+	const raw = (process.env[PROFILE_WAIT_ENV] ?? "").trim();
+	if (!raw) return proTiming.profileWaitS;
+	const value = Number(raw);
+	if (!Number.isFinite(value)) {
+		throw new Error(
+			`${PROFILE_WAIT_ENV} must be a number of seconds, not ${JSON.stringify(raw)}`,
+		);
+	}
+	return Math.max(0, value);
+}
 
 const REFUSAL = /camoufox-pro: lease refused \(([^)\n]*)\)/;
 const NOT_SIGNED_IN =
@@ -524,7 +544,7 @@ export function cleanStaleLeases(): void {
 	}
 }
 
-const LIVE = new Map<string, Lease>();
+export const LIVE = new Map<string, Lease>();
 
 /**
  * What a mint asks for beyond the build and OS, each field left out unless
@@ -558,7 +578,11 @@ export class Lease {
 	renderPath: string | null = null;
 	/** Run in place of a plain release when the browser closes. */
 	onClose: SessionEnd | null = null;
-	/** Directories that go with the lease: deleted when it ends. */
+	/** Run when the process exits with the browser never closed, before the release. */
+	onAbort: ((lease: Lease) => void) | null = null;
+	/** Sent with each heartbeat once set: whether the profile has state not yet committed. */
+	stateDirty: boolean | null = null;
+	/** Directories and files that go with the lease: deleted when it ends. */
 	scratch: string[] = [];
 	claimed = false;
 	readonly #key: string;
@@ -606,6 +630,56 @@ export class Lease {
 		return call(method, route, payload, { key: this.#key });
 	}
 
+	/**
+	 * An API call whose body or answer is not JSON (a profile's served state),
+	 * with this lease's key. Refusals throw as `call` throws them.
+	 */
+	async send(
+		method: "GET" | "PUT",
+		route: string,
+		params: Record<string, string>,
+		{
+			body,
+			contentType,
+			timeoutS = 600,
+		}: {
+			body?: Uint8Array<ArrayBuffer>;
+			contentType?: string;
+			timeoutS?: number;
+		} = {},
+	): Promise<Response> {
+		const headers: Record<string, string> = {
+			"User-Agent": clientName(),
+			Authorization: `Bearer ${this.#key}`,
+		};
+		if (contentType) headers["Content-Type"] = contentType;
+		let response: Response;
+		try {
+			response = await fetch(
+				`${apiBase()}${route}?${new URLSearchParams(params)}`,
+				{ method, headers, body, signal: AbortSignal.timeout(timeoutS * 1000) },
+			);
+		} catch (error) {
+			throw new ProUnavailable(
+				`The Camoufox Pro API at ${apiBase()} could not be reached: ${(error as Error).message}`,
+			);
+		}
+		if (response.status >= 400) {
+			let answer: any = {};
+			try {
+				answer = JSON.parse(await response.text());
+			} catch {}
+			throw apiError(
+				response.status,
+				answer && typeof answer === "object" && !Array.isArray(answer)
+					? answer
+					: {},
+				response.headers.get("Retry-After"),
+			);
+		}
+		return response;
+	}
+
 	async #mint(): Promise<void> {
 		const body = {
 			...this.request,
@@ -622,12 +696,28 @@ export class Lease {
 			idempotency_key: randomUUID().replaceAll("-", ""),
 		};
 		let lease: Record<string, any> | undefined;
-		for (const delay of [...proTiming.mintRetryS, null]) {
+		const retries = [...proTiming.mintRetryS];
+		const patience = profileWaitS();
+		let waited = 0;
+		for (;;) {
 			try {
 				lease = await post("/api/v1/leases", body, { key: this.#key });
 				break;
 			} catch (error) {
-				if (delay === null || !transient(error)) throw error;
+				if (error instanceof ProError && error.code === "lease_conflict") {
+					// Another session holds the profile, most often the last one
+					// still committing its state: its commit releases the lease.
+					const pause = Math.min(
+						error.retry_after || proTiming.profilePollS,
+						proTiming.profilePollS,
+					);
+					if (waited + pause > patience) throw error;
+					await sleepS(pause);
+					waited += pause;
+					continue;
+				}
+				const delay = retries.shift();
+				if (delay === undefined || !transient(error)) throw error;
 				await sleepS((error as ProError).retry_after || delay);
 			}
 		}
@@ -714,7 +804,11 @@ export class Lease {
 		try {
 			answer = await post(
 				`/api/v1/leases/${this.leaseId}/heartbeat`,
-				{ seq: this.#seq + 1, host: { fingerprint: this.#host } },
+				{
+					seq: this.#seq + 1,
+					host: { fingerprint: this.#host },
+					...(this.stateDirty === null ? {} : { state_dirty: this.stateDirty }),
+				},
 				{ key: this.#key, timeoutS: proTiming.heartbeatTimeoutS },
 			);
 		} catch (error) {
@@ -860,17 +954,39 @@ function watchExit(): void {
 	if (watchingExit) return;
 	watchingExit = true;
 	process.on("beforeExit", () => {
-		for (const lease of LIVE.values()) void lease.release("driver_shutdown");
+		for (const lease of LIVE.values()) {
+			abort(lease);
+			void lease.release("driver_shutdown");
+		}
 	});
 	process.on("exit", () => {
-		for (const lease of LIVE.values()) lease.cleanAtExit();
+		for (const lease of LIVE.values()) {
+			abort(lease);
+			lease.cleanAtExit();
+		}
 	});
+}
+
+/** A lease whose browser never closed: keep what the next launch of its profile needs. */
+function abort(lease: Lease): void {
+	const hook = lease.onAbort;
+	lease.onAbort = null;
+	try {
+		hook?.(lease);
+	} catch (error) {
+		console.warn(
+			`camoufox-pro: keeping lease ${lease.leaseId}'s state for the next launch failed: ${(error as Error).message}`,
+		);
+	}
 }
 
 /** Release every lease this process holds, as process exit does. */
 export async function releaseAll(): Promise<void> {
 	await Promise.all(
-		[...LIVE.values()].map((lease) => lease.release("driver_shutdown")),
+		[...LIVE.values()].map((lease) => {
+			abort(lease);
+			return lease.release("driver_shutdown");
+		}),
 	);
 }
 

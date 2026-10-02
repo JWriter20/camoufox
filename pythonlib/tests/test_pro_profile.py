@@ -82,12 +82,37 @@ class FakeCloud:
         self.heartbeat = {}
         self.heartbeat_s = 60
         self.key_class = "account"
+        self.transport = "direct"
+        self.served = {}
+        self.archive_commits = []
         self.objects = {}
         self.head = 0
         self.versions = {}
         self.bundle = b"{}"
         self.base = ""
         self.changed = threading.Condition()
+
+    def archive(self, method, path, raw):
+        """The served-state route: the head as a cfp-dir/1 archive, and a commit of one."""
+        query = parse_qs(urlparse(path).query)
+        if method == "GET":
+            return 200, self.served.get(self.head, self.empty_archive()), {"x-cfp-state-version": str(self.head)}
+        base = int(query["base_version"][0])
+        if base != self.head:
+            body = {"error": "state_conflict", "message": "moved", "details": {"current_version": self.head}}
+            return 409, json.dumps(body).encode(), {}
+        self.head += 1
+        self.served[self.head] = raw
+        self.archive_commits.append({key: values[0] for key, values in query.items()})
+        return 200, json.dumps({"version": self.head, "committed_at": now_iso()}).encode(), {}
+
+    @staticmethod
+    def empty_archive():
+        import io
+
+        out = io.BytesIO()
+        pro_state.write_archive(out, pro_state.Snapshot(Path("/nonexistent"), (), (), ()))
+        return out.getvalue()
 
     def script(self, route, *answers):
         self.scripted.setdefault(route, []).extend(answers)
@@ -140,7 +165,11 @@ class FakeCloud:
                     "bundle": {"url": f"{self.base}/store/bundle", "sha256": sha256(self.bundle),
                                "size": len(self.bundle), "cache_key": f"bundles/{sha256(self.bundle)}"},
                     "bundle_version": 1,
-                    "state": self.state_block(self.head),
+                    "state": (
+                        {"version": self.head, "manifest": None, "chunk_count": 0, "total_bytes": 0,
+                         "transport": "server", "archive": f"/api/v1/profiles/{PROFILE_ID}/state/archive"}
+                        if self.transport == "server" else self.state_block(self.head)
+                    ),
                     "launch_count": 1,
                 }  # fmt: skip
             return 201, {
@@ -226,6 +255,19 @@ def cloud(monkeypatch, tmp_path):
                 else:
                     status = 404
                 body = None
+            elif "/state/archive" in self.path:
+                body = None
+                status, payload, extra = fake.archive(self.command, self.path, raw)
+                with fake.changed:
+                    fake.requests.append({"method": self.command, "path": self.path, "body": None, "raw": raw})
+                    fake.changed.notify_all()
+                self.send_response(status)
+                for name, value in extra.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             else:
                 body = json.loads(raw) if raw else None
                 status, answer = fake.answer(self.command, self.path, body)
@@ -547,6 +589,137 @@ def test_a_pool_sealed_profile_launches_without_state_sync(bundle, caplog):
     assert cloud.calls("GET", ".*/state.*") == []
     assert len(cloud.calls("POST", ".*/release")) == 1
     assert not user_data_dir.exists()
+
+
+def test_a_warmed_profile_s_state_is_served_and_committed_through_the_api(bundle, tmp_path):
+    cloud = bundle
+    cloud.key_class, cloud.transport = "pool", "server"
+    first = profile_lease()
+    _, user_data_dir = pro_profile.open_profile(first, "152.0.4")
+    assert list(user_data_dir.iterdir()) == []
+    realistic_profile(user_data_dir)
+    first.close()
+    assert cloud.head == 1
+    (commit,) = cloud.archive_commits
+    assert commit == {"lease_id": first.lease_id, "base_version": "0", "ff_version": "152.0.4",
+                      "release": "1", "crashed": "0"}  # fmt: skip
+    # Nothing was sealed or uploaded here, and no content key was made: this machine never holds the pool's.
+    assert cloud.calls("PUT", "/store/chunks/.*") == []
+    assert not pro_profile.content_key_path(ACCOUNT).exists()
+    assert cloud.calls("POST", ".*/release") == [] and not user_data_dir.exists()
+
+    expected_dir = tmp_path / "expected"
+    realistic_profile(expected_dir)
+    pro_state.capture(expected_dir)
+    for name in ("cache2", "user.js", "big-at-root.bin", "cookies.sqlite-wal", "cookies.sqlite-shm"):
+        target = expected_dir / name
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink(missing_ok=True)
+
+    second = profile_lease()
+    _, reopened = pro_profile.open_profile(second, "152.0.4")
+    assert tree(reopened) == tree(expected_dir)
+    second.close()
+    assert cloud.head == 2 and cloud.archive_commits[-1]["base_version"] == "1"
+
+
+def test_served_state_that_would_write_outside_its_directory_is_refused(bundle):
+    import gzip
+    import io
+
+    cloud = bundle
+    cloud.key_class, cloud.transport = "pool", "server"
+    out = io.BytesIO()
+    with gzip.GzipFile(fileobj=out, mode="wb") as stream:
+        header = json.dumps({"path": "../escaped", "type": "file", "size": 1, "mode": 0o600, "mtime": 0}).encode()
+        stream.write(pro_state.ARCHIVE_MAGIC + len(header).to_bytes(4, "big") + header + b"x" + bytes(4))
+    cloud.head, cloud.served[1] = 1, out.getvalue()
+    with pytest.raises(pro_state.StateIntegrityError, match="cfp-dir/1"):
+        pro_profile.open_profile(profile_lease(), "152.0.4")
+    assert not (profiles_home() / "sessions" / "escaped").exists()
+    assert not (profiles_home() / "escaped").exists()
+
+
+@pytest.mark.parametrize("transport", ["direct", "server"])
+def test_a_session_that_never_closed_is_committed_before_the_next_launch_restores(bundle, transport):
+    cloud = bundle
+    if transport == "server":
+        cloud.key_class, cloud.transport = "pool", "server"
+    crashed = profile_lease()
+    _, left = pro_profile.open_profile(crashed, "152.0.4")
+    (left / "times.json").write_text('{"crashed": true}')
+    # The process exits with the browser never closed.
+    crashed.on_abort(crashed)
+    crashed.release("driver_shutdown")
+    assert left.exists() and cloud.head == 0
+
+    lease = profile_lease()
+    _, user_data_dir = pro_profile.open_profile(lease, "152.0.4")
+    assert cloud.head == 1, "the left-behind state is committed before anything is restored"
+    assert (user_data_dir / "times.json").read_text() == '{"crashed": true}'
+    assert not left.exists()
+    if transport == "server":
+        assert cloud.archive_commits[0]["release"] == "0" and cloud.archive_commits[0]["crashed"] == "1"
+    else:
+        (commit,) = cloud.calls("PUT", f"/api/v1/profiles/{PROFILE_ID}/state")
+        assert commit["body"]["release"] is False and commit["body"]["crashed"] is True
+    lease.close()
+    assert cloud.head == 2
+
+
+def test_a_session_left_behind_on_an_older_version_is_kept_as_a_conflict(bundle):
+    cloud = bundle
+    crashed = profile_lease()
+    _, left = pro_profile.open_profile(crashed, "152.0.4")
+    (left / "times.json").write_text("{}")
+    crashed.on_abort(crashed)
+    crashed.release("driver_shutdown")
+    # It was restored from a version the profile has since moved past.
+    (mark,) = (profiles_home() / "marks").glob("sessions-*.json")
+    mark.write_text(json.dumps({"base_version": 7, "served": False}))
+
+    lease = profile_lease()
+    _, user_data_dir = pro_profile.open_profile(lease, "152.0.4")
+    assert cloud.head == 0 and cloud.calls("PUT", f"/api/v1/profiles/{PROFILE_ID}/state") == []
+    (kept,) = (profiles_home() / "conflicts").iterdir()
+    assert (kept / "times.json").read_text() == "{}"
+    assert list(user_data_dir.iterdir()) == []
+    lease.release()
+
+
+def test_a_held_profile_is_waited_for_until_its_session_lets_go(cloud, monkeypatch):
+    monkeypatch.setattr(pro, "PROFILE_POLL_S", 0)
+    held = (409, {"error": "lease_conflict", "message": "held", "retry_after": 30, "details": {"holder": {}}})
+    cloud.script("/api/v1/leases", held, held)
+    lease = pro.acquire(BUILD, "win", KEY, {"profile": "linkedin-01"})
+    assert len(cloud.calls("POST", "/api/v1/leases")) == 3
+    keys = {call["body"]["idempotency_key"] for call in cloud.calls("POST", "/api/v1/leases")}
+    assert len(keys) == 1, "one mint, asked again"
+    lease.release()
+
+
+def test_a_held_profile_is_refused_once_the_wait_runs_out(cloud, monkeypatch):
+    monkeypatch.setenv(pro.PROFILE_WAIT_ENV, "0")
+    cloud.script(
+        "/api/v1/leases",
+        (409, {"error": "lease_conflict", "message": "held", "retry_after": 30, "details": {"holder": {}}}),
+    )
+    with pytest.raises(pro.ProError) as raised:
+        pro.acquire(BUILD, "win", KEY, {"profile": "linkedin-01"})
+    assert raised.value.code == "lease_conflict"
+    assert len(cloud.calls("POST", "/api/v1/leases")) == 1
+
+
+def test_a_profile_session_reports_its_state_dirty_in_heartbeats(bundle):
+    cloud = bundle
+    cloud.heartbeat_s = 0.05
+    lease = profile_lease()
+    pro_profile.open_profile(lease, "152.0.4")
+    cloud.wait_for(lambda: cloud.calls("POST", ".*/heartbeat"))
+    assert cloud.calls("POST", ".*/heartbeat")[0]["body"]["state_dirty"] is True
+    lease.release()
 
 
 def test_a_bundle_the_lease_does_not_name_is_refused(bundle):

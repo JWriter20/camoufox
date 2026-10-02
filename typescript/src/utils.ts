@@ -717,9 +717,7 @@ export function applyLaunchRules(
 			}
 			env[key] = resolved;
 		}
-		for (const [key, relative] of Object.entries(
-			rule.envPathsOptional ?? {},
-		)) {
+		for (const [key, relative] of Object.entries(rule.envPathsOptional ?? {})) {
 			const resolved = path.join(path.dirname(launchFile), relative);
 			if (!(key in env) && fs.existsSync(resolved)) env[key] = resolved;
 		}
