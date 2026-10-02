@@ -533,10 +533,22 @@ const LIVE = new Map<string, Lease>();
  * egress off (the caller's own proxy is never replaced) and an object states
  * the egress wanted, and `gpu: false` renders on this machine.
  */
+/**
+ * The managed egress a lease asks for. `provider` names a partner provider
+ * (its code, e.g. `"evomi"`); left out, or `"camouproxy"`, it is CamouProxy,
+ * our own managed network.
+ */
+export interface EgressRequest {
+	class?: string;
+	country?: string;
+	sticky?: boolean;
+	provider?: string;
+}
+
 export interface LeaseRequest {
 	profile?: string;
 	warm_plan?: "none" | "standard" | "continuous";
-	egress?: false | { class?: string; country?: string; sticky?: boolean };
+	egress?: false | EgressRequest;
 	gpu?: false;
 }
 

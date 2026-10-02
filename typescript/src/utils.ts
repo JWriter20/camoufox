@@ -1402,9 +1402,10 @@ export interface LaunchOptions {
 	 * cloud and launch with their identity only. Left out, the API decides. */
 	warm_plan?: "none" | "standard" | "continuous";
 	/** Camoufox Pro managed egress: `false` for none, or the egress wanted,
-	 * e.g. `{ class: "residential", country: "US" }`. Left out, the plan's
-	 * default; with your own `proxy`, never used. */
-	egress?: false | { class?: string; country?: string; sticky?: boolean };
+	 * e.g. `{ class: "residential", country: "US" }`, with `provider` naming a
+	 * partner provider instead of CamouProxy. Left out, the plan's default.
+	 * With your own `proxy` there is none, and passing both throws. */
+	egress?: false | pro.EgressRequest;
 	/** `false` renders WebGL, WebGPU and canvas on this machine's GPU for a
 	 * Camoufox Pro Windows identity, instead of on a remote GPU. */
 	gpu?: false;
@@ -1555,7 +1556,14 @@ async function buildLaunchOptions(
 		}
 		proRequest.warm_plan = warm_plan;
 	}
-	// The caller's own proxy is never replaced by managed egress.
+	// The caller's own proxy is never replaced by managed egress, and asking for both is a mistake
+	// worth naming rather than a request to drop one of them quietly.
+	if (proxy != null && egress !== undefined && egress !== false) {
+		throw new ValueError(
+			"proxy and egress conflict: with your own proxy there is no managed egress. " +
+				"Pass proxy to use your own, or egress (and no proxy) for managed egress.",
+		);
+	}
 	if (proxy != null) proRequest.egress = false;
 	else if (egress !== undefined) proRequest.egress = egress;
 	if (gpu === false) proRequest.gpu = false;

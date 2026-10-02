@@ -1131,8 +1131,10 @@ def launch_options(
             cloud and launch with their identity only. Left out, the API decides.
         egress (Optional[Union[bool, Dict[str, Any]]]):
             Camoufox Pro managed egress: False for none, or the egress wanted,
-            e.g. {"class": "residential", "country": "US"}. Left out, the plan's
-            default; with your own `proxy`, never used.
+            e.g. {"class": "residential", "country": "US"}, with "provider"
+            naming a partner provider instead of CamouProxy. Left out, the
+            plan's default. With your own `proxy` there is none, and passing
+            both raises ValueError.
         gpu (Optional[bool]):
             False renders WebGL, WebGPU and canvas on this machine's GPU for a
             Camoufox Pro Windows identity, instead of on a remote GPU.
@@ -1209,7 +1211,13 @@ def launch_options(
         if profile is None:
             raise ValueError("warm_plan applies to a profile: pass profile too.")
         pro_request["warm_plan"] = warm_plan
-    # The caller's own proxy is never replaced by managed egress.
+    # The caller's own proxy is never replaced by managed egress, and asking for both is a mistake
+    # worth naming rather than a request to drop one of them quietly.
+    if proxy is not None and egress not in (None, False):
+        raise ValueError(
+            "proxy and egress conflict: with your own proxy there is no managed egress. "
+            "Pass proxy to use your own, or egress (and no proxy) for managed egress."
+        )
     if proxy is not None:
         pro_request["egress"] = False
     elif egress is not None:
