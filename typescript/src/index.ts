@@ -15,14 +15,17 @@ export {
 	AllowanceExhausted,
 	BuildNotAllowlisted,
 	CapabilityMismatch,
+	GpuUnavailable,
 	InvalidRequest,
 	LeaseLimitReached,
 	LeaseRefused,
 	NotSignedIn,
 	ProClockSkew,
 	ProError,
+	ProfileMismatch,
 	ProUnavailable,
 	RateLimited,
+	StatePoolSealed,
 	SubscriptionRequired,
 } from "./exceptions.js";
 export {
@@ -65,6 +68,7 @@ export {
 	OS_NAME,
 	RepoConfig,
 } from "./pkgman.js";
+export type { LeaseRequest, ProSession } from "./pro.js";
 export { type LaunchServerOptions, launchServer } from "./server.js";
 export {
 	Camoufox,

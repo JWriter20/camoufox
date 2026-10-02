@@ -77,6 +77,7 @@ import {
 	Version,
 } from "./pkgman.js";
 import * as pro from "./pro.js";
+import { openProfile } from "./pro-profile.js";
 import {
 	formatPyFloatRepr,
 	isPyError,
@@ -1353,6 +1354,24 @@ export interface LaunchOptions {
 	 * released when the browser closes, or at exit when these options are
 	 * launched without NewBrowser/Camoufox. */
 	pro_key?: string;
+	/** A Camoufox Pro profile's key (any name up to 64 characters). The browser
+	 * presents the profile's identity, the same on every launch, and its state
+	 * (cookies, storage, logins) is restored before the launch and synced back
+	 * when it closes. Needs `os`; the launch is a persistent context. See
+	 * docs/pro.md, "Profiles". */
+	profile?: string;
+	/** The warm plan a new `profile` is created with: `"none"` (the default
+	 * with your own `proxy`) is the only plan whose state syncs to this
+	 * machine; `"standard"` and `"continuous"` profiles are kept warm in the
+	 * cloud and launch with their identity only. Left out, the API decides. */
+	warm_plan?: "none" | "standard" | "continuous";
+	/** Camoufox Pro managed egress: `false` for none, or the egress wanted,
+	 * e.g. `{ class: "residential", country: "US" }`. Left out, the plan's
+	 * default; with your own `proxy`, never used. */
+	egress?: false | { class?: string; country?: string; sticky?: boolean };
+	/** `false` renders WebGL, WebGPU and canvas on this machine's GPU for a
+	 * Camoufox Pro Windows identity, instead of on a remote GPU. */
+	gpu?: false;
 	/** Additional Firefox launch options, passed straight through to Playwright. */
 	[key: string]: any;
 }
@@ -1363,44 +1382,75 @@ export interface LaunchOptions {
  * Accepts all Playwright Firefox launch options, along with the Camoufox ones
  * documented on {@link LaunchOptions}.
  */
-export async function launchOptions({
-	config,
-	os: targetOsOption,
-	block_images,
-	block_webrtc,
-	block_webgl,
-	disable_coop,
-	webgl_config,
-	geoip,
-	geoip_db,
-	humanize,
-	locale,
-	addons,
-	fonts,
-	custom_fonts_only,
-	exclude_addons,
-	screen,
-	window,
-	fingerprint,
-	fingerprint_preset,
-	ff_version,
-	headless,
-	main_world_eval,
-	allow_addon_new_tab,
-	executable_path,
-	browser,
-	firefox_user_prefs,
-	proxy,
-	enable_cache,
-	args,
-	env,
-	i_know_what_im_doing,
-	debug,
-	virtual_display,
-	pin_cpu_cores,
-	pro_key,
-	...passthrough
-}: LaunchOptions = {}): Promise<Record<string, any>> {
+export async function launchOptions(
+	options: LaunchOptions = {},
+): Promise<Record<string, any>> {
+	// A Camoufox Pro lease minted along the way goes back if the build fails.
+	const held: { lease: pro.Lease | null } = { lease: null };
+	try {
+		return await buildLaunchOptions(options, held);
+	} catch (error) {
+		await held.lease?.release("error");
+		throw error;
+	}
+}
+
+const OS_CODE: Record<string, string> = {
+	windows: "win",
+	macos: "mac",
+	linux: "lin",
+};
+
+/** The Firefox version of the build at `executablePath`, without Camoufox's release suffix. */
+function firefoxVersion(executablePath: string): string {
+	return resolveVerstr(executablePath).split("-", 1)[0];
+}
+
+async function buildLaunchOptions(
+	{
+		config,
+		os: targetOsOption,
+		block_images,
+		block_webrtc,
+		block_webgl,
+		disable_coop,
+		webgl_config,
+		geoip,
+		geoip_db,
+		humanize,
+		locale,
+		addons,
+		fonts,
+		custom_fonts_only,
+		exclude_addons,
+		screen,
+		window,
+		fingerprint,
+		fingerprint_preset,
+		ff_version,
+		headless,
+		main_world_eval,
+		allow_addon_new_tab,
+		executable_path,
+		browser,
+		firefox_user_prefs,
+		proxy,
+		enable_cache,
+		args,
+		env,
+		i_know_what_im_doing,
+		debug,
+		virtual_display,
+		pin_cpu_cores,
+		pro_key,
+		profile,
+		warm_plan,
+		egress,
+		gpu,
+		...passthrough
+	}: LaunchOptions,
+	held: { lease: pro.Lease | null },
+): Promise<Record<string, any>> {
 	utilsDeps.ensureBrowserProfileDir(env);
 
 	// Build the config
@@ -1430,6 +1480,100 @@ export async function launchOptions({
 	}
 	if (typeof executable_path === "string") {
 		executable_path = path.resolve(executable_path);
+	}
+
+	// The managed install is resolved lazily in Python (camoufox_path() may
+	// download); here that download is async, so do it before any sync lookup.
+	if (!executable_path) {
+		await utilsDeps.ensureCamoufoxInstalled();
+	}
+
+	// Prepare the executable path
+	let resolvedExecutable: string;
+	if (executable_path) {
+		resolvedExecutable = String(executable_path);
+	} else if (browser) {
+		// Select a specific installed browser version
+		const browserPath = await utilsDeps.findInstalledVersion(browser);
+		if (!browserPath) {
+			throw new Error(
+				`Browser version '${browser}' not found. Run \`camoufox list\` to see installed versions.`,
+			);
+		}
+		resolvedExecutable = utilsDeps.launchPath(browserPath);
+	} else {
+		resolvedExecutable = utilsDeps.launchPath();
+	}
+
+	// A Pro build does not start without a lease. The caller's own lease file,
+	// if they hold one, wins, as every other variable in the environment does.
+	const proBuild = pro.readBuild(
+		settingsFile("pro-build.json", resolvedExecutable),
+	);
+	const leased = Boolean(proBuild) && !(pro.LEASE_FILE_ENV in env);
+	const proRequest: pro.LeaseRequest = {};
+	if (profile !== undefined) proRequest.profile = profile;
+	if (warm_plan !== undefined) {
+		if (profile === undefined) {
+			throw new ValueError("warm_plan applies to a profile: pass profile too.");
+		}
+		proRequest.warm_plan = warm_plan;
+	}
+	// The caller's own proxy is never replaced by managed egress.
+	if (proxy != null) proRequest.egress = false;
+	else if (egress !== undefined) proRequest.egress = egress;
+	if (gpu === false) proRequest.gpu = false;
+	if (Object.keys(proRequest).length && !leased) {
+		throw new ValueError(
+			proBuild
+				? `profile, warm_plan, egress and gpu are lease options, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
+				: "profile, warm_plan, egress and gpu need a Camoufox Pro build (see docs/pro.md).",
+		);
+	}
+	// What the lease adds to the environment, after every launch rule.
+	const proEnv: EnvVars = {};
+
+	if (profile !== undefined && proBuild) {
+		if (typeof targetOsOption !== "string") {
+			throw new ValueError(
+				"A profile launch needs `os`: the one OS its identity presents.",
+			);
+		}
+		checkValidOs(targetOsOption);
+		if (
+			fingerprint != null ||
+			isTruthy(fingerprint_preset) ||
+			isTruthy(config) ||
+			passthrough.user_data_dir !== undefined ||
+			passthrough.userDataDir !== undefined
+		) {
+			throw new ValueError(
+				"A profile carries its own identity and browser state: pass no config, fingerprint, " +
+					"fingerprint_preset or user_data_dir with it.",
+			);
+		}
+		held.lease = await pro.acquire(
+			proBuild,
+			OS_CODE[targetOsOption],
+			pro_key,
+			proRequest,
+		);
+		const { identity, userDataDir } = await openProfile(
+			held.lease,
+			firefoxVersion(resolvedExecutable),
+		);
+		// The identity is the bundle's, whole: nothing is drawn for it here.
+		config = identity.config;
+		fingerprint = identity.fingerprint;
+		targetOsOption = identity.os;
+		ff_version = identity.ff_version;
+		exclude_addons = identity.exclude_addons as DefaultAddon[];
+		i_know_what_im_doing = true;
+		Object.assign(firefox_user_prefs, identity.firefox_user_prefs);
+		for (const key of Object.keys(identity.firefox_user_prefs)) {
+			userPrefKeys.add(key);
+		}
+		passthrough.user_data_dir = userDataDir;
 	}
 
 	// Handle virtual display
@@ -1492,12 +1636,6 @@ export async function launchOptions({
 		config.addons = addons;
 	}
 
-	// The managed install is resolved lazily in Python (camoufox_path() may
-	// download); here that download is async, so do it before any sync lookup.
-	if (!executable_path) {
-		await utilsDeps.ensureCamoufoxInstalled();
-	}
-
 	// Get the Firefox version
 	let ffVersionStr: string;
 	if (ff_version) {
@@ -1552,6 +1690,34 @@ export async function launchOptions({
 	}
 
 	const targetOs = getTargetOs(config);
+
+	if (leased) {
+		held.lease ??= await pro.acquire(
+			proBuild as pro.ProBuild,
+			targetOs,
+			pro_key,
+			proRequest,
+		);
+		proEnv[pro.LEASE_FILE_ENV] = held.lease.path;
+		const grants = held.lease.grants;
+		if (grants.egress) {
+			proxy = {
+				server: grants.egress.server,
+				username: grants.egress.username,
+				password: grants.egress.password,
+				// The egress refuses local destinations, so they go direct.
+				bypass: "localhost,127.0.0.1,::1,*.local",
+			};
+			geoip ??= grants.egress.exit_ip ?? true;
+		}
+		// A profile's bundle leaves timezone and locale to the exit it runs behind.
+		if (grants.profile) geoip ??= true;
+		if (grants.gpu) {
+			proEnv[pro.RENDER_FILE_ENV] = held.lease.renderPath as string;
+			Object.assign(firefox_user_prefs, grants.gpu.prefs);
+			for (const key of Object.keys(grants.gpu.prefs)) userPrefKeys.add(key);
+		}
+	}
 
 	// A preset whose screen is a phone viewport is not a real desktop device.
 	if (!userSetScreenWindow && coherence.screenIsImplausible(config)) {
@@ -1951,33 +2117,7 @@ export async function launchOptions({
 		...env,
 	};
 
-	// Prepare the executable path
-	let resolvedExecutable: string;
-	if (executable_path) {
-		resolvedExecutable = String(executable_path);
-	} else if (browser) {
-		// Select a specific installed browser version
-		const browserPath = await utilsDeps.findInstalledVersion(browser);
-		if (!browserPath) {
-			throw new Error(
-				`Browser version '${browser}' not found. Run \`camoufox list\` to see installed versions.`,
-			);
-		}
-		resolvedExecutable = utilsDeps.launchPath(browserPath);
-	} else {
-		resolvedExecutable = utilsDeps.launchPath();
-	}
-
-	// A Pro build does not start without a lease. The caller's own lease file,
-	// if they hold one, wins, as every other variable in the environment does.
-	const proBuild = pro.readBuild(
-		settingsFile("pro-build.json", resolvedExecutable),
-	);
-	if (proBuild && !(pro.LEASE_FILE_ENV in envVars)) {
-		envVars[pro.LEASE_FILE_ENV] = (
-			await pro.acquire(proBuild, targetOs, pro_key)
-		).path;
-	}
+	Object.assign(envVars, proEnv);
 
 	const result: Record<string, any> = {
 		executablePath: resolvedExecutable,

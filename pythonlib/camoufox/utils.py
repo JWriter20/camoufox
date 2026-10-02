@@ -3,6 +3,7 @@ import os
 import platform
 import shutil
 import sys
+import threading
 from functools import wraps
 from os import environ
 from os.path import abspath
@@ -916,6 +917,36 @@ def resolve_verstr(executable_path: Optional[Path] = None) -> str:
     return installed_verstr()
 
 
+# The Camoufox Pro lease launch_options() minted on this thread, released if the
+# rest of the build fails.
+_HELD = threading.local()
+
+
+def _release_lease_on_failure(build: Any) -> Any:
+    @wraps(build)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        _HELD.lease = None
+        try:
+            return build(*args, **kwargs)
+        except BaseException:
+            if _HELD.lease is not None:
+                _HELD.lease.release("error")
+            raise
+        finally:
+            _HELD.lease = None
+
+    return wrapper
+
+
+_OS_CODE = {"windows": "win", "macos": "mac", "linux": "lin"}
+
+
+def _firefox_version(executable_path: Path) -> str:
+    """The Firefox version of the build at `executable_path`, without Camoufox's release suffix."""
+    return resolve_verstr(executable_path).split("-", 1)[0]
+
+
+@_release_lease_on_failure
 def launch_options(
     *,
     config: Optional[Dict[str, Any]] = None,
@@ -953,6 +984,10 @@ def launch_options(
     virtual_display: Optional[str] = None,
     pin_cpu_cores: Optional[bool] = None,
     pro_key: Optional[str] = None,
+    profile: Optional[str] = None,
+    warm_plan: Optional[Literal["none", "standard", "continuous"]] = None,
+    egress: Optional[Union[Literal[False], Dict[str, Any]]] = None,
+    gpu: Optional[Literal[False]] = None,
     **launch_options: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
@@ -1059,6 +1094,24 @@ def launch_options(
             is launched with a lease minted with it (see docs/pro.md); the lease
             is released when the browser closes, or at exit when these options
             are launched without NewBrowser/Camoufox.
+        profile (Optional[str]):
+            A Camoufox Pro profile's key (any name up to 64 characters). The
+            browser presents the profile's identity, the same on every launch,
+            and its state (cookies, storage, logins) is restored before the
+            launch and synced back when it closes. Needs `os`; the launch is a
+            persistent context. See docs/pro.md, "Profiles".
+        warm_plan (Optional[str]):
+            The warm plan a new `profile` is created with: "none" (the default
+            with your own `proxy`) is the only plan whose state syncs to this
+            machine; "standard" and "continuous" profiles are kept warm in the
+            cloud and launch with their identity only. Left out, the API decides.
+        egress (Optional[Union[bool, Dict[str, Any]]]):
+            Camoufox Pro managed egress: False for none, or the egress wanted,
+            e.g. {"class": "residential", "country": "US"}. Left out, the plan's
+            default; with your own `proxy`, never used.
+        gpu (Optional[bool]):
+            False renders WebGL, WebGPU and canvas on this machine's GPU for a
+            Camoufox Pro Windows identity, instead of on a remote GPU.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
             The pair must be one fpgen has recorded from Firefox on `os`
@@ -1104,6 +1157,79 @@ def launch_options(
     if isinstance(executable_path, str):
         # Convert executable path to a Path object
         executable_path = Path(abspath(executable_path))
+
+    # Prepare the executable path
+    if executable_path:
+        resolved_executable = str(executable_path)
+    elif browser:
+        # Select a specific installed browser version
+        from .multiversion import find_installed_version
+
+        browser_path = find_installed_version(browser)
+        if not browser_path:
+            raise ValueError(
+                f"Browser version '{browser}' not found. Run `camoufox list` to see installed versions."
+            )
+        resolved_executable = launch_path(browser_path)
+    else:
+        resolved_executable = launch_path()
+
+    # A Pro build does not start without a lease. The caller's own lease file,
+    # if they hold one, wins, as every other variable in the environment does.
+    pro_build = pro.read_build(_settings_file("pro-build.json", Path(resolved_executable)))
+    leased = pro_build is not None and pro.LEASE_FILE_ENV not in env
+    pro_request: Dict[str, Any] = {}
+    if profile is not None:
+        pro_request["profile"] = profile
+    if warm_plan is not None:
+        if profile is None:
+            raise ValueError("warm_plan applies to a profile: pass profile too.")
+        pro_request["warm_plan"] = warm_plan
+    # The caller's own proxy is never replaced by managed egress.
+    if proxy is not None:
+        pro_request["egress"] = False
+    elif egress is not None:
+        pro_request["egress"] = egress
+    if gpu is False:
+        pro_request["gpu"] = False
+    if pro_request and not leased:
+        raise ValueError(
+            "profile, warm_plan, egress and gpu are lease options, and this launch carries its own "
+            f"{pro.LEASE_FILE_ENV}."
+            if pro_build
+            else "profile, warm_plan, egress and gpu need a Camoufox Pro build (see docs/pro.md)."
+        )
+    # What the lease adds to the environment, after every launch rule.
+    pro_env: Dict[str, str] = {}
+
+    if profile is not None and pro_build is not None:
+        if not isinstance(os, str):
+            raise ValueError("A profile launch needs `os`: the one OS its identity presents.")
+        check_valid_os(os)
+        if (
+            fingerprint is not None
+            or fingerprint_preset
+            or config
+            or "user_data_dir" in launch_options
+        ):
+            raise ValueError(
+                "A profile carries its own identity and browser state: pass no config, fingerprint, "
+                "fingerprint_preset or user_data_dir with it."
+            )
+        _HELD.lease = pro.acquire(pro_build, _OS_CODE[os], pro_key, pro_request)
+        from .pro_profile import open_profile
+
+        identity, user_data_dir = open_profile(_HELD.lease, _firefox_version(Path(resolved_executable)))
+        # The identity is the bundle's, whole: nothing is drawn for it here.
+        config = identity["config"]
+        fingerprint = identity["fingerprint"]
+        os = identity["os"]
+        ff_version = identity["ff_version"]
+        exclude_addons = identity["exclude_addons"]
+        i_know_what_im_doing = True
+        firefox_user_prefs.update(identity["firefox_user_prefs"])
+        _user_pref_keys.update(identity["firefox_user_prefs"])
+        launch_options["user_data_dir"] = str(user_data_dir)
 
     # Handle virtual display
     if virtual_display:
@@ -1206,6 +1332,30 @@ def launch_options(
         )
 
     target_os = get_target_os(config)
+
+    if leased:
+        if _HELD.lease is None:
+            _HELD.lease = pro.acquire(pro_build, target_os, pro_key, pro_request)
+        lease = _HELD.lease
+        pro_env[pro.LEASE_FILE_ENV] = str(lease.path)
+        grants = lease.grants
+        if grants.get("egress"):
+            proxy = {
+                "server": grants["egress"]["server"],
+                "username": grants["egress"]["username"],
+                "password": grants["egress"]["password"],
+                # The egress refuses local destinations, so they go direct.
+                "bypass": "localhost,127.0.0.1,::1,*.local",
+            }
+            if geoip is None:
+                geoip = grants["egress"].get("exit_ip") or True
+        # A profile's bundle leaves timezone and locale to the exit it runs behind.
+        if grants.get("profile") and geoip is None:
+            geoip = True
+        if grants.get("gpu"):
+            pro_env[pro.RENDER_FILE_ENV] = str(lease.render_path)
+            firefox_user_prefs.update(grants["gpu"]["prefs"])
+            _user_pref_keys.update(grants["gpu"]["prefs"])
 
     # A preset whose screen is a phone viewport is not a real desktop device;
     # the floor is normally skipped for presets, on the assumption that a preset
@@ -1631,30 +1781,10 @@ def launch_options(
         **get_pref_env_vars(firefox_user_prefs),
         **env,
     }
-    # Prepare the executable path
-    if executable_path:
-        executable_path = str(executable_path)
-    elif browser:
-        # Select a specific installed browser version
-        from .multiversion import find_installed_version
-
-        browser_path = find_installed_version(browser)
-        if not browser_path:
-            raise ValueError(
-                f"Browser version '{browser}' not found. Run `camoufox list` to see installed versions."
-            )
-        executable_path = launch_path(browser_path)
-    else:
-        executable_path = launch_path()
-
-    # A Pro build does not start without a lease. The caller's own lease file,
-    # if they hold one, wins, as every other variable in the environment does.
-    pro_build = pro.read_build(_settings_file("pro-build.json", Path(executable_path)))
-    if pro_build and pro.LEASE_FILE_ENV not in env_vars:
-        env_vars[pro.LEASE_FILE_ENV] = str(pro.acquire(pro_build, target_os, pro_key).path)
+    env_vars.update(pro_env)
 
     result = {
-        "executable_path": executable_path,
+        "executable_path": resolved_executable,
         "args": args,
         "env": env_vars,
         "firefox_user_prefs": firefox_user_prefs,

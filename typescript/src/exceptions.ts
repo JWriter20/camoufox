@@ -270,6 +270,12 @@ export class CapabilityMismatch extends ProError {}
 export class RateLimited extends ProError {}
 /** The Camoufox Pro API cannot be reached, or fails, after the retries. */
 export class ProUnavailable extends ProError {}
+/** The profile exists with another OS, warm plan or egress regime than the launch asked for. */
+export class ProfileMismatch extends ProError {}
+/** The profile's state is sealed for the warm pool, so this machine cannot sync it. */
+export class StatePoolSealed extends ProError {}
+/** No remote GPU can serve this Windows identity now; retry after `retry_after`, or launch with `gpu: false`. */
+export class GpuUnavailable extends ProError {}
 
 /** This machine's clock is so far from the API's that a fresh lease would
  * look expired to the browser. */

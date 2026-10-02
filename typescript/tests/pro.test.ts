@@ -652,10 +652,11 @@ describe("release", () => {
 	it("happens when the browser closes, and deletes the file", async () => {
 		const lease = await acquire();
 		const handlers: Record<string, () => void> = {};
-		pro.releaseOnClose(
+		pro.attachLease(
 			lease,
 			{
 				on: (event: string, handler: () => void) => (handlers[event] = handler),
+				close: async () => undefined,
 			},
 			"disconnected",
 		);

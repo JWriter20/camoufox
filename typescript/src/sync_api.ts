@@ -20,7 +20,13 @@ import { generateContextFingerprint } from "./fingerprints.js";
 import { ensureModel } from "./fpgen/index.js";
 import * as humanizeCustom from "./humanize-custom.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
-import { claim, type Lease, launchFailed, releaseOnClose } from "./pro.js";
+import {
+	attachLease,
+	claim,
+	type Lease,
+	launchFailed,
+	type ProSession,
+} from "./pro.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
@@ -56,9 +62,12 @@ export interface NewBrowserOptions extends Omit<LaunchOptions, "headless"> {
  * spawned, is torn down with it.
  */
 export async function Camoufox(
-	options: NewBrowserOptions & { persistent_context: true },
-): Promise<BrowserContext>;
-export async function Camoufox(options?: NewBrowserOptions): Promise<Browser>;
+	options: NewBrowserOptions &
+		({ persistent_context: true } | { profile: string }),
+): Promise<BrowserContext & { pro?: ProSession }>;
+export async function Camoufox(
+	options?: NewBrowserOptions,
+): Promise<Browser & { pro?: ProSession }>;
 export async function Camoufox(
 	options: NewBrowserOptions = {},
 ): Promise<Browser | BrowserContext> {
@@ -74,12 +83,13 @@ export async function Camoufox(
  */
 export async function NewBrowser(
 	playwright: BrowserType,
-	options: NewBrowserOptions & { persistent_context: true },
-): Promise<BrowserContext>;
+	options: NewBrowserOptions &
+		({ persistent_context: true } | { profile: string }),
+): Promise<BrowserContext & { pro?: ProSession }>;
 export async function NewBrowser(
 	playwright: BrowserType,
 	options?: NewBrowserOptions,
-): Promise<Browser>;
+): Promise<Browser & { pro?: ProSession }>;
 export async function NewBrowser(
 	playwright: BrowserType,
 	{
@@ -203,13 +213,13 @@ async function launchWith(
 			userDataDir ?? "",
 			options,
 		);
-		if (lease) releaseOnClose(lease, context, "close");
+		if (lease) attachLease(lease, context, "close");
 		return attachVirtualDisplay(context, virtualDisplay);
 	}
 
 	// Browser
 	const browser = await playwright.launch(fromOptions);
-	if (lease) releaseOnClose(lease, browser, "disconnected");
+	if (lease) attachLease(lease, browser, "disconnected");
 	if (noViewportDefault) {
 		attachNoViewportDefault(browser);
 	}

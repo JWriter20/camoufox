@@ -300,6 +300,27 @@ class ProUnavailable(ProError):
     """
 
 
+class ProfileMismatch(ProError):
+    """
+    Raised when the profile exists with another OS, warm plan or egress regime
+    than the launch asked for.
+    """
+
+
+class StatePoolSealed(ProError):
+    """
+    Raised when a profile's state is sealed for the warm pool, so this machine
+    cannot sync it.
+    """
+
+
+class GpuUnavailable(ProError):
+    """
+    Raised when no remote GPU can serve a Windows identity now. Retry after
+    `retry_after`, or launch with `gpu=False` to render on this machine.
+    """
+
+
 class ProClockSkew(ProError):
     """
     Raised when this machine's clock is so far from the API's that a fresh lease

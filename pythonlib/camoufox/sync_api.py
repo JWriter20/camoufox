@@ -138,6 +138,8 @@ def NewBrowser(
     from .utils import driver_pid, pinned_core_count
 
     lease = pro.claim(from_options)
+    # A Camoufox Pro profile runs in its own user-data directory.
+    persistent_context = persistent_context or bool(lease and lease.grants.get('profile'))
     pin_to = pinned_core_count(from_options)
     pid = driver_pid(playwright) if pin_to else None
     previous = cpu_affinity.pin(pid, pin_to) if pid else None
@@ -154,13 +156,13 @@ def NewBrowser(
             }
             context = playwright.firefox.launch_persistent_context(**from_options)
             if lease:
-                pro.release_on_close(lease, context, 'close')
+                pro.attach_lease(lease, context, 'close')
             return attach(sync_attach_vd(context, virtual_display))
 
         # Browser
         browser = playwright.firefox.launch(**from_options)
         if lease:
-            pro.release_on_close(lease, browser, 'disconnected')
+            pro.attach_lease(lease, browser, 'disconnected')
         if no_viewport_default:
             attach_no_viewport_default(browser)
         attach_stock_media_defaults(browser)

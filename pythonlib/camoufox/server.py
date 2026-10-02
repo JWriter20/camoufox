@@ -54,12 +54,13 @@ def launch_server(**kwargs) -> NoReturn:
     `BrowserContext` over a websocket endpoint. Reject those options up front
     rather than accepting them and silently launching a throwaway profile.
     """
-    for unsupported in ('persistent_context', 'user_data_dir'):
+    # A Camoufox Pro profile launches as a persistent context too.
+    for unsupported in ('persistent_context', 'user_data_dir', 'profile'):
         if kwargs.get(unsupported):
             raise ValueError(
                 f"launch_server() does not support {unsupported!r}: Playwright cannot "
                 "serve a persistent context over a websocket endpoint. Use "
-                f"Camoufox(persistent_context=True, ...) in-process instead."
+                "Camoufox(...) in-process instead."
             )
         kwargs.pop(unsupported, None)
 

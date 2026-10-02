@@ -100,9 +100,11 @@ snake_case names: `os`, `config`, `block_images`, `block_webrtc`,
 `window`, `fingerprint`, `fingerprint_preset`, `ff_version`, `headless`,
 `main_world_eval`, `allow_addon_new_tab`, `executable_path`, `browser`,
 `firefox_user_prefs`, `proxy`, `enable_cache`, `args`, `env`,
-`i_know_what_im_doing`, `debug`, `virtual_display`, `pin_cpu_cores`, `pro_key`. Anything else is passed
-straight through to Playwright. `pro_key` is the Camoufox Pro key for a Pro
-build ([docs/pro.md](../docs/pro.md)).
+`i_know_what_im_doing`, `debug`, `virtual_display`, `pin_cpu_cores`, `pro_key`,
+`profile`, `warm_plan`, `egress`, `gpu`. Anything else is passed straight
+through to Playwright. The last five are for a Camoufox Pro build: its key, a
+profile to launch, its managed egress and its remote GPU
+([docs/pro.md](../docs/pro.md)).
 
 The returned launch options use Playwright's camelCase keys
 (`executablePath`, `firefoxUserPrefs`) rather than Python's snake_case. As in

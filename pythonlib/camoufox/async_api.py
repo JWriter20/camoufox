@@ -167,6 +167,8 @@ async def _launch(
     virtual_display: Optional[VirtualDisplay],
 ) -> Union[Browser, BrowserContext]:
     lease = pro.claim(from_options)
+    # A Camoufox Pro profile runs in its own user-data directory.
+    persistent_context = persistent_context or bool(lease and lease.grants.get('profile'))
     try:
         return await _launch_leased(
             playwright, from_options, persistent_context, no_viewport_default, virtual_display, lease
@@ -196,13 +198,13 @@ async def _launch_leased(
         }
         context = await playwright.firefox.launch_persistent_context(**from_options)
         if lease:
-            pro.release_on_close(lease, context, 'close')
+            pro.attach_lease(lease, context, 'close', is_async=True)
         return await async_attach_vd(context, virtual_display)
 
     # Browser
     browser = await playwright.firefox.launch(**from_options)
     if lease:
-        pro.release_on_close(lease, browser, 'disconnected')
+        pro.attach_lease(lease, browser, 'disconnected', is_async=True)
     if no_viewport_default:
         attach_no_viewport_default(browser)
     attach_stock_media_defaults(browser)

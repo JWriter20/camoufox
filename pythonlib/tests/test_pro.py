@@ -478,11 +478,14 @@ class Emitter:
     def on(self, event, handler):
         self.handlers[event] = handler
 
+    def close(self):
+        pass
+
 
 def test_closing_the_browser_releases_and_deletes_the_file(api):
     lease = acquire()
     browser = Emitter()
-    pro.release_on_close(lease, browser, "disconnected")
+    pro.attach_lease(lease, browser, "disconnected")
     browser.handlers["disconnected"](browser)
     api.wait_for(lambda: api.calls(r".*/release"))
     lease.release()  # joins the one in flight; releasing twice is one request

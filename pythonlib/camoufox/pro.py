@@ -9,6 +9,7 @@ the browser closes. A build without pro-build.json is launched as before, with
 no request made. See docs/pro.md.
 """
 
+import asyncio
 import atexit
 import base64
 import getpass
@@ -18,6 +19,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import socket
 import subprocess  # nosec
 import sys
@@ -29,7 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 from platformdirs import user_cache_dir, user_config_dir
@@ -39,20 +41,25 @@ from .exceptions import (
     AllowanceExhausted,
     BuildNotAllowlisted,
     CapabilityMismatch,
+    GpuUnavailable,
     InvalidRequest,
     LeaseLimitReached,
     LeaseRefused,
     NotSignedIn,
     ProClockSkew,
     ProError,
+    ProfileMismatch,
     ProUnavailable,
     RateLimited,
+    StatePoolSealed,
     SubscriptionRequired,
 )
 
 API_ENV = "CAMOUFOX_PRO_API"
 KEY_ENV = "CAMOUFOX_PRO_KEY"
 LEASE_FILE_ENV = "CAMOU_LEASE_FILE"
+# Where a Pro build reads its remote-rendering lease from, when the lease grants one.
+RENDER_FILE_ENV = "RENDERFARM_FIREFOX_CONFIG"
 DEFAULT_API = "https://api.camoufox.com"
 KEY_PREFIX = "cfp_live_"
 
@@ -88,6 +95,9 @@ _BY_CODE = {
     "lease_limit_reached": LeaseLimitReached,
     "capability_mismatch": CapabilityMismatch,
     "rate_limited": RateLimited,
+    "profile_mismatch": ProfileMismatch,
+    "state_pool_sealed": StatePoolSealed,
+    "gpu_unavailable": GpuUnavailable,
 }
 
 
@@ -119,11 +129,12 @@ def _private_dir(path: Path) -> None:
         path.chmod(0o700)
 
 
-def write_private(path: Path, data: bytes) -> None:
+def write_private(path: Path, data: bytes, *, replace: bool = True) -> bool:
     """
     Replace `path` atomically with a file only this user can read: a temporary
     file beside it, fsynced, then renamed over it, so a reader never sees half a
-    file (SPEC-LEASE § 8.3).
+    file (SPEC-LEASE § 8.3). With `replace=False` an existing file is kept and
+    False is returned.
     """
     _private_dir(path.parent)
     fd, tmp = tempfile.mkstemp(prefix=f"{path.name}.tmp-", dir=path.parent)
@@ -134,7 +145,17 @@ def write_private(path: Path, data: bytes) -> None:
             os.fsync(handle.fileno())
         if os.name == "nt":
             _owner_only(Path(tmp))
-        os.replace(tmp, path)
+        if replace:
+            os.replace(tmp, path)
+            return True
+        # A link fails rather than replace a file another process wrote first.
+        try:
+            os.link(tmp, path)
+            return True
+        except FileExistsError:
+            return False
+        finally:
+            Path(tmp).unlink(missing_ok=True)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
@@ -220,13 +241,20 @@ def _error(status: int, body: Dict[str, Any], retry_after: Optional[str]) -> Pro
     )
 
 
-def post(route: str, payload: Dict[str, Any], *, key: Optional[str] = None, timeout: float = 30) -> Dict[str, Any]:
-    """POST to the Camoufox Pro API. Every failure is a ProError; ProUnavailable is the retryable kind."""
+def call(
+    method: str,
+    route: str,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    key: Optional[str] = None,
+    timeout: float = 30,
+) -> Dict[str, Any]:
+    """Call the Camoufox Pro API. Every failure is a ProError; ProUnavailable is the retryable kind."""
     headers = {"User-Agent": client_name()}
     if key:
         headers["Authorization"] = f"Bearer {key}"
     try:
-        response = requests.post(f"{api_base()}{route}", json=payload, headers=headers, timeout=timeout)
+        response = requests.request(method, f"{api_base()}{route}", json=payload, headers=headers, timeout=timeout)
     except requests.RequestException as error:
         raise ProUnavailable(f"The Camoufox Pro API at {api_base()} could not be reached: {error}") from None
     try:
@@ -236,6 +264,10 @@ def post(route: str, payload: Dict[str, Any], *, key: Optional[str] = None, time
     if response.status_code >= 400:
         raise _error(response.status_code, body if isinstance(body, dict) else {}, response.headers.get("Retry-After"))
     return body
+
+
+def post(route: str, payload: Dict[str, Any], *, key: Optional[str] = None, timeout: float = 30) -> Dict[str, Any]:
+    return call("POST", route, payload, key=key, timeout=timeout)
 
 
 def _transient(error: ProError) -> bool:
@@ -388,20 +420,49 @@ def clean_stale_leases() -> None:
             continue
 
 
+@dataclass(frozen=True)
+class ProSession:
+    """What a Pro browser or persistent context exposes of its lease, as `.pro`."""
+
+    lease_id: str
+    # The captcha solver the lease grants: `endpoint` is an OpenAI-compatible API
+    # base URL, called with your own captcha key (docs/pro.md). None when the
+    # lease does not grant it.
+    captcha: Optional[Dict[str, Any]]
+
+
 class Lease:
     """
     One browser's lease: minted on creation, renewed in a daemon thread, and
     released by `release()`, which is idempotent and safe from any thread.
+
+    `request` is what the mint asks for beyond the build and OS, each field left
+    out unless set: `profile` names the profile to launch (and `warm_plan` the
+    plan a new one is created with), `egress: False` keeps managed egress off
+    (the caller's own proxy is never replaced) and a dict states the egress
+    wanted, and `gpu: False` renders on this machine.
     """
 
-    def __init__(self, build: ProBuild, target_os: str, key: str) -> None:
+    def __init__(self, build: ProBuild, target_os: str, key: str, request: Optional[Dict[str, Any]] = None) -> None:
         self.build = build
         self.target_os = target_os
+        self.request = dict(request or {})
         self._key = key
         self._host = host_fingerprint()
         self.path: Optional[Path] = None
         self.lease_id: Optional[str] = None
         self.grants: Dict[str, Any] = {}
+        # The account the lease belongs to.
+        self.account_id = 0
+        # The remote-rendering file, while the lease grants remote rendering.
+        self.render_path: Optional[Path] = None
+        # Run in place of a plain release when the browser closes.
+        self.on_close: Optional[Callable[["Lease"], None]] = None
+        # Directories that go with the lease: deleted when it ends.
+        self.scratch: List[Path] = []
+        self._close_lock = threading.Lock()
+        self._closed = False
+        self._close_error: Optional[BaseException] = None
         self.claimed = False
         self._seq = 0
         self._heartbeat_s = 60.0
@@ -415,8 +476,13 @@ class Lease:
         self._thread = threading.Thread(target=self._beat, name="camoufox-pro-heartbeat", daemon=True)
         self._thread.start()
 
+    def api(self, method: str, route: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Call the API with this lease's key."""
+        return call(method, route, payload, key=self._key)
+
     def _mint(self) -> None:
         body = {
+            **self.request,
             "build_hash": self.build.build_hash,
             "os": self.target_os,
             "client": client_name(),
@@ -437,8 +503,14 @@ class Lease:
                 if delay is None or not _transient(error):
                     raise
                 time.sleep(error.retry_after or delay)
+        if self.lease_id and self.grants.get("egress"):
+            log.warning(
+                "camoufox-pro: the new lease carries a new egress credential; the running browser keeps "
+                "the old one, so restart it to use managed egress again"
+            )
         self.lease_id = lease["lease_id"]
         self.grants = {name: lease.get(name) for name in SECTIONS}
+        self.account_id = int(lease.get("account_id") or token_fields(lease["token"])["account_id"])
         self._seq = 0
         self._heartbeat_s = float(lease["limits"]["heartbeat_s"])
         self._fidelity = lease["host"]["fidelity"]
@@ -449,12 +521,24 @@ class Lease:
             self._post_release("error")
             raise ProClockSkew(skew)
         self._write(lease["token"])
+        self._write_render(self.grants.get("gpu"))
 
     def _write(self, token: str) -> None:
         with self._write_lock:
             if self._released:
                 return
             write_private(self.path, lease_file_bytes(token, self.target_os, self._fidelity, int(time.time())))
+
+    def _write_render(self, gpu: Optional[Dict[str, Any]]) -> None:
+        """Write the remote-rendering file verbatim, as the browser reads it, when `gpu` carries one."""
+        if not gpu or not gpu.get("render"):
+            return
+        with self._write_lock:
+            if self._released:
+                return
+            if self.render_path is None:
+                self.render_path = self.path.with_name(self.path.stem + ".render.json")
+            write_private(self.render_path, json.dumps(gpu["render"], separators=(",", ":")).encode())
 
     def _next_beat(self) -> float:
         # Jittered by a twelfth, so a fleet started together does not beat together.
@@ -474,6 +558,8 @@ class Lease:
                     timeout=HEARTBEAT_TIMEOUT_S,
                 )
             except ProError as error:
+                if self._stop.is_set():
+                    return
                 # A 402 cannot happen on a heartbeat (allowances are checked at
                 # mint), so it is treated as the server failing.
                 if _transient(error) or error.status == 402:
@@ -503,6 +589,13 @@ class Lease:
             self._seq += 1
             _check_skew(answer["server_time"])
             self._write(answer["token"])
+            self._write_render(answer.get("gpu"))
+            if answer.get("gpu") is None and self.grants.get("gpu"):
+                if any(notice.get("code") == "gpu_lost" for notice in answer.get("notices") or ()):
+                    log.warning(
+                        "camoufox-pro: remote rendering for this browser was lost; restart it with a new "
+                        "lease to render remotely again"
+                    )
             failing_since, failures, wait = None, 0, self._next_beat()
 
     def _post_release(self, reason: str) -> bool:
@@ -521,6 +614,17 @@ class Lease:
         Release the lease and delete its file. Only the first call does anything.
         Returns whether this call's release reached the API.
         """
+        return self._end(lambda: self._post_release(reason))
+
+    def stop_renewing(self) -> None:
+        """Stop renewing, for a lease about to end with a commit that releases it."""
+        self._stop.set()
+
+    def forget(self) -> bool:
+        """Stop renewing and delete the files of a lease the API already released (a commit with release)."""
+        return self._end(lambda: True)
+
+    def _end(self, released: Callable[[], bool]) -> bool:
         with self._release_lock:
             if self._released:
                 return False
@@ -528,10 +632,32 @@ class Lease:
             with self._write_lock:
                 self._released = True
             _LIVE.pop(str(self.path), None)
-            released = self._post_release(reason)
-            if self.path is not None:
-                self.path.unlink(missing_ok=True)
-            return released
+            done = released()
+            for path in (self.path, self.render_path):
+                if path is not None:
+                    path.unlink(missing_ok=True)
+            for directory in self.scratch:
+                shutil.rmtree(directory, ignore_errors=True)
+            return done
+
+    def close(self) -> None:
+        """
+        End the browser session: `on_close` when one is set (a profile's state
+        sync, which releases the lease itself), else a release. Only the first
+        call does anything; every call raises what it raised.
+        """
+        with self._close_lock:
+            if not self._closed:
+                self._closed = True
+                try:
+                    if self.on_close is not None:
+                        self.on_close(self)
+                    else:
+                        self.release()
+                except BaseException as error:
+                    self._close_error = error
+        if self._close_error is not None:
+            raise self._close_error
 
 
 _LIVE: Dict[str, Lease] = {}
@@ -545,11 +671,13 @@ def _release_all() -> None:
 atexit.register(_release_all)
 
 
-def acquire(build: ProBuild, target_os: str, key: Optional[str] = None) -> Lease:
+def acquire(
+    build: ProBuild, target_os: str, key: Optional[str] = None, request: Optional[Dict[str, Any]] = None
+) -> Lease:
     """Mint a lease for a Pro build about to launch an identity of `target_os` ('win', 'mac', 'lin')."""
     resolved = resolve_key(key)
     clean_stale_leases()
-    return Lease(build, TARGET_OS[target_os], resolved)
+    return Lease(build, TARGET_OS[target_os], resolved, request)
 
 
 def claim(options: Dict[str, Any]) -> Optional[Lease]:
@@ -588,18 +716,47 @@ def launch_failed(lease: Optional[Lease], error: BaseException) -> None:
         raise LeaseRefused(reason) from error
 
 
-def release_on_close(lease: Lease, target: Any, event: str) -> None:
-    """Release `lease` when the browser or persistent context emits `event`."""
+def _close_quietly(lease: Lease) -> None:
+    # A failed sync has already said why; close() still raises it.
+    try:
+        lease.close()
+    except Exception:  # nosec
+        pass
+
+
+def attach_lease(lease: Lease, target: Any, event: str, *, is_async: bool = False) -> Any:
+    """
+    End `lease`'s session when the browser or persistent context emits `event`,
+    make `close()` return only once that is done (a profile's state is synced by
+    then), and expose the session as `target.pro`.
+    """
 
     def closed(*_: Any) -> None:
         # Off the caller's thread, so an async event loop is never blocked by the
         # request; not a daemon, so the interpreter finishes it before exiting.
         try:
-            threading.Thread(target=lease.release, name="camoufox-pro-release").start()
+            threading.Thread(target=_close_quietly, args=(lease,), name="camoufox-pro-close").start()
         except RuntimeError:
-            lease.release()
+            _close_quietly(lease)
 
     target.on(event, closed)
+    original = target.close
+    if is_async:
+
+        async def close_async(*args: Any, **kwargs: Any) -> None:
+            await original(*args, **kwargs)
+            await asyncio.get_running_loop().run_in_executor(None, lease.close)
+
+        target.close = close_async
+    else:
+
+        def close(*args: Any, **kwargs: Any) -> None:
+            original(*args, **kwargs)
+            lease.close()
+
+        target.close = close
+    target.pro = ProSession(lease_id=str(lease.lease_id), captcha=lease.grants.get("captcha"))
+    return target
 
 
 

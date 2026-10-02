@@ -20,6 +20,7 @@ import {
 	AllowanceExhausted,
 	BuildNotAllowlisted,
 	CapabilityMismatch,
+	GpuUnavailable,
 	InvalidRequest,
 	LeaseLimitReached,
 	LeaseRefused,
@@ -27,8 +28,10 @@ import {
 	ProClockSkew,
 	ProError,
 	type ProErrorFields,
+	ProfileMismatch,
 	ProUnavailable,
 	RateLimited,
+	StatePoolSealed,
 	SubscriptionRequired,
 } from "./exceptions.js";
 import { OS_NAME, userCacheDir, userConfigDir } from "./paths.js";
@@ -36,6 +39,8 @@ import { OS_NAME, userCacheDir, userConfigDir } from "./paths.js";
 export const API_ENV = "CAMOUFOX_PRO_API";
 export const KEY_ENV = "CAMOUFOX_PRO_KEY";
 export const LEASE_FILE_ENV = "CAMOU_LEASE_FILE";
+/** Where a Pro build reads its remote-rendering lease from, when the lease grants one. */
+export const RENDER_FILE_ENV = "RENDERFARM_FIREFOX_CONFIG";
 export const DEFAULT_API = "https://api.camoufox.com";
 export const KEY_PREFIX = "cfp_live_";
 
@@ -84,6 +89,9 @@ const BY_CODE: Record<
 	lease_limit_reached: LeaseLimitReached,
 	capability_mismatch: CapabilityMismatch,
 	rate_limited: RateLimited,
+	profile_mismatch: ProfileMismatch,
+	state_pool_sealed: StatePoolSealed,
+	gpu_unavailable: GpuUnavailable,
 };
 
 export function apiBase(): string {
@@ -128,7 +136,11 @@ function privateDir(dir: string): void {
  * file beside it, fsynced, then renamed over it, so a reader never sees half a
  * file (SPEC-LEASE § 8.3).
  */
-export function writePrivate(file: string, data: string): void {
+export function writePrivate(
+	file: string,
+	data: string,
+	{ replace = true }: { replace?: boolean } = {},
+): boolean {
 	privateDir(path.dirname(file));
 	const tmp = path.join(
 		path.dirname(file),
@@ -143,7 +155,20 @@ export function writePrivate(file: string, data: string): void {
 			fs.closeSync(fd);
 		}
 		if (OS_NAME === "win") ownerOnly(tmp);
-		fs.renameSync(tmp, file);
+		if (replace) {
+			fs.renameSync(tmp, file);
+			return true;
+		}
+		// A link fails rather than replace a file another process wrote first.
+		try {
+			fs.linkSync(tmp, file);
+			return true;
+		} catch (error: any) {
+			if (error?.code === "EEXIST") return false;
+			throw error;
+		} finally {
+			fs.rmSync(tmp, { force: true });
+		}
 	} catch (error) {
 		fs.rmSync(tmp, { force: true });
 		throw error;
@@ -237,24 +262,23 @@ function apiError(
 	});
 }
 
-/** POST to the Camoufox Pro API. Every failure is a ProError; ProUnavailable is the retryable kind. */
-export async function post(
+/** Call the Camoufox Pro API. Every failure is a ProError; ProUnavailable is the retryable kind. */
+export async function call(
+	method: "GET" | "POST" | "PUT",
 	route: string,
-	payload: Record<string, any>,
+	payload: Record<string, any> | null,
 	{ key, timeoutS = 30 }: { key?: string; timeoutS?: number } = {},
 ): Promise<Record<string, any>> {
-	const headers: Record<string, string> = {
-		"User-Agent": clientName(),
-		"Content-Type": "application/json",
-	};
+	const headers: Record<string, string> = { "User-Agent": clientName() };
+	if (payload) headers["Content-Type"] = "application/json";
 	if (key) headers.Authorization = `Bearer ${key}`;
 	let response: Response;
 	let text: string;
 	try {
 		response = await fetch(`${apiBase()}${route}`, {
-			method: "POST",
+			method,
 			headers,
-			body: JSON.stringify(payload),
+			body: payload ? JSON.stringify(payload) : undefined,
 			signal: AbortSignal.timeout(timeoutS * 1000),
 		});
 		text = await response.text();
@@ -277,11 +301,19 @@ export async function post(
 	return body;
 }
 
-function transient(error: unknown): boolean {
+export function post(
+	route: string,
+	payload: Record<string, any>,
+	options: { key?: string; timeoutS?: number } = {},
+): Promise<Record<string, any>> {
+	return call("POST", route, payload, options);
+}
+
+export function transient(error: unknown): boolean {
 	return error instanceof ProUnavailable || error instanceof RateLimited;
 }
 
-const sleepS = (seconds: number) =>
+export const sleepS = (seconds: number) =>
 	new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 
 // ── sign-in: RFC 8628's device flow ─────────────────────────────────────────
@@ -495,6 +527,23 @@ export function cleanStaleLeases(): void {
 const LIVE = new Map<string, Lease>();
 
 /**
+ * What a mint asks for beyond the build and OS, each field left out unless
+ * set: `profile` names the profile to launch (and `warm_plan` the plan a new
+ * one is created with), `egress: false` keeps managed
+ * egress off (the caller's own proxy is never replaced) and an object states
+ * the egress wanted, and `gpu: false` renders on this machine.
+ */
+export interface LeaseRequest {
+	profile?: string;
+	warm_plan?: "none" | "standard" | "continuous";
+	egress?: false | { class?: string; country?: string; sticky?: boolean };
+	gpu?: false;
+}
+
+/** Ends a lease's browser session: set for a profile whose state syncs when it closes. */
+export type SessionEnd = (lease: Lease) => Promise<void>;
+
+/**
  * One browser's lease: minted by `Lease.acquire()`, renewed on an unref'd
  * timer, and released by `release()`, which is idempotent.
  */
@@ -503,6 +552,14 @@ export class Lease {
 	leaseId = "";
 	/** The lease's sections (`SECTIONS`), each null when it does not grant it. */
 	grants: Record<string, any> = {};
+	/** The account the lease belongs to. */
+	accountId = 0;
+	/** The remote-rendering file, while the lease grants remote rendering. */
+	renderPath: string | null = null;
+	/** Run in place of a plain release when the browser closes. */
+	onClose: SessionEnd | null = null;
+	/** Directories that go with the lease: deleted when it ends. */
+	scratch: string[] = [];
 	claimed = false;
 	readonly #key: string;
 	readonly #host: string;
@@ -511,6 +568,8 @@ export class Lease {
 	#fidelity = "native";
 	#timer: NodeJS.Timeout | null = null;
 	#released: Promise<boolean> | null = null;
+	#closed: Promise<void> | null = null;
+	#renewing = true;
 	#failingSince: number | null = null;
 	#failures = 0;
 
@@ -518,6 +577,7 @@ export class Lease {
 		readonly build: ProBuild,
 		readonly targetOs: string,
 		key: string,
+		readonly request: LeaseRequest,
 	) {
 		this.#key = key;
 		this.#host = hostFingerprint();
@@ -527,8 +587,9 @@ export class Lease {
 		build: ProBuild,
 		targetOs: string,
 		key: string,
+		request: LeaseRequest = {},
 	): Promise<Lease> {
-		const lease = new Lease(build, targetOs, key);
+		const lease = new Lease(build, targetOs, key, request);
 		await lease.#mint();
 		LIVE.set(lease.path, lease);
 		watchExit();
@@ -536,8 +597,18 @@ export class Lease {
 		return lease;
 	}
 
+	/** Call the API with this lease's key. */
+	api(
+		method: "GET" | "POST" | "PUT",
+		route: string,
+		payload: Record<string, any> | null = null,
+	): Promise<Record<string, any>> {
+		return call(method, route, payload, { key: this.#key });
+	}
+
 	async #mint(): Promise<void> {
 		const body = {
+			...this.request,
 			build_hash: this.build.build_hash,
 			os: this.targetOs,
 			client: clientName(),
@@ -561,9 +632,18 @@ export class Lease {
 			}
 		}
 		const minted = lease as Record<string, any>;
+		if (this.leaseId && this.grants.egress) {
+			console.warn(
+				"camoufox-pro: the new lease carries a new egress credential; " +
+					"the running browser keeps the old one, so restart it to use managed egress again",
+			);
+		}
 		this.leaseId = minted.lease_id;
 		this.grants = Object.fromEntries(
 			SECTIONS.map((name) => [name, minted[name] ?? null]),
+		);
+		this.accountId = Number(
+			minted.account_id ?? tokenFields(minted.token).account_id,
 		);
 		this.#seq = 0;
 		this.#heartbeatS = Number(minted.limits.heartbeat_s);
@@ -578,6 +658,26 @@ export class Lease {
 			throw new ProClockSkew(skew);
 		}
 		this.#write(minted.token);
+		this.#writeRender(this.grants.gpu);
+	}
+
+	/** Write the remote-rendering file verbatim, as the browser reads it, when `gpu` carries one. */
+	#writeRender(gpu: Record<string, any> | null | undefined): void {
+		if (this.#released || !gpu?.render) return;
+		this.renderPath ??= this.path.replace(/\.json$/, ".render.json");
+		writePrivate(this.renderPath, JSON.stringify(gpu.render));
+	}
+
+	/** Delete every file and directory that goes with this lease. */
+	#clean(): void {
+		for (const file of [this.path, this.renderPath, ...this.scratch]) {
+			if (file) fs.rmSync(file, { recursive: true, force: true });
+		}
+	}
+
+	/** At process exit, when nothing else can run. */
+	cleanAtExit(): void {
+		this.#clean();
 	}
 
 	get fidelity(): string {
@@ -603,7 +703,7 @@ export class Lease {
 	}
 
 	#schedule(seconds: number): void {
-		if (this.#released) return;
+		if (this.#released || !this.#renewing) return;
 		this.#timer = setTimeout(() => void this.#beat(), seconds * 1000);
 		this.#timer.unref();
 	}
@@ -618,7 +718,7 @@ export class Lease {
 				{ key: this.#key, timeoutS: proTiming.heartbeatTimeoutS },
 			);
 		} catch (error) {
-			if (this.#released) return;
+			if (this.#released || !this.#renewing) return;
 			if (!(error instanceof ProError)) throw error;
 			// A 402 cannot happen on a heartbeat (allowances are checked at
 			// mint), so it is treated as the server failing.
@@ -668,6 +768,17 @@ export class Lease {
 		this.#seq += 1;
 		checkSkew(answer.server_time);
 		this.#write(answer.token);
+		this.#writeRender(answer.gpu);
+		if (answer.gpu === null && this.grants.gpu) {
+			for (const notice of answer.notices ?? []) {
+				if (notice.code === "gpu_lost") {
+					console.warn(
+						"camoufox-pro: remote rendering for this browser was lost; " +
+							"restart it with a new lease to render remotely again",
+					);
+				}
+			}
+		}
 		this.#failingSince = null;
 		this.#failures = 0;
 		this.#schedule(this.#nextBeat());
@@ -699,14 +810,42 @@ export class Lease {
 	 * every call resolves to whether that release reached the API.
 	 */
 	release(reason = "clean_exit"): Promise<boolean> {
+		return this.#end(() => this.#postRelease(reason));
+	}
+
+	/** Stop renewing, for a lease about to end with a commit that releases it. */
+	stopRenewing(): void {
+		this.#renewing = false;
+		if (this.#timer) clearTimeout(this.#timer);
+	}
+
+	/** Stop renewing and delete the files of a lease the API already released (a commit with release). */
+	forget(): Promise<boolean> {
+		return this.#end(async () => true);
+	}
+
+	#end(released: () => Promise<boolean>): Promise<boolean> {
 		this.#released ??= (async () => {
 			if (this.#timer) clearTimeout(this.#timer);
 			LIVE.delete(this.path);
-			const released = await this.#postRelease(reason);
-			fs.rmSync(this.path, { force: true });
-			return released;
+			const done = await released();
+			this.#clean();
+			return done;
 		})();
 		return this.#released;
+	}
+
+	/**
+	 * End the browser session: `onClose` when one is set (a profile's state
+	 * sync, which releases the lease itself), else a release. Only the first
+	 * call does anything.
+	 */
+	close(): Promise<void> {
+		this.#closed ??= (async () => {
+			if (this.onClose) await this.onClose(this);
+			else await this.release();
+		})();
+		return this.#closed;
 	}
 }
 
@@ -724,7 +863,7 @@ function watchExit(): void {
 		for (const lease of LIVE.values()) void lease.release("driver_shutdown");
 	});
 	process.on("exit", () => {
-		for (const file of LIVE.keys()) fs.rmSync(file, { force: true });
+		for (const lease of LIVE.values()) lease.cleanAtExit();
 	});
 }
 
@@ -740,10 +879,11 @@ export async function acquire(
 	build: ProBuild,
 	targetOs: string,
 	key?: string | null,
+	request: LeaseRequest = {},
 ): Promise<Lease> {
 	const resolved = resolveKey(key);
 	cleanStaleLeases();
-	return Lease.acquire(build, TARGET_OS[targetOs], resolved);
+	return Lease.acquire(build, TARGET_OS[targetOs], resolved, request);
 }
 
 /**
@@ -782,13 +922,43 @@ export async function launchFailed(
 	if (reason !== null) throw new LeaseRefused(reason);
 }
 
-/** Release `lease` when the browser or persistent context emits `event`. */
-export function releaseOnClose(
+/** What a Pro browser or persistent context exposes of its lease, as `.pro`. */
+export interface ProSession {
+	/** The lease's id. */
+	leaseId: string;
+	/**
+	 * The captcha solver the lease grants: `endpoint` is an OpenAI-compatible
+	 * API base URL, called with your own captcha key (docs/pro.md). null when
+	 * the lease does not grant it.
+	 */
+	captcha: { endpoint: string; remaining: number; expires_at?: string } | null;
+}
+
+/**
+ * End `lease`'s session when the browser or persistent context emits `event`,
+ * make `close()` resolve only once that is done (a profile's state is synced
+ * by then), and expose the session as `target.pro`.
+ */
+export function attachLease<
+	T extends {
+		on(event: any, listener: () => void): unknown;
+		close(...args: any[]): Promise<void>;
+	},
+>(
 	lease: Lease,
-	target: { on(event: any, listener: () => void): unknown },
+	target: T,
 	event: "disconnected" | "close",
-): void {
-	target.on(event, () => void lease.release());
+): T & { pro: ProSession } {
+	// A failed sync has already said why; close() still rejects with it.
+	target.on(event, () => void lease.close().catch(() => undefined));
+	const close = target.close.bind(target);
+	target.close = async (...args: any[]) => {
+		await close(...args);
+		await lease.close();
+	};
+	return Object.assign(target, {
+		pro: { leaseId: lease.leaseId, captcha: lease.grants.captcha ?? null },
+	});
 }
 
 // ── camoufox pro --activate ─────────────────────────────────────────────────
