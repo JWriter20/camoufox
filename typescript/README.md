@@ -273,6 +273,49 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 and `from_options` (an object from `launchOptions()` to use as is).
 `launchServer()` also takes `port` and `ws_path`.
 
+`humanize` takes one engine per input channel, built with the factories the
+package exports (`auto`, `raw`, `cursory`, `notches`, and `engine(name,
+options)` for any engine a build lists in its `humanize-engines.json`), which
+take their options in camelCase:
+
+```ts
+import { Camoufox, cursory, raw } from "camoufox";
+
+const browser = await Camoufox({
+	humanize: { mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 },
+});
+```
+
+A `seed` above `Number.MAX_SAFE_INTEGER` must be passed as a `bigint`.
+
+`custom(fn)` runs a channel with a function of yours in this process (see the
+repository README, "Writing your own engine"). The function receives its
+extras as one object, and `play()` takes arrays:
+
+```ts
+import { Camoufox, custom } from "camoufox";
+
+const browser = await Camoufox({
+	humanize: {
+		keyboard: custom(async (page, text, { original, rng, play, kind }) => {
+			if (kind === "press") return original();
+			let t = 0;
+			const steps = [];
+			for (const ch of text) {
+				steps.push(["key", ch, "down", t]);
+				t += 40 + rng() * 60;
+				steps.push(["key", ch, "up", t]);
+			}
+			return play(steps);
+		}),
+		seed: 1234,
+	},
+});
+```
+
+A scroll function gets `[dx, dy]` for a wheel call, and a `Locator` otherwise.
+The same seed and function give the same events as the Python launcher.
+
 ## CLI
 
 `npx camoufox <command>`. The commands match the Python package's.

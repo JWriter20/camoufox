@@ -54,6 +54,11 @@ import {
 	setWebgpu,
 } from "./host_rendering.js";
 import {
+	type HumanizeManifest,
+	type HumanizeSetting,
+	humanizeConfig,
+} from "./humanize.js";
+import {
 	type ProxyConfig,
 	ProxyHelper,
 	publicIP,
@@ -195,6 +200,20 @@ function stockProfileDiskCapacityKb(): number | null {
 }
 
 /**
+ * Loads humanize-engines.json, found the same way as properties.json. null for
+ * a build that predates it.
+ */
+function loadHumanizeEngines(
+	executablePath?: string | null,
+): HumanizeManifest | null {
+	const manifest = executablePath
+		? buildFile(executablePath, "humanize-engines.json")
+		: utilsDeps.getPath("humanize-engines.json");
+	if (!fs.existsSync(manifest)) return null;
+	return JSON.parse(fs.readFileSync(manifest, "utf-8"));
+}
+
+/**
  * Injection points: everything launchOptions() reaches outside this module.
  * Mirrors the names the Python tests monkeypatch on camoufox.utils.
  */
@@ -220,6 +239,7 @@ export const utilsDeps = {
 	getPath,
 	launchPath,
 	selectedLaunchPath,
+	loadHumanizeEngines,
 	identitySalt,
 	identitySeed,
 	generateFingerprint: async (
@@ -1339,8 +1359,12 @@ export interface LaunchOptions {
 	geoip?: string | boolean;
 	/** Name of the GeoIP database to use (e.g. "GeoIP AIO by daijro"). */
 	geoip_db?: string;
-	/** Humanize the cursor movement: `true`, or the MAX duration in seconds. */
-	humanize?: boolean | number;
+	/** Humanize mouse, keyboard and scroll input, per channel. `true` uses the
+	 * best engine the build offers on every channel; a number is the MAX
+	 * duration in seconds of a cursor movement; an object picks an engine per
+	 * channel with the factories in humanize.ts, e.g.
+	 * `{ mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 }`. */
+	humanize?: HumanizeSetting;
 	/** Locale(s) to use. The first listed locale is used for the Intl API. */
 	locale?: string | string[];
 	/** List of Firefox addons to use (paths to extracted addons). */
@@ -1900,14 +1924,15 @@ export async function launchOptions({
 	// it. setInto leaves an explicit caller value alone.
 	setInto(config, "voices:blockIfNotDefined", true);
 
-	// Pass the humanize option
-	if (pyTruthy(humanize)) {
-		setInto(config, "humanize", true);
-		// MaskConfig expects maxTime to be a JSON number.
-		// float(humanize): a JSON number with a floating-point representation.
-		if (typeof humanize === "number") {
-			setInto(config, "humanize:maxTime", new PyFloat(humanize));
-		}
+	// Pass the humanize option, checked against the engines the build ships
+	for (const [key, value] of Object.entries(
+		humanizeConfig(
+			humanize,
+			utilsDeps.loadHumanizeEngines(executable_path),
+			i_know_what_im_doing,
+		),
+	)) {
+		setInto(config, key, value);
 	}
 
 	// Enable the main world context creation
