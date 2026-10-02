@@ -1557,6 +1557,8 @@ export interface InitValues {
 	webglRenderer?: string;
 	screenWidth?: number;
 	screenHeight?: number;
+	screenAvailWidth?: number;
+	screenAvailHeight?: number;
 	screenColorDepth?: number;
 	timezone?: string;
 	fontList?: string[];
@@ -1590,12 +1592,20 @@ export function buildInitScript(values: InitValues): string {
 		}
 	}
 
-	// Screen dimensions (requires width + height together)
+	// Screen dimensions (requires width + height together). The available rect
+	// rides along when the identity has one; a build that keeps only the full
+	// size ignores the extra arguments.
 	const sw = values.screenWidth;
 	const sh = values.screenHeight;
 	if (pyTruthy(sw) && pyTruthy(sh)) {
+		const aw = values.screenAvailWidth;
+		const ah = values.screenAvailHeight;
+		const dims =
+			pyTruthy(aw) && pyTruthy(ah)
+				? `${sw}, ${sh}, ${aw}, ${ah}`
+				: `${sw}, ${sh}`;
 		lines.push(
-			`  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions(${sw}, ${sh});`,
+			`  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions(${dims});`,
 		);
 		const scd = values.screenColorDepth;
 		if (pyTruthy(scd)) {
@@ -1856,6 +1866,8 @@ export function generateContextFingerprint({
 		webglRenderer: webgl.unmaskedRenderer,
 		screenWidth: screen.width,
 		screenHeight: screen.height,
+		screenAvailWidth: config["screen.availWidth"],
+		screenAvailHeight: config["screen.availHeight"],
 		screenColorDepth: screen.colorDepth,
 		timezone:
 			typeof resolvedPreset.timezone === "string"

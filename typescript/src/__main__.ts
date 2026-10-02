@@ -1119,6 +1119,36 @@ program
 	});
 
 program
+	.command("login")
+	.description("Sign in to Camoufox Pro on this machine")
+	.action(async () => {
+		const { login } = await import("./pro.js");
+		const signedIn = await login();
+		rprint(
+			`Signed in to ${signedIn.account.name} as ${signedIn.user.github_login}. ` +
+				`The key is stored in ${signedIn.path}.`,
+			"green",
+		);
+	});
+
+program
+	.command("logout")
+	.description("Delete the Camoufox Pro key stored on this machine")
+	.action(async () => {
+		const { forgetKey } = await import("./pro.js");
+		const forgotten = forgetKey();
+		if (forgotten === null) {
+			rprint("No Camoufox Pro key is stored on this machine.", "yellow");
+			return;
+		}
+		rprint(
+			`Deleted ${forgotten} from this machine. It stays valid until you revoke it ` +
+				"in the Camoufox Pro dashboard.",
+			"green",
+		);
+	});
+
+program
 	.command("gui")
 	.description("Launch the Camoufox Manager GUI (requires PySide6)")
 	.option("--debug", "Enable debug options in the GUI.")

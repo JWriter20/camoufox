@@ -12,7 +12,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from . import _humanize_custom
+from . import _humanize_custom, pro
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
@@ -166,6 +166,24 @@ async def _launch(
     no_viewport_default: bool,
     virtual_display: Optional[VirtualDisplay],
 ) -> Union[Browser, BrowserContext]:
+    lease = pro.claim(from_options)
+    try:
+        return await _launch_leased(
+            playwright, from_options, persistent_context, no_viewport_default, virtual_display, lease
+        )
+    except Exception as error:
+        pro.launch_failed(lease, error)
+        raise
+
+
+async def _launch_leased(
+    playwright: Playwright,
+    from_options: Dict[str, Any],
+    persistent_context: bool,
+    no_viewport_default: bool,
+    virtual_display: Optional[VirtualDisplay],
+    lease: Optional[pro.Lease],
+) -> Union[Browser, BrowserContext]:
     # Persistent context
     if persistent_context:
         if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
@@ -177,10 +195,14 @@ async def _launch(
             **from_options,
         }
         context = await playwright.firefox.launch_persistent_context(**from_options)
+        if lease:
+            pro.release_on_close(lease, context, 'close')
         return await async_attach_vd(context, virtual_display)
 
     # Browser
     browser = await playwright.firefox.launch(**from_options)
+    if lease:
+        pro.release_on_close(lease, browser, 'disconnected')
     if no_viewport_default:
         attach_no_viewport_default(browser)
     attach_stock_media_defaults(browser)

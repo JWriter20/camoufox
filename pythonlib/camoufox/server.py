@@ -6,6 +6,7 @@ import base64
 import orjson
 from playwright._impl._driver import compute_driver_executable
 
+from camoufox import pro
 from camoufox.pkgman import LOCAL_DATA
 from camoufox.humanize import custom_engines
 from camoufox.utils import launch_options
@@ -74,9 +75,14 @@ def launch_server(**kwargs) -> NoReturn:
         virtual_display = VirtualDisplay(debug=kwargs.get('debug'))
         kwargs['virtual_display'] = virtual_display.get()
         kwargs['headless'] = False
+    lease = None
     try:
-        _serve(launch_options(**kwargs))
+        config = launch_options(**kwargs)
+        lease = pro.claim(config)
+        _serve(config)
     finally:
+        if lease:
+            lease.release()
         if virtual_display:
             virtual_display.kill()
 

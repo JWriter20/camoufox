@@ -1522,12 +1522,17 @@ def _build_init_script(values: Dict[str, Any]) -> str:
                 f'  if (typeof w.{fn_name} === "function") w.{fn_name}({js_val});'
             )
 
-    # Screen dimensions (requires width + height together)
+    # Screen dimensions (requires width + height together). The available rect
+    # rides along when the identity has one; a build that keeps only the full
+    # size ignores the extra arguments.
     sw = values.get('screenWidth')
     sh = values.get('screenHeight')
     if sw and sh:
+        aw = values.get('screenAvailWidth')
+        ah = values.get('screenAvailHeight')
+        dims = f'{sw}, {sh}, {aw}, {ah}' if aw and ah else f'{sw}, {sh}'
         lines.append(
-            f'  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions({sw}, {sh});'
+            f'  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions({dims});'
         )
         scd = values.get('screenColorDepth')
         if scd:
@@ -1741,6 +1746,8 @@ def generate_context_fingerprint(
         'webglRenderer': webgl.get('unmaskedRenderer'),
         'screenWidth': screen.get('width'),
         'screenHeight': screen.get('height'),
+        'screenAvailWidth': config.get('screen.availWidth'),
+        'screenAvailHeight': config.get('screen.availHeight'),
         'screenColorDepth': screen.get('colorDepth'),
         'timezone': preset.get('timezone') if isinstance(preset.get('timezone'), str) else config.get('timezone'),
         'fontList': config.get('fonts'),

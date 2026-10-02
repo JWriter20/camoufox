@@ -76,6 +76,7 @@ import {
 	resolvedPlaywrightVersionStr,
 	Version,
 } from "./pkgman.js";
+import * as pro from "./pro.js";
 import {
 	formatPyFloatRepr,
 	isPyError,
@@ -553,59 +554,165 @@ export function getEnvVars(
 }
 
 /**
- * Loads the properties.json file.
+ * Where a settings file the build ships (properties.json, launch.json) lives:
+ * beside the caller's own binary when they supplied one, else in the managed
+ * install.
+ */
+function settingsFile(name: string, executablePath?: string | null): string {
+	if (!executablePath) return utilsDeps.getPath(name);
+	const beside = path.join(path.dirname(executablePath), name);
+	if (!fs.existsSync(beside)) {
+		// macOS app bundle: the binary is Contents/MacOS/camoufox, the
+		// packaged settings live in Contents/Resources/.
+		const bundled = path.join(
+			path.dirname(path.dirname(executablePath)),
+			"Resources",
+			name,
+		);
+		if (fs.existsSync(bundled)) return bundled;
+	}
+	return beside;
+}
+
+interface Property {
+	property: string;
+	type: string;
+	min?: number;
+}
+
+/**
+ * Loads the properties.json file, keyed by property name.
  */
 function loadProperties(
 	executablePath?: string | null,
-): Record<string, string> {
-	let propFile: string;
-	if (executablePath) {
-		propFile = path.join(path.dirname(executablePath), "properties.json");
-		if (!fs.existsSync(propFile)) {
-			// macOS app bundle: the binary is Contents/MacOS/camoufox, the
-			// packaged settings live in Contents/Resources/.
-			const bundled = path.join(
-				path.dirname(path.dirname(executablePath)),
-				"Resources",
-				"properties.json",
-			);
-			if (fs.existsSync(bundled)) propFile = bundled;
-		}
-	} else {
-		propFile = utilsDeps.getPath("properties.json");
-	}
-	const propDict: Array<{ property: string; type: string }> = JSON.parse(
-		fs.readFileSync(propFile, "utf-8"),
+): Record<string, Property> {
+	const propDict: Property[] = JSON.parse(
+		fs.readFileSync(settingsFile("properties.json", executablePath), "utf-8"),
 	);
-	const out: Record<string, string> = {};
-	for (const prop of propDict) out[prop.property] = prop.type;
+	const out: Record<string, Property> = {};
+	for (const prop of propDict) out[prop.property] = prop;
 	return out;
 }
 
 /**
- * Validates the config map.
+ * Validates the config map against the build's properties.json, and lifts a
+ * numeric value below its declared `min` up to it.
  */
 export function validateConfig(
 	configMap: Record<string, any>,
 	executablePath?: string | null,
 ): void {
-	const propertyTypes = loadProperties(executablePath);
+	const properties = loadProperties(executablePath);
 
 	for (const [key, value] of Object.entries(configMap)) {
-		const expectedType = propertyTypes[key];
-		if (!expectedType) {
+		const prop = properties[key];
+		if (!prop) {
 			utilsDeps.print(`Skipping unknown patch ${key} : ${pyStr(value)}`);
 			continue; // Property not supported by this browser version; skip silently
 		}
 
+		const expectedType = prop.type;
 		if (!validateType(value, expectedType)) {
 			throw new InvalidPropertyType(
 				`Invalid type for property ${key}. Expected ${expectedType}, got ${pyTypeName(value)}`,
 			);
 		}
 
+		if (prop.min !== undefined) {
+			const n = value instanceof PyFloat ? value.value : Number(value);
+			if (n < prop.min) configMap[key] = prop.min;
+		}
+
 		if (key === "voices") {
 			validateVoices(value);
+		}
+	}
+}
+
+interface LaunchRule {
+	target?: string[];
+	host?: string[];
+	prefs?: Record<string, any>;
+	env?: Record<string, string>;
+	envPaths?: Record<string, string>;
+	envFromConfig?: Record<string, string>;
+	exclusive?: boolean;
+	warn?: string;
+}
+
+/**
+ * Applies the prefs and environment variables the build declares in its
+ * launch.json. A build that needs a pref or variable set at launch for a
+ * feature it compiles in says so there, so the launcher needs no knowledge of
+ * any particular build. Most builds ship no launch.json.
+ *
+ * Each rule may restrict itself to identity OSes (`target`) and host OSes
+ * (`host`), both in 'win'/'mac'/'lin' terms. `env` sets variables verbatim,
+ * `envPaths` to a file relative to the build's directory, which must exist,
+ * and `envFromConfig` to the value of a config key when the identity has one.
+ * A pref the caller set, or a variable already in the environment, is never
+ * replaced.
+ *
+ * An `exclusive` rule owns its variables: where it does not apply they are
+ * removed from the environment, the caller's included, so a feature meant for
+ * one target/host pairing cannot leak into another through an inherited
+ * variable. A rule's `warn` is emitted as a RuntimeWarning when it applies.
+ */
+export function applyLaunchRules(
+	targetOs: string,
+	config: Record<string, any>,
+	firefoxUserPrefs: Record<string, any>,
+	userPrefKeys: Set<string>,
+	env: Record<string, any>,
+	executablePath?: string | null,
+): void {
+	const launchFile = settingsFile("launch.json", executablePath);
+	if (!fs.existsSync(launchFile)) return;
+	const rules: LaunchRule[] = JSON.parse(
+		fs.readFileSync(launchFile, "utf-8"),
+	).rules;
+
+	const hostOs = utilsDeps.hostOsKey();
+	const applies = (rule: LaunchRule): boolean =>
+		!(rule.target && !rule.target.includes(targetOs)) &&
+		!(rule.host && !(hostOs && rule.host.includes(hostOs)));
+	const owned = (rule: LaunchRule): string[] => [
+		...Object.keys(rule.env ?? {}),
+		...Object.keys(rule.envPaths ?? {}),
+		...Object.keys(rule.envFromConfig ?? {}),
+	];
+
+	const matched = rules.filter(applies);
+	const claimed = new Set(matched.flatMap(owned));
+	for (const rule of rules) {
+		if (!rule.exclusive || applies(rule)) continue;
+		for (const key of owned(rule)) {
+			if (!claimed.has(key)) delete env[key];
+		}
+	}
+
+	for (const rule of matched) {
+		if (rule.warn) warn(String(rule.warn), "RuntimeWarning");
+		for (const [key, value] of Object.entries(rule.prefs ?? {})) {
+			if (!userPrefKeys.has(key)) firefoxUserPrefs[key] = value;
+		}
+		for (const [key, value] of Object.entries(rule.env ?? {})) {
+			if (!(key in env)) env[key] = value;
+		}
+		for (const [key, relative] of Object.entries(rule.envPaths ?? {})) {
+			if (key in env) continue;
+			const resolved = path.join(path.dirname(launchFile), relative);
+			if (!fs.existsSync(resolved)) {
+				throw new Error(
+					`${launchFile} needs ${resolved} for ${key}, and it does not exist.`,
+				);
+			}
+			env[key] = resolved;
+		}
+		for (const [key, configKey] of Object.entries(rule.envFromConfig ?? {})) {
+			if (configKey in config && !(key in env)) {
+				env[key] = pyStr(config[configKey]);
+			}
 		}
 	}
 }
@@ -1237,6 +1344,12 @@ export interface LaunchOptions {
 	/** Pin the browser to navigator.hardwareConcurrency cores (Linux/Windows).
 	 * OFF by default -- it costs real CPU and serializes concurrent launches. */
 	pin_cpu_cores?: boolean;
+	/** Camoufox Pro key (cfp_live_...) for a Pro build. Defaults to
+	 * CAMOUFOX_PRO_KEY, then the key `camoufox login` stored. A Pro build is
+	 * launched with a lease minted with it (see docs/pro.md); the lease is
+	 * released when the browser closes, or at exit when these options are
+	 * launched without NewBrowser/Camoufox. */
+	pro_key?: string;
 	/** Additional Firefox launch options, passed straight through to Playwright. */
 	[key: string]: any;
 }
@@ -1282,6 +1395,7 @@ export async function launchOptions({
 	debug,
 	virtual_display,
 	pin_cpu_cores,
+	pro_key,
 	...passthrough
 }: LaunchOptions = {}): Promise<Record<string, any>> {
 	utilsDeps.ensureBrowserProfileDir(env);
@@ -1294,6 +1408,9 @@ export async function launchOptions({
 	addons ??= [];
 	args ??= [];
 	firefox_user_prefs ??= {};
+	// The caller's own prefs, before the launcher adds any: a pref the build
+	// declares in launch.json never replaces one of these.
+	const userPrefKeys = new Set(Object.keys(firefox_user_prefs));
 	custom_fonts_only ??= false;
 	i_know_what_im_doing ??= false;
 	// Keep per-launch overrides isolated from the process environment and from
@@ -1811,6 +1928,15 @@ export async function launchOptions({
 		console.log(inspect(config, { depth: null, sorted: true }));
 	}
 
+	applyLaunchRules(
+		targetOs,
+		config,
+		firefox_user_prefs,
+		userPrefKeys,
+		env,
+		executable_path,
+	);
+
 	// Validate the config
 	warnIfExecutablePredatesPlaywright(executable_path);
 	utilsDeps.validateConfig(config, executable_path);
@@ -1837,6 +1963,17 @@ export async function launchOptions({
 		resolvedExecutable = utilsDeps.launchPath(browserPath);
 	} else {
 		resolvedExecutable = utilsDeps.launchPath();
+	}
+
+	// A Pro build does not start without a lease. The caller's own lease file,
+	// if they hold one, wins, as every other variable in the environment does.
+	const proBuild = pro.readBuild(
+		settingsFile("pro-build.json", resolvedExecutable),
+	);
+	if (proBuild && !(pro.LEASE_FILE_ENV in envVars)) {
+		envVars[pro.LEASE_FILE_ENV] = (
+			await pro.acquire(proBuild, targetOs, pro_key)
+		).path;
 	}
 
 	const result: Record<string, any> = {

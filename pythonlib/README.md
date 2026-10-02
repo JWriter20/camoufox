@@ -93,6 +93,8 @@ $ python -m camoufox --help
 │ fetch     Install the active version, or a specific version                           │
 │ gui       Launch the Camoufox Manager GUI (requires PySide6)                          │
 │ list      List Camoufox versions                                                      │
+│ login     Sign in to Camoufox Pro on this machine                                     │
+│ logout    Delete the Camoufox Pro key stored on this machine                          │
 │ path      Print the install directory path                                            │
 │ remove    Remove downloaded data. By default, this removes everything.                │
 │           Pass --select to pick a browser version to remove.                          │
@@ -308,6 +310,28 @@ Launch a remote Playwright server.
 
 ```bash
 > camoufox server
+```
+
+<hr width=50>
+
+### `login`
+
+Sign in to Camoufox Pro on this machine. It prints a link and a code to confirm
+in a browser, then stores a key for this machine. See
+[docs/pro.md](https://github.com/daijro/camoufox/blob/main/docs/pro.md).
+
+```bash
+> camoufox login
+```
+
+<hr width=50>
+
+### `logout`
+
+Delete the Camoufox Pro key stored on this machine.
+
+```bash
+> camoufox logout
 ```
 
 ---

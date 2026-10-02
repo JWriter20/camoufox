@@ -23,7 +23,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
 )
 from .fingerprints import Screen, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS
-from . import coherence
+from . import coherence, pro
 from .geolocation import geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
@@ -331,24 +331,32 @@ def get_env_vars(
     return env_vars
 
 
-def _load_properties(path: Optional[Path] = None) -> Dict[str, str]:
+def _settings_file(name: str, path: Optional[Path] = None) -> str:
     """
-    Loads the properties.json file.
+    Where a settings file the build ships (properties.json, launch.json) lives:
+    beside the caller's own binary when they supplied one, else in the managed
+    install.
     """
-    if path:
-        prop_file = str(path.parent / "properties.json")
-        if not os.path.exists(prop_file):
-            # macOS app bundle: the binary is Contents/MacOS/camoufox, the
-            # packaged settings live in Contents/Resources/.
-            bundled = path.parent.parent / "Resources" / "properties.json"
-            if bundled.exists():
-                prop_file = str(bundled)
-    else:
-        prop_file = get_path("properties.json")
-    with open(prop_file, "rb") as f:
+    if not path:
+        return get_path(name)
+    beside = path.parent / name
+    if not beside.exists():
+        # macOS app bundle: the binary is Contents/MacOS/camoufox, the
+        # packaged settings live in Contents/Resources/.
+        bundled = path.parent.parent / "Resources" / name
+        if bundled.exists():
+            return str(bundled)
+    return str(beside)
+
+
+def _load_properties(path: Optional[Path] = None) -> Dict[str, Dict[str, Any]]:
+    """
+    Loads the properties.json file, keyed by property name.
+    """
+    with open(_settings_file("properties.json", path), "rb") as f:
         prop_dict = orjson.loads(f.read())
 
-    return {prop['property']: prop['type'] for prop in prop_dict}
+    return {prop['property']: prop for prop in prop_dict}
 
 
 def _load_humanize_engines(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
@@ -356,36 +364,111 @@ def _load_humanize_engines(path: Optional[Path] = None) -> Optional[Dict[str, An
     Loads humanize-engines.json, found the same way as properties.json. None
     for a build that predates it.
     """
-    if path:
-        manifest = path.parent / "humanize-engines.json"
-        if not manifest.exists():
-            manifest = path.parent.parent / "Resources" / "humanize-engines.json"
-    else:
-        manifest = Path(get_path("humanize-engines.json"))
+    manifest = Path(_settings_file("humanize-engines.json", path))
     if not manifest.exists():
         return None
     return orjson.loads(manifest.read_bytes())
 
 
-def validate_config(config_map: Dict[str, str], path: Optional[Path] = None) -> None:
+def validate_config(config_map: Dict[str, Any], path: Optional[Path] = None) -> None:
     """
-    Validates the config map.
+    Validates the config map against the build's properties.json, and lifts a
+    numeric value below its declared `min` up to it.
     """
-    property_types = _load_properties(path=path)
+    properties = _load_properties(path=path)
 
     for key, value in config_map.items():
-        expected_type = property_types.get(key)
-        if not expected_type:
+        prop = properties.get(key)
+        if not prop:
             print(f'Skipping unknown patch {key} : {value}')
             continue  # Property not supported by this browser version; skip silently
 
+        expected_type = prop['type']
         if not validate_type(value, expected_type):
             raise InvalidPropertyType(
                 f"Invalid type for property {key}. Expected {expected_type}, got {type(value).__name__}"
             )
 
+        if 'min' in prop and value < prop['min']:
+            config_map[key] = prop['min']
+
         if key == 'voices':
             validate_voices(value)
+
+
+def apply_launch_rules(
+    target_os: str,
+    config: Dict[str, Any],
+    firefox_user_prefs: Dict[str, Any],
+    user_pref_keys: set,
+    env: Dict[str, Union[str, float, bool]],
+    path: Optional[Path] = None,
+) -> None:
+    """
+    Applies the prefs and environment variables the build declares in its
+    launch.json. A build that needs a pref or variable set at launch for a
+    feature it compiles in says so there, so the launcher needs no knowledge of
+    any particular build. Most builds ship no launch.json.
+
+    Each rule may restrict itself to identity OSes (`target`) and host OSes
+    (`host`), both in 'win'/'mac'/'lin' terms. `env` sets variables verbatim,
+    `envPaths` to a file relative to the build's directory, which must exist,
+    and `envFromConfig` to the value of a config key when the identity has one.
+    A pref the caller set, or a variable already in the environment, is never
+    replaced.
+
+    An `exclusive` rule owns its variables: where it does not apply they are
+    removed from the environment, the caller's included, so a feature meant for
+    one target/host pairing cannot leak into another through an inherited
+    variable. A rule's `warn` is emitted as a RuntimeWarning when it applies.
+    """
+    launch_file = _settings_file("launch.json", path)
+    if not os.path.exists(launch_file):
+        return
+    with open(launch_file, "rb") as f:
+        rules = orjson.loads(f.read())['rules']
+
+    host_os = _host_os_key()
+
+    def applies(rule: Dict[str, Any]) -> bool:
+        return target_os in rule.get('target', [target_os]) and host_os in rule.get(
+            'host', [host_os]
+        )
+
+    def owned(rule: Dict[str, Any]) -> set:
+        return {
+            key
+            for field in ('env', 'envPaths', 'envFromConfig')
+            for key in rule.get(field, {})
+        }
+
+    matched = [rule for rule in rules if applies(rule)]
+    claimed = set().union(*(owned(rule) for rule in matched))
+    for rule in rules:
+        if rule.get('exclusive') and not applies(rule):
+            for key in owned(rule) - claimed:
+                env.pop(key, None)
+
+    for rule in matched:
+        if rule.get('warn'):
+            warnings.warn(str(rule['warn']), RuntimeWarning, stacklevel=3)
+        for key, value in rule.get('prefs', {}).items():
+            if key not in user_pref_keys:
+                firefox_user_prefs[key] = value
+        for key, value in rule.get('env', {}).items():
+            env.setdefault(key, value)
+        for key, relative in rule.get('envPaths', {}).items():
+            if key in env:
+                continue
+            resolved = os.path.normpath(os.path.join(os.path.dirname(launch_file), relative))
+            if not os.path.exists(resolved):
+                raise FileNotFoundError(
+                    f"{launch_file} needs {resolved} for {key}, and it does not exist."
+                )
+            env[key] = resolved
+        for key, config_key in rule.get('envFromConfig', {}).items():
+            if config_key in config:
+                env.setdefault(key, str(config[config_key]))
 
 
 def validate_type(value: Any, expected_type: str) -> bool:
@@ -869,6 +952,7 @@ def launch_options(
     debug: Optional[bool] = None,
     virtual_display: Optional[str] = None,
     pin_cpu_cores: Optional[bool] = None,
+    pro_key: Optional[str] = None,
     **launch_options: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
@@ -969,6 +1053,12 @@ def launch_options(
             told. OFF by default -- it costs real CPU and serializes concurrent
             launches. Without it the host's own (snapped) count is reported,
             which is equally coherent, just less diverse.
+        pro_key (Optional[str]):
+            Camoufox Pro key (cfp_live_...) for a Pro build. Defaults to
+            CAMOUFOX_PRO_KEY, then the key `camoufox login` stored. A Pro build
+            is launched with a lease minted with it (see docs/pro.md); the lease
+            is released when the browser closes, or at exit when these options
+            are launched without NewBrowser/Camoufox.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
             The pair must be one fpgen has recorded from Firefox on `os`
@@ -991,6 +1081,9 @@ def launch_options(
         args = []
     if firefox_user_prefs is None:
         firefox_user_prefs = {}
+    # The caller's own prefs, before the launcher adds any: a pref the build
+    # declares in launch.json never replaces one of these.
+    _user_pref_keys = set(firefox_user_prefs)
     if custom_fonts_only is None:
         custom_fonts_only = False
     if i_know_what_im_doing is None:
@@ -1157,8 +1250,9 @@ def launch_options(
     # Pinning it on top of that is strictly worse than leaving it alone: the
     # value would no longer move across navigations, and a fresh tab would claim
     # a depth of, say, 4 while history.back() -- which reads the real session
-    # history -- does nothing. Any page can check that pair. The property stays
-    # in properties.json for callers who want to override it by hand.
+    # history -- does nothing. Any page can check that pair. A build that
+    # implements the key declares it in its own properties.json, with the floor
+    # it needs, and callers set it by hand.
 
     # Update fonts list
     if fonts:
@@ -1523,6 +1617,10 @@ def launch_options(
         print('[DEBUG] Config:')
         pprint(config)
 
+    apply_launch_rules(
+        target_os, config, firefox_user_prefs, _user_pref_keys, env, path=executable_path
+    )
+
     # Validate the config
     warn_if_executable_predates_playwright(executable_path)
     validate_config(config, path=executable_path)
@@ -1548,6 +1646,12 @@ def launch_options(
         executable_path = launch_path(browser_path)
     else:
         executable_path = launch_path()
+
+    # A Pro build does not start without a lease. The caller's own lease file,
+    # if they hold one, wins, as every other variable in the environment does.
+    pro_build = pro.read_build(_settings_file("pro-build.json", Path(executable_path)))
+    if pro_build and pro.LEASE_FILE_ENV not in env_vars:
+        env_vars[pro.LEASE_FILE_ENV] = str(pro.acquire(pro_build, target_os, pro_key).path)
 
     result = {
         "executable_path": executable_path,

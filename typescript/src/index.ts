@@ -11,6 +11,21 @@ export {
 	AsyncNewContext,
 } from "./async_api.js";
 export {
+	AccountSuspended,
+	AllowanceExhausted,
+	BuildNotAllowlisted,
+	CapabilityMismatch,
+	InvalidRequest,
+	LeaseLimitReached,
+	LeaseRefused,
+	NotSignedIn,
+	ProClockSkew,
+	ProError,
+	ProUnavailable,
+	RateLimited,
+	SubscriptionRequired,
+} from "./exceptions.js";
+export {
 	generateContextFingerprint,
 	getRandomPreset,
 	loadPresets,
