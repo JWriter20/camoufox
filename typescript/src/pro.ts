@@ -62,7 +62,7 @@ const NOT_SIGNED_IN =
 export const HOST_OS = (
 	{ lin: "linux", mac: "macos", win: "windows" } as const
 )[OS_NAME];
-const TARGET_OS: Record<string, string> = {
+export const TARGET_OS: Record<string, string> = {
 	win: "windows",
 	mac: "macos",
 	lin: "linux",
@@ -357,6 +357,9 @@ export async function login(
 
 // ── the lease ───────────────────────────────────────────────────────────────
 
+/** The sections a lease answer carries, each null when the lease does not grant it. */
+export const SECTIONS = ["profile", "egress", "gpu", "captcha"] as const;
+
 /** What a Pro build's pro-build.json declares. */
 export interface ProBuild {
 	build_hash: string;
@@ -498,6 +501,8 @@ const LIVE = new Map<string, Lease>();
 export class Lease {
 	path = "";
 	leaseId = "";
+	/** The lease's sections (`SECTIONS`), each null when it does not grant it. */
+	grants: Record<string, any> = {};
 	claimed = false;
 	readonly #key: string;
 	readonly #host: string;
@@ -505,7 +510,7 @@ export class Lease {
 	#heartbeatS = 60;
 	#fidelity = "native";
 	#timer: NodeJS.Timeout | null = null;
-	#released: Promise<void> | null = null;
+	#released: Promise<boolean> | null = null;
 	#failingSince: number | null = null;
 	#failures = 0;
 
@@ -557,6 +562,9 @@ export class Lease {
 		}
 		const minted = lease as Record<string, any>;
 		this.leaseId = minted.lease_id;
+		this.grants = Object.fromEntries(
+			SECTIONS.map((name) => [name, minted[name] ?? null]),
+		);
 		this.#seq = 0;
 		this.#heartbeatS = Number(minted.limits.heartbeat_s);
 		this.#fidelity = minted.host.fidelity;
@@ -570,6 +578,10 @@ export class Lease {
 			throw new ProClockSkew(skew);
 		}
 		this.#write(minted.token);
+	}
+
+	get fidelity(): string {
+		return this.#fidelity;
 	}
 
 	#write(token: string): void {
@@ -661,7 +673,7 @@ export class Lease {
 		this.#schedule(this.#nextBeat());
 	}
 
-	async #postRelease(reason: string): Promise<void> {
+	async #postRelease(reason: string): Promise<boolean> {
 		for (const attempt of [0, 1]) {
 			try {
 				await post(
@@ -669,25 +681,30 @@ export class Lease {
 					{ reason },
 					{ key: this.#key, timeoutS: proTiming.releaseTimeoutS },
 				);
-				return;
+				return true;
 			} catch (error) {
 				if (attempt || !transient(error)) {
 					console.warn(
 						`camoufox-pro: releasing lease ${this.leaseId} failed: ${(error as Error).message}`,
 					);
-					return;
+					return false;
 				}
 			}
 		}
+		return false;
 	}
 
-	/** Release the lease and delete its file. Only the first call does anything. */
-	release(reason = "clean_exit"): Promise<void> {
+	/**
+	 * Release the lease and delete its file. Only the first call does anything;
+	 * every call resolves to whether that release reached the API.
+	 */
+	release(reason = "clean_exit"): Promise<boolean> {
 		this.#released ??= (async () => {
 			if (this.#timer) clearTimeout(this.#timer);
 			LIVE.delete(this.path);
-			await this.#postRelease(reason);
+			const released = await this.#postRelease(reason);
 			fs.rmSync(this.path, { force: true });
+			return released;
 		})();
 		return this.#released;
 	}
@@ -772,4 +789,73 @@ export function releaseOnClose(
 	event: "disconnected" | "close",
 ): void {
 	target.on(event, () => void lease.release());
+}
+
+// ── camoufox pro --activate ─────────────────────────────────────────────────
+
+/** What --activate shows of a granted section: never its credentials. */
+const SHOWN: Record<string, string[]> = {
+	egress: ["class", "country"],
+	gpu: ["mode", "renderer"],
+	captcha: ["remaining"],
+};
+
+function granted(name: string, section: Record<string, any>): string {
+	const detail = (SHOWN[name] ?? [])
+		.filter((field) => section[field] != null)
+		.map((field) => String(section[field]))
+		.join(", ");
+	return detail ? `${name}: granted (${detail})` : `${name}: granted`;
+}
+
+/**
+ * `camoufox pro --activate`: mint a lease for the Pro build whose
+ * pro-build.json is `buildFile`, for an identity of `targetOs` ('win', 'mac',
+ * 'lin'), report what the lease grants, and release it. Resolves to whether
+ * the API granted it.
+ */
+export async function activate(
+	buildFile: string,
+	targetOs: string,
+	{
+		key = null,
+		echo = console.log,
+	}: { key?: string | null; echo?: (line: string) => void } = {},
+): Promise<boolean> {
+	let build: ProBuild | null;
+	let lease: Lease;
+	try {
+		build = readBuild(buildFile);
+		if (!build) {
+			echo(`[FAIL] no Camoufox Pro build: ${buildFile} does not exist`);
+			return false;
+		}
+		lease = await acquire(build, targetOs, key);
+	} catch (error) {
+		echo(`[FAIL] lease: ${(error as Error).message}`);
+		return false;
+	}
+	let released: boolean;
+	try {
+		echo(
+			`[ ok ] lease verified: ${lease.leaseId} for ${build.version}, ` +
+				`${lease.targetOs} identity, ${lease.fidelity} fidelity`,
+		);
+		for (const name of SECTIONS) {
+			const section = lease.grants[name];
+			echo(
+				section
+					? `[ ok ] ${granted(name, section)}`
+					: `[ -- ] ${name}: not granted`,
+			);
+		}
+	} finally {
+		released = await lease.release();
+	}
+	echo(
+		released
+			? "[ ok ] lease released"
+			: "[ -- ] lease not released: the API frees it when it expires",
+	);
+	return true;
 }

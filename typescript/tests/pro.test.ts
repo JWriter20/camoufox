@@ -19,6 +19,7 @@ import {
 	describe,
 	expect,
 	it,
+	vi,
 } from "vitest";
 import {
 	BUNDLE,
@@ -92,6 +93,7 @@ class FakeApi {
 	scripted: [RegExp, [number, Record<string, any>][]][] = [];
 	clockOffsetMs = 0;
 	heartbeatS = 60;
+	grants: Record<string, any> = {};
 	#waiters: (() => void)[] = [];
 	server = http.createServer((req, res) => {
 		let data = "";
@@ -170,6 +172,7 @@ class FakeApi {
 						capability_hash: "",
 					},
 					notices: [],
+					...this.grants,
 				},
 			];
 		}
@@ -737,5 +740,159 @@ describe("a browser that refuses its lease", () => {
 		expect(api.calls(".*/release").map((r) => r.body)).toEqual([
 			{ reason: "error" },
 		]);
+	});
+});
+
+// ── camoufox pro --activate ─────────────────────────────────────────────────
+
+describe("camoufox pro --activate", () => {
+	let buildFile: string;
+	beforeEach(() => {
+		const dir = fs.mkdtempSync(path.join(SCRATCH, "pro-build-"));
+		buildFile = path.join(dir, "pro-build.json");
+		fs.writeFileSync(buildFile, JSON.stringify(BUILD));
+	});
+	const activate = async (targetOs = "win") => {
+		const lines: string[] = [];
+		const verified = await pro.activate(buildFile, targetOs, {
+			echo: (line) => lines.push(line),
+		});
+		return { verified, lines };
+	};
+
+	it("verifies a lease and releases it", async () => {
+		process.env[pro.KEY_ENV] = KEY;
+		const { verified, lines } = await activate();
+		expect(verified).toBe(true);
+		const [mint] = api.calls("/api/v1/leases");
+		expect(mint.body.os).toBe("windows");
+		expect(mint.body.build_hash).toBe(BUILD_HASH);
+		const [release] = api.calls(".*/release");
+		expect(release.body).toEqual({ reason: "clean_exit" });
+		expect(lines).toEqual([
+			`[ ok ] lease verified: ${release.path.split("/")[4]} for 156.0.1-pro.1, windows identity, layout fidelity`,
+			"[ -- ] profile: not granted",
+			"[ -- ] egress: not granted",
+			"[ -- ] gpu: not granted",
+			"[ -- ] captcha: not granted",
+			"[ ok ] lease released",
+		]);
+		expect(
+			fs.readdirSync(
+				path.join(process.env.XDG_RUNTIME_DIR as string, "camoufox-pro"),
+			),
+		).toEqual([]);
+	});
+
+	it("reports only the sections the lease carries, and no credentials", async () => {
+		process.env[pro.KEY_ENV] = KEY;
+		api.grants = {
+			profile: null,
+			egress: {
+				server: "http://203.0.113.7:8080",
+				username: "user-1",
+				password: "secret-pass",
+				class: "residential",
+				country: "US",
+				exit_ip: null,
+			},
+			gpu: null,
+			captcha: {
+				endpoint: "https://captcha.example/v1",
+				remaining: 250,
+				expires_at: "2026-10-02T12:00:00Z",
+			},
+		};
+		const { verified, lines } = await activate();
+		expect(verified).toBe(true);
+		expect(lines.slice(1, 5)).toEqual([
+			"[ -- ] profile: not granted",
+			"[ ok ] egress: granted (residential, US)",
+			"[ -- ] gpu: not granted",
+			"[ ok ] captcha: granted (250)",
+		]);
+		expect(lines.join("\n")).not.toMatch(/secret-pass|user-1/);
+	});
+
+	it("says there is no Pro build and fails", async () => {
+		process.env[pro.KEY_ENV] = KEY;
+		fs.rmSync(buildFile);
+		const { verified, lines } = await activate();
+		expect(verified).toBe(false);
+		expect(lines).toEqual([
+			`[FAIL] no Camoufox Pro build: ${buildFile} does not exist`,
+		]);
+		expect(api.requests).toEqual([]);
+	});
+
+	it("fails without a key, saying how to sign in", async () => {
+		const { verified, lines } = await activate();
+		expect(verified).toBe(false);
+		expect(lines[0]).toMatch(/^\[FAIL\] lease: .*camoufox login/);
+		expect(api.requests).toEqual([]);
+	});
+
+	it("reads the key camoufox login stored", async () => {
+		pro.storeKey(KEY);
+		expect((await activate()).verified).toBe(true);
+		expect(api.calls("/api/v1/leases")[0].auth).toBe(`Bearer ${KEY}`);
+	});
+
+	it("reports a refused lease and fails", async () => {
+		process.env[pro.KEY_ENV] = KEY;
+		api.script("/api/v1/leases", [
+			402,
+			{
+				error: "subscription_required",
+				message: "No active plan.",
+				resolution_url: "https://camoufox.com/pro",
+			},
+		]);
+		const { verified, lines } = await activate();
+		expect(verified).toBe(false);
+		expect(lines).toEqual([
+			"[FAIL] lease: No active plan. https://camoufox.com/pro",
+		]);
+		expect(api.calls(".*/release")).toEqual([]);
+	});
+
+	it("says when the release did not reach the API", async () => {
+		process.env[pro.KEY_ENV] = KEY;
+		api.script("/api/v1/leases/.*/release", [500, {}], [500, {}]);
+		const { verified, lines } = await activate();
+		expect(verified).toBe(true);
+		expect(lines.at(-1)).toBe(
+			"[ -- ] lease not released: the API frees it when it expires",
+		);
+	});
+
+	it("runs from the CLI against the build beside an executable", async () => {
+		process.env[pro.KEY_ENV] = KEY;
+		const savedArgv = process.argv;
+		const output: string[] = [];
+		const log = vi
+			.spyOn(console, "log")
+			.mockImplementation((line) => void output.push(String(line)));
+		try {
+			process.argv = [
+				"node",
+				"camoufox",
+				"pro",
+				"--activate",
+				"--executable-path",
+				path.join(path.dirname(buildFile), "camoufox-bin"),
+				"--os",
+				"linux",
+			];
+			await import("../src/__main__.js");
+			await vi.waitFor(() =>
+				expect(output.at(-1)).toBe("[ ok ] lease released"),
+			);
+		} finally {
+			process.argv = savedArgv;
+			log.mockRestore();
+		}
+		expect(api.calls("/api/v1/leases")[0].body.os).toBe("linux");
+		expect(process.exitCode ?? 0).toBe(0);
 	});
 });

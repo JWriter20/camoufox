@@ -1149,6 +1149,54 @@ program
 	});
 
 program
+	.command("pro")
+	.description("Check Camoufox Pro on this machine")
+	.option(
+		"--activate",
+		"Mint a lease for the local Pro build, report what it grants, and release it.",
+	)
+	.option(
+		"--executable-path <path>",
+		"The Pro build's executable. Defaults to CAMOUFOX_EXECUTABLE_PATH, then the active install.",
+	)
+	.addOption(
+		new Option(
+			"--os <os>",
+			"The identity OS to lease for. Defaults to this machine's.",
+		).choices(["windows", "macos", "linux"]),
+	)
+	.action(async (opts, command: Command) => {
+		if (!opts.activate) {
+			command.help();
+		}
+		const pro = await import("./pro.js");
+		const { camoufoxPath, launchPath } = await import("./pkgman.js");
+		const { settingsFile } = await import("./utils.js");
+		let executable =
+			opts.executablePath ??
+			(process.env.CAMOUFOX_EXECUTABLE_PATH ?? "").trim();
+		if (!executable) {
+			try {
+				executable = launchPath(camoufoxPath());
+			} catch (error) {
+				console.log(
+					`[FAIL] no Camoufox Pro build: ${(error as Error).message}`,
+				);
+				process.exitCode = 1;
+				return;
+			}
+		}
+		const osCode = Object.entries(pro.TARGET_OS).find(
+			([, name]) => name === (opts.os ?? pro.HOST_OS),
+		)?.[0] as string;
+		const verified = await pro.activate(
+			settingsFile("pro-build.json", executable),
+			osCode,
+		);
+		if (!verified) process.exitCode = 1;
+	});
+
+program
 	.command("gui")
 	.description("Launch the Camoufox Manager GUI (requires PySide6)")
 	.option("--debug", "Enable debug options in the GUI.")

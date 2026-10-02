@@ -60,6 +60,38 @@ is set: the `pro_key` argument, `CAMOUFOX_PRO_KEY`, the key file.
 `CAMOUFOX_PRO_API` points both launchers at a different Camoufox Pro API. It
 defaults to `https://api.camoufox.com`.
 
+## Checking a machine
+
+```bash
+camoufox pro --activate
+```
+
+mints a lease for the local Pro build, prints what it grants, and releases it
+straight away, without starting the browser. Use it after `camoufox login` on a
+new machine, or in a CI job before the real work. It exits 0 only when the API
+granted the lease:
+
+```
+[ ok ] lease verified: lse_0b7c... for 156.0.1-pro.1, windows identity, layout fidelity
+[ -- ] profile: not granted
+[ ok ] egress: granted (residential, US)
+[ -- ] gpu: not granted
+[ ok ] captcha: granted (250)
+[ ok ] lease released
+```
+
+Each line after the first is one section of the lease. `[ ok ]` means the lease
+carries it, and `[ -- ] ... not granted` means the API left it out. A granted
+section's credentials are never printed. A refused lease prints one
+`[FAIL] lease:` line with the API's reason, the same as the matching
+[launch error](#when-a-launch-fails), and a missing key or a build without
+`pro-build.json` prints `[FAIL]` too; each exits 1.
+
+The build is the one beside `--executable-path`, else beside
+`CAMOUFOX_EXECUTABLE_PATH`, else the active install. `--os windows|macos|linux`
+picks the identity OS to lease for, and defaults to this machine's. The key and
+API come from the same places as for a launch (below).
+
 ## Launching
 
 Nothing changes in your code. Point the launcher at the Pro build:

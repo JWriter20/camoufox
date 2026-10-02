@@ -169,6 +169,7 @@ camoufox test [url]               # open the Playwright inspector
 camoufox server                   # launch a Playwright server
 camoufox login                    # sign in to Camoufox Pro on this machine
 camoufox logout                   # delete the stored Camoufox Pro key
+camoufox pro --activate           # check that this machine can run its Pro build
 ```
 
 Each release of this package is paired with the one browser build it was built

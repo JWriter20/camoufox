@@ -558,7 +558,10 @@ export function getEnvVars(
  * beside the caller's own binary when they supplied one, else in the managed
  * install.
  */
-function settingsFile(name: string, executablePath?: string | null): string {
+export function settingsFile(
+	name: string,
+	executablePath?: string | null,
+): string {
 	if (!executablePath) return utilsDeps.getPath(name);
 	const beside = path.join(path.dirname(executablePath), name);
 	if (!fs.existsSync(beside)) {

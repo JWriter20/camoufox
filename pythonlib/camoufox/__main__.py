@@ -898,6 +898,50 @@ def logout():
     )
 
 
+@cli.command(name="pro")
+@click.option(
+    "--activate",
+    is_flag=True,
+    help="Mint a lease for the local Pro build, report what it grants, and release it.",
+)
+@click.option(
+    "--executable-path",
+    type=click.Path(dir_okay=False),
+    help="The Pro build's executable. Defaults to CAMOUFOX_EXECUTABLE_PATH, then the active install.",
+)
+@click.option(
+    "--os",
+    "target_os",
+    type=click.Choice(["windows", "macos", "linux"]),
+    help="The identity OS to lease for. Defaults to this machine's.",
+)
+@click.pass_context
+def pro_cmd(ctx, activate, executable_path, target_os):
+    """
+    Check Camoufox Pro on this machine
+    """
+    if not activate:
+        click.echo(ctx.get_help())
+        return
+    from pathlib import Path
+
+    from . import pro
+    from .exceptions import CamoufoxNotInstalled, UnsupportedVersion
+    from .pkgman import camoufox_path, launch_path
+    from .utils import _settings_file
+
+    executable = executable_path or environ.get("CAMOUFOX_EXECUTABLE_PATH", "").strip()
+    if not executable:
+        try:
+            executable = launch_path(camoufox_path(download_if_missing=False))
+        except (CamoufoxNotInstalled, UnsupportedVersion) as error:
+            click.echo(f"[FAIL] no Camoufox Pro build: {error}")
+            raise SystemExit(1) from None
+    os_code = {name: code for code, name in pro.TARGET_OS.items()}[target_os or pro.HOST_OS]
+    if not pro.activate(_settings_file("pro-build.json", Path(executable)), os_code, echo=click.echo):
+        raise SystemExit(1)
+
+
 @cli.command(name="gui")
 @click.option("--debug", is_flag=True, help="Enable debug options in the GUI.")
 def gui(debug):

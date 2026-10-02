@@ -96,6 +96,7 @@ $ python -m camoufox --help
 │ login     Sign in to Camoufox Pro on this machine                                     │
 │ logout    Delete the Camoufox Pro key stored on this machine                          │
 │ path      Print the install directory path                                            │
+│ pro       Check Camoufox Pro on this machine                                          │
 │ remove    Remove downloaded data. By default, this removes everything.                │
 │           Pass --select to pick a browser version to remove.                          │
 │ server    Launch a Playwright server                                                  │
@@ -332,6 +333,19 @@ Delete the Camoufox Pro key stored on this machine.
 
 ```bash
 > camoufox logout
+```
+
+<hr width=50>
+
+### `pro`
+
+`--activate` checks that this machine can run the local Camoufox Pro build: it
+mints a lease for it, prints what the lease grants, and releases it. It exits 0
+only when the lease was granted. See
+[docs/pro.md](https://github.com/daijro/camoufox/blob/main/docs/pro.md).
+
+```bash
+> camoufox pro --activate
 ```
 
 ---

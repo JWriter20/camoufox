@@ -20,6 +20,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from click.testing import CliRunner
+
+from camoufox import __main__ as cli
 from camoufox import pro, sync_api, utils
 from camoufox.exceptions import (
     AccountSuspended,
@@ -69,6 +72,7 @@ class FakeApi:
         self.heartbeat_s = 60
         self.changed = threading.Condition()
         self.build_hash = BUILD_HASH
+        self.grants = {}
 
     def script(self, route, *answers):
         """Answer the next calls to `route` (a regex) with these (status, body) pairs, in order."""
@@ -97,6 +101,7 @@ class FakeApi:
                 "limits": {"ttl_s": 1800, "heartbeat_s": self.heartbeat_s, "grace_s": 180, "degrade_drain_s": 900},
                 "host": {"fingerprint": body["host"]["fingerprint"], "fidelity": "layout", "capability_hash": ""},
                 "notices": [],
+                **self.grants,
             }
         match = re.fullmatch(r"/api/v1/leases/lse_([0-9a-f-]+)/(heartbeat|release)", path)
         if match and match.group(2) == "heartbeat":
@@ -547,3 +552,93 @@ def test_any_other_launch_failure_is_raised_as_it_was(api):
     with pytest.raises(RuntimeError, match="no display"):
         sync_api.NewBrowser(playwright, from_options={"env": {pro.LEASE_FILE_ENV: str(lease.path)}})
     assert [r["body"] for r in api.calls(r".*/release")] == [{"reason": "error"}]
+
+
+# ── camoufox pro --activate ──────────────────────────────────────────────────
+
+
+def activate(build, *args):
+    return CliRunner().invoke(cli.cli, ["pro", "--activate", "--executable-path", str(build), *args])
+
+
+def test_activate_verifies_a_lease_and_releases_it(api, pro_build, monkeypatch):
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    result = activate(pro_build, "--os", "windows")
+
+    assert result.exit_code == 0, result.output
+    (mint,) = api.calls("/api/v1/leases")
+    assert mint["body"]["os"] == "windows" and mint["body"]["build_hash"] == BUILD_HASH
+    assert [r["body"] for r in api.calls(".*/release")] == [{"reason": "clean_exit"}]
+    assert result.output.splitlines() == [
+        f"[ ok ] lease verified: {api.requests[1]['path'].split('/')[4]} for 156.0.1-pro.1, windows identity, layout fidelity",
+        "[ -- ] profile: not granted",
+        "[ -- ] egress: not granted",
+        "[ -- ] gpu: not granted",
+        "[ -- ] captcha: not granted",
+        "[ ok ] lease released",
+    ]
+    assert list((Path(os.environ["XDG_RUNTIME_DIR"]) / "camoufox-pro").iterdir()) == []
+
+
+def test_activate_reports_only_the_sections_the_lease_carries_and_no_credentials(api, pro_build, monkeypatch):
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    api.grants = {
+        "profile": None,
+        "egress": {
+            "server": "http://203.0.113.7:8080", "username": "user-1", "password": "secret-pass",
+            "class": "residential", "country": "US", "exit_ip": None,
+        },
+        "gpu": None,
+        "captcha": {"endpoint": "https://captcha.example/v1", "remaining": 250, "expires_at": "2026-10-02T12:00:00Z"},
+    }
+    result = activate(pro_build)
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[1:5] == [
+        "[ -- ] profile: not granted",
+        "[ ok ] egress: granted (residential, US)",
+        "[ -- ] gpu: not granted",
+        "[ ok ] captcha: granted (250)",
+    ]
+    assert "secret-pass" not in result.output and "user-1" not in result.output
+
+
+def test_activate_without_a_pro_build_says_so_and_fails(api, build, monkeypatch):
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    result = activate(build)
+    assert result.exit_code == 1
+    assert result.output.startswith("[FAIL] no Camoufox Pro build:") and "pro-build.json" in result.output
+    assert api.requests == []
+
+
+def test_activate_without_a_key_fails_with_how_to_sign_in(api, pro_build):
+    result = activate(pro_build)
+    assert result.exit_code == 1
+    assert "[FAIL] lease:" in result.output and "camoufox login" in result.output
+    assert api.requests == []
+
+
+def test_activate_reads_the_key_camoufox_login_stored(api, pro_build):
+    pro.store_key(KEY)
+    assert activate(pro_build).exit_code == 0
+    assert api.calls("/api/v1/leases")[0]["auth"] == f"Bearer {KEY}"
+
+
+def test_activate_reports_a_refused_lease_and_fails(api, pro_build, monkeypatch):
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    api.script(
+        "/api/v1/leases",
+        (402, {"error": "subscription_required", "message": "No active plan.", "resolution_url": "https://camoufox.com/pro"}),
+    )
+    result = activate(pro_build)
+    assert result.exit_code == 1
+    assert result.output.splitlines() == ["[FAIL] lease: No active plan. https://camoufox.com/pro"]
+    assert api.calls(".*/release") == []
+
+
+def test_activate_says_when_the_release_did_not_reach_the_api(api, pro_build, monkeypatch):
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    api.script(r"/api/v1/leases/.*/release", (500, {}), (500, {}))
+    result = activate(pro_build)
+    assert result.exit_code == 0
+    assert result.output.splitlines()[-1] == "[ -- ] lease not released: the API frees it when it expires"

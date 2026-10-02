@@ -73,6 +73,8 @@ NOT_SIGNED_IN = "Camoufox Pro needs a key: run `camoufox login`, or set CAMOUFOX
 
 HOST_OS = {"linux": "linux", "darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
 TARGET_OS = {"win": "windows", "mac": "macos", "lin": "linux"}
+# The sections a lease answer carries, each null when the lease does not grant it.
+SECTIONS = ("profile", "egress", "gpu", "captcha")
 
 log = logging.getLogger("camoufox.pro")
 
@@ -399,6 +401,7 @@ class Lease:
         self._host = host_fingerprint()
         self.path: Optional[Path] = None
         self.lease_id: Optional[str] = None
+        self.grants: Dict[str, Any] = {}
         self.claimed = False
         self._seq = 0
         self._heartbeat_s = 60.0
@@ -435,6 +438,7 @@ class Lease:
                     raise
                 time.sleep(error.retry_after or delay)
         self.lease_id = lease["lease_id"]
+        self.grants = {name: lease.get(name) for name in SECTIONS}
         self._seq = 0
         self._heartbeat_s = float(lease["limits"]["heartbeat_s"])
         self._fidelity = lease["host"]["fidelity"]
@@ -501,28 +505,33 @@ class Lease:
             self._write(answer["token"])
             failing_since, failures, wait = None, 0, self._next_beat()
 
-    def _post_release(self, reason: str) -> None:
+    def _post_release(self, reason: str) -> bool:
         for attempt in range(2):
             try:
                 post(f"/api/v1/leases/{self.lease_id}/release", {"reason": reason}, key=self._key, timeout=RELEASE_TIMEOUT_S)
-                return
+                return True
             except ProError as error:
                 if attempt or not _transient(error):
                     log.warning("camoufox-pro: releasing lease %s failed: %s", self.lease_id, error)
-                    return
+                    return False
+        return False
 
-    def release(self, reason: str = "clean_exit") -> None:
-        """Release the lease and delete its file. Only the first call does anything."""
+    def release(self, reason: str = "clean_exit") -> bool:
+        """
+        Release the lease and delete its file. Only the first call does anything.
+        Returns whether this call's release reached the API.
+        """
         with self._release_lock:
             if self._released:
-                return
+                return False
             self._stop.set()
             with self._write_lock:
                 self._released = True
             _LIVE.pop(str(self.path), None)
-            self._post_release(reason)
+            released = self._post_release(reason)
             if self.path is not None:
                 self.path.unlink(missing_ok=True)
+            return released
 
 
 _LIVE: Dict[str, Lease] = {}
@@ -592,3 +601,43 @@ def release_on_close(lease: Lease, target: Any, event: str) -> None:
 
     target.on(event, closed)
 
+
+
+# ── camoufox pro --activate ──────────────────────────────────────────────────
+
+# What --activate shows of a granted section: never its credentials.
+_SHOWN = {"egress": ("class", "country"), "gpu": ("mode", "renderer"), "captcha": ("remaining",)}
+
+
+def _granted(name: str, section: Dict[str, Any]) -> str:
+    detail = ", ".join(str(section[field]) for field in _SHOWN.get(name, ()) if section.get(field) is not None)
+    return f"{name}: granted ({detail})" if detail else f"{name}: granted"
+
+
+def activate(build_file: str, target_os: str, key: Optional[str] = None, echo: Callable[[str], None] = print) -> bool:
+    """
+    `camoufox pro --activate`: mint a lease for the Pro build whose pro-build.json
+    is `build_file`, for an identity of `target_os` ('win', 'mac', 'lin'), report
+    what the lease grants, and release it. Returns whether the API granted it.
+    """
+    try:
+        build = read_build(build_file)
+        if build is None:
+            echo(f"[FAIL] no Camoufox Pro build: {build_file} does not exist")
+            return False
+        lease = acquire(build, target_os, key)
+    except (ProError, PermissionError, ValueError) as error:
+        echo(f"[FAIL] lease: {error}")
+        return False
+    try:
+        echo(
+            f"[ ok ] lease verified: {lease.lease_id} for {build.version}, "
+            f"{lease.target_os} identity, {lease._fidelity} fidelity"
+        )
+        for name in SECTIONS:
+            section = lease.grants.get(name)
+            echo(f"[ ok ] {_granted(name, section)}" if section else f"[ -- ] {name}: not granted")
+    finally:
+        released = lease.release()
+    echo("[ ok ] lease released" if released else "[ -- ] lease not released: the API frees it when it expires")
+    return True
