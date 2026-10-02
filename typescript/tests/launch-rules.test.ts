@@ -116,6 +116,37 @@ describe("applyLaunchRules", () => {
 		}
 	});
 
+	it("sets an optional env path only when the file exists, and fills config keys", () => {
+		const launch = path.join(BUILD, "launch.json");
+		fs.writeFileSync(
+			launch,
+			JSON.stringify({
+				rules: [
+					{
+						target: ["win"],
+						host: ["lin"],
+						envPathsOptional: {
+							EXAMPLE_PRESENT: "lib/example.dll",
+							EXAMPLE_ABSENT: "lib/missing.dll",
+						},
+						config: { "example:on": true, "example:kept": true },
+					},
+				],
+			}),
+		);
+		try {
+			const config: Record<string, any> = { "example:kept": false };
+			const { env } = apply("win", {}, {}, "lin", BUILD_EXE, config);
+			expect(env).toEqual({ EXAMPLE_PRESENT: LIB });
+			expect(config).toEqual({ "example:on": true, "example:kept": false });
+			const other: Record<string, any> = {};
+			apply("win", {}, {}, "win", BUILD_EXE, other);
+			expect(other).toEqual({});
+		} finally {
+			fs.writeFileSync(launch, JSON.stringify(RULES));
+		}
+	});
+
 	it("skips a conditional rule on its own host", () => {
 		const { prefs, env } = apply("win", {}, {}, "win");
 		expect("example.cross-os-feature" in prefs).toBe(false);

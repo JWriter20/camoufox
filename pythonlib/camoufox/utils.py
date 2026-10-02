@@ -414,9 +414,10 @@ def apply_launch_rules(
     Each rule may restrict itself to identity OSes (`target`) and host OSes
     (`host`), both in 'win'/'mac'/'lin' terms. `env` sets variables verbatim,
     `envPaths` to a file relative to the build's directory, which must exist,
-    and `envFromConfig` to the value of a config key when the identity has one.
-    A pref the caller set, or a variable already in the environment, is never
-    replaced.
+    `envPathsOptional` likewise but only when the file exists, and
+    `envFromConfig` to the value of a config key when the identity has one.
+    `config` sets config keys. A pref or config key the caller set, or a
+    variable already in the environment, is never replaced.
 
     An `exclusive` rule owns its variables: where it does not apply they are
     removed from the environment, the caller's included, so a feature meant for
@@ -439,7 +440,7 @@ def apply_launch_rules(
     def owned(rule: Dict[str, Any]) -> set:
         return {
             key
-            for field in ('env', 'envPaths', 'envFromConfig')
+            for field in ('env', 'envPaths', 'envPathsOptional', 'envFromConfig')
             for key in rule.get(field, {})
         }
 
@@ -467,6 +468,12 @@ def apply_launch_rules(
                     f"{launch_file} needs {resolved} for {key}, and it does not exist."
                 )
             env[key] = resolved
+        for key, relative in rule.get('envPathsOptional', {}).items():
+            resolved = os.path.normpath(os.path.join(os.path.dirname(launch_file), relative))
+            if key not in env and os.path.exists(resolved):
+                env[key] = resolved
+        for key, value in rule.get('config', {}).items():
+            config.setdefault(key, value)
         for key, config_key in rule.get('envFromConfig', {}).items():
             if config_key in config:
                 env.setdefault(key, str(config[config_key]))

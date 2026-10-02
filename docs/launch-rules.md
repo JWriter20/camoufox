@@ -55,14 +55,19 @@ in but stays off until a pref or an environment variable turns it on:
 - `envPaths` sets each variable to a file relative to the directory holding
   `launch.json`. The launch fails (`FileNotFoundError` in Python) if the file is
   missing: a feature the build needs and cannot find must not degrade quietly.
+- `envPathsOptional` is like `envPaths`, but a missing file leaves the
+  variable unset instead of failing. Use it only for a feature whose absence
+  changes nothing, rather than degrading quietly.
 - `envFromConfig` sets each variable to the value of a config key, only when
   the identity has that key.
+- `config` sets config keys (which must be declared in `properties.json`) that
+  the caller did not set.
 
 - `warn` is a message emitted as a `RuntimeWarning` when the rule applies. Use
   it for a pairing the build cannot support, so the caller hears about it
   instead of getting a quietly degraded browser.
 - `exclusive: true` makes the rule own the variables it names in `env`,
-  `envPaths` and `envFromConfig`. Where the rule does not apply, those
+  `envPaths`, `envPathsOptional` and `envFromConfig`. Where the rule does not apply, those
   variables are removed from the launch environment, the caller's included,
   unless another rule that does apply sets them.
 

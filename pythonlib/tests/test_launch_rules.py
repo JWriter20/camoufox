@@ -223,3 +223,26 @@ def test_exclusive_rule_keeps_a_variable_another_matching_rule_sets(exclusive_bu
     (exclusive_build.parent / "launch.json").write_text(json.dumps(rules))
     _, env = _apply(exclusive_build, "lin", host="lin", monkeypatch=monkeypatch)
     assert env == {"EXAMPLE_DLL": "/other.dll"}
+
+
+def test_optional_env_path_set_only_when_the_file_exists(build, monkeypatch):
+    launch = build.parent / "launch.json"
+    launch.write_text(json.dumps({"rules": [{
+        "target": ["win"], "host": ["lin"],
+        "envPathsOptional": {"EXAMPLE_PRESENT": "lib/example.dll", "EXAMPLE_ABSENT": "lib/missing.dll"},
+    }]}))
+    _, env = _apply(build, "win", monkeypatch=monkeypatch)
+    assert env == {"EXAMPLE_PRESENT": str(build.parent / "lib" / "example.dll")}
+
+
+def test_rule_config_fills_keys_the_caller_did_not_set(build, monkeypatch):
+    launch = build.parent / "launch.json"
+    launch.write_text(json.dumps({"rules": [{
+        "target": ["win"], "host": ["lin"], "config": {"example:on": True, "example:kept": True},
+    }]}))
+    config = {"example:kept": False}
+    _apply(build, "win", monkeypatch=monkeypatch, config=config)
+    assert config == {"example:on": True, "example:kept": False}
+    other = {}
+    _apply(build, "win", host="win", monkeypatch=monkeypatch, config=other)
+    assert other == {}

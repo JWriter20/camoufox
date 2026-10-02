@@ -639,7 +639,9 @@ interface LaunchRule {
 	prefs?: Record<string, any>;
 	env?: Record<string, string>;
 	envPaths?: Record<string, string>;
+	envPathsOptional?: Record<string, string>;
 	envFromConfig?: Record<string, string>;
+	config?: Record<string, any>;
 	exclusive?: boolean;
 	warn?: string;
 }
@@ -653,9 +655,10 @@ interface LaunchRule {
  * Each rule may restrict itself to identity OSes (`target`) and host OSes
  * (`host`), both in 'win'/'mac'/'lin' terms. `env` sets variables verbatim,
  * `envPaths` to a file relative to the build's directory, which must exist,
- * and `envFromConfig` to the value of a config key when the identity has one.
- * A pref the caller set, or a variable already in the environment, is never
- * replaced.
+ * `envPathsOptional` likewise but only when the file exists, and
+ * `envFromConfig` to the value of a config key when the identity has one.
+ * `config` sets config keys. A pref or config key the caller set, or a
+ * variable already in the environment, is never replaced.
  *
  * An `exclusive` rule owns its variables: where it does not apply they are
  * removed from the environment, the caller's included, so a feature meant for
@@ -683,6 +686,7 @@ export function applyLaunchRules(
 	const owned = (rule: LaunchRule): string[] => [
 		...Object.keys(rule.env ?? {}),
 		...Object.keys(rule.envPaths ?? {}),
+		...Object.keys(rule.envPathsOptional ?? {}),
 		...Object.keys(rule.envFromConfig ?? {}),
 	];
 
@@ -712,6 +716,15 @@ export function applyLaunchRules(
 				);
 			}
 			env[key] = resolved;
+		}
+		for (const [key, relative] of Object.entries(
+			rule.envPathsOptional ?? {},
+		)) {
+			const resolved = path.join(path.dirname(launchFile), relative);
+			if (!(key in env) && fs.existsSync(resolved)) env[key] = resolved;
+		}
+		for (const [key, value] of Object.entries(rule.config ?? {})) {
+			if (!(key in config)) config[key] = value;
 		}
 		for (const [key, configKey] of Object.entries(rule.envFromConfig ?? {})) {
 			if (configKey in config && !(key in env)) {
