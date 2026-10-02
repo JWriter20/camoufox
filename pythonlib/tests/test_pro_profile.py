@@ -933,6 +933,15 @@ def test_a_proxy_and_an_egress_request_together_are_refused(cloud, launch):
     assert launch.mint()["egress"] is False
 
 
+def test_a_warm_launch_names_its_pool_profile_and_brings_its_own_proxy(cloud, launch):
+    pool_profile = "prf_0192f0c4-0000-7000-8000-000000000001"
+    launch(proxy={"server": "http://dish:3128"}, pool_profile=pool_profile)
+    assert launch.mint()["pool_profile"] == pool_profile
+    assert launch.mint()["egress"] is False
+    with pytest.raises(ValueError, match="pool_profile and profile conflict"):
+        launch(pool_profile=pool_profile, profile="mine", os="windows")
+
+
 def test_a_partner_provider_is_asked_for_by_name(cloud, launch):
     launch(egress={"provider": "evomi", "country": "US"})
     assert launch.mint()["egress"] == {"provider": "evomi", "country": "US"}
