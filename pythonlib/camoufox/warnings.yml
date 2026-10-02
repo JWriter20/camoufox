@@ -85,3 +85,11 @@ geoip_frozen: >-
     The newest "{name}" GeoIP database was built {days} days ago, so its source may have
     stopped publishing and locations may be out of date. Please report this at
     https://github.com/daijro/camoufox/issues.
+
+humanize_scroll_teleports: >-
+    humanize has mouse=raw() with a scroll engine that moves the cursor over the page before it scrolls.
+    With a raw mouse that move is a single jump.
+
+humanize_custom_remote: >-
+    humanize has a custom() engine on a remote browser. Each event it plays is a round trip over the network,
+    so network jitter lands between the events. Built-in engines run inside the browser and avoid it.

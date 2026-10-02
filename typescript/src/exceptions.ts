@@ -1,3 +1,5 @@
+import { pyRepr } from "./pycompat.js";
+
 /**
  * TypeScript twin of python/src/exceptions.py.
  *
@@ -190,5 +192,25 @@ export class ProfileDirectoryError extends Error {
 			options,
 		);
 		this.name = "ProfileDirectoryError";
+	}
+}
+
+/**
+ * Thrown at launch when `humanize` names an engine the browser build does not
+ * ship: one its humanize-engines.json does not list for that channel.
+ */
+export class HumanizeEngineUnavailable extends Error {
+	constructor(
+		readonly channel: string,
+		readonly engine: string,
+		readonly available: string[],
+		reason = "",
+	) {
+		super(
+			`humanize ${channel}: ${engine} is not available in this build` +
+				(reason ? ` (${reason})` : "") +
+				`; available: ${pyRepr(available)}`,
+		);
+		this.name = "HumanizeEngineUnavailable";
 	}
 }

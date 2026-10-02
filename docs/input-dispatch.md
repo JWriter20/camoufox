@@ -64,8 +64,11 @@ deadline is sized above the slowest *legitimate* ack, not near the typical one:
 acks are p99 1ms on an idle page, but they are delivered from the content main
 thread and inherit any block on it — a 3s synchronous script delayed one by
 2849ms. `sendTrajectoryAcked()` abandons the rest of a curve after the first
-undelivered point, so the ~90 bounded waits a curve can hold — the 1.5s default
-humanize ceiling at 60Hz — cannot add up to an unbounded slot. It also refuses
+undelivered point and goes straight to the destination, so the ~90 bounded waits
+a curve can hold — the 1.5s default humanize ceiling at 60Hz — cannot add up to
+an unbounded slot. The humanize seam (`input/HumanizeSeam.js`) paces every plan
+on its own schedule (`input/Pacer.js`) and fast-forwards one that runs past 1.5x
+its time budget. It also refuses
 to dispatch a point on the pixel the previous dispatch left the cursor on: a
 zero-displacement move produces no `eMouseMove`, so it is never acked, and
 that is the same deadlock reached from inside a curve rather than from

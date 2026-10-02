@@ -15,13 +15,14 @@ index 36eafe3506..1787249b72 100644
  ; All the pref files must be part of base to prevent migration bugs
  @RESPATH@/browser/@PREF_DIR@/firefox.js
 diff --git a/lw/moz.build b/lw/moz.build
-index e69de29bb2..5459e4ac36 100644
+index e69de29bb2..bbc2292c22 100644
 --- a/lw/moz.build
 +++ b/lw/moz.build
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,15 @@
 +FINAL_TARGET_FILES += [
 +  "camoufox.cfg",
 +  "chrome.css",
++  "humanize-engines.json",
 +  "properties.json"
 +]
 +

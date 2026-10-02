@@ -255,6 +255,11 @@ jobs:
       - name: Synthesized input goes through one chokepoint
         run: python3 scripts/check-input-dispatch.py
 
+      - name: Juggler input planners and pacing
+        # The humanize seam, its streams and pacer, and the base engines are
+        # plain ES modules, so they run under Node without a browser build.
+        run: node --test tests/juggler/*.test.mjs
+
       - name: CI pipeline self-tests
         # These assert that the pipeline reports honestly: skips carry reasons,
         # shards partition exactly, and nothing identifying a sundial vector
@@ -556,8 +561,11 @@ jobs:
           #                            binary, so AsyncCamoufox dies with
           #                            FileNotFoundError without it. That breaks
           #                            patch-guards, the leak suite and sundial.
+          #   humanize-engines.json -- the launchers read it there too; without
+          #                            it they treat the build as one that
+          #                            predates per-channel humanize.
           make stage-fonts
-          for f in properties.json chrome.css; do
+          for f in properties.json humanize-engines.json chrome.css; do
             [ -f "$src/$f" ] || cp -v "settings/$f" "$src/$f"
           done
 
@@ -567,7 +575,7 @@ jobs:
           # bundle/fonts/groups.json), not a copy per OS; groups.json is what
           # utils._generate_fontconfig reads to decide which of them an identity
           # may see, so its absence is the failure that matters.
-          for required in camoufox-bin properties.json camoufox.cfg fonts/groups.json fonts/LMW fontconfig/linux; do
+          for required in camoufox-bin properties.json humanize-engines.json camoufox.cfg fonts/groups.json fonts/LMW fontconfig/linux; do
             [ -e "$src/$required" ] || { echo "::error::artifact is missing $required"; exit 1; }
           done
 

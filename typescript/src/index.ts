@@ -17,6 +17,28 @@ export {
 	Screen,
 } from "./fingerprints.js";
 export {
+	auto,
+	type CustomEngineFn,
+	channelStream,
+	cursory,
+	custom,
+	type Engine,
+	engine,
+	type HumanizeSetting,
+	notches,
+	raw,
+	type SeededRng,
+	seededRng,
+	splitmix64,
+} from "./humanize.js";
+export {
+	attach as attachCustom,
+	type CustomEngineContext,
+	type Play,
+	type PlayRecord,
+	type PlayStep,
+} from "./humanize-custom.js";
+export {
 	findInstalledVersion,
 	listInstalled,
 	printTree,

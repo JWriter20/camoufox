@@ -8,6 +8,7 @@
  * no-viewport default, the stock media defaults, CPU-core pinning with its
  * launch lock (async_api), and virtual-display teardown.
  */
+
 import {
 	type Browser,
 	type BrowserContext,
@@ -17,6 +18,7 @@ import {
 import * as cpuAffinity from "./cpu_affinity.js";
 import { generateContextFingerprint } from "./fingerprints.js";
 import { ensureModel } from "./fpgen/index.js";
+import * as humanizeCustom from "./humanize-custom.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
 import {
 	applyNoViewport,
@@ -97,6 +99,14 @@ export async function NewBrowser(
 		headlessBool = headless;
 	}
 
+	// custom() humanize engines run in this process: checked before the
+	// launch, attached to the browser after it (also with from_options).
+	humanizeCustom.check(kwargs.humanize);
+	const attach = <T extends Browser | BrowserContext>(target: T): T =>
+		humanizeCustom.attach(target, kwargs.humanize, {
+			iKnowWhatImDoing: kwargs.i_know_what_im_doing,
+		});
+
 	let fromOptions = from_options;
 	try {
 		if (!fromOptions || !Object.keys(fromOptions).length) {
@@ -125,13 +135,15 @@ export async function NewBrowser(
 	// as the identity reports, so measurable parallelism matches
 	// navigator.hardwareConcurrency; the driver gets its cores back afterwards.
 	const pinTo = pinnedCoreCount(fromOptions);
-	const launch = () =>
-		launchWith(
-			playwright,
-			fromOptions as Record<string, any>,
-			Boolean(persistent_context),
-			noViewportDefault,
-			virtualDisplay,
+	const launch = async () =>
+		attach(
+			await launchWith(
+				playwright,
+				fromOptions as Record<string, any>,
+				Boolean(persistent_context),
+				noViewportDefault,
+				virtualDisplay,
+			),
 		);
 	try {
 		if (!pinTo) {

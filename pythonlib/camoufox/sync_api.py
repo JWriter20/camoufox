@@ -10,6 +10,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
+from . import _humanize_custom
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
@@ -100,6 +101,15 @@ def NewBrowser(
         **kwargs:
             All other keyword arugments passed to `launch_options()`.
     """
+    # custom() humanize engines run in this process: checked before the launch,
+    # attached to the browser after it (also with from_options).
+    _humanize_custom.check(kwargs.get('humanize'), is_async=False)
+
+    def attach(target: Any) -> Any:
+        return _humanize_custom.attach(
+            target, kwargs.get('humanize'), i_know_what_im_doing=kwargs.get('i_know_what_im_doing')
+        )
+
     if headless == 'virtual':
         virtual_display = VirtualDisplay(debug=debug)
         kwargs['virtual_display'] = virtual_display.get()
@@ -142,7 +152,7 @@ def NewBrowser(
                 **from_options,
             }
             context = playwright.firefox.launch_persistent_context(**from_options)
-            return sync_attach_vd(context, virtual_display)
+            return attach(sync_attach_vd(context, virtual_display))
 
         # Browser
         browser = playwright.firefox.launch(**from_options)
@@ -150,7 +160,7 @@ def NewBrowser(
             attach_no_viewport_default(browser)
         attach_stock_media_defaults(browser)
         attach_desktop_only_warning(browser)
-        return sync_attach_vd(browser, virtual_display)
+        return attach(sync_attach_vd(browser, virtual_display))
     finally:
         if pid:
             cpu_affinity.restore(pid, previous)

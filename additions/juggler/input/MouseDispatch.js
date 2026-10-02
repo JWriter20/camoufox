@@ -25,8 +25,6 @@
  * the build if it does. See docs/input-dispatch.md.
  */
 
-const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
-
 /**
  * How long to wait for a juggler-mouse-event-hit-renderer ack before giving up.
  *
@@ -174,22 +172,16 @@ export class MouseDispatch {
   }
 
   /**
-   * Dispatch the intermediate points of a humanized trajectory.
+   * Dispatch a planned humanized move (input/CursorTrajectory.js, or any mouse
+   * engine behind input/HumanizeSeam.js): every step but the last is an
+   * intermediate point, and the last is the destination, always dispatched.
    *
-   * Each step carries its own pause because the trajectory generator
-   * (input/CursorTrajectory.js) replays timing recorded from a real hand: the
-   * gaps are uneven, and evening them out would throw away the half of the
-   * realism that is not the shape of the path. The pause is taken BEFORE the
-   * point it belongs to, and it is taken even for a point that is then skipped,
-   * so dropping a point shifts nothing that follows it in time.
-   *
-   * The pauses are a schedule counted from the start of the curve, not gaps
-   * taken after each ack: every point waits until its own due time. Waiting a
-   * full gap after the ack added each ack's latency to the curve, so a move ran
-   * as long as its plan plus one round trip per point: on a page busy 19ms in
-   * every 20, moves planned at 0.5s took 0.54-0.71s (tests/patches/
-   * humanize-pacing.py). A late point is dispatched as soon as it can be; the
-   * ones after it are still due on the original clock.
+   * The steps keep the timing the engine planned, because Cursory replays
+   * timing recorded from a real hand: the gaps are uneven, and evening them out
+   * would throw away the half of the realism that is not the shape of the path.
+   * `play` (the seam's Pacer) holds each step to its own due time from the
+   * start of the move, not a gap after the previous ack, so a late ack delays
+   * only its own point; a skipped point shifts nothing that follows it.
    *
    * Points outside the viewport are skipped, and a curve leaves the viewport
    * more often than it sounds: measured over 400 random moves, 69% of Cursory
@@ -200,21 +192,17 @@ export class MouseDispatch {
    * points at the 1.5s default ceiling (the generator holds the sample rate at
    * 60Hz however the duration is scaled; measured worst case over 800 moves was
    * 83). A curve riding a coordinate that cannot be delivered would spend 90 x
-   * the deadline there. Rather than a wall-clock
-   * budget -- which would false-fire on exactly the slow pages the deadline
-   * exists to tolerate -- the first undelivered point abandons the rest of the
-   * curve. Intermediate points are humanization garnish: if one did not reach
-   * the renderer the rest of that curve almost certainly will not either, and
-   * dropping them costs realism, not correctness. The caller still dispatches
-   * the real destination afterwards.
+   * the deadline there. So the first undelivered point abandons the rest of the
+   * curve and the move goes straight to its destination. Intermediate points
+   * are humanization garnish: if one did not reach the renderer the rest of
+   * that curve almost certainly will not either, and dropping them costs
+   * realism, not correctness. The seam also fast-forwards to the destination
+   * once a move runs past 1.5x its time budget.
    *
-   * @param {Array<[number, number, number]>} steps [x, y, msToPauseBeforeIt].
-   * @param {number} trailingDelayMs pause before the caller's own dispatch of
-   *   the destination, so the movement ends on the generator's clock and not
-   *   the moment its last intermediate point landed.
-   * @returns {boolean} true if the whole curve was delivered.
+   * @param {{steps: Array<{x: number, y: number, t: number}>}} plan
+   * @param {(plan: object, dispatchStep: Function) => Promise} play
    */
-  async sendTrajectoryAcked(watcher, eventType, steps, trailingDelayMs = 0) {
+  async sendTrajectoryAcked(watcher, eventType, plan, play) {
     // A point on the pixel the cursor is already on generates no eMouseMove, so
     // it is never acked and the wait below would burn the whole deadline. The
     // generator already drops those, but it cannot see which points this method
@@ -223,27 +211,22 @@ export class MouseDispatch {
     // dispatched is the only place that check is reliable.
     let lastX = NaN;
     let lastY = NaN;
-    const startMs = ChromeUtils.now();
-    let dueMs = 0;
-    const untilDue = () => {
-      const waitMs = startMs + dueMs - ChromeUtils.now();
-      return waitMs > 0 ? new Promise(resolve => setTimeout(resolve, waitMs)) : null;
-    };
-    for (const [x, y, delayMs] of steps) {
-      dueMs += delayMs;
-      await untilDue();
+    const destination = plan.steps.length - 1;
+    await play(plan, async ({x, y}, i) => {
+      if (i === destination) {
+        await this.sendAcked(watcher, eventType, x, y);
+        return true;
+      }
       if (!this.isInViewport(x, y))
-        continue;
+        return true;
       if (Math.round(x) === lastX && Math.round(y) === lastY)
-        continue;
+        return true;
       if (!await this.sendAcked(watcher, eventType, x, y))
         return false;
       lastX = Math.round(x);
       lastY = Math.round(y);
-    }
-    dueMs += trailingDelayMs;
-    await untilDue();
-    return true;
+      return true;
+    });
   }
 
   /**

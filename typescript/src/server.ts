@@ -8,8 +8,11 @@
  * playwright-core's launchServer() directly with the same options Python
  * would send: launchOptions() with every top-level key camelCased.
  */
+
 import { type BrowserServer, firefox } from "playwright-core";
 import { withUnpinnedLaunch } from "./cpu_affinity.js";
+import { customEngines } from "./humanize.js";
+import { ValueError } from "./pycompat.js";
 import { camelCase } from "./sync_api.js";
 import { type LaunchOptions, launchOptions } from "./utils.js";
 import { VirtualDisplay } from "./virtdisplay.js";
@@ -60,6 +63,14 @@ export async function launchServer({
 			);
 		}
 		delete options[unsupported];
+	}
+
+	if (Object.keys(customEngines(options.humanize)).length) {
+		throw new ValueError(
+			"launch_server() cannot run custom() humanize engines: they run in the process that drives " +
+				"the page. Serve with raw() on those channels, and on the client call " +
+				"attachCustom(browser, humanize) on the connected browser.",
+		);
 	}
 
 	let virtualDisplay: VirtualDisplay | null = null;
