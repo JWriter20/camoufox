@@ -1012,6 +1012,7 @@ def launch_options(
     warm_plan: Optional[Literal["none", "standard", "continuous"]] = None,
     egress: Optional[Union[Literal[False], Dict[str, Any]]] = None,
     gpu: Optional[Literal[False]] = None,
+    pool_profile: Optional[str] = None,
     **launch_options: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
@@ -1138,6 +1139,10 @@ def launch_options(
         gpu (Optional[bool]):
             False renders WebGL, WebGPU and canvas on this machine's GPU for a
             Camoufox Pro Windows identity, instead of on a remote GPU.
+        pool_profile (Optional[str]):
+            Camoufox Pro's own pool warmer only: the pool profile ('prf_<uuid>')
+            this launch presents, so its lease draws on the GPU that profile is
+            pinned to. Any other account's mint is refused.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
             The pair must be one fpgen has recorded from Firefox on `os`
@@ -1224,6 +1229,10 @@ def launch_options(
         pro_request["egress"] = egress
     if gpu is False:
         pro_request["gpu"] = False
+    if pool_profile is not None:
+        if profile is not None:
+            raise ValueError("pool_profile and profile conflict: a warm launch presents a pool profile.")
+        pro_request["pool_profile"] = pool_profile
     if pro_request and not leased:
         raise ValueError(
             "profile, warm_plan, egress and gpu are lease options, and this launch carries its own "
