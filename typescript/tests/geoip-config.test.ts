@@ -78,6 +78,30 @@ it("keeps an explicit choice through a refresh", async () => {
 	expect(fs.readFileSync(g.getMmdbPath("ipv4"), "utf-8")).toBe("x");
 });
 
+it("extracts beside the cache, so the move into it never crosses filesystems", async () => {
+	// os.tmpdir() is often its own filesystem (tmpfs, a container mount), and renameSync from there
+	// into the cache fails with EXDEV: every Pro launch on such a host died fetching GeoIP.
+	const extractedIn: string[] = [];
+	vi.doMock("../src/pkgman.js", async (importOriginal) => ({
+		...(await importOriginal<typeof import("../src/pkgman.js")>()),
+		webdl: async () => Buffer.from("zip"),
+		unzip: (_buffer: Buffer, dest: string) => {
+			extractedIn.push(dest);
+			fs.writeFileSync(path.join(dest, "db.mmdb"), "x");
+		},
+	}));
+	try {
+		await g.downloadMmdb();
+	} finally {
+		vi.doUnmock("../src/pkgman.js");
+	}
+	expect(extractedIn.length).toBeGreaterThan(0);
+	for (const dir of extractedIn) expect(path.dirname(dir)).toBe(g.MMDB_DIR);
+	expect(
+		fs.readdirSync(g.MMDB_DIR).filter((n) => n.startsWith(".geoip-")),
+	).toEqual([]);
+});
+
 it("warns on a deprecated source", async () => {
 	const { warnings } = await w.recordWarnings(() => {
 		g.warnIfDeprecated(g.getGeoipConfigByName(DEPRECATED));
