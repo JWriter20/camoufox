@@ -1384,6 +1384,14 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 		expect(mint().egress).toBe(false);
 	});
 
+	it("asks for CamouProxy with true, and never beside a proxy", async () => {
+		await launch({ egress: true });
+		expect(mint().egress).toBe(true);
+		await expect(
+			launch({ proxy: { server: "http://my.proxy:8080" }, egress: true }),
+		).rejects.toThrow(/proxy and egress conflict/);
+	});
+
 	it("asks for a partner provider by name", async () => {
 		await launch({ egress: { provider: "evomi", country: "US" } });
 		expect(mint().egress).toEqual({ provider: "evomi", country: "US" });

@@ -550,8 +550,8 @@ export const LIVE = new Map<string, Lease>();
  * What a mint asks for beyond the build and OS, each field left out unless
  * set: `profile` names the profile to launch (and `warm_plan` the plan a new
  * one is created with), `egress: false` keeps managed
- * egress off (the caller's own proxy is never replaced) and an object states
- * the egress wanted, and `gpu: false` renders on this machine.
+ * egress off (the caller's own proxy is never replaced), `true` asks for
+ * CamouProxy and an object states the egress wanted, and `gpu: false` renders on this machine.
  */
 /**
  * The managed egress a lease asks for. `provider` names a partner provider
@@ -568,7 +568,7 @@ export interface EgressRequest {
 export interface LeaseRequest {
 	profile?: string;
 	warm_plan?: "none" | "standard" | "continuous";
-	egress?: false | EgressRequest;
+	egress?: boolean | EgressRequest;
 	gpu?: false;
 }
 

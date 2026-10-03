@@ -933,6 +933,13 @@ def test_a_proxy_and_an_egress_request_together_are_refused(cloud, launch):
     assert launch.mint()["egress"] is False
 
 
+def test_camouproxy_is_asked_for_with_true_and_never_beside_a_proxy(cloud, launch):
+    launch(egress=True)
+    assert launch.mint()["egress"] is True
+    with pytest.raises(ValueError, match="proxy and egress conflict"):
+        launch(proxy={"server": "http://my.proxy:8080"}, egress=True)
+
+
 def test_a_warm_launch_names_its_pool_profile_and_brings_its_own_proxy(cloud, launch):
     pool_profile = "prf_0192f0c4-0000-7000-8000-000000000001"
     launch(proxy={"server": "http://dish:3128"}, pool_profile=pool_profile)

@@ -1399,11 +1399,13 @@ export interface LaunchOptions {
 	 * machine; `"standard"` and `"continuous"` profiles are kept warm in the
 	 * cloud and launch with their identity only. Left out, the API decides. */
 	warm_plan?: "none" | "standard" | "continuous";
-	/** Camoufox Pro managed egress: `false` for none, or the egress wanted,
-	 * e.g. `{ class: "residential", country: "US" }`, with `provider` naming a
-	 * partner provider instead of CamouProxy. Left out, the plan's default.
+	/** Camoufox Pro managed egress: `false` for none, `true` for CamouProxy
+	 * with defaults, or the egress wanted, e.g. `{ class: "residential",
+	 * country: "US" }`, with `provider` naming a partner provider instead of
+	 * CamouProxy. Left out, a `profile` gets CamouProxy and a launch without
+	 * one goes direct.
 	 * With your own `proxy` there is none, and passing both throws. */
-	egress?: false | pro.EgressRequest;
+	egress?: boolean | pro.EgressRequest;
 	/** `false` renders WebGL, WebGPU and canvas on this machine's GPU for a
 	 * Camoufox Pro Windows identity, instead of on a remote GPU. */
 	gpu?: false;

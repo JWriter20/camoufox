@@ -1010,7 +1010,7 @@ def launch_options(
     pro_key: Optional[str] = None,
     profile: Optional[str] = None,
     warm_plan: Optional[Literal["none", "standard", "continuous"]] = None,
-    egress: Optional[Union[Literal[False], Dict[str, Any]]] = None,
+    egress: Optional[Union[bool, Dict[str, Any]]] = None,
     gpu: Optional[Literal[False]] = None,
     pool_profile: Optional[str] = None,
     **launch_options: Dict[str, Any],
@@ -1131,10 +1131,11 @@ def launch_options(
             machine; "standard" and "continuous" profiles are kept warm in the
             cloud and launch with their identity only. Left out, the API decides.
         egress (Optional[Union[bool, Dict[str, Any]]]):
-            Camoufox Pro managed egress: False for none, or the egress wanted,
-            e.g. {"class": "residential", "country": "US"}, with "provider"
-            naming a partner provider instead of CamouProxy. Left out, the
-            plan's default. With your own `proxy` there is none, and passing
+            Camoufox Pro managed egress: False for none, True for CamouProxy
+            with defaults, or the egress wanted, e.g. {"class": "residential",
+            "country": "US"}, with "provider" naming a partner provider instead
+            of CamouProxy. Left out, a `profile` gets CamouProxy and a launch
+            without one goes direct. With your own `proxy` there is none, and passing
             both raises ValueError.
         gpu (Optional[bool]):
             False renders WebGL, WebGPU and canvas on this machine's GPU for a
