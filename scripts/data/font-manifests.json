@@ -131,7 +131,7 @@
      "ＭＳ ゴシック",
      "ＭＳ Ｐゴシック"
     ],
-    "source": "win-i9, real Windows 11 build 26200.9457: C:\\Windows\\Fonts files carrying a WinSxS hardlink (OS-native, Office excluded), all-language nameID 1, plus the GDI substitution aliases and the DirectWrite optical-size scan splits"
+    "source": "a real Windows 11 laptop, build 26200.9457: C:\\Windows\\Fonts files carrying a WinSxS hardlink (OS-native, Office excluded), all-language nameID 1, plus the GDI substitution aliases and the DirectWrite optical-size scan splits"
    }
   },
   "additions": [
@@ -1395,7 +1395,7 @@
      "Zapf Dingbats",
      "Zapfino"
     ],
-    "source": "jobharvest-mac, real macOS 26.6.2 build 25G83: /System/Library/Fonts + /Library/Fonts + ~/Library/Fonts, nameID 1, dot-prefixed (CoreText-private) families excluded; PingFang added because macOS 26 serves it from FontServices.framework/.../Reserved where a public-directory scan cannot see it"
+    "source": "a real Apple Silicon Mac, macOS 26.6.2 build 25G83: /System/Library/Fonts + /Library/Fonts + ~/Library/Fonts, nameID 1, dot-prefixed (CoreText-private) families excluded; PingFang added because macOS 26 serves it from FontServices.framework/.../Reserved where a public-directory scan cannot see it"
    },
    "macos27": {
     "weight": 0.15,
@@ -1771,7 +1771,7 @@
      "Zapf Dingbats",
      "Zapfino"
     ],
-    "source": "jobharvest-mac, real macOS 27.0 build 26A428 (upgraded from 26.6.2 on 2026-09-22): /System/Library/Fonts + /Library/Fonts + ~/Library/Fonts, nameID 1, dot-prefixed (CoreText-private) families excluded, PingFang added (private Reserved ttc), apple-optional tier excluded. Verified clean: no Office, no user fonts."
+    "source": "a real Apple Silicon Mac, macOS 27.0 build 26A428 (upgraded from 26.6.2 on 2026-09-22): /System/Library/Fonts + /Library/Fonts + ~/Library/Fonts, nameID 1, dot-prefixed (CoreText-private) families excluded, PingFang added (private Reserved ttc), apple-optional tier excluded. Verified clean: no Office, no user fonts."
    }
   },
   "additions": [
