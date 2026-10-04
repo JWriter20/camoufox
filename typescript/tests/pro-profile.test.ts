@@ -1503,11 +1503,9 @@ describe("capture waits for Firefox to let go of the profile", () => {
 			const exited = new Promise((resolve) => holder.once("exit", resolve));
 			fs.symlinkSync(`127.0.0.1:+${holder.pid}`, path.join(dir, "lock"));
 			let released = false;
-			const waiting = profiles
-				.profileReleased(dir, 10_000, 20)
-				.then(() => {
-					released = true;
-				});
+			const waiting = profiles.profileReleased(dir, 10_000, 20).then(() => {
+				released = true;
+			});
 			await new Promise((resolve) => setTimeout(resolve, 200));
 			expect(released).toBe(false);
 			holder.kill();
