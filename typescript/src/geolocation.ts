@@ -7,7 +7,6 @@
  */
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
-import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { NotInstalledGeoIPExtra, UnknownIPLocation } from "./exceptions.js";
@@ -259,7 +258,8 @@ export async function downloadMmdb(
 		let lastError: unknown;
 		let done = false;
 		for (const url of urlList) {
-			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-geoip-"));
+			// Beside the destination: renameSync cannot cross filesystems, and os.tmpdir() is often another one.
+			const tmpDir = fs.mkdtempSync(path.join(MMDB_DIR, ".geoip-"));
 			try {
 				const buffer = await webdl(
 					url,
