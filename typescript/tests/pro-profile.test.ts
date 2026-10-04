@@ -1490,3 +1490,37 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 		]);
 	});
 });
+
+describe("capture waits for Firefox to let go of the profile", () => {
+	// Playwright reports a persistent context closed while Firefox is still writing prefs.js and
+	// places.sqlite on its way out, and a capture taken then failed "changed size after capture".
+	it.skipIf(process.platform === "win32")(
+		"until the process named by the lock symlink exits",
+		async () => {
+			const { spawn } = await import("node:child_process");
+			const dir = fs.mkdtempSync(path.join(SCRATCH, "locked-"));
+			const holder = spawn("sleep", ["30"]);
+			const exited = new Promise((resolve) => holder.once("exit", resolve));
+			fs.symlinkSync(`127.0.0.1:+${holder.pid}`, path.join(dir, "lock"));
+			let released = false;
+			const waiting = profiles.profileReleased(dir, 10_000, 20).then(() => {
+				released = true;
+			});
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			expect(released).toBe(false);
+			holder.kill();
+			await exited;
+			await waiting;
+			expect(released).toBe(true);
+		},
+	);
+
+	it("not at all when the lock is stale or absent", async () => {
+		const dir = fs.mkdtempSync(path.join(SCRATCH, "stale-"));
+		const started = Date.now();
+		await profiles.profileReleased(dir, 10_000, 20);
+		fs.symlinkSync("127.0.0.1:+2147483646", path.join(dir, "lock"));
+		await profiles.profileReleased(dir, 10_000, 20);
+		expect(Date.now() - started).toBeLessThan(1_000);
+	});
+});
