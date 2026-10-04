@@ -1,5 +1,6 @@
 import json
 import os
+from urllib.parse import urlsplit
 import platform
 import shutil
 import sys
@@ -1398,6 +1399,12 @@ def launch_options(
             pro_env[pro.RENDER_FILE_ENV] = str(lease.render_path)
             firefox_user_prefs.update(grants["gpu"]["prefs"])
             _user_pref_keys.update(grants["gpu"]["prefs"])
+            # The farm is reached directly: the page's proxy is for the page, and one that cannot reach
+            # the render gateway leaves every farm call waiting on a route that never opens.
+            if proxy:
+                farm_host = urlsplit(grants["gpu"]["render"]["endpoint"]).hostname
+                bypass = [entry for entry in (proxy.get("bypass") or "").split(",") if entry]
+                proxy = {**proxy, "bypass": ",".join([*bypass, farm_host])}
 
     # A preset whose screen is a phone viewport is not a real desktop device;
     # the floor is normally skipped for presets, on the assumption that a preset
