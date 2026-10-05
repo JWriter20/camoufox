@@ -1760,6 +1760,13 @@ async function buildLaunchOptions(
 			proEnv[pro.RENDER_FILE_ENV] = held.lease.renderPath as string;
 			Object.assign(firefox_user_prefs, grants.gpu.prefs);
 			for (const key of Object.keys(grants.gpu.prefs)) userPrefKeys.add(key);
+			// The farm is reached directly: the page's proxy is for the page, and one that cannot reach
+			// the render gateway leaves every farm call waiting on a route that never opens.
+			if (proxy) {
+				const farmHost = new URL(grants.gpu.render.endpoint).hostname;
+				const bypass = (proxy.bypass ?? "").split(",").filter(Boolean);
+				proxy = { ...proxy, bypass: [...bypass, farmHost].join(",") };
+			}
 		}
 	}
 

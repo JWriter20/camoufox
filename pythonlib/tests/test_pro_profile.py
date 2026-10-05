@@ -962,6 +962,16 @@ def test_the_browser_is_pointed_at_the_render_document(cloud, launch):
     assert opts["firefox_user_prefs"]["privacy.resistFingerprinting"] is False
 
 
+def test_the_render_farm_is_reached_directly_not_through_the_pages_proxy(cloud, launch):
+    """A warm session's farm socket went through its proxy, which cannot reach the gateway: every heavy
+    canvas or WebGL call then waited on a route that never opened."""
+    cloud.sections = {"gpu": GPU}
+    opts = launch(proxy={"server": "http://dish:3128", "bypass": "intranet.example"})
+    assert opts["proxy"]["server"] == "http://dish:3128"
+    assert opts["proxy"]["bypass"].split(",") == ["intranet.example", "render.example"]
+    assert launch(proxy={"server": "http://dish:3128"})["proxy"]["bypass"] == "render.example"
+
+
 def test_none_of_it_is_set_without_a_gpu_section(cloud, launch):
     opts = launch(gpu=False)
     assert launch.mint()["gpu"] is False
