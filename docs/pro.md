@@ -76,7 +76,7 @@ granted the lease:
 ```
 [ ok ] lease verified: lse_0b7c... for 156.0.1-pro.1, windows identity, layout fidelity
 [ -- ] profile: not granted
-[ ok ] egress: granted (residential, US)
+[ ok ] managed: granted (residential, US)
 [ -- ] gpu: not granted
 [ ok ] captcha: granted (250)
 [ ok ] lease released
@@ -125,8 +125,7 @@ For every Pro browser it launches, the launcher:
 3. renews it about once a minute while the browser runs, rewriting the file;
 4. releases it and deletes the file when the browser closes.
 
-Each browser holds its own lease, and each lease is one of the concurrent
-browsers your plan includes. Leases are renewed from a daemon thread in Python
+Each browser holds its own lease. Leases are renewed from a daemon thread in Python
 and an unreferenced timer in Node, so they work with the sync and async APIs
 and never keep a process alive.
 
@@ -156,7 +155,7 @@ set it:
 |---|---|---|
 | `profile` | a name, up to 64 characters | the [profile](#profiles) of that name, created on first use |
 | `warm_plan` | `"none"`, `"standard"`, `"continuous"` | the plan a new profile is created with (with `profile` only) |
-| `egress` | `false`, `true`, or `{class, country, sticky, provider}` | no [managed egress](#managed-egress), CamouProxy, or the egress wanted |
+| `managed` | `False`, `True`, or a `Managed` | no [managed proxy](#managed-proxies), the defaults, or the proxy wanted |
 | `farm_gpu` | `false` | no [remote GPU](#remote-rendering): render on this machine |
 | `render_node` | `false`, a path, or `{coordinator, token, gpu}` | WebGL on [your own render node](#your-own-render-node) |
 
@@ -164,44 +163,94 @@ They need a Pro build; on a stock build, or with a `CAMOU_LEASE_FILE` of your
 own, they raise `ValueError`. An explicitly named `render_node` path or object
 is the exception: it uses your lease without trying to replace it.
 
-### Managed egress
+### Managed proxies
 
 Nothing is forced on you: `profile` is optional, and so is any proxy. A Pro
-browser reaches the network one of four ways:
+browser reaches the network one of three ways:
 
 - **Direct.** Launch without a `profile` and without `proxy`, or pass
-  `egress: false`. No proxy at all; a profile launched this way stays direct.
+  `managed=False`. A profile first launched this way stays direct.
 - **Your own proxy.** Pass `proxy` exactly as for any camoufox launch. Nothing
-  else is needed and nothing is configured on our side; the lease carries no
-  egress. A profile first launched this way keeps using your own proxy.
-- **A partner provider.** Name it in `egress: { provider: "<code>" }`. We hold
-  the integration and the provider's credentials, and the lease still hands the
-  browser only our proxy address. No partner is available yet.
-- **CamouProxy**, the default for a `profile`. Leave `egress` out on a profile
-  launch, or pass `egress: true` or `provider: "camouproxy"` on any launch: our own Starlink network, plus partner Starlink
-  exits we fold into it. A profile keeps the exit it was warmed on, or one in
-  the same Starlink point of presence, for life.
+  else is needed; the lease carries no managed proxy. A profile first launched
+  this way keeps using your own proxy.
+- **A managed proxy.** Pass `managed`. We hold the provider's credentials; the
+  lease hands the browser only our proxy address and a credential that expires
+  with it, and the traffic is paid from your account's wallet.
 
-When the lease carries managed egress, the launcher routes the browser through
-it:
+`managed` is a `Managed`, whose fields are enums:
+
+```python
+from camoufox import Managed, ProxyNetwork, ProxyProvider, ProxyType
+from camoufox.sync_api import Camoufox
+
+# A one-off browser on Evomi residential, US, with a fresh IP this launch:
+with Camoufox(
+    executable_path="/path/to/camoufox-pro/camoufox-bin",
+    managed=Managed(provider=ProxyProvider.EVOMI, type=ProxyType.ROTATING,
+                    network=ProxyNetwork.RESIDENTIAL, country="US"),
+) as browser:
+    browser.new_page().goto("https://example.com")
+
+# A profile on CamouLink (the default for a profile):
+with Camoufox(
+    executable_path="/path/to/camoufox-pro/camoufox-bin",
+    profile="shop-1", os="windows",
+    managed=Managed(provider=ProxyProvider.CAMOULINK),
+) as context:
+    context.new_page().goto("https://example.com")
+
+# A profile on a rented static ISP IP:
+with Camoufox(
+    executable_path="/path/to/camoufox-pro/camoufox-bin",
+    profile="shop-2", os="linux",
+    managed=Managed(provider=ProxyProvider.EVOMI, type=ProxyType.STATIC,
+                    network=ProxyNetwork.ISP),
+) as context:
+    context.new_page().goto("https://example.com")
+```
 
 ```ts
+import { Camoufox, ProxyNetwork, ProxyProvider, ProxyType } from "@camoufox/camoufox";
+
 const browser = await Camoufox({
 	executable_path: "/path/to/camoufox-pro/camoufox-bin",
-	egress: { class: "residential", country: "US" },
+	managed: {
+		provider: ProxyProvider.EVOMI,
+		type: ProxyType.ROTATING,
+		network: ProxyNetwork.RESIDENTIAL,
+		country: "US",
+	},
 });
 ```
 
-`class` is one of `residential`, `isp`, `datacenter` and `mobile`, and
-`country` an ISO 3166 code such as `US`. Left out, the plan's default is used.
-The launcher sets `geoip` to the proxy's exit address when the API knows it,
-and otherwise looks the exit up through the proxy, so timezone, locale and
-WebRTC match the exit. A `geoip` you pass yourself wins. `localhost`,
-`127.0.0.1`, `::1` and `*.local` bypass the proxy, which refuses local
-destinations.
+`managed=True` asks for a managed proxy with every default. A field left out
+takes the API's default:
 
-Your own `proxy` is never replaced: with one, the launcher asks for no managed
-egress. Passing both `proxy` and an `egress` object raises `ValueError`.
+| Field | Values | Default |
+|---|---|---|
+| `provider` | `ProxyProvider.CAMOULINK`, `EVOMI`, `RAYOBYTE` | `CAMOULINK`, Camoufox Pro's own Starlink network |
+| `type` | `ProxyType.ROTATING`: a fresh exit each launch, kept for that browser's life. `ProxyType.STATIC`: an exit that stays | `STATIC` with a profile, else `ROTATING` |
+| `network` | `ProxyNetwork.RESIDENTIAL`, `MOBILE`, `ISP`, `DATACENTER` | `RESIDENTIAL`; `ISP` for a static exit from a partner |
+| `country` | an upper-case ISO 3166 code such as `"US"` | any |
+
+Left out entirely, a `profile` gets the defaults and a launch without one goes
+direct, so nobody is put on a metered proxy they did not ask for.
+
+The launcher refuses these before minting, and the API refuses the same:
+
+| Request | Why |
+|---|---|
+| `ProxyType.STATIC` without a `profile` | A static exit belongs to a profile |
+| A `profile` with `ProxyType.ROTATING` | A profile keeps its IP for life |
+| A `profile` on a partner's `RESIDENTIAL` or `DATACENTER` network | A profile exits through CamouLink, or a partner's `MOBILE` or `ISP` network, so it matches its IP for life |
+| `proxy` and `managed` together | Your own proxy is never replaced |
+| A provider, type or network that is not one of the enums' members | Python raises `TypeError` for a bare string; TypeScript for an unknown value |
+
+When the lease carries a managed proxy, the launcher routes the browser through
+it. It sets `geoip` to the exit's address when the API knows it, and otherwise
+looks the exit up through the proxy, so timezone, locale and WebRTC match the
+exit. A `geoip` you pass yourself wins. `localhost`, `127.0.0.1`, `::1` and
+`*.local` bypass the proxy, which refuses local destinations.
 
 ### Remote rendering
 
@@ -395,8 +444,9 @@ Python and from `camoufox` in TypeScript. Each carries the API's
 | Exception | Meaning | What to do |
 |---|---|---|
 | `NotSignedIn` | No key was found, or the API does not accept it | Run `camoufox login`, or set `CAMOUFOX_PRO_KEY` |
-| `SubscriptionRequired` | The account has no active Camoufox Pro plan | Subscribe at the `resolution_url` |
-| `AllowanceExhausted` | A metered allowance is used up and usage-based billing is off | Top up, or turn usage-based billing on |
+| `WalletEmpty` | The wallet cannot pay for what the launch asked for: a managed proxy, or a static IP's first month | Top up, or turn on auto-refill, at the `resolution_url` |
+| `PlanRequired` | The launch asks for a feature the plan does not include; `details["feature"]` names it | Choose a plan at the `resolution_url`, or launch without the feature |
+| `TopupRequired` | An account that has never added credits is creating its first profile | Add credits at the `resolution_url` |
 | `AccountSuspended` | The account is suspended | See the `resolution_url` |
 | `BuildNotAllowlisted` | The browser is not a published Pro release, or was revoked | Install a current Pro release |
 | `LeaseLimitReached` | Every concurrent browser in the plan is running. The message names the machines holding them | Close one, or add browsers to the plan. The launcher never waits for a slot |
@@ -404,7 +454,8 @@ Python and from `camoufox` in TypeScript. Each carries the API's
 | `InvalidRequest` | The API rejected the request | Report it: the launcher sent something the API does not accept |
 | `RateLimited` | The API asked the launcher to slow down, and kept asking through three retries | Launch fewer browsers at once |
 | `ProUnavailable` | The API could not be reached, or failed, through three retries (1, 2 and 4 seconds apart) | Check the network; see the API status |
-| `ProfileMismatch` | The profile exists with another `os` or `warm_plan`, or another egress regime, than the launch asked for | Launch it as it was created, or use another profile name |
+| `ProfileMismatch` | The profile exists with another `os` or `warm_plan`, or another managed proxy, than the launch asked for | Launch it as it was created, or use another profile name |
+| `GpuLimitReached` | Every remote GPU the plan includes is in use | Retry after `retry_after`, or pass `farm_gpu: false` |
 | `GpuUnavailable` | No remote GPU can serve this Windows identity now | Retry after `retry_after`, or pass `farm_gpu: false` |
 | `StatePoolSealed` | The API refused to take a warmed profile's state through the chunk routes; it only takes it back through the route it served it from | Update the launcher |
 | `ProClockSkew` | This machine's clock is more than 3 minutes off the API's, so a fresh lease would look expired | Fix the clock (NTP). Over one minute off logs a warning |
@@ -429,11 +480,11 @@ Choices made while building the lease sections into the launchers, with the
 reason for each.
 
 - **Option names** are the API's own field names: `profile`, `warm_plan`,
-  `egress`. `pro_key` keeps its prefix because `key` alone would be
+  `managed`. `pro_key` keeps its prefix because `key` alone would be
   ambiguous, and `farm_gpu` (sent as `gpu`) because `gpu` already picks the
   card for `headless: "virtual-gpu"`.
-- **Nothing is sent that you did not set**, except `egress: false` with your
-  own `proxy`: the API applies the plan's defaults otherwise.
+- **Nothing is sent that you did not set**, except `managed: false` with your
+  own `proxy` on a launch that mints a lease: the API applies the plan's defaults otherwise.
 - **A profile launch needs one explicit `os`.** The API refuses a profile
   asked for with another OS, and drawing one at random would fail half the
   launches of an existing profile.
@@ -464,7 +515,9 @@ reason for each.
   than retried: the launch would otherwise block for an unknown time.
 - **Prefs the lease sets are treated as the caller's**, so a rule in the
   build's `launch.json` never replaces them.
-- **A lease minted again after the API lost it carries a new egress
+- **`managed` takes enums, not strings.** A misspelt provider fails at the
+  call, with the enum's name in the message, instead of as an API refusal.
+- **A lease minted again after the API lost it carries a new managed proxy
   credential** the running browser cannot pick up; the launcher warns instead
   of restarting the browser.
 - **Dependencies.** Node: XChaCha20-Poly1305 is not in `node:crypto`, so
