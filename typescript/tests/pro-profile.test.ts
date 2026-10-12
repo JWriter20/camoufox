@@ -1,7 +1,7 @@
 /**
  * Port of python/tests/test_pro_profile.py: what a Camoufox Pro lease
  * grants beyond the lease itself -- a profile's identity and synced state,
- * managed egress, remote rendering and the captcha solver -- and how the
+ * managed proxies, remote rendering and the captcha solver -- and how the
  * launcher applies each.
  *
  * Every test talks to a local fake of the Camoufox Pro API and of the object
@@ -39,6 +39,9 @@ import {
 const pro = await import("../src/pro.js");
 const { GpuDisplay } = await import("../src/gpudisplay.js");
 const { hasCanvasPlaceholder } = await import("../src/host_rendering.js");
+const { ProxyNetwork, ProxyProvider, ProxyType } = await import(
+	"../src/managed.js"
+);
 const errors = await import("../src/exceptions.js");
 const state = await import("../src/pro-state.js");
 const profiles = await import("../src/pro-profile.js");
@@ -1322,7 +1325,7 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 		);
 	const mint = () => cloud.calls("POST", "/api/v1/leases").at(-1)?.body;
 
-	it("routes the browser through managed egress, located at its exit", async () => {
+	it("routes the browser through a managed proxy, located at its exit", async () => {
 		cloud.sections = {
 			egress: {
 				server: "http://100.64.12.34:7190",
@@ -1334,8 +1337,10 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 				exit_ip: "98.97.12.34",
 			},
 		};
-		const opts = await launch({ egress: { class: "isp", country: "US" } });
-		expect(mint().egress).toEqual({ class: "isp", country: "US" });
+		const opts = await launch({
+			managed: { network: ProxyNetwork.ISP, country: "US" },
+		});
+		expect(mint().managed).toEqual({ network: "isp", country: "US" });
 		expect(opts.proxy).toEqual({
 			server: "http://100.64.12.34:7190",
 			username: "0192f0c4",
@@ -1357,7 +1362,7 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 			},
 		};
 		await launch();
-		expect("egress" in mint()).toBe(false);
+		expect("managed" in mint() || "egress" in mint()).toBe(false);
 		expect(lookedUp).toEqual(["http://u:p@100.64.12.34:7190"]);
 		expect("profile" in mint() || "warm_plan" in mint()).toBe(false);
 	});
@@ -1365,30 +1370,57 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 	it("never replaces the caller's own proxy", async () => {
 		const proxy = { server: "http://my.proxy:8080" };
 		const opts = await launch({ proxy, geoip: "198.51.100.1" });
-		expect(mint().egress).toBe(false);
+		expect(mint().managed).toBe(false);
 		expect(opts.proxy).toEqual(proxy);
 	});
 
-	it("refuses a proxy and an egress request together", async () => {
+	it("refuses a proxy and a managed request together", async () => {
 		const proxy = { server: "http://my.proxy:8080" };
 		await expect(
-			launch({ proxy, egress: { provider: "evomi" } }),
-		).rejects.toThrow(/proxy and egress conflict/);
-		await launch({ proxy, egress: false });
-		expect(mint().egress).toBe(false);
+			launch({ proxy, managed: { provider: ProxyProvider.EVOMI } }),
+		).rejects.toThrow(/proxy and managed conflict/);
+		await expect(launch({ proxy, managed: true })).rejects.toThrow(
+			/proxy and managed conflict/,
+		);
+		await launch({ proxy, managed: false });
+		expect(mint().managed).toBe(false);
 	});
 
-	it("asks for CamouProxy with true, and never beside a proxy", async () => {
-		await launch({ egress: true });
-		expect(mint().egress).toBe(true);
+	it("asks for the defaults with true", async () => {
+		await launch({ managed: true });
+		expect(mint().managed).toBe(true);
+	});
+
+	it("asks for a partner by its enum, sending only the fields set", async () => {
+		await launch({
+			managed: {
+				provider: ProxyProvider.EVOMI,
+				type: ProxyType.ROTATING,
+				country: "US",
+			},
+		});
+		expect(mint().managed).toEqual({
+			provider: "evomi",
+			type: "rotating",
+			country: "US",
+		});
+		expect("egress" in mint()).toBe(false);
+	});
+
+	it("checks a profile's managed request before minting", async () => {
 		await expect(
-			launch({ proxy: { server: "http://my.proxy:8080" }, egress: true }),
-		).rejects.toThrow(/proxy and egress conflict/);
-	});
-
-	it("asks for a partner provider by name", async () => {
-		await launch({ egress: { provider: "evomi", country: "US" } });
-		expect(mint().egress).toEqual({ provider: "evomi", country: "US" });
+			launch({ profile: "shop-1", managed: { type: ProxyType.ROTATING } }),
+		).rejects.toThrow(/cannot be ProxyType.ROTATING/);
+		await expect(
+			launch({
+				profile: "shop-1",
+				managed: {
+					provider: ProxyProvider.RAYOBYTE,
+					network: ProxyNetwork.RESIDENTIAL,
+				},
+			}),
+		).rejects.toThrow(/not RESIDENTIAL/);
+		expect(cloud.calls("POST", "/api/v1/leases")).toEqual([]);
 	});
 
 	it("points the browser at the render document and sets the farm prefs", async () => {
@@ -1478,7 +1510,7 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 			profile: "linkedin-01",
 			warm_plan: "none",
 			os: "windows",
-			egress: false,
+			managed: false,
 		});
 		const presented = configOf(opts);
 		expect(presented["navigator.userAgent"]).toBe(

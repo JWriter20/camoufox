@@ -32,6 +32,7 @@ from . import coherence, pro, render_node as render_nodes
 from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
 from .ip import Proxy, proxy_auth_env, proxy_auth_init_script, public_ip, public_ipv6, socks5_auth, valid_ipv4, valid_ipv6
+from .managed import Managed, managed_request
 from .locales import handle_locales
 import warnings
 
@@ -1559,7 +1560,7 @@ def launch_options(
     pro_key: Optional[str] = None,
     profile: Optional[str] = None,
     warm_plan: Optional[Literal["none", "standard", "continuous"]] = None,
-    egress: Optional[Union[bool, Dict[str, Any]]] = None,
+    managed: Optional[Union[Managed, bool]] = None,
     farm_gpu: Optional[Literal[False]] = None,
     render_node: render_nodes.RenderNodeOption = None,
     pool_profile: Optional[str] = None,
@@ -1683,13 +1684,12 @@ def launch_options(
             with your own `proxy`) is the only plan whose state syncs to this
             machine; "standard" and "continuous" profiles are kept warm in the
             cloud and launch with their identity only. Left out, the API decides.
-        egress (Optional[Union[bool, Dict[str, Any]]]):
-            Camoufox Pro managed egress: False for none, True for CamouProxy
-            with defaults, or the egress wanted, e.g. {"class": "residential",
-            "country": "US"}, with "provider" naming a partner provider instead
-            of CamouProxy. Left out, a `profile` gets CamouProxy and a launch
-            without one goes direct. With your own `proxy` there is none, and passing
-            both raises ValueError.
+        managed (Optional[Union[Managed, bool]]):
+            A Camoufox Pro managed proxy: a Managed naming the provider, type,
+            network and country wanted, True for the defaults, or False for
+            none. Left out, a `profile` gets the default and a launch without
+            one goes direct. With your own `proxy` there is none, and passing
+            both raises ValueError. See docs/pro.md, "Managed proxies".
         farm_gpu (Optional[bool]):
             False renders WebGL, WebGPU and canvas on this machine's GPU for a
             Camoufox Pro Windows identity, instead of on a remote GPU.
@@ -1781,15 +1781,11 @@ def launch_options(
         if profile is None:
             raise ValueError("warm_plan applies to a profile: pass profile too.")
         pro_request["warm_plan"] = warm_plan
-    # The caller's own proxy is never replaced by managed egress, and asking for both is a mistake
-    # worth naming rather than a request to drop one of them quietly.
-    if proxy is not None and egress not in (None, False):
-        raise ValueError(
-            "proxy and egress conflict: with your own proxy there is no managed egress. "
-            "Pass proxy to use your own, or egress (and no proxy) for managed egress."
-        )
-    if egress is not None:
-        pro_request["egress"] = egress
+    wire = managed_request(managed, profile=profile, proxy=proxy)
+    # Your own proxy tells a lease to add no managed one; a launch with no lease to tell
+    # (a stock build) only fails here when it asked for `managed` itself.
+    if wire is not None and (leased or managed is not None):
+        pro_request["managed"] = wire
     if farm_gpu is False:
         pro_request["gpu"] = False
     # A render node runs Windows Firefox's ANGLE, so it serves Windows identities of a Pro build.
@@ -1817,14 +1813,11 @@ def launch_options(
         pro_request["pool_profile"] = pool_profile
     if pro_request and not leased:
         raise ValueError(
-            "profile, warm_plan, egress and farm_gpu are lease options, and this launch carries its own "
+            "profile, warm_plan, managed and farm_gpu are lease options, and this launch carries its own "
             f"{pro.LEASE_FILE_ENV}."
             if pro_build
-            else "profile, warm_plan, egress and farm_gpu need a Camoufox Pro build (see docs/pro.md)."
+            else "profile, warm_plan, managed and farm_gpu need a Camoufox Pro build (see docs/pro.md)."
         )
-    # Your own proxy, asked for no other way, means no managed egress.
-    if proxy is not None:
-        pro_request["egress"] = False
     # What the lease adds to the environment, after every launch rule.
     pro_env: Dict[str, str] = {}
 
@@ -1988,7 +1981,7 @@ def launch_options(
                 "server": grants["egress"]["server"],
                 "username": grants["egress"]["username"],
                 "password": grants["egress"]["password"],
-                # The egress refuses local destinations, so they go direct.
+                # The managed proxy refuses local destinations, so they go direct.
                 "bypass": "localhost,127.0.0.1,::1,*.local",
             }
             if geoip is None:

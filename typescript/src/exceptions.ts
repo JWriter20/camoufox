@@ -312,10 +312,14 @@ export class ProError extends Error {
 export class NotSignedIn extends ProError {}
 /** The API rejected the lease request itself. */
 export class InvalidRequest extends ProError {}
-/** The account has no active Camoufox Pro subscription. */
-export class SubscriptionRequired extends ProError {}
-/** A metered allowance is used up and usage-based billing is off. */
-export class AllowanceExhausted extends ProError {}
+/** The account's wallet cannot pay for what the launch asked for: a managed
+ * proxy, or a static IP's first month. Top up, or turn on auto-refill. */
+export class WalletEmpty extends ProError {}
+/** The launch asks for a feature the account's plan does not include;
+ * `details.feature` names it. */
+export class PlanRequired extends ProError {}
+/** An account that has never added credits is creating its first profile. */
+export class TopupRequired extends ProError {}
 /** The account is suspended. */
 export class AccountSuspended extends ProError {}
 /** The browser is not a published Camoufox Pro release, or was revoked. */
@@ -328,10 +332,12 @@ export class CapabilityMismatch extends ProError {}
 export class RateLimited extends ProError {}
 /** The Camoufox Pro API cannot be reached, or fails, after the retries. */
 export class ProUnavailable extends ProError {}
-/** The profile exists with another OS, warm plan or egress regime than the launch asked for. */
+/** The profile exists with another OS, warm plan or managed proxy than the launch asked for. */
 export class ProfileMismatch extends ProError {}
 /** The profile's state is sealed for the warm pool, so this machine cannot sync it. */
 export class StatePoolSealed extends ProError {}
+/** Every remote GPU the plan includes is in use; retry after `retry_after`, or launch with `gpu: false`. */
+export class GpuLimitReached extends ProError {}
 /** No remote GPU can serve this Windows identity now; retry after `retry_after`, or launch with `gpu: false`. */
 export class GpuUnavailable extends ProError {}
 

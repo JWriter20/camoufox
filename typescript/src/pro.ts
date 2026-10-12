@@ -17,14 +17,15 @@ import * as path from "node:path";
 import { LIBRARY_VERSION } from "./__version__.js";
 import {
 	AccountSuspended,
-	AllowanceExhausted,
 	BuildNotAllowlisted,
 	CapabilityMismatch,
+	GpuLimitReached,
 	GpuUnavailable,
 	InvalidRequest,
 	LeaseLimitReached,
 	LeaseRefused,
 	NotSignedIn,
+	PlanRequired,
 	ProClockSkew,
 	ProError,
 	type ProErrorFields,
@@ -32,9 +33,11 @@ import {
 	ProUnavailable,
 	RateLimited,
 	StatePoolSealed,
-	SubscriptionRequired,
+	TopupRequired,
+	WalletEmpty,
 } from "./exceptions.js";
 import { GpuDisplay } from "./gpudisplay.js";
+import type { Managed } from "./managed.js";
 import { OS_NAME, userCacheDir, userConfigDir } from "./paths.js";
 import { ValueError } from "./pycompat.js";
 import type { Session as RenderNodeSession } from "./render_node.js";
@@ -105,8 +108,9 @@ const BY_CODE: Record<
 > = {
 	invalid_request: InvalidRequest,
 	invalid_api_key: NotSignedIn,
-	subscription_required: SubscriptionRequired,
-	allowance_exhausted: AllowanceExhausted,
+	wallet_empty: WalletEmpty,
+	plan_required: PlanRequired,
+	topup_required: TopupRequired,
 	account_suspended: AccountSuspended,
 	build_not_allowlisted: BuildNotAllowlisted,
 	lease_limit_reached: LeaseLimitReached,
@@ -115,6 +119,7 @@ const BY_CODE: Record<
 	profile_mismatch: ProfileMismatch,
 	state_pool_sealed: StatePoolSealed,
 	gpu_unavailable: GpuUnavailable,
+	gpu_limit_reached: GpuLimitReached,
 };
 
 /** The API to call: CAMOUFOX_PRO_API, else the one the build was made for, else the default. */
@@ -585,26 +590,14 @@ export const LIVE = new Map<string, Lease>();
 /**
  * What a mint asks for beyond the build and OS, each field left out unless
  * set: `profile` names the profile to launch (and `warm_plan` the plan a new
- * one is created with), `egress: false` keeps managed
- * egress off (the caller's own proxy is never replaced), `true` asks for
- * CamouProxy and an object states the egress wanted, and `gpu: false` renders on this machine.
+ * one is created with), `managed: false` asks for no managed proxy (the
+ * caller's own proxy is never replaced), `true` or an object asks for one
+ * (`managedRequest` builds it), and `gpu: false` renders on this machine.
  */
-/**
- * The managed egress a lease asks for. `provider` names a partner provider
- * (its code, e.g. `"evomi"`); left out, or `"camouproxy"`, it is CamouProxy,
- * our own managed network.
- */
-export interface EgressRequest {
-	class?: string;
-	country?: string;
-	sticky?: boolean;
-	provider?: string;
-}
-
 export interface LeaseRequest {
 	profile?: string;
 	warm_plan?: "none" | "standard" | "continuous";
-	egress?: boolean | EgressRequest;
+	managed?: boolean | Managed;
 	gpu?: false;
 }
 
@@ -779,8 +772,8 @@ export class Lease {
 		const minted = lease as Record<string, any>;
 		if (this.leaseId && this.grants.egress) {
 			console.warn(
-				"camoufox-pro: the new lease carries a new egress credential; " +
-					"the running browser keeps the old one, so restart it to use managed egress again",
+				"camoufox-pro: the new lease carries a new managed proxy credential; " +
+					"the running browser keeps the old one, so restart it to use the managed proxy again",
 			);
 		}
 		this.leaseId = minted.lease_id;
@@ -1165,7 +1158,10 @@ export function attachLease<
 
 // ── camoufox pro --activate ─────────────────────────────────────────────────
 
-/** What --activate shows of a granted section: never its credentials. */
+/** What --activate shows of a granted section: never its credentials. The
+ * lease's `egress` section is what the `managed` launch option asked for, so
+ * it is shown under that name. */
+const LABEL: Record<string, string> = { egress: "managed" };
 const SHOWN: Record<string, string[]> = {
 	egress: ["class", "country"],
 	gpu: ["mode", "renderer"],
@@ -1177,7 +1173,8 @@ function granted(name: string, section: Record<string, any>): string {
 		.filter((field) => section[field] != null)
 		.map((field) => String(section[field]))
 		.join(", ");
-	return detail ? `${name}: granted (${detail})` : `${name}: granted`;
+	const label = LABEL[name] ?? name;
+	return detail ? `${label}: granted (${detail})` : `${label}: granted`;
 }
 
 /**
@@ -1218,7 +1215,7 @@ export async function activate(
 			echo(
 				section
 					? `[ ok ] ${granted(name, section)}`
-					: `[ -- ] ${name}: not granted`,
+					: `[ -- ] ${LABEL[name] ?? name}: not granted`,
 			);
 		}
 	} finally {

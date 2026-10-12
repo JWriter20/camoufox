@@ -15,21 +15,23 @@ export {
 } from "./async_api.js";
 export {
 	AccountSuspended,
-	AllowanceExhausted,
 	BuildNotAllowlisted,
 	CapabilityMismatch,
+	GpuLimitReached,
 	GpuUnavailable,
 	InvalidRequest,
 	LeaseLimitReached,
 	LeaseRefused,
 	NotSignedIn,
+	PlanRequired,
 	ProClockSkew,
 	ProError,
 	ProfileMismatch,
 	ProUnavailable,
 	RateLimited,
 	StatePoolSealed,
-	SubscriptionRequired,
+	TopupRequired,
+	WalletEmpty,
 } from "./exceptions.js";
 export {
 	generateContextFingerprint,
@@ -59,6 +61,12 @@ export {
 	type PlayRecord,
 	type PlayStep,
 } from "./humanize-custom.js";
+export {
+	type Managed,
+	ProxyNetwork,
+	ProxyProvider,
+	ProxyType,
+} from "./managed.js";
 export {
 	findInstalledVersion,
 	listInstalled,

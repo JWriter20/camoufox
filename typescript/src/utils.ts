@@ -82,6 +82,7 @@ import {
 	validIPv6,
 } from "./ip.js";
 import { handleLocales } from "./locales.js";
+import { type Managed, managedRequest } from "./managed.js";
 import {
 	INSTALL_DIR,
 	LAUNCHER_CONSTANTS,
@@ -2216,13 +2217,12 @@ export interface LaunchOptions {
 	 * machine; `"standard"` and `"continuous"` profiles are kept warm in the
 	 * cloud and launch with their identity only. Left out, the API decides. */
 	warm_plan?: "none" | "standard" | "continuous";
-	/** Camoufox Pro managed egress: `false` for none, `true` for CamouProxy
-	 * with defaults, or the egress wanted, e.g. `{ class: "residential",
-	 * country: "US" }`, with `provider` naming a partner provider instead of
-	 * CamouProxy. Left out, a `profile` gets CamouProxy and a launch without
-	 * one goes direct.
-	 * With your own `proxy` there is none, and passing both throws. */
-	egress?: boolean | pro.EgressRequest;
+	/** A Camoufox Pro managed proxy: a `Managed` naming the provider, type,
+	 * network and country wanted, `true` for the defaults, or `false` for none.
+	 * Left out, a `profile` gets the default and a launch without one goes
+	 * direct. With your own `proxy` there is none, and passing both throws.
+	 * See docs/pro.md, "Managed proxies". */
+	managed?: boolean | Managed;
 	/** `false` renders WebGL, WebGPU and canvas on this machine's GPU for a
 	 * Camoufox Pro Windows identity, instead of on a remote GPU. */
 	farm_gpu?: false;
@@ -2312,7 +2312,7 @@ async function buildLaunchOptions(
 		pro_key,
 		profile,
 		warm_plan,
-		egress,
+		managed,
 		farm_gpu,
 		render_node,
 		...passthrough
@@ -2387,21 +2387,18 @@ async function buildLaunchOptions(
 		}
 		proRequest.warm_plan = warm_plan;
 	}
-	// The caller's own proxy is never replaced by managed egress, and asking for both is a mistake
-	// worth naming rather than a request to drop one of them quietly.
-	if (proxy != null && egress !== undefined && egress !== false) {
-		throw new ValueError(
-			"proxy and egress conflict: with your own proxy there is no managed egress. " +
-				"Pass proxy to use your own, or egress (and no proxy) for managed egress.",
-		);
+	const wire = managedRequest(managed, { profile, proxy });
+	// Your own proxy tells a lease to add no managed one; a launch with no lease to tell
+	// (a stock build) only fails here when it asked for `managed` itself.
+	if (wire !== undefined && (leased || managed !== undefined)) {
+		proRequest.managed = wire;
 	}
-	if (egress !== undefined) proRequest.egress = egress;
 	if (farm_gpu === false) proRequest.gpu = false;
 	if (Object.keys(proRequest).length && !leased) {
 		throw new ValueError(
 			proBuild
-				? `profile, warm_plan, egress and farm_gpu are lease options, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
-				: "profile, warm_plan, egress and farm_gpu need a Camoufox Pro build (see docs/pro.md).",
+				? `profile, warm_plan, managed and farm_gpu are lease options, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
+				: "profile, warm_plan, managed and farm_gpu need a Camoufox Pro build (see docs/pro.md).",
 		);
 	}
 	// A render node runs Windows Firefox's ANGLE, so it serves Windows identities of a Pro build.
@@ -2429,8 +2426,6 @@ async function buildLaunchOptions(
 		}
 	}
 	let node: renderNodes.Session | null = null;
-	// Your own proxy, asked for no other way, means no managed egress.
-	if (proxy != null) proRequest.egress = false;
 	// What the lease adds to the environment, after every launch rule.
 	const proEnv: EnvVars = {};
 
@@ -2649,7 +2644,7 @@ async function buildLaunchOptions(
 				server: grants.egress.server,
 				username: grants.egress.username,
 				password: grants.egress.password,
-				// The egress refuses local destinations, so they go direct.
+				// The managed proxy refuses local destinations, so they go direct.
 				bypass: "localhost,127.0.0.1,::1,*.local",
 			};
 			geoip ??= grants.egress.exit_ip ?? true;

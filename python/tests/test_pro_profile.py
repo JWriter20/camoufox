@@ -1,5 +1,5 @@
 """What a Camoufox Pro lease grants beyond the lease itself -- a profile's identity
-and synced state, managed egress, remote rendering and the captcha solver --
+and synced state, managed proxies, remote rendering and the captcha solver --
 and how the launcher applies each.
 
 Every test talks to a local fake of the Camoufox Pro API and of the object store
@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 # Needs the pro extra (pip install "camoufox[pro]"), which CI installs.
-from camoufox import pro, pro_profile, pro_state, utils
+from camoufox import Managed, ProxyNetwork, ProxyProvider, ProxyType, pro, pro_profile, pro_state, utils
 from camoufox.exceptions import GpuUnavailable, ProfileMismatch, StatePoolSealed
 from camoufox.gpudisplay import GpuDisplay
 from camoufox.host_rendering import has_canvas_placeholder
@@ -896,11 +896,11 @@ def launch(cloud, pro_exe, monkeypatch):
     return run
 
 
-def test_managed_egress_routes_the_browser_located_at_its_exit(cloud, launch):
+def test_a_managed_proxy_routes_the_browser_located_at_its_exit(cloud, launch):
     cloud.sections = {"egress": {"server": "http://100.64.12.34:7190", "username": "0192f0c4", "password": "secret",
                                  "class": "residential", "country": "US", "sticky": True, "exit_ip": "98.97.12.34"}}  # fmt: skip
-    opts = launch(egress={"class": "isp", "country": "US"})
-    assert launch.mint()["egress"] == {"class": "isp", "country": "US"}
+    opts = launch(managed=Managed(network=ProxyNetwork.ISP, country="US"))
+    assert launch.mint()["managed"] == {"network": "isp", "country": "US"}
     assert opts["proxy"] == {
         "server": "http://100.64.12.34:7190",
         "username": "0192f0c4",
@@ -915,45 +915,54 @@ def test_managed_egress_routes_the_browser_located_at_its_exit(cloud, launch):
 def test_the_exit_is_looked_up_through_the_proxy_when_unknown(cloud, launch):
     cloud.sections = {"egress": {"server": "http://100.64.12.34:7190", "username": "u", "password": "p", "exit_ip": None}}
     launch()
-    assert not {"egress", "profile", "warm_plan"} & set(launch.mint())
+    assert not {"managed", "egress", "profile", "warm_plan"} & set(launch.mint())
     assert launch.looked_up == ["http://u:p@100.64.12.34:7190"]
 
 
 def test_the_caller_s_own_proxy_is_never_replaced(cloud, launch):
     proxy = {"server": "http://my.proxy:8080"}
     opts = launch(proxy=proxy, geoip="198.51.100.1")
-    assert launch.mint()["egress"] is False
+    assert launch.mint()["managed"] is False
     assert opts["proxy"] == proxy
 
 
-def test_a_proxy_and_an_egress_request_together_are_refused(cloud, launch):
+def test_a_proxy_and_a_managed_request_together_are_refused(cloud, launch):
     proxy = {"server": "http://my.proxy:8080"}
-    with pytest.raises(ValueError, match="proxy and egress conflict"):
-        launch(proxy=proxy, egress={"provider": "evomi"})
-    # egress=False beside a proxy says the same thing twice, which is fine.
-    launch(proxy=proxy, egress=False)
-    assert launch.mint()["egress"] is False
+    with pytest.raises(ValueError, match="proxy and managed conflict"):
+        launch(proxy=proxy, managed=Managed(provider=ProxyProvider.EVOMI))
+    with pytest.raises(ValueError, match="proxy and managed conflict"):
+        launch(proxy=proxy, managed=True)
+    # managed=False beside a proxy says the same thing twice, which is fine.
+    launch(proxy=proxy, managed=False)
+    assert launch.mint()["managed"] is False
 
 
-def test_camouproxy_is_asked_for_with_true_and_never_beside_a_proxy(cloud, launch):
-    launch(egress=True)
-    assert launch.mint()["egress"] is True
-    with pytest.raises(ValueError, match="proxy and egress conflict"):
-        launch(proxy={"server": "http://my.proxy:8080"}, egress=True)
+def test_the_defaults_are_asked_for_with_true(cloud, launch):
+    launch(managed=True)
+    assert launch.mint()["managed"] is True
 
 
 def test_a_warm_launch_names_its_pool_profile_and_brings_its_own_proxy(cloud, launch):
     pool_profile = "prf_0192f0c4-0000-7000-8000-000000000001"
     launch(proxy={"server": "http://dish:3128"}, pool_profile=pool_profile)
     assert launch.mint()["pool_profile"] == pool_profile
-    assert launch.mint()["egress"] is False
+    assert launch.mint()["managed"] is False
     with pytest.raises(ValueError, match="pool_profile and profile conflict"):
         launch(pool_profile=pool_profile, profile="mine", os="windows")
 
 
-def test_a_partner_provider_is_asked_for_by_name(cloud, launch):
-    launch(egress={"provider": "evomi", "country": "US"})
-    assert launch.mint()["egress"] == {"provider": "evomi", "country": "US"}
+def test_a_partner_is_asked_for_by_its_enum_and_only_the_set_fields_are_sent(cloud, launch):
+    launch(managed=Managed(provider=ProxyProvider.EVOMI, type=ProxyType.ROTATING, country="US"))
+    assert launch.mint()["managed"] == {"provider": "evomi", "type": "rotating", "country": "US"}
+    assert "egress" not in launch.mint()
+
+
+def test_a_profile_s_managed_request_is_checked_before_the_mint(cloud, launch):
+    with pytest.raises(ValueError, match="cannot be ProxyType.ROTATING"):
+        launch(profile="shop-1", managed=Managed(type=ProxyType.ROTATING))
+    with pytest.raises(ValueError, match="not RESIDENTIAL"):
+        launch(profile="shop-1", managed=Managed(provider=ProxyProvider.RAYOBYTE, network=ProxyNetwork.RESIDENTIAL))
+    assert cloud.calls("POST", "/api/v1/leases") == []
 
 
 def test_the_browser_is_pointed_at_the_render_document(cloud, launch):
@@ -1012,7 +1021,7 @@ def test_a_profile_launches_with_its_identity_in_its_own_directory(cloud, launch
     cloud.set_bundle({**BUNDLE_DOC, "config": config})
     opts = launch(profile="linkedin-01", warm_plan="none", proxy={"server": "http://my.proxy:8080"})
     mint = launch.mint()
-    assert (mint["profile"], mint["warm_plan"], mint["os"], mint["egress"]) == ("linkedin-01", "none", "windows", False)
+    assert (mint["profile"], mint["warm_plan"], mint["os"], mint["managed"]) == ("linkedin-01", "none", "windows", False)
     presented = launch.configs[-1]
     assert presented["navigator.userAgent"] == generated["navigator.userAgent"]
     assert presented["fonts"] == generated["fonts"]

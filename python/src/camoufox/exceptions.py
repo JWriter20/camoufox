@@ -314,15 +314,24 @@ class InvalidRequest(ProError):
     """
 
 
-class SubscriptionRequired(ProError):
+class WalletEmpty(ProError):
     """
-    Raised when the account has no active Camoufox Pro subscription.
+    Raised when the account's wallet cannot pay for what the launch asked for:
+    a managed proxy, or a static IP's first month. Top up, or turn on auto-refill.
     """
 
 
-class AllowanceExhausted(ProError):
+class PlanRequired(ProError):
     """
-    Raised when a metered allowance is used up and usage-based billing is off.
+    Raised when the launch asks for a feature the account's plan does not
+    include. `details["feature"]` names it.
+    """
+
+
+class TopupRequired(ProError):
+    """
+    Raised when an account that has never added credits creates its first
+    profile.
     """
 
 
@@ -366,7 +375,7 @@ class ProUnavailable(ProError):
 
 class ProfileMismatch(ProError):
     """
-    Raised when the profile exists with another OS, warm plan or egress regime
+    Raised when the profile exists with another OS, warm plan or managed proxy
     than the launch asked for.
     """
 
@@ -375,6 +384,13 @@ class StatePoolSealed(ProError):
     """
     Raised when a profile's state is sealed for the warm pool, so this machine
     cannot sync it.
+    """
+
+
+class GpuLimitReached(ProError):
+    """
+    Raised when every remote GPU the plan includes is in use. Retry after
+    `retry_after`, or launch with `gpu=False` to render on this machine.
     """
 
 
