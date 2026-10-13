@@ -387,6 +387,21 @@ class StatePoolSealed(ProError):
     """
 
 
+class EgressUnavailable(ProError):
+    """
+    Raised when no exit of the managed proxy's provider matches the launch's
+    network and country. `details["available_classes"]` lists what it can serve.
+    """
+
+
+class TargetUnavailable(ProError):
+    """
+    Raised when the provider has no exit on the region, city, ISP or ASN asked
+    for, or no static IP in stock on it. `details["listing"]` is the API route
+    to choose from; `camoufox.proxies.proxy_targets` reads it.
+    """
+
+
 class GpuLimitReached(ProError):
     """
     Raised when every remote GPU the plan includes is in use. Retry after

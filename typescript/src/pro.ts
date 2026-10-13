@@ -19,6 +19,7 @@ import {
 	AccountSuspended,
 	BuildNotAllowlisted,
 	CapabilityMismatch,
+	EgressUnavailable,
 	GpuLimitReached,
 	GpuUnavailable,
 	InvalidRequest,
@@ -33,6 +34,7 @@ import {
 	ProUnavailable,
 	RateLimited,
 	StatePoolSealed,
+	TargetUnavailable,
 	TopupRequired,
 	WalletEmpty,
 } from "./exceptions.js";
@@ -120,6 +122,8 @@ const BY_CODE: Record<
 	state_pool_sealed: StatePoolSealed,
 	gpu_unavailable: GpuUnavailable,
 	gpu_limit_reached: GpuLimitReached,
+	egress_unavailable: EgressUnavailable,
+	target_unavailable: TargetUnavailable,
 };
 
 /** The API to call: CAMOUFOX_PRO_API, else the one the build was made for, else the default. */

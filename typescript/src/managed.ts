@@ -33,16 +33,41 @@ export const ProxyNetwork = {
 export type ProxyNetwork = (typeof ProxyNetwork)[keyof typeof ProxyNetwork];
 
 /**
+ * What an exit can be targeted by. Which a product takes, and their values,
+ * are in the listing (`listProxies`, `proxyTargets` in proxies.ts).
+ */
+export const ProxyDimension = {
+	COUNTRY: "country",
+	REGION: "region",
+	CITY: "city",
+	ZIP: "zip",
+	ISP: "isp",
+	ASN: "asn",
+} as const;
+export type ProxyDimension =
+	(typeof ProxyDimension)[keyof typeof ProxyDimension];
+
+/**
  * The managed proxy a launch asks for. A field left out takes the API's
  * default: provider `CAMOULINK`; type `STATIC` with a profile, `ROTATING`
  * without; network `RESIDENTIAL`, or `ISP` for a static exit from a partner;
  * any country.
+ *
+ * Targeting beyond country: `region` and `city` take a name or its listing
+ * value ("New York" and "new_york" are the same), `zip` a postal code, `isp`
+ * the listing's value, `asn` 14593 or "AS14593". A region, city or ZIP needs a
+ * country. A product that cannot be targeted by a field refuses it.
  */
 export interface Managed {
 	provider?: ProxyProvider;
 	type?: ProxyType;
 	network?: ProxyNetwork;
 	country?: string;
+	region?: string;
+	city?: string;
+	zip?: string;
+	isp?: string;
+	asn?: number | string;
 }
 
 // A profile keeps one IP for life, so it exits only through networks that can hold one.
@@ -51,7 +76,21 @@ const PROFILE_PARTNER_NETWORKS: readonly ProxyNetwork[] = [
 	ProxyNetwork.ISP,
 ];
 const COUNTRY = /^[A-Z]{2}$/;
-const FIELDS = ["provider", "type", "network", "country"] as const;
+const ASN = /^(?:AS)?[0-9]{1,10}$/i;
+const ZIP = /^[A-Za-z0-9]{2,10}$/;
+// A place name is ambiguous across countries.
+const NEEDS_COUNTRY = ["region", "city", "zip"] as const;
+const FIELDS = [
+	"provider",
+	"type",
+	"network",
+	"country",
+	"region",
+	"city",
+	"zip",
+	"isp",
+	"asn",
+] as const;
 
 function member(
 	name: string,
@@ -114,6 +153,40 @@ export function managedRequest(
 	) {
 		throw new ValueError(
 			`managed country must be an upper-case ISO 3166 code such as "US", not ${JSON.stringify(managed.country)}`,
+		);
+	}
+	for (const name of ["region", "city", "isp"] as const) {
+		const value = managed[name];
+		if (
+			value !== undefined &&
+			(typeof value !== "string" || value.trim() === "")
+		) {
+			throw new ValueError(
+				`managed ${name} must be a non-empty string, not ${JSON.stringify(value)}`,
+			);
+		}
+	}
+	if (
+		managed.zip !== undefined &&
+		(typeof managed.zip !== "string" || !ZIP.test(managed.zip))
+	) {
+		throw new ValueError(
+			`managed zip must be 2-10 letters or digits, not ${JSON.stringify(managed.zip)}`,
+		);
+	}
+	if (
+		managed.asn !== undefined &&
+		((typeof managed.asn !== "number" && typeof managed.asn !== "string") ||
+			!ASN.test(String(managed.asn)))
+	) {
+		throw new ValueError(
+			`managed asn must be a number such as 14593 or "AS14593", not ${JSON.stringify(managed.asn)}`,
+		);
+	}
+	const place = NEEDS_COUNTRY.find((name) => managed[name] !== undefined);
+	if (place !== undefined && managed.country === undefined) {
+		throw new ValueError(
+			`managed ${place} needs a country: a place name is ambiguous without one`,
 		);
 	}
 	const hasProfile = profile != null;

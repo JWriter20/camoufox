@@ -136,3 +136,38 @@ describe("what a profile may use", () => {
 		});
 	});
 });
+
+describe("targeting beyond country (SPEC-EGRESS § 9)", () => {
+	it("is sent as given", () => {
+		expect(
+			request({
+				provider: ProxyProvider.EVOMI,
+				country: "US",
+				region: "New York",
+				city: "new_york",
+				isp: "comcast",
+				asn: "AS7018",
+			}),
+		).toEqual({
+			provider: "evomi",
+			country: "US",
+			region: "New York",
+			city: "new_york",
+			isp: "comcast",
+			asn: "AS7018",
+		});
+		expect(request({ asn: 14593 }, "shop-1")).toEqual({ asn: 14593 });
+	});
+
+	it.each(["region", "city", "zip"] as const)("%s needs a country", (field) => {
+		expect(() => request({ [field]: "10001" })).toThrow(/needs a country/);
+	});
+
+	it.each(["AS", "ASN7018", "70-18"])("asn %s is refused", (asn) => {
+		expect(() => request({ asn })).toThrow(/asn/);
+	});
+
+	it("a zip is short and alphanumeric", () => {
+		expect(() => request({ country: "US", zip: "1" })).toThrow(/zip/);
+	});
+});

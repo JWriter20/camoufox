@@ -336,6 +336,10 @@ export class ProUnavailable extends ProError {}
 export class ProfileMismatch extends ProError {}
 /** The profile's state is sealed for the warm pool, so this machine cannot sync it. */
 export class StatePoolSealed extends ProError {}
+/** No exit of the managed proxy's provider matches the network and country; `details.available_classes` lists what it can serve. */
+export class EgressUnavailable extends ProError {}
+/** The provider has no exit on the region, city, ISP or ASN asked for, or no static IP in stock on it; `details.listing` is the route to choose from (`proxyTargets`). */
+export class TargetUnavailable extends ProError {}
 /** Every remote GPU the plan includes is in use; retry after `retry_after`, or launch with `gpu: false`. */
 export class GpuLimitReached extends ProError {}
 /** No remote GPU can serve this Windows identity now; retry after `retry_after`, or launch with `gpu: false`. */

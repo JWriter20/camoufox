@@ -42,6 +42,7 @@ from .exceptions import (
     AccountSuspended,
     BuildNotAllowlisted,
     CapabilityMismatch,
+    EgressUnavailable,
     GpuLimitReached,
     GpuUnavailable,
     InvalidRequest,
@@ -55,6 +56,7 @@ from .exceptions import (
     ProUnavailable,
     RateLimited,
     StatePoolSealed,
+    TargetUnavailable,
     TopupRequired,
     WalletEmpty,
 )
@@ -110,6 +112,8 @@ _BY_CODE = {
     "state_pool_sealed": StatePoolSealed,
     "gpu_unavailable": GpuUnavailable,
     "gpu_limit_reached": GpuLimitReached,
+    "egress_unavailable": EgressUnavailable,
+    "target_unavailable": TargetUnavailable,
 }
 
 

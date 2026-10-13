@@ -232,6 +232,13 @@ takes the API's default:
 | `type` | `ProxyType.ROTATING`: a fresh exit each launch, kept for that browser's life. `ProxyType.STATIC`: an exit that stays | `STATIC` with a profile, else `ROTATING` |
 | `network` | `ProxyNetwork.RESIDENTIAL`, `MOBILE`, `ISP`, `DATACENTER` | `RESIDENTIAL`; `ISP` for a static exit from a partner |
 | `country` | an upper-case ISO 3166 code such as `"US"` | any |
+| `region`, `city` | a name or its listing value: `"New York"` and `"new_york"` are the same. Needs `country` | any |
+| `zip` | a postal code, 2-10 letters or digits. Needs `country` | any |
+| `isp` | the listing's value, such as Evomi's carrier code `"tmobileusainc"` | any |
+| `asn` | `14593` or `"AS14593"` | any |
+
+Which of the last five a product can be targeted by, and the values it has,
+are in the catalogue below. A profile keeps its targeting for life.
 
 Left out entirely, a `profile` gets the defaults and a launch without one goes
 direct, so nobody is put on a metered proxy they did not ask for.
@@ -245,6 +252,43 @@ The launcher refuses these before minting, and the API refuses the same:
 | A `profile` on a partner's `RESIDENTIAL` or `DATACENTER` network | A profile exits through CamouLink, or a partner's `MOBILE` or `ISP` network, so it matches its IP for life |
 | `proxy` and `managed` together | Your own proxy is never replaced |
 | A provider, type or network that is not one of the enums' members | Python raises `TypeError` for a bare string; TypeScript for an unknown value |
+| A `region`, `city` or `zip` without a `country` | A place name is ambiguous across countries |
+
+The API alone refuses a targeting field the product cannot serve (a city on a
+datacenter exit, an ISP on Rayobyte, any ASN but 14593 on CamouLink) with
+`InvalidRequest`, and a value the provider does not have with
+`TargetUnavailable`, whose `details["listing"]` is where to choose from.
+
+#### What is on offer
+
+The catalogue lists every product, its price and how it can be targeted, in
+the same shape for every provider. It needs no key.
+
+```python
+from camoufox import Managed, ProxyDimension, ProxyNetwork, ProxyProvider, ProxyType
+from camoufox.proxies import list_proxies, proxy_targets
+
+for product in list_proxies():
+    print(product.provider, product.network, product.type, product.sell_cents, product.unit,
+          product.available, product.profiles, product.targeting)
+
+cities = proxy_targets(ProxyProvider.EVOMI, ProxyNetwork.RESIDENTIAL, ProxyType.ROTATING,
+                       ProxyDimension.CITY, country="US", query="york")
+managed = Managed(provider=ProxyProvider.EVOMI, country="US", city=cities[0].value)
+```
+
+```ts
+import { listProxies, proxyTargets, ProxyDimension, ProxyNetwork, ProxyProvider, ProxyType } from "@camoufox/camoufox";
+
+const products = await listProxies();
+const asns = await proxyTargets(ProxyProvider.RAYOBYTE, ProxyNetwork.RESIDENTIAL, ProxyType.ROTATING,
+	ProxyDimension.ASN, { country: "US" });
+```
+
+A dimension's `mode` is `"listed"` when the provider names its values, or
+`"open"` when it takes any well-formed value and the values shown are the ones
+Camoufox Pro's own exits have been seen on. A static product's options carry
+`available`, the IPs in stock with that value.
 
 When the lease carries a managed proxy, the launcher routes the browser through
 it. It sets `geoip` to the exit's address when the API knows it, and otherwise
@@ -445,6 +489,8 @@ Python and from `camoufox` in TypeScript. Each carries the API's
 |---|---|---|
 | `NotSignedIn` | No key was found, or the API does not accept it | Run `camoufox login`, or set `CAMOUFOX_PRO_KEY` |
 | `WalletEmpty` | The wallet cannot pay for what the launch asked for: a managed proxy, or a static IP's first month | Top up, or turn on auto-refill, at the `resolution_url` |
+| `EgressUnavailable` | No exit of the managed proxy's provider matches the network and country; `details["available_classes"]` lists what it can serve | Choose another provider, network or country, or launch with `managed=False` |
+| `TargetUnavailable` | The provider has no exit on the region, city, ISP or ASN asked for, or no static IP in stock on it | Choose a value from `proxy_targets` / `proxyTargets` (`details["listing"]`) |
 | `PlanRequired` | The launch asks for a feature the plan does not include; `details["feature"]` names it | Choose a plan at the `resolution_url`, or launch without the feature |
 | `TopupRequired` | An account that has never added credits is creating its first profile | Add credits at the `resolution_url` |
 | `AccountSuspended` | The account is suspended | See the `resolution_url` |
