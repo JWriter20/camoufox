@@ -1,0 +1,106 @@
+Camoufox: driver mouse moves coalesce like a real mouse's.
+
+Firefox delivers mousemove and pointermove at most once per refresh: moves that
+arrive between two frames are merged into one event, and the rest ride along
+in PointerEvent.getCoalescedEvents(). A real mouse at any report rate shows
+that -- camoufox-parity input.mouse.rate, 2026-10-18: at 125 Hz and 1000 Hz,
+stock and Camoufox both deliver one move per frame, 2-4 or 5-20 coalesced.
+
+Juggler's moves were exempt (0-playwright.patch), because their ack fired only
+on dispatch and a coalesced dispatch waits for the next refresh tick, which
+under load stalls juggler's serialized input chain. So every step of
+page.mouse.move(x, y, {steps}) reached the page as its own event: 21-63
+mousemoves in one frame, no gap, one coalesced event each (camoufox-parity
+driven.rate) -- a pattern no hardware produces.
+
+Now a juggler move is acked when BrowserChild takes it, coalesced or not, so
+the driver never waits on a refresh, and it coalesces with other juggler moves
+(never with real ones). Juggler marks its moves synthesized-for-tests, which
+CanCoalesce otherwise refuses to merge unless a test drives the refresh clock;
+a juggler move stands for a person's mouse, so it merges like a real one. A button event still flushes every pending move ahead
+of itself, so move-then-click keeps its order.
+
+--- a/dom/ipc/BrowserChild.cpp
++++ b/dom/ipc/BrowserChild.cpp
+@@ -1591,16 +1591,30 @@
+   MOZ_ASSERT(!aMouseEvent.AsPointerEvent());
+   MOZ_ASSERT(!aMouseEvent.AsDragEvent());
+   // Playwright/juggler: synthesized mouse events (mJugglerEventId != 0) await a
+-  // per-event "juggler-mouse-event-hit-renderer" observer notification that is
+-  // only fired from HandleRealMouseButtonEvent. Coalescing defers dispatch to
+-  // the next nsRefreshDriver tick, which under heavy parallel load (many
+-  // browsers, software rendering) can be many seconds late — long enough to
+-  // pin activateAndRun's serialization chain. Skip the coalescing branch for
+-  // juggler-originated events so they dispatch immediately and ack in
+-  // milliseconds; real (non-juggler) events still benefit from the coalescing
+-  // optimization.
+-  if (mCoalesceMouseMoveEvents && mCoalescedMouseEventFlusher &&
+-      !aMouseEvent.mJugglerEventId) {
++  // per-event "juggler-mouse-event-hit-renderer" observer notification. A
++  // coalesced move is dispatched at the next nsRefreshDriver tick, which under
++  // heavy parallel load can be seconds late -- long enough to pin
++  // activateAndRun's serialization chain -- so a juggler move is acked here,
++  // when this process takes it, not when it is dispatched. Camoufox: and it is
++  // coalesced like any other move. Exempting it made a page see every step of
++  // page.mouse.move(x, y, {steps}) as its own mousemove, dozens in one frame
++  // with no coalesced events, where a real mouse at any report rate gives one
++  // per frame carrying the rest in getCoalescedEvents().
++  auto ackJuggler = [&]() {
++    if (!aMouseEvent.mJugglerEventId) {
++      return;
++    }
++    if (nsCOMPtr<nsIObserverService> observerService =
++            mozilla::services::GetObserverService()) {
++      observerService->NotifyObservers(
++          nullptr, "juggler-mouse-event-hit-renderer",
++          NS_ConvertASCIItoUTF16(nsPrintfCString(
++                                     "mousemove %" PRIu32,
++                                     aMouseEvent.mJugglerEventId))
++              .get());
++    }
++  };
++  if (mCoalesceMouseMoveEvents && mCoalescedMouseEventFlusher) {
+     CoalescedMouseData* data =
+         mCoalescedMouseData.GetOrInsertNew(aMouseEvent.pointerId);
+     MOZ_ASSERT(data);
+@@ -1622,6 +1636,7 @@
+       data->Coalesce(pendingMouseMoveEvent, aGuid, aInputBlockId);
+       mCoalescedMouseEventFlusher->StartObserver();
+       HandleMouseRawUpdateEvent(pendingMouseMoveEvent, aGuid, aInputBlockId);
++      ackJuggler();
+       return IPC_OK();
+     }
+ 
+@@ -1658,6 +1673,7 @@
+     mCoalescedMouseEventFlusher->StartObserver();
+     // Finally, dispatch eMouseRawUpdate for aEvent right now.
+     HandleMouseRawUpdateEvent(pendingMouseMoveEvent, aGuid, aInputBlockId);
++    ackJuggler();
+     return IPC_OK();
+   }
+ 
+--- a/dom/ipc/CoalescedMouseData.cpp
++++ b/dom/ipc/CoalescedMouseData.cpp
+@@ -95,15 +95,19 @@
+       mCoalescedInputEvent->mMovement.isSome() !=
+           aMouseMoveEvent.mMovement.isSome() ||
+       // `mJugglerEventId` is 0 for non-juggler events and a unique number for
+-      // juggler-emitted events.
+-      mCoalescedInputEvent->mJugglerEventId != aMouseMoveEvent.mJugglerEventId ||
++      // juggler-emitted events: juggler moves coalesce with each other (each is
++      // acked when BrowserChild takes it), never with real ones.
++      !mCoalescedInputEvent->mJugglerEventId != !aMouseMoveEvent.mJugglerEventId ||
+       mGuid != aGuid || mInputBlockId != aInputBlockId) {
+     return false;
+   }
+   // Basically, tests do not want to coalesces the consecutive mouse events.
+   // However, if the test calls nsIDOMWindowUtils::AdvanceTimeAndRefresh(0),
+   // they must try to check coalesced mouse move events.
+-  if (!aMouseMoveEvent.mFlags.mIsSynthesizedForTests) {
++  // Camoufox: juggler's moves are synthesized too, but stand for a person's
++  // mouse, so they coalesce the way real moves do.
++  if (!aMouseMoveEvent.mFlags.mIsSynthesizedForTests ||
++      aMouseMoveEvent.mJugglerEventId) {
+     return true;
+   }
+   return aRefreshDriver && aRefreshDriver->IsTestControllingRefreshesEnabled();

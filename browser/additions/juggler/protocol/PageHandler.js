@@ -17,6 +17,8 @@ const Ci = Components.interfaces;
 const Cu = Components.utils;
 const XUL_NS = 'http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul';
 const helper = new Helper();
+// A mouse's report interval, 125 Hz (see PageHandler._paceMouseMove).
+const kMouseReportMs = 8;
 
 function hashConsoleMessage(params) {
   return params.location.lineNumber + ':' + params.location.columnNumber + ':' + params.location.url;
@@ -525,10 +527,29 @@ export class PageHandler {
     return await this._contentPage.send('dispatchTapEvent', options);
   }
 
+  // Camoufox: a mouse reports at a fixed rate, 125 Hz on most (one move every
+  // 8 ms), and Firefox merges the moves of one frame into a single mousemove
+  // carrying the rest as coalesced events. page.mouse.move(x, y, {steps}) sends
+  // its steps back to back, and without pacing a page saw dozens of raw
+  // updates in one frame (camoufox-parity driven.rate), which no mouse makes.
+  // Spaced like a 125 Hz mouse, the same call takes as long as moving one would.
+  // humanize replays recorded timing of its own and is not paced here.
+  async _paceMouseMove() {
+    const due = (this._lastMouseMoveAt || 0) + kMouseReportMs;
+    const wait = due - Date.now();
+    if (wait > 0)
+      await new Promise(resolve => setTimeout(resolve, wait));
+    this._lastMouseMoveAt = Date.now();
+  }
+
   async ['Page.dispatchMouseEvent']({type, x, y, button, clickCount, modifiers, buttons}) {
     const win = this._pageTarget._window;
     const eventArgs = {button, clickCount, modifiers, buttons};
     const sendEvents = async (types) => {
+      // 0. Camoufox: at a mouse's report rate. Before anything is measured: the
+      //    rect below must be taken synchronously before the dispatch.
+      if (types.includes('mousemove') && !ChromeUtils.camouGetBool('humanize', false))
+        await this._paceMouseMove();
       // 1. Scroll element to the desired location first; the coordinates are relative to the element.
       this._pageTarget._linkedBrowser.scrollRectIntoViewIfNeeded(x, y, 0, 0);
       // 2. Make sure compositor is flushed after scrolling.
