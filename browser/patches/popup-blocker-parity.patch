@@ -33,6 +33,15 @@ either. Reaching that case would mean making this a synced BrowsingContext field
 instead of a docShell member. page.click() is unaffected: it synthesizes a real
 click, which grants a real activation.
 
+ONLY THE DRIVER'S OWN CODE, measured 2026-10-18 (camoufox-parity driven.traps,
+activation-gates-agree): with the flag alone, page code the evaluate reached --
+a getter on window, a Proxy trap, a toJSON the serializer called, a
+then-lookup on a returned object -- could window.open() with no activation,
+which stock refuses: one popup per driver call on a page that plants such a
+trap. The blocker is lifted only when the innermost scripted caller is the
+evaluated code itself (Debugger.executeInGlobal names it "debugger eval code");
+everything the page wrote stays blocked, exactly as on stock.
+
 Guards: browser/tests/playwright/patches/popup-blocker-parity.py (both
 directions, plus that no user activation is granted), and the upstream suite's
 popup tests (page.evaluate(window.open) must keep working).
@@ -41,7 +50,7 @@ diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.c
 index 5da611e913..d63498919d 100644
 --- a/docshell/base/BrowsingContext.cpp
 +++ b/docshell/base/BrowsingContext.cpp
-@@ -4398,6 +4398,18 @@ bool BrowsingContext::IsPopupAllowed() {
+@@ -4398,6 +4398,24 @@ bool BrowsingContext::IsPopupAllowed() {
      if (context->CanShowPopup()) {
        return true;
      }
@@ -52,7 +61,13 @@ index 5da611e913..d63498919d 100644
 +    // see it and the popup blocker stays at Firefox's default for them.
 +    if (BrowsingContext* bc = context->GetBrowsingContext()) {
 +      if (nsIDocShell* shell = bc->GetDocShell()) {
-+        if (nsDocShell::Cast(shell)->DriverPopupsAllowed()) {
++        // Only for the driver's own code: juggler compiles it with
++        // Debugger.executeInGlobal, whose scripts are "debugger eval code".
++        // Page code the evaluate reaches (a getter, a Proxy trap, a toJSON its
++        // serializer calls) keeps its page's URL and stays blocked.
++        if (nsDocShell::Cast(shell)->DriverPopupsAllowed() &&
++            JSCallingLocation::Get().FileName().EqualsLiteral(
++                "debugger eval code")) {
 +          return true;
 +        }
 +      }

@@ -17,6 +17,9 @@ a popup opened after an `await` inside the evaluated function is blocked, as it
 would be on stock, or a page polling window.open() on a timer would eventually
 land inside somebody else's evaluate.
 
+Only the evaluated code itself holds the key: page code it reaches (a getter, a
+Proxy trap, a toJSON the serializer calls) is the page's and stays blocked.
+
 Both directions are checked here, because either one regressing is silent:
 losing the driver's key breaks ~35 upstream tests, and losing the blocker puts
 the tell back.
@@ -46,6 +49,14 @@ let opened = null;
 try { opened = window.open('', '_pageopen', 'width=120,height=120'); } catch (e) {}
 document.body.dataset.pageOpened = String(!!opened);
 if (opened) { try { opened.close(); } catch (e) {} }
+// A trap a driver reaches while it evaluates: page code, so stock's rule holds.
+Object.defineProperty(window, 'cfpTrap', { get() {
+  let w = null;
+  try { w = window.open('', '_trapopen', 'width=120,height=120'); } catch (e) {}
+  document.body.dataset.trapOpened = String(!!w);
+  if (w) { try { w.close(); } catch (e) {} }
+  return 1;
+} });
 </script></body>"""
 
 
@@ -71,7 +82,7 @@ async def probe(binary, port):
     from camoufox.async_api import AsyncCamoufox
 
     async with AsyncCamoufox(headless=True, executable_path=str(binary),
-                             i_know_what_im_doing=True) as browser:
+                             i_know_what_im_doing=True, main_world_eval=True) as browser:
         context = await browser.new_context()
         page = await context.new_page()
         page.set_default_timeout(TIMEOUT_MS)
@@ -102,6 +113,11 @@ async def probe(binary, port):
         out["autoplay"] = await page.evaluate(
             "() => navigator.getAutoplayPolicy('mediaelement')"
         )
+
+        # Page code the evaluate reaches (here a getter, read in the main world)
+        # is the page's own: blocked, as on stock.
+        await page.evaluate("mw:() => window.cfpTrap")
+        out["trap_opened"] = await page.evaluate("() => document.body.dataset.trapOpened")
 
         # Past the synchronous window the blocker is back.
         out["async_opened"] = await page.evaluate(
@@ -136,6 +152,11 @@ def main() -> int:
         failures.append(
             f"autoplay policy is {out['autoplay']!r}, not stock's 'allowed-muted' "
             "without activation"
+        )
+    if out["trap_opened"] != "false":
+        failures.append(
+            f"page code a driver evaluate reached opened a popup ({out['trap_opened']!r}): "
+            "the driver's key is meant for its own evaluated code only"
         )
     if out["async_opened"]:
         failures.append(
