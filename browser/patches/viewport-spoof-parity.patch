@@ -1,0 +1,107 @@
+Camoufox: the spoofed viewport is the top window's and follows the page zoom,
+and a removed frame's screen is empty.
+
+window.innerWidth/innerHeight and devicePixelRatio come from the config, as
+fixed numbers (fingerprint-injection.patch). Measured with camoufox-parity
+(2026-10-18/19), three ways that differed from the real values:
+
+- Frames (realms.geometry). The config was applied to every window, so an
+  iframe 300 px wide reported the top window's 1280. The configured viewport
+  now applies to the top-level window; a frame reports its own box.
+- Page zoom (input.scroll.zoom). Firefox's real values follow the page's full
+  zoom (Ctrl+wheel, Ctrl+plus, a site's remembered zoom): at 110% a device
+  pixel is 55 app units instead of 60, so a 1280x815 viewport is 1173x747 CSS
+  px and devicePixelRatio 1.0909. Stock zoomed; Camoufox stayed at 1 and
+  1280x815. The spoofed values are now scaled by Firefox's own factor,
+  AppUnitsPerDevPixelAtUnitFullZoom / AppUnitsPerDevPixel (1 at 100%).
+- Removed frames (realms.retained). A frame's window kept after the frame is
+  removed reads an empty screen rect in Firefox (no device context to measure);
+  the spoofed screen size answered there as if nothing had happened. The screen
+  rects now return empty where Firefox's would.
+
+Still open: the top window's spoofed size stays put when something takes room
+from the viewport (an infobar, the find bar), where stock's shrinks.
+
+--- a/dom/base/nsGlobalWindowInner.cpp
++++ b/dom/base/nsGlobalWindowInner.cpp
+@@ -3720,10 +3720,32 @@
+   FORWARD_TO_OUTER_OR_THROW(SetNameOuter, (aName, aError), aError, );
+ }
+ 
++// Camoufox: the page's full zoom (Ctrl+wheel, Ctrl+plus), as Firefox applies it
++// -- fewer app units to a device pixel -- so the spoofed devicePixelRatio and
++// viewport follow it the way the real ones do: at 110% a 1280 px viewport is
++// 1173 CSS px and devicePixelRatio 1.0909. Fixed values ignored zoom, and a page
++// that zoomed (or saw the user zoom) read numbers no zoomed window reports.
++static double CamouFullZoomFactor(Document* aDoc) {
++  nsPresContext* presContext = aDoc ? aDoc->GetPresContext() : nullptr;
++  if (!presContext || !presContext->DeviceContext() || !presContext->AppUnitsPerDevPixel()) {
++    return 1.0;
++  }
++  return double(presContext->DeviceContext()->AppUnitsPerDevPixelAtUnitFullZoom()) /
++         presContext->AppUnitsPerDevPixel();
++}
++
++// Camoufox: the configured viewport is the top-level window's. A frame's is its
++// own box (an iframe 300 wide reads 300); applying the config to every window
++// made each frame report the top window's size.
++static bool CamouIsTopWindow(nsGlobalWindowInner* aWindow) {
++  BrowsingContext* bc = aWindow->GetBrowsingContext();
++  return !bc || bc->IsTop();
++}
++
+ double nsGlobalWindowInner::GetInnerWidth(CallerType aCallerType,
+                                           ErrorResult& aError) {
+-  if (auto value = MaskConfig::GetDouble("window.innerWidth"))
+-    return value.value();
++  if (auto value = CamouIsTopWindow(this) ? MaskConfig::GetDouble("window.innerWidth") : std::nullopt)
++    return std::round(value.value() / CamouFullZoomFactor(mDoc));
+   FORWARD_TO_OUTER_OR_THROW(GetInnerWidthOuter, (aCallerType, aError), aError,
+                             0);
+ }
+@@ -3737,8 +3759,8 @@
+ 
+ double nsGlobalWindowInner::GetInnerHeight(CallerType aCallerType,
+                                            ErrorResult& aError) {
+-  if (auto value = MaskConfig::GetDouble("window.innerHeight"))
+-    return value.value();
++  if (auto value = CamouIsTopWindow(this) ? MaskConfig::GetDouble("window.innerHeight") : std::nullopt)
++    return std::round(value.value() / CamouFullZoomFactor(mDoc));
+   FORWARD_TO_OUTER_OR_THROW(GetInnerHeightOuter, (aCallerType, aError), aError,
+                             0);
+ }
+@@ -3819,7 +3841,7 @@
+                                                 ErrorResult& aError) {
+   ENSURE_ACTIVE_DOCUMENT(aError, 0.0);
+   if (auto value = MaskConfig::GetDouble("window.devicePixelRatio"))
+-    return value.value();
++    return value.value() * CamouFullZoomFactor(mDoc);
+ 
+   RefPtr<nsPresContext> presContext = GetPresContextForRatio(mDoc);
+   if (NS_WARN_IF(!presContext)) {
+--- a/dom/base/nsScreen.cpp
++++ b/dom/base/nsScreen.cpp
+@@ -83,6 +83,12 @@
+ }
+ 
+ CSSIntRect nsScreen::GetRect() {
++  // Camoufox: a window with no screen to measure (a removed frame's, kept by
++  // script) reads an empty rect in Firefox; the spoofed size must not outlive
++  // the window it describes.
++  if (!GetDeviceContext()) {
++    return {};
++  }
+   // Camoufox: per-context size wins over the global config.
+   if (uint32_t w = 0, h = 0; ScreenDimensionManager::GetDimensions(
+           RoverfoxStorageManager::UserContextId(GetOwnerWindow()), w, h)) {
+@@ -126,6 +132,10 @@
+ }
+ 
+ CSSIntRect nsScreen::GetAvailRect() {
++  // Camoufox: as GetRect: no screen to measure, an empty rect, as in Firefox.
++  if (!GetDeviceContext()) {
++    return {};
++  }
+   // Camoufox: stock Firefox's baseline fingerprinting protection derives the
+   // available rect from the screen size below. The spoofed available rect
+   // must not bypass it.
