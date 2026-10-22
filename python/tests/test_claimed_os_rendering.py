@@ -38,6 +38,35 @@ def launch(monkeypatch, isolated_launch_dependencies):  # noqa: F811
     return run
 
 
+# Everything this module sets for another OS's identity, config keys and prefs.
+CLAIMED_OS_CONFIG = ("fonts:metrics", "media:spoof_codecs", "media:hwCodecs")
+CLAIMED_OS_PREFS = (
+    "font.name-list.emoji",
+    "gfx.text.subpixel-position.force-enabled",
+    *utils.WINDOWS_UI_COLORS,
+)
+
+
+class TestLinuxHostOnly:
+    """The C++ behind these exists for a Linux build only (gfxPlatformGtk,
+    FreeType), so another host sets none of it, whatever the identity claims."""
+
+    @pytest.mark.parametrize(
+        "host, ua",
+        [("mac", WIN_UA), ("mac", LIN_UA), ("win", MAC_UA), ("win", LIN_UA)],
+    )
+    def test_other_hosts_set_nothing(self, launch, monkeypatch, host, ua):
+        monkeypatch.setattr(utils, "_host_os_key", lambda: host)
+        config, prefs = launch(ua)
+        assert [k for k in CLAIMED_OS_CONFIG if k in config] == []
+        assert [k for k in CLAIMED_OS_PREFS if k in prefs] == []
+
+    def test_linux_host_sets_it(self, launch):
+        config, prefs = launch(WIN_UA)
+        assert all(k in config for k in CLAIMED_OS_CONFIG)
+        assert all(k in prefs for k in CLAIMED_OS_PREFS)
+
+
 class TestFontPrefs:
     """font.* defaults of the claimed OS, from font-prefs.json."""
 

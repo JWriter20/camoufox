@@ -225,6 +225,48 @@ describe("test_launch_environment: prefs", () => {
 		});
 	});
 
+	describe("another OS's rendering, on a Linux host only (test_claimed_os_rendering.py)", () => {
+		// The C++ behind these exists for a Linux build only (gfxPlatformGtk,
+		// FreeType), so another host sets none of it.
+		const CONFIG_KEYS = [
+			"fonts:metrics",
+			"media:spoof_codecs",
+			"media:hwCodecs",
+		];
+		const PREFS = [
+			"font.name-list.emoji",
+			"gfx.text.subpixel-position.force-enabled",
+			...Object.keys(utils.WINDOWS_UI_COLORS),
+		];
+		const launchOn = async (host: "mac" | "win" | "lin", u: string) => {
+			deps.hostOsKey = () => host;
+			let config: Record<string, any> = {};
+			deps.getEnvVars = (c: Record<string, any>) => {
+				config = { ...c };
+				return {};
+			};
+			const result = await launch({ i_know_what_im_doing: true, ...ua(u) });
+			return { config, prefs: result.firefoxUserPrefs };
+		};
+		for (const [host, u] of [
+			["mac", WIN_UA],
+			["mac", LINUX_UA],
+			["win", MAC_UA],
+			["win", LINUX_UA],
+		] as const) {
+			it(`sets nothing on a ${host} host for ${u.slice(13, 20)}`, async () => {
+				const { config, prefs } = await launchOn(host, u);
+				expect(CONFIG_KEYS.filter((k) => k in config)).toEqual([]);
+				expect(PREFS.filter((k) => k in prefs)).toEqual([]);
+			});
+		}
+		it("sets it for a Windows identity on a Linux host", async () => {
+			const { config, prefs } = await launchOn("lin", WIN_UA);
+			expect(CONFIG_KEYS.filter((k) => !(k in config))).toEqual([]);
+			expect(PREFS.filter((k) => !(k in prefs))).toEqual([]);
+		});
+	});
+
 	describe("toggle settings are written both ways (test_launch_environment.py)", () => {
 		// A persistent profile keeps a user.js pref in prefs.js, so a toggle that
 		// only wrote when on stayed on after the flag was removed.

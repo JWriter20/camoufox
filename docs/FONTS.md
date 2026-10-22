@@ -241,7 +241,9 @@ where full hinting rounded every advance to a whole pixel.
 
 A Linux build compiles only Linux's font defaults, so without help a Windows
 identity resolved generics and scripts the Linux way (75 of 168 per-script
-widths matched stock Windows). When the claimed OS is not the host's:
+widths matched stock Windows). When a Linux host launches a Windows or macOS
+identity (on a macOS or Windows host, where this code is not built, the
+launchers set none of it):
 
 - the launcher sets that OS's `font.*` defaults from
   `python/src/camoufox/font-prefs.json`, which

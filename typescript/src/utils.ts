@@ -216,7 +216,7 @@ function stockProfileDiskCapacityKb(): number | null {
  */
 function stockFontPrefs(
 	targetOs: TargetOS,
-	buildOs: TargetOS,
+	buildOs: TargetOS = "lin",
 ): Record<string, any> {
 	const table: Record<string, Record<string, any>> = loadDataFile(
 		"font-prefs.json",
@@ -1825,27 +1825,26 @@ export async function launchOptions({
 	// Per-language and generic fonts: the build only has its own platform's
 	// font.name-list defaults, so another OS's identity takes that OS's stock
 	// values (with fallback-fonts-claimed-os.patch for the per-script table).
-	if (
-		(targetOs === "win" || targetOs === "mac") &&
-		hostOs !== null &&
-		targetOs !== hostOs
-	) {
-		for (const [pref, value] of Object.entries(
-			stockFontPrefs(targetOs, hostOs),
-		)) {
+	// These and the settings below replace answers that come from the Linux
+	// build's platform code (gfxPlatformGtk, FreeType, the GTK theme). Only a
+	// Linux build has that code, so on a macOS or Windows host nothing is set.
+	const rendersAnotherOs =
+		hostOs === "lin" && (targetOs === "win" || targetOs === "mac");
+	if (rendersAnotherOs) {
+		for (const [pref, value] of Object.entries(stockFontPrefs(targetOs))) {
 			setInto(firefox_user_prefs, pref, value);
 		}
 	}
 
 	// Line boxes: DirectWrite's ascent, descent and em height rather than
 	// FreeType's pixel-rounded ones (font-metrics-windows.patch).
-	if (targetOs === "win" && hostOs !== "win") {
+	if (rendersAnotherOs && targetOs === "win") {
 		setInto(config, "fonts:metrics", "windows");
 	}
 
 	// canPlayType()/isTypeSupported() and decodingInfo() answer for the claimed
 	// OS instead of the host's decoders (#558).
-	if ((targetOs === "win" || targetOs === "mac") && hostOs !== targetOs) {
+	if (rendersAnotherOs) {
 		setInto(config, "media:spoof_codecs", true);
 		if (targetOs === "win") {
 			setInto(config, "media:hwCodecs", [...WINDOWS_HW_CODECS]);
@@ -1854,7 +1853,7 @@ export async function launchOptions({
 
 	// Glyph advances at subpixel offsets, as DirectWrite and CoreText place
 	// them, rather than rounded to whole pixels by the host's hinting.
-	if ((targetOs === "win" || targetOs === "mac") && hostOs !== targetOs) {
+	if (rendersAnotherOs) {
 		setInto(
 			firefox_user_prefs,
 			"gfx.text.subpixel-position.force-enabled",
@@ -1863,7 +1862,7 @@ export async function launchOptions({
 	}
 
 	// Windows' system colours instead of the host theme's.
-	if (targetOs === "win" && hostOs !== "win") {
+	if (rendersAnotherOs && targetOs === "win") {
 		for (const [pref, value] of Object.entries(WINDOWS_UI_COLORS)) {
 			setInto(firefox_user_prefs, pref, value);
 		}

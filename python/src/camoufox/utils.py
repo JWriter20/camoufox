@@ -138,7 +138,7 @@ def _stock_profile_disk_capacity_kb() -> Optional[int]:
     return None
 
 
-def _stock_font_prefs(target_os: str, build_os: str) -> Dict[str, Any]:
+def _stock_font_prefs(target_os: str, build_os: str = 'lin') -> Dict[str, Any]:
     """The font.* prefs that make a build for `build_os` resolve fonts the way
     stock Firefox does on `target_os` (font-prefs.json, from all.js by
     browser/scripts/gen-font-prefs.py): the target's values where they differ,
@@ -1455,9 +1455,13 @@ def launch_options(
     # values (plus fallback-fonts-claimed-os.patch for the per-script table,
     # and unhinted advances in the bundled fonts.conf), 156 of 168 per-script
     # widths matched stock 152.0.4 on Windows, against 75.
-    host_os = _host_os_key()
-    if target_os in ('win', 'mac') and host_os in OS_NAMES and target_os != host_os:
-        for pref, value in _stock_font_prefs(target_os, host_os).items():
+    #
+    # These and the settings below replace answers that come from the Linux
+    # build's platform code (gfxPlatformGtk, FreeType, the GTK theme). Only a
+    # Linux build has that code, so on a macOS or Windows host nothing is set.
+    renders_another_os = _host_os_key() == 'lin' and target_os in ('win', 'mac')
+    if renders_another_os:
+        for pref, value in _stock_font_prefs(target_os).items():
             firefox_user_prefs.setdefault(pref, value)
 
     # Line boxes: DirectWrite takes ascent/descent from OS/2 usWin* and keeps
@@ -1465,7 +1469,7 @@ def launch_options(
     # same font file gives different heights (Arial 16px: 17/18 px on Windows,
     # 19/19 on a Linux host; all 26 fonts measured differed).
     # font-metrics-windows.patch lays text out with DirectWrite's metrics.
-    if target_os == 'win' and host_os != 'win':
+    if renders_another_os and target_os == 'win':
         config.setdefault('fonts:metrics', 'windows')
 
     # canPlayType()/isTypeSupported() list the host's decoders: a Linux
@@ -1473,7 +1477,7 @@ def launch_options(
     # Firefox answers "probably" (#558). The spoof matches Windows exactly on
     # 58 MIME/codec strings, and decodingInfo() follows it, power-efficient
     # for the codecs a Windows GPU decodes.
-    if target_os in ('win', 'mac') and host_os != target_os:
+    if renders_another_os:
         config.setdefault('media:spoof_codecs', True)
         if target_os == 'win':
             config.setdefault('media:hwCodecs', list(WINDOWS_HW_CODECS))
@@ -1484,12 +1488,12 @@ def launch_options(
     # Forcing subpixel positioning reproduces the Windows widths exactly, and
     # with them the default widths of form controls (<input> 158 -> 165 px,
     # <select> 92 -> 95 px, as on Windows).
-    if target_os in ('win', 'mac') and host_os != target_os:
+    if renders_another_os:
         firefox_user_prefs.setdefault('gfx.text.subpixel-position.force-enabled', True)
 
     # Highlight, SelectedItem, AccentColor and the -moz-dialog pair come from
     # the host's theme otherwise (GTK's Adwaita: 53,132,228 / 246,245,244).
-    if target_os == 'win' and host_os != 'win':
+    if renders_another_os and target_os == 'win':
         for pref, value in WINDOWS_UI_COLORS.items():
             firefox_user_prefs.setdefault(pref, value)
 
