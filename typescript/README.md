@@ -126,7 +126,7 @@ Contexts with other OSes, like the ones above, need `canvas_noise: true`.
 
 Text rendering belongs to the browser as well. On a Linux host, a Windows or
 macOS launch identity sets that OS's font defaults and per-script fallback,
-and for Windows its line metrics, glyph positioning, codec answers and system
+and for Windows its line metrics, codec answers and system
 colours ([docs/FONTS.md](https://github.com/daijro/camoufox/blob/main/docs/FONTS.md#another-oss-identity-on-a-linux-host)).
 They are read once per process, so every context gets the launch's, and a
 context claiming another OS lays text out as the launch's OS does. Launch one

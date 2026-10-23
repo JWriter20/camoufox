@@ -263,18 +263,13 @@ launchers set none of it):
   `usWin*`, GDI's external-leading rule, Arial Black measured as Arial Bold)
   instead of FreeType's pixel-rounded `hhea` values: Arial 16px is 17/18 px
   as on Windows, not 19/19;
-- a Windows identity gets `gfx.text.subpixel-position.force-enabled`:
-  DirectWrite places glyphs at subpixel offsets, so text widths are
-  fractional (`sans-serif` 953.0667 px on Windows), where hinted FreeType
-  rounds each advance to a whole pixel (953). Form controls take their
-  default widths from the same advances;
 - a macOS identity has `cmap-unicode-ucs4-fallback.patch` read a font's
   Unicode-platform UCS4 cmap as the macOS build does, so Geneva, Apple Symbols
   and Heiti, which carry only that subtable, are used for text.
 
 A macOS identity gets the font defaults, the fallback table and the cmap rule,
 which are stock Firefox's own code and data, and nothing that was only
-measured on Windows: no unhinted fonts.conf, no forced subpixel positioning,
+measured on Windows: no unhinted fonts.conf,
 no system colours and no codec spoof. The codec spoof would also answer
 `decodingInfo()`, and nothing in the repo records which codecs a Mac reports
 power-efficient (fpgen's macOS `canPlayType()` records do match the spoof).

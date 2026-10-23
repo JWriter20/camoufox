@@ -1848,14 +1848,6 @@ export async function launchOptions({
 		// Windows 11 answers.
 		setInto(config, "media:spoof_codecs", true);
 
-		// Glyph advances at subpixel offsets, as DirectWrite places them,
-		// rather than rounded to whole pixels by the host's hinting.
-		setInto(
-			firefox_user_prefs,
-			"gfx.text.subpixel-position.force-enabled",
-			true,
-		);
-
 		// Windows' system colours instead of the host theme's.
 		for (const [pref, value] of Object.entries(WINDOWS_UI_COLORS)) {
 			setInto(firefox_user_prefs, pref, value);

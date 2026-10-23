@@ -231,7 +231,6 @@ describe("test_launch_environment: prefs", () => {
 		const CONFIG_KEYS = ["fonts:metrics", "media:spoof_codecs"];
 		const PREFS = [
 			"font.name-list.emoji",
-			"gfx.text.subpixel-position.force-enabled",
 			...Object.keys(utils.WINDOWS_UI_COLORS),
 		];
 		const launchOn = async (host: "mac" | "win" | "lin", u: string) => {

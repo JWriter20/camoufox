@@ -42,7 +42,6 @@ def launch(monkeypatch, isolated_launch_dependencies):  # noqa: F811
 CLAIMED_OS_CONFIG = ("fonts:metrics", "media:spoof_codecs")
 CLAIMED_OS_PREFS = (
     "font.name-list.emoji",
-    "gfx.text.subpixel-position.force-enabled",
     *utils.WINDOWS_UI_COLORS,
 )
 
@@ -155,33 +154,26 @@ class TestCodecs:
 
 
 class TestLookAndFeel:
-    """Glyph positioning and system colours of the claimed OS."""
+    """System colours of the claimed OS."""
 
     def test_windows_identity_gets_windows_look_and_feel(self, launch):
         _, prefs = launch(WIN_UA)
-        assert prefs["gfx.text.subpixel-position.force-enabled"] is True
         assert utils.WINDOWS_UI_COLORS["ui.highlight"] == "#0078d7"
         for pref, value in utils.WINDOWS_UI_COLORS.items():
             assert prefs[pref] == value
 
-    def test_macos_identity_gets_neither(self, launch):
-        # Both were measured against stock Windows only.
+    def test_macos_identity_gets_none(self, launch):
+        # They were measured against stock Windows only.
         _, prefs = launch(MAC_UA)
-        assert "gfx.text.subpixel-position.force-enabled" not in prefs
         assert "ui.highlight" not in prefs
 
     def test_host_os_identity_is_left_alone(self, launch, monkeypatch):
         _, prefs = launch(LIN_UA)
-        assert "gfx.text.subpixel-position.force-enabled" not in prefs
         assert "ui.highlight" not in prefs
         monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
         _, prefs = launch(WIN_UA)
-        assert "gfx.text.subpixel-position.force-enabled" not in prefs
         assert "ui.highlight" not in prefs
 
     def test_caller_values_win(self, launch):
-        _, prefs = launch(WIN_UA, firefox_user_prefs={
-            "ui.highlight": "#ff0000", "gfx.text.subpixel-position.force-enabled": False,
-        })
+        _, prefs = launch(WIN_UA, firefox_user_prefs={"ui.highlight": "#ff0000"})
         assert prefs["ui.highlight"] == "#ff0000"
-        assert prefs["gfx.text.subpixel-position.force-enabled"] is False

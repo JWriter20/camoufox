@@ -1484,14 +1484,6 @@ def launch_options(
         # them as stock Firefox 158 on Windows 11 answers.
         config.setdefault('media:spoof_codecs', True)
 
-        # Glyph advances: DirectWrite positions glyphs at subpixel offsets, so
-        # text widths are fractional (sans-serif 953.0667 px on Windows);
-        # Linux with hinting rounds every advance to a whole pixel (953).
-        # Forcing subpixel positioning reproduces the Windows widths exactly,
-        # and with them the default widths of form controls (<input> 158 ->
-        # 165 px, <select> 92 -> 95 px, as on Windows).
-        firefox_user_prefs.setdefault('gfx.text.subpixel-position.force-enabled', True)
-
         # Highlight, SelectedItem, AccentColor and the -moz-dialog pair come
         # from the host's theme otherwise.
         for pref, value in WINDOWS_UI_COLORS.items():
