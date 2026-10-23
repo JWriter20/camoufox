@@ -276,8 +276,19 @@ no system colours and no codec spoof. The codec spoof would also answer
 power-efficient (fpgen's macOS `canPlayType()` records do match the spoof).
 Each needs a measurement on stock macOS first.
 
-`browser/tests/playwright/patches/font-fallback-windows.py` measures 28
-scripts in three generics against stock Windows (at least 160 of 168 match).
+The guards in `browser/tests/playwright/patches/`:
+
+- `font-fallback-windows.py` measures 28 scripts in three generics against
+  stock Windows (at least 160 of 168 match), and 13 Windows fonts' line boxes
+  against the DirectWrite values derived from their font files
+  (`assets/font-metrics-windows.json`);
+- `cmap-ucs4-macos.py` checks that Geneva, Apple Symbols and Heiti TC/SC draw
+  with their own advances in a macOS identity, not the next family's;
+- `system-colors-windows.py` checks the Windows identity's system colours
+  (`windowsUiColors` in `launcher-constants.json`) against a Linux identity's;
+- `decoding-info-claimed-os.py` checks that `decodingInfo()` agrees with
+  `canPlayType()` with no host decoder, power-efficient only for H.264 on a
+  hardware GPU or a small frame, and the same with ClearKey.
 
 ## Verifying
 
