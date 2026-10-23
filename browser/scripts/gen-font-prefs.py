@@ -9,7 +9,8 @@ where Windows names Segoe UI Emoji). The launcher applies the claimed OS's
 values from this file.
 
 all.js selects per-OS values with #ifdef blocks; they are evaluated here for
-each OS's defines. Regenerate on a Firefox bump:
+each OS's defines. Regenerate on a Firefox bump (CI's
+browser/scripts/check-firefox-copies.py fails until it is):
 
     python3 browser/scripts/gen-font-prefs.py <all.js of that release>
 """
@@ -87,12 +88,17 @@ def font_prefs(all_js, defines):
     return prefs
 
 
-def main():
-    all_js = Path(sys.argv[1]).read_text(encoding="utf-8")
+def render(all_js):
+    """font-prefs.json's exact text for this all.js."""
     out = {os_name: font_prefs(all_js, defines) for os_name, defines in DEFINES.items()}
     if not all(out.values()):
         sys.exit("no font prefs found for some OS -- not an all.js?")
-    OUT.write_text(json.dumps(out, indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    return json.dumps(out, indent=1, ensure_ascii=False, sort_keys=True) + "\n", out
+
+
+def main():
+    text, out = render(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    OUT.write_text(text, encoding="utf-8")
     print(f"{OUT}: " + ", ".join(f"{k} {len(v)}" for k, v in out.items()))
 
 

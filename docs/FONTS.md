@@ -248,7 +248,8 @@ launchers set none of it):
 
 - the launcher sets that OS's `font.*` defaults from
   `python/src/camoufox/font-prefs.json`, which
-  `browser/scripts/gen-font-prefs.py` reads out of `all.js` (regenerate it on
+  `browser/scripts/gen-font-prefs.py` reads out of `all.js` (CI's
+  `check-firefox-copies.py` fails until it is regenerated on
   a Firefox bump), and turns async fallback off on any Linux host;
 - `fallback-fonts-claimed-os.patch` makes `gfxPlatformGtk` use stock's
   Windows or macOS per-script fallback table, by the launch's

@@ -261,6 +261,13 @@ jobs:
       - name: Synthesized input goes through one chokepoint
         run: python3 browser/scripts/check-input-dispatch.py
 
+      - name: Copies of Firefox source match the release
+        # font-prefs.json and the fallback tables in
+        # fallback-fonts-claimed-os.patch are copied out of Firefox, so a bump
+        # changes the original and not the copy. Compared against the release
+        # in browser/upstream.sh; an unreachable source fails, it never passes.
+        run: python3 browser/scripts/check-firefox-copies.py
+
       - name: CI pipeline self-tests
         # These assert that the pipeline reports honestly: skips carry reasons,
         # shards partition exactly, and nothing identifying a sundial vector
