@@ -219,6 +219,7 @@ renders, so some signals still show the real OS:
 | Text rendering | Core Text, DirectWrite and FreeType rasterize the same font differently, which shows in canvas hashes |
 | GPU rasterization | Canvas and WebGL output carry the host GPU driver's rasterization |
 | System colors | `AccentColor` and system colors differ by OS and desktop |
+| Text layout, codecs, system colours of another OS | On a Linux host the launchers set them for the launch identity's OS (font defaults, `fallback-fonts-claimed-os.patch`, `fonts:metrics`, `media:spoof_codecs`, subpixel positioning, `windowsUiColors`; [FONTS.md](FONTS.md#another-oss-identity-on-a-linux-host)). The browser reads them once, so a context claiming another OS keeps the launch's |
 | Shader precision behaviour | Actual precision follows the real driver even when the reported formats are spoofed |
 
 Run each identity on the OS it claims. The per-context patches make each

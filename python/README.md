@@ -134,6 +134,14 @@ Canvas noise belongs to the browser, not the context (see
 every context claims the host's OS and GPU too, since its canvas renders there.
 Contexts with other OSes, like the ones above, need `canvas_noise=True`.
 
+Text rendering belongs to the browser as well. On a Linux host, a Windows or
+macOS launch identity sets that OS's font defaults and per-script fallback,
+and for Windows its line metrics, glyph positioning, codec answers and system
+colours ([docs/FONTS.md](https://github.com/daijro/camoufox/blob/main/docs/FONTS.md#another-oss-identity-on-a-linux-host)).
+They are read once per process, so every context gets the launch's, and a
+context claiming another OS lays text out as the launch's OS does. Launch one
+browser per OS your contexts claim, with `os` set to it.
+
 ### The canvas on another OS
 
 A page can draw a canvas or a WebGL scene and read the pixels back. Those pixels
