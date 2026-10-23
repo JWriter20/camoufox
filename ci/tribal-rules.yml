@@ -677,22 +677,26 @@ rules:
   # -------------------------------------------------------------------------
 
   - id: builds-are-optimized-like-stock
-    title: Every build, tested or shipped and on every OS, links with cross-language LTO and Rust SIMD
+    title: Releases are built as stock builds its releases, with PGO and LTO; pull request builds with ThinLTO
     check: automated
     evidence:
-      - "PR #886: measured against stock 152.0.4 on the same host, an unoptimized build ran Gecko's C++ 1.3-1.8x slower (JSON.parse 1.52x, location.href 1.77x, createElement 1.32x, TextEncoder 1.45x) and a regexp replace 1.04x, so JSON.parse over a regexp replace read ~3.3 where stock reads ~2.2"
+      - "PR #886: stock 158.0 against Camoufox 158.0-beta.40 over 8-11 fresh launches each on a Ryzen 9850X3D (Linux), an i9-11900H (Windows 11), an Apple M4 and a 4-vCPU GitHub runner: Array.prototype.sort with a comparator per regexp replace was 1.12-1.26 in stock and 1.51-2.58 in Camoufox on every machine, and four more same-page ratios separated with one cut-off"
+      - "PR #886: Mozilla's own linux64-opt build of the stock 158.0 source (no PGO, no LTO) timed like Camoufox, sort/re 2.36-2.52; the ThinLTO build without PGO still read 2.38-2.50"
       - "Firefox 158 build/mozconfig.common sets MOZ_LTO=cross with --enable-profile-use=cross for every build taskcluster/kinds/build marks use-pgo, which is every shippable desktop build; build/mozconfig.rust adds --enable-rust-simd"
       - "Firefox 158 build/moz.configure/lto-pgo.configure: --enable-lto=cross is full LTO when PGO and MOZ_AUTOMATION are on and the target is x86_64 Linux or Windows, and ThinLTO otherwise"
-      - "PR #886 review: LTO had entered only the tests.yml build, so a release would have been tested on an LTO Linux binary and shipped binaries built without it"
+      - "PR #886 review, maintainer: pull request CI keeps its warm-ccache build; releases are built the way stock builds them"
     rationale: >-
-      A page can time how fast Gecko's C++ runs against JIT-compiled script, so
-      an unoptimized build stands out from every stock release. The options are
-      unconditional in base.mozconfig, which every build copies (the tests.yml
-      build, multibuild.py and release.yml alike), so the binary CI tests is
-      configured exactly like the binaries a release ships. Without a PGO
-      profile, configure picks ThinLTO across C++ and Rust on every target.
-      Stock pairs full LTO with PGO on x86_64 Linux and Windows and uses
-      ThinLTO everywhere else, so the remaining difference is PGO. Rust comes
-      from the release Mozilla builds the tree with (scripts/patch.py reads
-      taskcluster/kinds/toolchain/rust.yml), because lld cannot read Rust
-      bitcode from an LLVM newer than the bootstrapped clang's.
+      A page can time a call into Gecko against plain script and see a build
+      stock never ships, whatever the CPU. Stock's speed comes from PGO, so
+      releases follow stock's recipe (ci/pgo.py): an instrumented build, a
+      training run on the target OS with Mozilla's profileserver.py and corpus,
+      and the release build with that profile, with full LTO on x86_64 Linux
+      and Windows and ThinLTO elsewhere, as configure picks under automation.
+      base.mozconfig is the one place that decides it. A release build refuses
+      a profile trained on other sources, and the speed-parity guard checks
+      the result before anything publishes. Pull request builds get ThinLTO
+      without a profile, because training would triple their cost, and they
+      do not run that guard. Rust comes from the release Mozilla builds the
+      tree with (scripts/patch.py reads taskcluster/kinds/toolchain/rust.yml),
+      because lld cannot read Rust bitcode from an LLVM newer than the
+      bootstrapped clang's.

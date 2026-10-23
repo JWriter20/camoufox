@@ -6,11 +6,13 @@ These check that what they do still works in the built browser -- the most
 direct evidence that a Firefox bump did not quietly neuter a patch that still
 applies cleanly, which is the failure mode a compile check cannot catch.
 
-The guards fall into three groups, each its own suite and CI job:
+The guards fall into four groups, each its own suite and CI job:
 
   spoofing    a spoofed value still reaches the page and holds together
   automation  Playwright stays invisible to the page and never deadlocks it
   parity      what a page, or the OS, can observe matches stock Firefox
+  release     what only a release build has: the PGO profile's speed. It
+              runs in build-browser.yml, not on a pull request's build
 
 Each guard is a standalone script exiting 0 or 1. Policy allows zero failures.
 Every guard belongs to exactly one group (ci/tests checks this), so a new one
@@ -90,6 +92,9 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "stock-parity-probes",
         "viewport-no-rdm",
         "windows-exe-manifest",
+    ),
+    "release": (
+        "speed-parity",
     ),
 }
 

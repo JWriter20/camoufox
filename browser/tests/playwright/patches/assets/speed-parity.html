@@ -1,0 +1,41 @@
+<!doctype html><meta charset=utf-8><body><div id=host></div><script>
+const now=()=>performance.now();
+let sink=0;
+const jsonStr=JSON.stringify({a:1,b:[1,2,3,"x"],c:{d:"hello world",e:true,f:null},g:3.14159});
+const reStr="the quick brown fox jumps over the lazy dog ".repeat(4);
+const enc=new TextEncoder(); const teStr="hello wörld, this is a TextEncoder test string ".repeat(2);
+const dec=new TextDecoder(); const teBytes=enc.encode(teStr);
+const host=document.getElementById('host');
+for(let i=0;i<20;i++){const d=document.createElement('div');d.className='c'+(i%5);d.textContent='x'+i;host.appendChild(d);}
+const arr=Array.from({length:64},(_,i)=>(i*7919)%101);
+const B={
+ json:()=>{sink+=JSON.parse(jsonStr).g},
+ re:()=>{sink+=reStr.replace(/o/g,'0').length},
+ te:()=>{sink+=enc.encode(teStr).length},
+ href:()=>{sink+=location.href.length},
+ ce:()=>{sink+=document.createElement('div').nodeType},
+ js:()=>{let a=0;for(let i=0;i<50;i++)a+=(i*7)^(i>>1);sink+=a},
+ b64:()=>{sink+=btoa(reStr).length},
+ split:()=>{sink+=reStr.split(' ').length},
+ stringify:()=>{sink+=JSON.stringify({a:sink&7,b:[1,2,3],c:"hello"}).length},
+ td:()=>{sink+=dec.decode(teBytes).length},
+ qsa:()=>{sink+=host.querySelectorAll('.c3').length},
+ text:()=>{host.firstChild.textContent='y'+(sink&3);sink+=1},
+ attr:()=>{host.setAttribute('data-x',sink&7);sink+=host.getAttribute('data-x').length},
+ sort:()=>{sink+=arr.slice().sort((a,b)=>a-b)[3]},
+ map:()=>{const m=new Map();for(let i=0;i<16;i++)m.set('k'+i,i);sink+=m.get('k5')},
+ date:()=>{sink+=new Date(1700000000000+(sink&1023)).toISOString().length},
+ rand:()=>{sink+=crypto.getRandomValues(new Uint8Array(16))[0]},
+ uri:()=>{sink+=encodeURIComponent(reStr).length},
+};
+function run(f,n){const t=now();for(let i=0;i<n;i++)f();return (now()-t)/n;}
+function cal(f){let n=1;for(;;){const t=run(f,n)*n;if(t>=25)return Math.ceil(n*50/t);n*=2;}}
+setTimeout(()=>{
+ const N={},P={};for(const k in B){N[k]=cal(B[k]);P[k]=[];}
+ const ks=Object.keys(B);
+ for(let t=0;t<15;t++)for(let i=0;i<ks.length;i++){const k=ks[(i+t)%ks.length];P[k].push(run(B[k],N[k]));}
+ const mm=a=>{const s=a.slice().sort((x,y)=>x-y),q=s.length>>2,m=s.slice(q,s.length-q);return m.reduce((x,y)=>x+y,0)/m.length};
+ const r={};for(const k in P)r[k]=mm(P[k]);
+ fetch('/result',{method:'POST',body:JSON.stringify({ua:navigator.userAgent,r,sink})}).then(()=>{document.title='done'});
+},1500);
+</script>

@@ -3037,10 +3037,14 @@ def test_every_patch_guard_is_in_exactly_one_group():
 
 
 def test_the_patch_guard_matrix_runs_every_group():
+    """Every group but `release`, which only a release build can pass: it runs
+    in build-browser.yml, against the build it publishes."""
     from ci.run_patch_guards import GROUPS
 
     legs = {leg["leg"] for leg in _jobs()["patch-guards"]["strategy"]["matrix"]["include"]}
-    assert legs == set(GROUPS) | {"skiplist"}
+    assert legs == set(GROUPS) - {"release"} | {"skiplist"}
+    build = (CI_ROOT.parent / ".github" / "workflows" / "build-browser.yml").read_text(encoding="utf-8")
+    assert "ci.run_patch_guards --group release" in build
 
 
 def test_leftover_browsers_sees_content_processes(tmp_path):

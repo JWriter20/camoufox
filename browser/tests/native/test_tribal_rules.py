@@ -878,8 +878,12 @@ def test_pages_see_an_official_firefox_build():
 
 def test_every_build_is_optimized_like_stock():
     """Rule: builds-are-optimized-like-stock."""
-    base = (BROWSER / "assets" / "base.mozconfig").read_text(encoding="utf-8").splitlines()
-    for option in ("ac_add_options --enable-lto=cross", "ac_add_options --enable-rust-simd"):
+    base = (BROWSER / "assets" / "base.mozconfig").read_text(encoding="utf-8")
+    for option in ("ac_add_options --enable-rust-simd",
+                   "ac_add_options --enable-profile-generate=cross",
+                   "ac_add_options --enable-profile-use=cross",
+                   "x86_64-pc-linux-gnu|x86_64-pc-windows-msvc) ac_add_options --enable-lto=cross,full",
+                   "*) ac_add_options --enable-lto=cross"):
         assert option in base, explain("builds-are-optimized-like-stock")
     # Only base.mozconfig decides it, so no target or workflow builds differently.
     others = [*(BROWSER / "assets").glob("*.mozconfig"), *(REPO_ROOT / ".github" / "workflows").glob("*.yml")]
@@ -887,6 +891,8 @@ def test_every_build_is_optimized_like_stock():
         if path.name != "base.mozconfig":
             text = path.read_text(encoding="utf-8")
             assert "-lto" not in text and "MOZ_LTO" not in text, f"{path.name}" + explain("builds-are-optimized-like-stock")
+    build = (REPO_ROOT / ".github" / "workflows" / "build-browser.yml").read_text(encoding="utf-8")
+    assert "python3 -m ci.pgo use" in build, explain("builds-are-optimized-like-stock")
 
 
 # ---------------------------------------------------------------------------

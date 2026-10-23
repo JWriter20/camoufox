@@ -153,10 +153,11 @@ class Patcher:
         with open(mozconfig_backup, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # Add target option
-        content += f"\nac_add_options --target={self.moz_target}\n"
-        # configure resolves rustc and cargo through rustup, which honours this.
-        content += f"export RUSTUP_TOOLCHAIN={self.rust}\n"
+        # The target first: base.mozconfig picks the LTO mode stock uses for it.
+        # configure resolves rustc and cargo through rustup, which honours RUSTUP_TOOLCHAIN.
+        content = (f"CAMOUFOX_TARGET={self.moz_target}\n"
+                   "ac_add_options --target=$CAMOUFOX_TARGET\n"
+                   f"export RUSTUP_TOOLCHAIN={self.rust}\n\n") + content
 
         # Add target-specific mozconfig if it exists
         target_mozconfig = os.path.join("..", "assets", f"{self.target}.mozconfig")

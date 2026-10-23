@@ -1,0 +1,194 @@
+name: Build browser
+
+# The release build, the way stock Firefox builds its releases (ci/pgo.py):
+# an instrumented build per profile platform, a training run on that OS, then
+# every release target built with its profile and checked by the release
+# patch guards. It publishes nothing. release.yml calls it and publishes what
+# it uploads; run on its own, it is a dry run of the release build.
+#
+# Profiles are cached by platform and native-input digest, so a re-run on the
+# same sources trains nothing, and a profile never meets other sources.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+      browser_tag:
+        description: "The release this build becomes; empty for a dry run"
+        required: false
+        type: string
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  profile:
+    name: Profile (${{ matrix.platform }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux-x86_64, target: linux, arch: x86_64}
+    env:
+      BUILD_TARGET: ${{ matrix.target }},${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - id: key
+        run: echo "key=pgo-${{ matrix.platform }}-$(python3 -m ci.browser_inputs --digest)" >> "$GITHUB_OUTPUT"
+
+      - id: cached
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: pgo-profile
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Maximize build space
+        if: steps.cached.outputs.cache-hit != 'true'
+        uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef # v4.1
+        with:
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+          remove-cached-tools: "true"
+          remove-swapfile: "true"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        if: steps.cached.outputs.cache-hit != 'true'
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build and runtime dependencies
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y msitools p7zip-full aria2 ccache libsqlite3-dev \
+            xvfb libgtk-3-0 libasound2t64 libdbus-glib-1-2 libx11-xcb1
+          sudo fallocate -l 24G /swapfile && sudo chmod 600 /swapfile
+          sudo mkswap /swapfile && sudo swapon /swapfile
+
+      - name: Prepare the source tree
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: python3 -m ci.run_prepare
+
+      - name: Instrumented build
+        if: steps.cached.outputs.cache-hit != 'true'
+        env:
+          CAMOUFOX_PGO_GENERATE: "1"
+          CARGO_BUILD_JOBS: "1"
+        run: make -C browser build
+
+      - name: Train
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: |
+          binary=$(python3 -c "from ci._pytest import built_binary; print(built_binary())")
+          xvfb-run -a -s "-screen 0 1024x768x24" \
+            python3 -m ci.pgo train --binary "$binary" --platform ${{ matrix.platform }} --out pgo-profile
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pgo-${{ matrix.platform }}
+          path: pgo-profile/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build (${{ matrix.target }} ${{ matrix.arch }})
+    needs: profile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: linux, arch: x86_64, profile: linux-x86_64}
+    env:
+      BUILD_TARGET: ${{ matrix.target }},${{ matrix.arch }}
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef # v4.1
+        with:
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+          remove-cached-tools: "true"
+          remove-swapfile: "true"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Name this release
+        if: inputs.browser_tag != ''
+        run: python3 -m ci.release set-build --tag "${{ inputs.browser_tag }}"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y msitools p7zip-full aria2 ccache fontconfig \
+            xvfb libgtk-3-0 libasound2t64 libdbus-glib-1-2 libx11-xcb1
+          if [ "${{ matrix.arch }}" != "x86_64" ]; then
+            sudo apt-get install -y libc6-i386 lib32gcc-s1 lib32stdc++6 gcc-multilib g++-multilib
+          fi
+          sudo fallocate -l 24G /swapfile && sudo chmod 600 /swapfile
+          sudo mkswap /swapfile && sudo swapon /swapfile
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pgo-${{ matrix.profile }}
+          path: pgo-profile
+
+      - name: Use the profile trained on these sources
+        run: python3 -m ci.pgo use --profile pgo-profile --target ${{ matrix.target }}-${{ matrix.arch }}
+
+      - name: Fetch and verify the font bundle
+        working-directory: browser
+        run: |
+          make fonts-extract
+          python3 -m pip install -e ../python
+          python3 scripts/verify-fonts.py
+
+      - name: Prepare the source tree
+        run: python3 -m ci.run_prepare
+
+      - name: Build
+        env:
+          CARGO_BUILD_JOBS: "1"
+        working-directory: browser
+        run: /usr/bin/time -v python3 ./multibuild.py --target ${{ matrix.target }} --arch ${{ matrix.arch }}
+
+      - name: Release patch guards
+        if: matrix.target == 'linux' && matrix.arch == 'x86_64'
+        run: |
+          pip install -r ci/requirements.txt
+          binary=$(python3 -c "from ci._pytest import built_binary; print(built_binary())")
+          xvfb-run -a python3 -m ci.run_patch_guards --group release --binary "$binary"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: CamoufoxBuilds-${{ matrix.target }}-${{ matrix.arch }}
+          path: browser/dist/*
