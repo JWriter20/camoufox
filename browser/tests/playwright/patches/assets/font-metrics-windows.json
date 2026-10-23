@@ -1,0 +1,96 @@
+{
+ "size": 16,
+ "fonts": {
+  "Arial": {
+   "fontBoundingBoxAscent": 14.0,
+   "fontBoundingBoxDescent": 3.0,
+   "emHeightAscent": 13.1765,
+   "emHeightDescent": 2.8235,
+   "lineHeight": 18.0
+  },
+  "Times New Roman": {
+   "fontBoundingBoxAscent": 14.0,
+   "fontBoundingBoxDescent": 3.0,
+   "emHeightAscent": 13.1765,
+   "emHeightDescent": 2.8235,
+   "lineHeight": 18.0
+  },
+  "Courier New": {
+   "fontBoundingBoxAscent": 13.0,
+   "fontBoundingBoxDescent": 5.0,
+   "emHeightAscent": 11.5556,
+   "emHeightDescent": 4.4444,
+   "lineHeight": 18.0
+  },
+  "Verdana": {
+   "fontBoundingBoxAscent": 16.0,
+   "fontBoundingBoxDescent": 3.0,
+   "emHeightAscent": 13.4737,
+   "emHeightDescent": 2.5263,
+   "lineHeight": 19.0
+  },
+  "Tahoma": {
+   "fontBoundingBoxAscent": 16.0,
+   "fontBoundingBoxDescent": 3.0,
+   "emHeightAscent": 13.4737,
+   "emHeightDescent": 2.5263,
+   "lineHeight": 19.0
+  },
+  "Georgia": {
+   "fontBoundingBoxAscent": 15.0,
+   "fontBoundingBoxDescent": 4.0,
+   "emHeightAscent": 12.6316,
+   "emHeightDescent": 3.3684,
+   "lineHeight": 19.0
+  },
+  "Trebuchet MS": {
+   "fontBoundingBoxAscent": 15.0,
+   "fontBoundingBoxDescent": 4.0,
+   "emHeightAscent": 12.6316,
+   "emHeightDescent": 3.3684,
+   "lineHeight": 19.0
+  },
+  "Comic Sans MS": {
+   "fontBoundingBoxAscent": 18.0,
+   "fontBoundingBoxDescent": 5.0,
+   "emHeightAscent": 12.5217,
+   "emHeightDescent": 3.4783,
+   "lineHeight": 23.0
+  },
+  "Impact": {
+   "fontBoundingBoxAscent": 16.0,
+   "fontBoundingBoxDescent": 3.0,
+   "emHeightAscent": 13.4737,
+   "emHeightDescent": 2.5263,
+   "lineHeight": 19.0
+  },
+  "Segoe UI": {
+   "fontBoundingBoxAscent": 17.0,
+   "fontBoundingBoxDescent": 4.0,
+   "emHeightAscent": 12.9524,
+   "emHeightDescent": 3.0476,
+   "lineHeight": 21.0
+  },
+  "Calibri": {
+   "fontBoundingBoxAscent": 15.0,
+   "fontBoundingBoxDescent": 4.0,
+   "emHeightAscent": 12.6316,
+   "emHeightDescent": 3.3684,
+   "lineHeight": 19.0
+  },
+  "Consolas": {
+   "fontBoundingBoxAscent": 15.0,
+   "fontBoundingBoxDescent": 4.0,
+   "emHeightAscent": 12.6316,
+   "emHeightDescent": 3.3684,
+   "lineHeight": 19.0
+  },
+  "Arial Black": {
+   "fontBoundingBoxAscent": 14.0,
+   "fontBoundingBoxDescent": 3.0,
+   "emHeightAscent": 13.1765,
+   "emHeightDescent": 2.8235,
+   "lineHeight": 18.0
+  }
+ }
+}
