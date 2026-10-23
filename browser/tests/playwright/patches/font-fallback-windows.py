@@ -31,6 +31,14 @@ adds them; Arial Black takes Arial Bold's tables. Arial is 17/18 px, as
 measured on Windows. FreeType's own hhea values (font-metrics-windows.patch or
 fonts:metrics missing) give other numbers on every font.
 
+The font list is pinned too: a launch draws its fonts at random, and which
+fonts a draw adds decides some fallbacks, so the guard takes one realistic
+draw every time -- the Windows base (font-bases.json) plus the LibreOffice
+bundle (font-groups.json, 6.6% of Windows draws). That bundle carries DejaVu
+Sans, which this build's global fallback (fontconfig) picked for Lao and
+Inuktitut, where DirectWrite's system fallback on Windows picks Leelawadee UI
+and Gadugi (148 of 168 matched).
+
 The scale is pinned to 1: at devicePixelRatio 1.25 every canvas width moves by
 ~0.26% (FreeType's fixed-point advances at another pixel size), as Windows'
 would at 125% too -- a different reference, not a mismatch.
@@ -51,6 +59,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import resolve_binary  # noqa: E402
 
 ASSETS = Path(__file__).resolve().parent / "assets"
+LAUNCHER_DATA = Path(__file__).resolve().parents[4] / "python" / "src" / "camoufox"
+BASE = "win11"
+BUNDLE = "libreoffice"
 TOLERANCE_PX = 0.5
 METRICS_TOLERANCE_PX = 0.01
 LINE_BOXES = """(spec) => {
@@ -88,6 +99,17 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
 
+def pinned_fonts() -> list:
+    """The Windows base plus the LibreOffice bundle, from the launcher's data."""
+    bases = json.loads((LAUNCHER_DATA / "font-bases.json").read_text(encoding="utf-8"))["win"]
+    groups = json.loads((LAUNCHER_DATA / "font-groups.json").read_text(encoding="utf-8"))["win"]
+    base = next((b["fonts"] for b in bases if b["id"] == BASE), None)
+    bundle = next((g["fonts"] for g in groups if g["id"] == BUNDLE), None)
+    if base is None or bundle is None or "DejaVu Sans" not in bundle:
+        raise SystemExit(f"FAIL: no {BASE} base or {BUNDLE} bundle with DejaVu Sans -- re-pin the draw")
+    return sorted(set(base) | set(bundle))
+
+
 def main() -> int:
     from camoufox.sync_api import Camoufox
 
@@ -102,7 +124,7 @@ def main() -> int:
     try:
         with Camoufox(os="windows", headless=True, executable_path=str(binary),
                       firefox_user_prefs={"layout.css.devPixelsPerPx": "1"},
-                      i_know_what_im_doing=True) as browser:
+                      fonts=pinned_fonts(), i_know_what_im_doing=True) as browser:
             page = browser.new_page()
             page.goto(url)
             page.wait_for_function("document.body.dataset.r", timeout=60000)

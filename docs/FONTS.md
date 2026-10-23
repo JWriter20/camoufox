@@ -252,7 +252,11 @@ launchers set none of it):
   a Firefox bump), and turns async fallback off on any Linux host;
 - `fallback-fonts-claimed-os.patch` makes `gfxPlatformGtk` use stock's
   Windows or macOS per-script fallback table, by the launch's
-  `navigator.platform`;
+  `navigator.platform`. Where stock Windows names a face Windows 10 does not
+  ship (Lao UI, Euphemia), the Windows table follows it with the face
+  DirectWrite's system fallback picks (Leelawadee UI, Gadugi, as the Windows
+  reference measures); this build's own global fallback asks fontconfig, which
+  picked DejaVu Sans whenever a draw had the LibreOffice bundle;
 - a Windows identity gets `fonts:metrics: "windows"`, and
   `font-metrics-windows.patch` lays text out with the ascent, descent, line
   gap and em height DirectWrite derives from the same font tables (OS/2
@@ -279,7 +283,8 @@ Each needs a measurement on stock macOS first.
 The guards in `browser/tests/playwright/patches/`:
 
 - `font-fallback-windows.py` measures 28 scripts in three generics against
-  stock Windows (at least 160 of 168 match), and 13 Windows fonts' line boxes
+  stock Windows (at least 160 of 168 match) on a pinned draw, the Windows base
+  plus the LibreOffice bundle, and 13 Windows fonts' line boxes
   against the DirectWrite values derived from their font files
   (`assets/font-metrics-windows.json`);
 - `cmap-ucs4-macos.py` checks that Geneva, Apple Symbols and Heiti TC/SC draw
