@@ -96,7 +96,12 @@ import {
 } from "./pycompat.js";
 import { VirtualDisplay } from "./virtdisplay.js";
 import { FallbackWarning, LeakWarning, warn } from "./warnings.js";
-import { firefoxGpus, sampleWebglForScreen, webglForGpu } from "./webgl.js";
+import {
+	firefoxGpus,
+	isHardwareGpu,
+	sampleWebglForScreen,
+	webglForGpu,
+} from "./webgl.js";
 
 type ListOrString = string | string[];
 export type TargetOS = "mac" | "win" | "lin";
@@ -108,8 +113,10 @@ const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
 
-// Video codecs a Windows desktop decodes in hardware, so that
-// mediaCapabilities.decodingInfo() reports them powerEfficient.
+// Video codecs a Windows identity's GPU decodes in hardware, so that
+// mediaCapabilities.decodingInfo() reports them powerEfficient at any size:
+// H.264 only, since fpgen's GPU buckets do not say which identities also decode
+// HEVC and VP9 (see utils.py), and nothing for a software rasteriser.
 export const WINDOWS_HW_CODECS: readonly string[] =
 	LAUNCHER_CONSTANTS.windowsHwCodecs;
 
@@ -1828,6 +1835,8 @@ export async function launchOptions({
 	// These and the settings below replace answers that come from the Linux
 	// build's platform code (gfxPlatformGtk, FreeType, the GTK theme). Only a
 	// Linux build has that code, so on a macOS or Windows host nothing is set.
+	// A macOS identity gets the font defaults only: the values below were
+	// measured against stock Windows alone (see utils.py).
 	const rendersAnotherOs =
 		hostOs === "lin" && (targetOs === "win" || targetOs === "mac");
 	if (rendersAnotherOs) {
@@ -1836,33 +1845,25 @@ export async function launchOptions({
 		}
 	}
 
-	// Line boxes: DirectWrite's ascent, descent and em height rather than
-	// FreeType's pixel-rounded ones (font-metrics-windows.patch).
 	if (rendersAnotherOs && targetOs === "win") {
+		// Line boxes: DirectWrite's ascent, descent and em height rather than
+		// FreeType's pixel-rounded ones (font-metrics-windows.patch).
 		setInto(config, "fonts:metrics", "windows");
-	}
 
-	// canPlayType()/isTypeSupported() and decodingInfo() answer for the claimed
-	// OS instead of the host's decoders (#558).
-	if (rendersAnotherOs) {
+		// canPlayType()/isTypeSupported() and decodingInfo() answer for Windows
+		// instead of the host's decoders (#558); media:hwCodecs is set below,
+		// once the GPU is known.
 		setInto(config, "media:spoof_codecs", true);
-		if (targetOs === "win") {
-			setInto(config, "media:hwCodecs", [...WINDOWS_HW_CODECS]);
-		}
-	}
 
-	// Glyph advances at subpixel offsets, as DirectWrite and CoreText place
-	// them, rather than rounded to whole pixels by the host's hinting.
-	if (rendersAnotherOs) {
+		// Glyph advances at subpixel offsets, as DirectWrite places them,
+		// rather than rounded to whole pixels by the host's hinting.
 		setInto(
 			firefox_user_prefs,
 			"gfx.text.subpixel-position.force-enabled",
 			true,
 		);
-	}
 
-	// Windows' system colours instead of the host theme's.
-	if (rendersAnotherOs && targetOs === "win") {
+		// Windows' system colours instead of the host theme's.
 		for (const [pref, value] of Object.entries(WINDOWS_UI_COLORS)) {
 			setInto(firefox_user_prefs, pref, value);
 		}
@@ -2162,6 +2163,16 @@ export async function launchOptions({
 		[config["webGl:vendor"], config["webGl:renderer"]],
 		host,
 	);
+
+	// decodingInfo() reports a video codec power-efficient at any size where
+	// the claimed GPU decodes it; a software rasteriser decodes nothing.
+	if (rendersAnotherOs && targetOs === "win") {
+		setInto(
+			config,
+			"media:hwCodecs",
+			isHardwareGpu(config["webGl:renderer"]) ? [...WINDOWS_HW_CODECS] : [],
+		);
+	}
 
 	// Cache previous pages, requests, etc (uses more memory)
 	if (enable_cache) {

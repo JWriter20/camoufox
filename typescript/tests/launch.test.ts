@@ -260,6 +260,42 @@ describe("test_launch_environment: prefs", () => {
 				expect(PREFS.filter((k) => k in prefs)).toEqual([]);
 			});
 		}
+		it("gives a macOS identity the font defaults only", async () => {
+			const { config, prefs } = await launchOn("lin", MAC_UA);
+			expect(prefs["font.name-list.serif.th"]).toBe("Thonburi");
+			expect(CONFIG_KEYS.filter((k) => k in config)).toEqual([]);
+			expect(PREFS.slice(1).filter((k) => k in prefs)).toEqual([]);
+		});
+		for (const [vendor, renderer, codecs] of [
+			[
+				"Google Inc. (NVIDIA)",
+				"ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar",
+				["video/avc"],
+			],
+			[
+				"Google Inc. (Microsoft)",
+				"ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0), or similar",
+				[],
+			],
+			["Mozilla", "Mozilla", []],
+		] as const) {
+			it(`claims ${codecs.length} hardware codecs for ${renderer.slice(0, 30)}`, async () => {
+				deps.hostOsKey = () => "lin";
+				let config: Record<string, any> = {};
+				deps.getEnvVars = (c: Record<string, any>) => {
+					config = { ...c };
+					return {};
+				};
+				await launch({
+					i_know_what_im_doing: true,
+					os: "windows",
+					webgl_config: [vendor, renderer],
+					...ua(WIN_UA),
+				});
+				expect(config["webGl:renderer"]).toBe(renderer);
+				expect(config["media:hwCodecs"]).toEqual(codecs);
+			});
+		}
 		it("sets it for a Windows identity on a Linux host", async () => {
 			const { config, prefs } = await launchOn("lin", WIN_UA);
 			expect(CONFIG_KEYS.filter((k) => !(k in config))).toEqual([]);

@@ -47,16 +47,19 @@ from .gpudisplay import GPU_PREFS, GpuDisplay, async_prove_gpu, prove_gpu, selec
 from .virtdisplay import VirtualDisplay
 from ._warnings import FallbackWarning, LeakWarning
 from .host_rendering import Gpu, add_canvas_placeholder, has_canvas_placeholder, host_gpu, renders_on_hardware, set_webgpu
-from .webgl import firefox_gpus, sample_webgl_for_screen, webgl_for_gpu
+from .webgl import firefox_gpus, is_hardware_gpu, sample_webgl_for_screen, webgl_for_gpu
 
 ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
 
 # Camoufox preferences to cache previous pages and requests
 CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
 
-# Video codecs a Windows desktop decodes in hardware, so that
-# mediaCapabilities.decodingInfo() reports them powerEfficient (stock 152.0.4 on
-# Windows: H.264, HEVC and VP9 true; AV1 false even on a GPU that decodes it).
+# Video codecs a Windows identity's GPU decodes in hardware, so that
+# mediaCapabilities.decodingInfo() reports them powerEfficient at any size. Stock
+# 152.0.4 on one Windows machine reported H.264, HEVC and VP9 at 1080p. HEVC
+# also needs the HEVC Video Extensions and VP9 a recent GPU, and fpgen's GPU
+# buckets ("GeForce GTX 980, or similar") do not say which identities have
+# them, so only H.264 is claimed, and nothing for a software rasteriser.
 WINDOWS_HW_CODECS: List[str] = LAUNCHER_CONSTANTS['windowsHwCodecs']
 
 # System colours stock Firefox 152.0.4 reports on Windows 10/11 in the default
@@ -1459,41 +1462,41 @@ def launch_options(
     # These and the settings below replace answers that come from the Linux
     # build's platform code (gfxPlatformGtk, FreeType, the GTK theme). Only a
     # Linux build has that code, so on a macOS or Windows host nothing is set.
+    # A macOS identity gets the font defaults only: the glyph-position and
+    # colour values below were measured against stock Windows alone, and the
+    # codec spoof also answers decodingInfo(), whose macOS powerEfficient
+    # values nothing in the repo records.
     renders_another_os = _host_os_key() == 'lin' and target_os in ('win', 'mac')
     if renders_another_os:
         for pref, value in _stock_font_prefs(target_os).items():
             firefox_user_prefs.setdefault(pref, value)
 
-    # Line boxes: DirectWrite takes ascent/descent from OS/2 usWin* and keeps
-    # the em height fractional, FreeType takes pixel-rounded hhea values -- the
-    # same font file gives different heights (Arial 16px: 17/18 px on Windows,
-    # 19/19 on a Linux host; all 26 fonts measured differed).
-    # font-metrics-windows.patch lays text out with DirectWrite's metrics.
     if renders_another_os and target_os == 'win':
+        # Line boxes: DirectWrite takes ascent/descent from OS/2 usWin* and
+        # keeps the em height fractional, FreeType takes pixel-rounded hhea
+        # values -- the same font file gives different heights (Arial 16px:
+        # 17/18 px on Windows, 19/19 on a Linux host; all 26 fonts measured
+        # differed). font-metrics-windows.patch lays text out with
+        # DirectWrite's metrics.
         config.setdefault('fonts:metrics', 'windows')
 
-    # canPlayType()/isTypeSupported() list the host's decoders: a Linux
-    # container answers "" for H.264 and HEVC, where every Windows and macOS
-    # Firefox answers "probably" (#558). The spoof matches Windows exactly on
-    # 58 MIME/codec strings, and decodingInfo() follows it, power-efficient
-    # for the codecs a Windows GPU decodes.
-    if renders_another_os:
+        # canPlayType()/isTypeSupported() list the host's decoders: a Linux
+        # container answers "" for H.264 and HEVC (#558). With the spoof and
+        # no system decoders, all 131 MIME strings fpgen records answer as
+        # its most common Windows record does, and decodingInfo() follows
+        # them (media:hwCodecs is set below, once the GPU is known).
         config.setdefault('media:spoof_codecs', True)
-        if target_os == 'win':
-            config.setdefault('media:hwCodecs', list(WINDOWS_HW_CODECS))
 
-    # Glyph advances: DirectWrite and CoreText position glyphs at subpixel
-    # offsets, so text widths are fractional (sans-serif 953.0667 px on
-    # Windows); Linux with hinting rounds every advance to a whole pixel (953).
-    # Forcing subpixel positioning reproduces the Windows widths exactly, and
-    # with them the default widths of form controls (<input> 158 -> 165 px,
-    # <select> 92 -> 95 px, as on Windows).
-    if renders_another_os:
+        # Glyph advances: DirectWrite positions glyphs at subpixel offsets, so
+        # text widths are fractional (sans-serif 953.0667 px on Windows);
+        # Linux with hinting rounds every advance to a whole pixel (953).
+        # Forcing subpixel positioning reproduces the Windows widths exactly,
+        # and with them the default widths of form controls (<input> 158 ->
+        # 165 px, <select> 92 -> 95 px, as on Windows).
         firefox_user_prefs.setdefault('gfx.text.subpixel-position.force-enabled', True)
 
-    # Highlight, SelectedItem, AccentColor and the -moz-dialog pair come from
-    # the host's theme otherwise (GTK's Adwaita: 53,132,228 / 246,245,244).
-    if renders_another_os and target_os == 'win':
+        # Highlight, SelectedItem, AccentColor and the -moz-dialog pair come
+        # from the host's theme otherwise.
         for pref, value in WINDOWS_UI_COLORS.items():
             firefox_user_prefs.setdefault(pref, value)
 
@@ -1777,6 +1780,14 @@ def launch_options(
             print(f'Incoherent identity ({_violation.rule}): {_violation.detail}')
 
     set_webgpu(firefox_user_prefs, target_os, (config.get('webGl:vendor'), config.get('webGl:renderer')), host)
+
+    # decodingInfo() reports a video codec power-efficient at any size where
+    # the claimed GPU decodes it; a software rasteriser decodes nothing.
+    if renders_another_os and target_os == 'win':
+        config.setdefault(
+            'media:hwCodecs',
+            list(WINDOWS_HW_CODECS) if is_hardware_gpu(config.get('webGl:renderer')) else [],
+        )
 
     # Cache previous pages, requests, etc (uses more memory)
     if enable_cache:

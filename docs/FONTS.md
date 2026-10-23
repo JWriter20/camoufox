@@ -233,9 +233,10 @@ Tahoma`, the `Sitka` / `Segoe UI Variable` scan-time instance families and the
 alias block above. macOS: Helvetica / Times / Menlo / Apple Chancery / Zapfino.
 `system-ui` is left to Gecko, which resolves it itself. The
 `<dir prefix="cwd">fonts</dir>` line that `utils.py` rewrites is kept in all
-three — `verify-fonts.py` fails if it is missing. Windows hints `hintslight`
-and macOS not at all: DirectWrite and CoreText keep advances at design units,
-where full hinting rounded every advance to a whole pixel.
+three — `verify-fonts.py` fails if it is missing. Windows hints `hintslight`:
+DirectWrite keeps advances at design units, where full hinting rounded every
+advance to a whole pixel. macOS keeps full hinting, since nothing has measured
+the macOS set against stock macOS.
 
 ## Another OS's identity on a Linux host
 
@@ -257,12 +258,23 @@ launchers set none of it):
   gap and em height DirectWrite derives from the same font tables (OS/2
   `usWin*`, GDI's external-leading rule, Arial Black measured as Arial Bold)
   instead of FreeType's pixel-rounded `hhea` values: Arial 16px is 17/18 px
-  as on Windows, not 19/19.
-- a Windows or macOS identity gets `gfx.text.subpixel-position.force-enabled`:
-  DirectWrite and CoreText place glyphs at subpixel offsets, so text widths
-  are fractional (`sans-serif` 953.0667 px on Windows), where hinted FreeType
+  as on Windows, not 19/19;
+- a Windows identity gets `gfx.text.subpixel-position.force-enabled`:
+  DirectWrite places glyphs at subpixel offsets, so text widths are
+  fractional (`sans-serif` 953.0667 px on Windows), where hinted FreeType
   rounds each advance to a whole pixel (953). Form controls take their
-  default widths from the same advances.
+  default widths from the same advances;
+- a macOS identity has `cmap-unicode-ucs4-fallback.patch` read a font's
+  Unicode-platform UCS4 cmap as the macOS build does, so Geneva, Apple Symbols
+  and Heiti, which carry only that subtable, are used for text.
+
+A macOS identity gets the font defaults, the fallback table and the cmap rule,
+which are stock Firefox's own code and data, and nothing that was only
+measured on Windows: no unhinted fonts.conf, no forced subpixel positioning,
+no system colours and no codec spoof. The codec spoof would also answer
+`decodingInfo()`, and nothing in the repo records which codecs a Mac reports
+power-efficient (fpgen's macOS `canPlayType()` records do match the spoof).
+Each needs a measurement on stock macOS first.
 
 `browser/tests/playwright/patches/font-fallback-windows.py` measures 28
 scripts in three generics against stock Windows (at least 160 of 168 match).

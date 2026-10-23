@@ -136,11 +136,27 @@ class TestCodecs:
     def test_windows_identity_claims_windows_codecs(self, launch):
         config, _ = launch(WIN_UA)
         assert config["media:spoof_codecs"] is True
-        assert config["media:hwCodecs"] == ["video/avc", "video/hevc", "video/vp9"]
+        # H.264 only: fpgen's GPU buckets do not say which GPUs decode HEVC or VP9.
+        assert config["media:hwCodecs"] == ["video/avc"]
 
-    def test_macos_identity_claims_codecs_without_windows_hardware(self, launch):
+    @pytest.mark.parametrize("gpu, codecs", [
+        (("Google Inc. (NVIDIA)",
+          "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar"), ["video/avc"]),
+        # A software rasteriser decodes nothing in hardware, and the RFP mask's
+        # decodingInfo() reports no video power-efficient either.
+        (("Google Inc. (Microsoft)",
+          "ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0), or similar"), []),
+        (("Mozilla", "Mozilla"), []),
+    ])
+    def test_hardware_codecs_follow_the_claimed_gpu(self, launch, gpu, codecs):
+        config, _ = launch(WIN_UA, os="windows", webgl_config=gpu)
+        assert config["webGl:renderer"] == gpu[1]
+        assert config["media:hwCodecs"] == codecs
+
+    def test_macos_identity_keeps_stock_codecs(self, launch):
+        # Nothing records what decodingInfo() reports on a Mac.
         config, _ = launch(MAC_UA)
-        assert config["media:spoof_codecs"] is True
+        assert "media:spoof_codecs" not in config
         assert "media:hwCodecs" not in config
 
     def test_host_os_identity_is_left_alone(self, launch, monkeypatch):
@@ -167,9 +183,10 @@ class TestLookAndFeel:
         for pref, value in utils.WINDOWS_UI_COLORS.items():
             assert prefs[pref] == value
 
-    def test_macos_identity_gets_subpixel_only(self, launch):
+    def test_macos_identity_gets_neither(self, launch):
+        # Both were measured against stock Windows only.
         _, prefs = launch(MAC_UA)
-        assert prefs["gfx.text.subpixel-position.force-enabled"] is True
+        assert "gfx.text.subpixel-position.force-enabled" not in prefs
         assert "ui.highlight" not in prefs
 
     def test_host_os_identity_is_left_alone(self, launch, monkeypatch):
