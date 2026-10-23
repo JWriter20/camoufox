@@ -41,6 +41,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "audio-frequency-noise",
         "baseline-protections",
         "cmap-ucs4-macos",
+        "context-app-version",
         "context-lists-across-processes",
         "context-os-system-font",
         "decoding-info-claimed-os",
