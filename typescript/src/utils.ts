@@ -113,24 +113,6 @@ export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
 export const WINDOWS_UI_COLORS: Readonly<Record<string, string>> =
 	LAUNCHER_CONSTANTS.windowsUiColors;
 
-// Draws tried for one that fits the monitor at its own display scale.
-export const MAX_SCALE_FIT_DRAWS = 20;
-
-/** Whether an fpgen draw's screen fits the monitor at its devicePixelRatio. */
-function fitsAtDrawnScale(fingerprint: any, screenCons: Screen): boolean {
-	if (!isPlainObject(fingerprint)) return true;
-	const scale = Number(fingerprint.window?.devicePixelRatio || 1);
-	const scr = fingerprint.screen || {};
-	const caps: Array<[string, number | null]> = [
-		["width", screenCons.maxWidth],
-		["height", screenCons.maxHeight],
-	];
-	for (const [axis, cap] of caps) {
-		if (cap && scr[axis] && scr[axis] * scale > cap) return false;
-	}
-	return true;
-}
-
 /** The host OS in fonts.json / target_os terms ('mac', 'win', 'lin'). */
 function hostOsKey(): TargetOS | null {
 	return (
@@ -1434,11 +1416,6 @@ export interface LaunchOptions {
 	 * (webgl_config, a preset's, or a host GPU fpgen never recorded), whose
 	 * canvas would otherwise show the host. */
 	canvas_noise?: boolean | null;
-	/** Render at the identity's display scale (layout.css.devPixelsPerPx)
-	 * instead of at 1, so devicePixelRatio, the resolution media queries and
-	 * CSS geometry agree as on the real machine. Headful on a real monitor, the
-	 * identity must also fit it physically at that scale. Off by default. */
-	display_scale?: boolean | null;
 	/** Additional Firefox launch options, passed straight through to Playwright. */
 	[key: string]: any;
 }
@@ -1485,7 +1462,6 @@ export async function launchOptions({
 	virtual_display,
 	pin_cpu_cores,
 	canvas_noise,
-	display_scale,
 	...passthrough
 }: LaunchOptions = {}): Promise<Record<string, any>> {
 	utilsDeps.ensureBrowserProfileDir(env);
@@ -1634,24 +1610,12 @@ export async function launchOptions({
 			: null;
 
 	if (!usedPreset && fingerprint == null) {
-		// Default: synthetic generation via fpgen (infinite unique fingerprints).
-		// With display_scale, headful on a real monitor, the draw must also fit
-		// it physically at its own display scale; fpgen's conditions are per
-		// field and cannot express screen x scale, so redraw until it does.
-		const onMonitor = headless === false && !virtual_display && screenCons;
-		for (let i = 0; i < MAX_SCALE_FIT_DRAWS; i++) {
-			fingerprint = await utilsDeps.generateFingerprint({
-				screen: screenCons ?? undefined,
-				window,
-				os: targetOsOption,
-			});
-			if (
-				!(display_scale && onMonitor) ||
-				fitsAtDrawnScale(fingerprint, screenCons as Screen)
-			) {
-				break;
-			}
-		}
+		// Default: synthetic generation via fpgen (infinite unique fingerprints)
+		fingerprint = await utilsDeps.generateFingerprint({
+			screen: screenCons ?? undefined,
+			window,
+			os: targetOsOption,
+		});
 	}
 
 	if (!usedPreset && fingerprint != null) {
@@ -1660,45 +1624,6 @@ export async function launchOptions({
 	}
 
 	const targetOs = getTargetOs(config);
-
-	// Display scaling (display_scale): render at the drawn scale for real, so
-	// devicePixelRatio, the resolution media queries and the CSS geometry agree
-	// as on the real machine (lang315/camoufox#41).
-	let deviceScale = 1.0;
-	if (
-		display_scale &&
-		!usedPreset &&
-		isPlainObject(fingerprint) &&
-		!("layout.css.devPixelsPerPx" in firefox_user_prefs)
-	) {
-		const drawn = (fingerprint as any).window?.devicePixelRatio;
-		const allowed = coherence.PLAUSIBLE_DPR[targetOs];
-		if (drawn && allowed) {
-			let best = allowed[0];
-			for (const v of allowed) {
-				if (Math.abs(v - drawn) < Math.abs(best - drawn)) best = v;
-			}
-			deviceScale = best;
-		}
-		// An identity too large for this monitor at its scale (a supplied one,
-		// or the last of MAX_SCALE_FIT_DRAWS fresh draws) renders at 1 rather
-		// than being clamped to a fraction of itself, and says so even with
-		// i_know_what_im_doing, which a supplied fingerprint requires.
-		const onMonitor = headless === false && !virtual_display && screenCons;
-		if (
-			deviceScale !== 1.0 &&
-			onMonitor &&
-			!fitsAtDrawnScale(fingerprint, screenCons as Screen)
-		) {
-			deviceScale = 1.0;
-			LeakWarning.warn("display_scale_unfit");
-		}
-		if (deviceScale !== 1.0) {
-			firefox_user_prefs["layout.css.devPixelsPerPx"] = String(deviceScale);
-		}
-	} else if (display_scale && usedPreset) {
-		LeakWarning.warn("display_scale_preset");
-	}
 
 	// A preset whose screen is a phone viewport is not a real desktop device.
 	if (!userSetScreenWindow && coherence.screenIsImplausible(config)) {
@@ -1723,23 +1648,11 @@ export async function launchOptions({
 		// the screen it is drawn on. headless has no window to overflow, and
 		// headless="virtual" reaches here as headless=false with a 1x1 Xvfb.
 		if (headless === false && !virtual_display && screenCons) {
-			if (deviceScale === 1.0) {
-				utilsDeps.clampScreenToDisplay(
-					config,
-					screenCons.maxWidth as number,
-					screenCons.maxHeight as number,
-				);
-			} else {
-				// The window is drawn at the identity's scale, so it is the
-				// physical size -- CSS size x scale -- that has to fit.
-				utilsDeps.clampScreenToDisplay(
-					config,
-					(screenCons.maxWidth &&
-						Math.trunc(screenCons.maxWidth / deviceScale)) as number,
-					(screenCons.maxHeight &&
-						Math.trunc(screenCons.maxHeight / deviceScale)) as number,
-				);
-			}
+			utilsDeps.clampScreenToDisplay(
+				config,
+				screenCons.maxWidth as number,
+				screenCons.maxHeight as number,
+			);
 		}
 		utilsDeps.followBaselineProtection(config, targetOs);
 		utilsDeps.clampWindowDimensions(config);
