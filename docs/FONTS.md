@@ -284,8 +284,10 @@ The guards in `browser/tests/playwright/patches/`:
   (`assets/font-metrics-windows.json`);
 - `cmap-ucs4-macos.py` checks that Geneva, Apple Symbols and Heiti TC/SC draw
   with their own advances in a macOS identity, not the next family's;
-- `system-colors-windows.py` checks the Windows identity's system colours
-  (`windowsUiColors` in `launcher-constants.json`) against a Linux identity's;
+- `system-colors-windows.py` checks a Windows identity's 92 CSS system colours
+  against stock Firefox 158 on Windows 11
+  (`assets/system-colors-windows.json`); `windowsUiColors` in
+  `launcher-constants.json` supplies the ones the host theme answers otherwise;
 - `decoding-info-claimed-os.py` checks `decodingInfo()` against stock
   Firefox 158 on Windows 11 (`assets/decoding-info-windows.json`: every codec
   supported, smooth and power-efficient at 720p, 1080p and 2160p) with no host

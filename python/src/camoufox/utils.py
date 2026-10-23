@@ -54,11 +54,15 @@ ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
 # Camoufox preferences to cache previous pages and requests
 CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
 
-# System colours stock Firefox 152.0.4 reports on Windows 10/11 in the default
-# (light) theme, measured 2026-09-24. Only the ones that differ from what a Linux
-# host's GTK theme produces are listed: the rest are Gecko stand-ins, identical on
-# every OS. AccentColor is Firefox's own default (Photon blue 60), not the Windows
-# accent, unless the user opts into system accent colours.
+# System colours stock Firefox reports on Windows in the default (light) theme:
+# measured on 152.0.4 (2026-09-24) and checked, all 92 CSS system colours,
+# against 158.0 on Windows 11 (browser/tests/playwright/patches/assets/
+# system-colors-windows.json). The ones a Linux host's GTK theme would answer
+# otherwise are listed, plus -moz-oddtreerow; the rest are Gecko stand-ins,
+# identical on every OS. The -moz_menuhover* pair is Windows 11's non-native
+# menu colours (NS_RGBA(0, 0, 0, 30) and kNonNativeMenuText). AccentColor is
+# Firefox's own default (Photon blue 60), not the Windows accent, unless the
+# user opts into system accent colours.
 WINDOWS_UI_COLORS: Dict[str, str] = LAUNCHER_CONSTANTS['windowsUiColors']
 
 

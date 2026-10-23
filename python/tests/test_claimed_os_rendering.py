@@ -159,6 +159,8 @@ class TestLookAndFeel:
     def test_windows_identity_gets_windows_look_and_feel(self, launch):
         _, prefs = launch(WIN_UA)
         assert utils.WINDOWS_UI_COLORS["ui.highlight"] == "#0078d7"
+        # Windows 11's non-native menu hover, NS_RGBA(0, 0, 0, 30).
+        assert utils.WINDOWS_UI_COLORS["ui.-moz_menuhover"] == "#0000001e"
         for pref, value in utils.WINDOWS_UI_COLORS.items():
             assert prefs[pref] == value
 
