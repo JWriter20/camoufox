@@ -546,11 +546,22 @@ class Runtime {
     // Keyed by the Debugger.Object, which is unique per promise: Firefox 158
     // removed Debugger.Object.promiseID (bug 2044184).
     this._pendingPromises.set(obj, {resolve, reject, executionContext, exceptionDetails});
-    // Firefox 156 removed Debugger.onPromiseSettled (bug 2044167). As upstream
-    // Juggler does, attach reactions inside the debuggee that hit a `debugger;`
-    // statement when the promise settles, and sweep the pending promises from
-    // onDebuggerStatement. This also works in workers, which have no Xrays.
-    if (this._pendingPromises.size === 1)
+    // Firefox 156 removed Debugger.onPromiseSettled (bug 2044167).
+    //
+    // Camoufox: in a window, react to the promise from here, through the Xray
+    // unsafeDereference() hands back. A `p.then(...)` run in the page called
+    // whatever the page had put on Promise.prototype.then, and read
+    // p.constructor through any getter it had installed: a page could see the
+    // driver await its value. Through the Xray, neither runs.
+    if (executionContext._domWindow) {
+      const settled = () => this._onDebuggerStatement();
+      Promise.prototype.then.call(obj.unsafeDereference(), settled, settled);
+      return await promise;
+    }
+    // Workers have no Xrays. As upstream Juggler does, attach reactions inside
+    // the debuggee that hit a `debugger;` statement when the promise settles,
+    // and sweep the pending promises from onDebuggerStatement.
+    if (!this._debugger.onDebuggerStatement)
       this._debugger.onDebuggerStatement = this._onDebuggerStatement.bind(this);
     executionContext._debuggee.executeInGlobalWithBindings(
         'p.then(() => { debugger; }, () => { debugger; })', {p: obj}, {useInnerBindings: true});
