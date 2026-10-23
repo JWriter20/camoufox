@@ -443,6 +443,25 @@ it holds on every device of that backend, then follow it where the launchers
 convert a recording (`to_config` in `python/src/camoufox/webgl.py` and
 `typescript/src/webgl.ts`).
 
+### Data Read Out of Firefox
+
+Some launcher data is read out of the Firefox source and goes stale with it.
+`python/src/camoufox/font-prefs.json` holds the `font.*` defaults stock Firefox
+ships on Windows, macOS and Linux, which a Linux host applies for another OS's
+identity ([FONTS.md](FONTS.md#another-oss-identity-on-a-linux-host)).
+Regenerate it from the new release's `all.js`, and commit any change. From the
+repository root:
+
+```bash
+python3 browser/scripts/gen-font-prefs.py browser/camoufox-<version>-<release>/modules/libpref/init/all.js
+```
+
+`fallback-fonts-claimed-os.patch` copies the per-script fallback tables of
+`gfxWindowsPlatform::GetCommonFallbackFonts` and
+`gfxPlatformMac::GetCommonFallbackFonts` verbatim. When either changes, update
+the copy with `make workspace ./patches/fallback-fonts-claimed-os.patch` and
+`make diff` (see [Changing a patch](../AGENTS.md#changing-a-patch)).
+
 ---
 
 ## Pitfalls
@@ -496,6 +515,7 @@ grep -r "class Navigator" . --include="*.h"
 - [ ] `make dir` applies the whole stack cleanly, with no fuzz
 - [ ] `make build`, then run the patch guards; `firefox-version-pin` checks that the build and every identity are the new Firefox
 - [ ] Run `stock-gpu-parity` on Linux, Windows and macOS ([Browser-Owned GPU Values](#browser-owned-gpu-values))
+- [ ] Regenerate `font-prefs.json` and check the copied fallback tables ([Data Read Out of Firefox](#data-read-out-of-firefox))
 
 ---
 
