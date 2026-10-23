@@ -17,31 +17,41 @@ const helper = new Helper();
 const Cc = Components.classes;
 const Ci = Components.interfaces;
 
-// Register JSWindowActors that will be instantiated for each frame.
-ActorManagerParent.addJSWindowActors({
-  JugglerFrame: {
-    parent: {
-      esModuleURI: 'resource://gre/modules/juggler/JugglerFrameParent.sys.mjs',
-    },
-    child: {
-      esModuleURI: 'resource://gre/modules/juggler/JugglerFrameChild.sys.mjs',
-      events: {
-        // Normally, we instantiate an actor when a new window is created.
-        DOMWindowCreated: {},
-        // However, for same-origin iframes, the navigation from about:blank
-        // to the URL will share the same window, so we need to also create
-        // an actor for a new document via DOMDocElementInserted.
-        DOMDocElementInserted: {},
-        // Also, listening to DOMContentLoaded.
-        DOMContentLoaded: {},
-        DOMWillOpenModalDialog: {},
-        DOMModalDialogClosed: {},
+// Camoufox: everything Juggler changes in a page is installed only once a
+// driver is attached (-juggler-pipe). Its frame actor forces every top-level
+// docShell active and focused and turns off its bfcache, so without a driver a
+// background tab stayed visible and unthrottled and no page ever blurred.
+// focusmanager.testmode belongs to the driver too: it keeps a window that
+// loses focus to another window or a native dialog from being lowered, which a
+// page reads as the missing blur (stock's default is false).
+function installDriverOverrides() {
+  Services.prefs.getDefaultBranch("").setBoolPref("focusmanager.testmode", true);
+  // Register JSWindowActors that will be instantiated for each frame.
+  ActorManagerParent.addJSWindowActors({
+    JugglerFrame: {
+      parent: {
+        esModuleURI: 'resource://gre/modules/juggler/JugglerFrameParent.sys.mjs',
       },
+      child: {
+        esModuleURI: 'resource://gre/modules/juggler/JugglerFrameChild.sys.mjs',
+        events: {
+          // Normally, we instantiate an actor when a new window is created.
+          DOMWindowCreated: {},
+          // However, for same-origin iframes, the navigation from about:blank
+          // to the URL will share the same window, so we need to also create
+          // an actor for a new document via DOMDocElementInserted.
+          DOMDocElementInserted: {},
+          // Also, listening to DOMContentLoaded.
+          DOMContentLoaded: {},
+          DOMWillOpenModalDialog: {},
+          DOMModalDialogClosed: {},
+        },
+      },
+      allFrames: true,
+      safeForUntrustedWebProcess: true,
     },
-    allFrames: true,
-    safeForUntrustedWebProcess: true,
-  },
-});
+  });
+}
 
 let browserStartupFinishedCallback;
 let browserStartupFinishedPromise = new Promise(x => browserStartupFinishedCallback = x);
@@ -78,6 +88,7 @@ export class Juggler {
         const jugglerPipeFlag = cmdLine.handleFlag('juggler-pipe', false);
         if (!jugglerPipeFlag)
           return;
+        installDriverOverrides();
 
         this._silent = cmdLine.findFlag('silent', false) >= 0;
         if (this._silent) {
