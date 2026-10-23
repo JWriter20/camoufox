@@ -22,16 +22,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import resolve_binary  # noqa: E402
 
-TRAP = """() => {
-  window.__thenHits = [];
+# Page code, so it runs in the page's own world: page.evaluate() runs in an
+# isolated world, which gets the driver's promise and cannot see page expandos.
+# Results go back through the DOM, which both worlds see.
+TRAP = """
+  const hits = [];
   Object.defineProperty(Object.prototype, 'then', {
     configurable: true,
     get() {
-      window.__thenHits.push(Object.prototype.toString.call(this));
+      hits.push(Object.prototype.toString.call(this));
+      document.body.dataset.hits = JSON.stringify(hits);
       return undefined;
     },
   });
-}"""
+  document.body.dataset.hits = '[]';
+"""
+
+OWN_READY = """
+  document.fonts.ready.then(set => { document.body.dataset.own = String(set === document.fonts); });
+"""
 
 
 async def main() -> int:
@@ -41,15 +50,17 @@ async def main() -> int:
                              executable_path=str(resolve_binary())) as browser:
         page = await browser.new_page()
         await page.set_content("<p style='font-family: serif'>text</p>")
-        await page.evaluate(TRAP)
+        await page.add_script_tag(content=TRAP)
         await page.screenshot()
-        after_screenshot = await page.evaluate("window.__thenHits.slice()")
-        own = await page.evaluate("document.fonts.ready.then(set => set === document.fonts)")
-        after_own = await page.evaluate("window.__thenHits.slice()")
+        after_screenshot = await page.evaluate("document.body.dataset.hits")
+        await page.add_script_tag(content=OWN_READY)
+        await page.wait_for_function("document.body.dataset.own !== undefined")
+        own = await page.evaluate("document.body.dataset.own")
+        after_own = await page.evaluate("document.body.dataset.hits")
 
     checks = [
-        ("a screenshot fires no then getter", after_screenshot == [], after_screenshot),
-        ("the page's own ready resolves to the set", own is True, own),
+        ("a screenshot fires no then getter", after_screenshot == "[]", after_screenshot),
+        ("the page's own ready resolves to the set", own == "true", own),
         ("the trap fires for the page's own ready", "[object FontFaceSet]" in after_own, after_own),
     ]
     passed = True
