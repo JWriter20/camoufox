@@ -118,12 +118,6 @@ def firefox_gpus(target_os: str) -> FrozenSet[Tuple[str, str]]:
     )
 
 
-def is_hardware_gpu(renderer: Optional[str]) -> bool:
-    """Whether `renderer` is a GPU, not a software rasteriser or the
-    resistFingerprinting mask. An unknown renderer (WebGL off) counts as one."""
-    return not is_software_renderer(renderer) and renderer != _RFP_RENDERER
-
-
 def _backend_extensions(target_os: str, webgl: Dict[str, Any], webgl2: Any) -> Tuple[str, ...]:
     """The extensions the shipped Firefox adds on this device's backend."""
     extensions = _BACKEND_EXTENSIONS.get(target_os, ())

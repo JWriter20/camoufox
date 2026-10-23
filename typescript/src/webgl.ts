@@ -127,12 +127,6 @@ function choose(rng: Random, results: readonly TraceResult[]): TraceResult {
 	})[0];
 }
 
-/** Whether `renderer` is a GPU, not a software rasteriser or the
- * resistFingerprinting mask. An unknown renderer (WebGL off) counts as one. */
-export function isHardwareGpu(renderer: string | null | undefined): boolean {
-	return !isSoftwareRenderer(renderer) && renderer !== RFP_RENDERER;
-}
-
 /**
  * Every (vendor, renderer) that fpgen has seen Firefox report on this OS.
  *

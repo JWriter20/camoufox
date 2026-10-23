@@ -39,7 +39,7 @@ def launch(monkeypatch, isolated_launch_dependencies):  # noqa: F811
 
 
 # Everything this module sets for another OS's identity, config keys and prefs.
-CLAIMED_OS_CONFIG = ("fonts:metrics", "media:spoof_codecs", "media:hwCodecs")
+CLAIMED_OS_CONFIG = ("fonts:metrics", "media:spoof_codecs")
 CLAIMED_OS_PREFS = (
     "font.name-list.emoji",
     "gfx.text.subpixel-position.force-enabled",
@@ -136,28 +136,11 @@ class TestCodecs:
     def test_windows_identity_claims_windows_codecs(self, launch):
         config, _ = launch(WIN_UA)
         assert config["media:spoof_codecs"] is True
-        # H.264 only: fpgen's GPU buckets do not say which GPUs decode HEVC or VP9.
-        assert config["media:hwCodecs"] == ["video/avc"]
-
-    @pytest.mark.parametrize("gpu, codecs", [
-        (("Google Inc. (NVIDIA)",
-          "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar"), ["video/avc"]),
-        # A software rasteriser decodes nothing in hardware, and the RFP mask's
-        # decodingInfo() reports no video power-efficient either.
-        (("Google Inc. (Microsoft)",
-          "ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0), or similar"), []),
-        (("Mozilla", "Mozilla"), []),
-    ])
-    def test_hardware_codecs_follow_the_claimed_gpu(self, launch, gpu, codecs):
-        config, _ = launch(WIN_UA, os="windows", webgl_config=gpu)
-        assert config["webGl:renderer"] == gpu[1]
-        assert config["media:hwCodecs"] == codecs
 
     def test_macos_identity_keeps_stock_codecs(self, launch):
         # Nothing records what decodingInfo() reports on a Mac.
         config, _ = launch(MAC_UA)
         assert "media:spoof_codecs" not in config
-        assert "media:hwCodecs" not in config
 
     def test_host_os_identity_is_left_alone(self, launch, monkeypatch):
         config, _ = launch(LIN_UA)
@@ -165,12 +148,10 @@ class TestCodecs:
         monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
         config, _ = launch(WIN_UA)
         assert "media:spoof_codecs" not in config
-        assert "media:hwCodecs" not in config
 
     def test_caller_values_win(self, launch):
-        config, _ = launch(WIN_UA, config={"media:spoof_codecs": False, "media:hwCodecs": []})
+        config, _ = launch(WIN_UA, config={"media:spoof_codecs": False})
         assert config["media:spoof_codecs"] is False
-        assert config["media:hwCodecs"] == []
 
 
 class TestLookAndFeel:

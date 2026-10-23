@@ -47,20 +47,12 @@ from .gpudisplay import GPU_PREFS, GpuDisplay, async_prove_gpu, prove_gpu, selec
 from .virtdisplay import VirtualDisplay
 from ._warnings import FallbackWarning, LeakWarning
 from .host_rendering import Gpu, add_canvas_placeholder, has_canvas_placeholder, host_gpu, renders_on_hardware, set_webgpu
-from .webgl import firefox_gpus, is_hardware_gpu, sample_webgl_for_screen, webgl_for_gpu
+from .webgl import firefox_gpus, sample_webgl_for_screen, webgl_for_gpu
 
 ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
 
 # Camoufox preferences to cache previous pages and requests
 CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
-
-# Video codecs a Windows identity's GPU decodes in hardware, so that
-# mediaCapabilities.decodingInfo() reports them powerEfficient at any size. Stock
-# 152.0.4 on one Windows machine reported H.264, HEVC and VP9 at 1080p. HEVC
-# also needs the HEVC Video Extensions and VP9 a recent GPU, and fpgen's GPU
-# buckets ("GeForce GTX 980, or similar") do not say which identities have
-# them, so only H.264 is claimed, and nothing for a software rasteriser.
-WINDOWS_HW_CODECS: List[str] = LAUNCHER_CONSTANTS['windowsHwCodecs']
 
 # System colours stock Firefox 152.0.4 reports on Windows 10/11 in the default
 # (light) theme, measured 2026-09-24. Only the ones that differ from what a Linux
@@ -1489,7 +1481,7 @@ def launch_options(
         # container answers "" for H.264 and HEVC (#558). With the spoof and
         # no system decoders, all 131 MIME strings fpgen records answer as
         # its most common Windows record does, and decodingInfo() follows
-        # them (media:hwCodecs is set below, once the GPU is known).
+        # them as stock Firefox 158 on Windows 11 answers.
         config.setdefault('media:spoof_codecs', True)
 
         # Glyph advances: DirectWrite positions glyphs at subpixel offsets, so
@@ -1785,14 +1777,6 @@ def launch_options(
             print(f'Incoherent identity ({_violation.rule}): {_violation.detail}')
 
     set_webgpu(firefox_user_prefs, target_os, (config.get('webGl:vendor'), config.get('webGl:renderer')), host)
-
-    # decodingInfo() reports a video codec power-efficient at any size where
-    # the claimed GPU decodes it; a software rasteriser decodes nothing.
-    if renders_another_os and target_os == 'win':
-        config.setdefault(
-            'media:hwCodecs',
-            list(WINDOWS_HW_CODECS) if is_hardware_gpu(config.get('webGl:renderer')) else [],
-        )
 
     # Cache previous pages, requests, etc (uses more memory)
     if enable_cache:

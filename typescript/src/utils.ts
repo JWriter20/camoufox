@@ -96,12 +96,7 @@ import {
 } from "./pycompat.js";
 import { VirtualDisplay } from "./virtdisplay.js";
 import { FallbackWarning, LeakWarning, warn } from "./warnings.js";
-import {
-	firefoxGpus,
-	isHardwareGpu,
-	sampleWebglForScreen,
-	webglForGpu,
-} from "./webgl.js";
+import { firefoxGpus, sampleWebglForScreen, webglForGpu } from "./webgl.js";
 
 type ListOrString = string | string[];
 export type TargetOS = "mac" | "win" | "lin";
@@ -112,13 +107,6 @@ const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
-
-// Video codecs a Windows identity's GPU decodes in hardware, so that
-// mediaCapabilities.decodingInfo() reports them powerEfficient at any size:
-// H.264 only, since fpgen's GPU buckets do not say which identities also decode
-// HEVC and VP9 (see utils.py), and nothing for a software rasteriser.
-export const WINDOWS_HW_CODECS: readonly string[] =
-	LAUNCHER_CONSTANTS.windowsHwCodecs;
 
 // System colours stock Firefox reports on Windows 10/11 in the light theme,
 // where they differ from a Linux host's GTK theme.
@@ -1856,8 +1844,8 @@ export async function launchOptions({
 		setInto(config, "fonts:metrics", "windows");
 
 		// canPlayType()/isTypeSupported() and decodingInfo() answer for Windows
-		// instead of the host's decoders (#558); media:hwCodecs is set below,
-		// once the GPU is known.
+		// instead of the host's decoders (#558), as stock Firefox 158 on
+		// Windows 11 answers.
 		setInto(config, "media:spoof_codecs", true);
 
 		// Glyph advances at subpixel offsets, as DirectWrite places them,
@@ -2168,16 +2156,6 @@ export async function launchOptions({
 		[config["webGl:vendor"], config["webGl:renderer"]],
 		host,
 	);
-
-	// decodingInfo() reports a video codec power-efficient at any size where
-	// the claimed GPU decodes it; a software rasteriser decodes nothing.
-	if (rendersAnotherOs && targetOs === "win") {
-		setInto(
-			config,
-			"media:hwCodecs",
-			isHardwareGpu(config["webGl:renderer"]) ? [...WINDOWS_HW_CODECS] : [],
-		);
-	}
 
 	// Cache previous pages, requests, etc (uses more memory)
 	if (enable_cache) {

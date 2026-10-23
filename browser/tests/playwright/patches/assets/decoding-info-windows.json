@@ -1,0 +1,30 @@
+{
+ "provenance": {
+  "recording": "cfparity reference 2ca4d300f9495b60, scenario headed, variant stock, runs 0-2 (identical)",
+  "firefox": "158.0 (build 20261007201254, eb9a6e3a736802c8e080a76c44dc81f409d99d54)",
+  "os": "Windows-11-10.0.26200-SP0",
+  "machine": "DESKTOP-51J77AN",
+  "gpus": [
+   "Virtual Display Driver | 11.30.4.434",
+   "Intel(R) UHD Graphics | 32.0.101.7088",
+   "NVIDIA GeForce RTX 3050 Ti Laptop GPU | 32.0.16.1060"
+  ],
+  "started": "2026-10-19T13:40:27-0600",
+  "probe": "cfparity/web/probes/media.js media.capabilities"
+ },
+ "decodingInfo": {
+  "decode:audio:opus": "true,true,true",
+  "decode:av1:1080p60": "true,true,true",
+  "decode:av1:2160p30": "true,true,true",
+  "decode:av1:720p30": "true,true,true",
+  "decode:h264:1080p60": "true,true,true",
+  "decode:h264:2160p30": "true,true,true",
+  "decode:h264:720p30": "true,true,true",
+  "decode:hevc:1080p60": "true,true,true",
+  "decode:hevc:2160p30": "true,true,true",
+  "decode:hevc:720p30": "true,true,true",
+  "decode:vp9:1080p60": "true,true,true",
+  "decode:vp9:2160p30": "true,true,true",
+  "decode:vp9:720p30": "true,true,true"
+ }
+}

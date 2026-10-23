@@ -291,9 +291,11 @@ The guards in `browser/tests/playwright/patches/`:
   with their own advances in a macOS identity, not the next family's;
 - `system-colors-windows.py` checks the Windows identity's system colours
   (`windowsUiColors` in `launcher-constants.json`) against a Linux identity's;
-- `decoding-info-claimed-os.py` checks that `decodingInfo()` agrees with
-  `canPlayType()` with no host decoder, power-efficient only for H.264 on a
-  hardware GPU or a small frame, and the same with ClearKey.
+- `decoding-info-claimed-os.py` checks `decodingInfo()` against stock
+  Firefox 158 on Windows 11 (`assets/decoding-info-windows.json`: every codec
+  supported, smooth and power-efficient at 720p, 1080p and 2160p) with no host
+  decoder, its agreement with `canPlayType()`, and the same answer with
+  ClearKey.
 
 ## Verifying
 
