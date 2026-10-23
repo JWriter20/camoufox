@@ -26,6 +26,9 @@ const Ci = Components.interfaces;
 // page reads as the missing blur (stock's default is false).
 function installDriverOverrides() {
   Services.prefs.getDefaultBranch("").setBoolPref("focusmanager.testmode", true);
+  // Juggler follows frames within one content process: keep cross-site iframes in their
+  // parent's process. A browser nobody drives keeps Firefox's isolation, which a page can tell.
+  Services.prefs.getDefaultBranch("").setIntPref("fission.webContentIsolationStrategy", 0);
   // Register JSWindowActors that will be instantiated for each frame.
   ActorManagerParent.addJSWindowActors({
     JugglerFrame: {

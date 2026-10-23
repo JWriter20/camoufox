@@ -154,7 +154,7 @@ real value.
 | Pref | Why |
 |---|---|
 | `fission.autostart = true` | Disabled Fission is detectable; cross-process storage makes per-context values work with it |
-| `fission.webContentIsolationStrategy = 0` | Cross-site iframes stay in their parent's process |
+| `fission.webContentIsolationStrategy = 0` | Cross-site iframes stay in their parent's process. Set by Juggler when a driver is attached; otherwise Firefox's default |
 | `dom.ipc.processPrelaunch.enabled = false` | A prelaunched process could carry stale values |
 
 `dom.ipc.processCount` is not overridden.
