@@ -424,7 +424,22 @@ export class PageHandler {
     const unsubscribe = helper.addObserver((browsingContext, topic, loadIdentifier) => {
       navigationId = helper.toProtocolNavigationId(loadIdentifier);
     }, 'juggler-navigation-started-browser');
-    browsingContext.loadURI(Services.io.newURI(url), {
+    const navigationURI = Services.io.newURI(url);
+    // Camoufox: a top-level load starts its connection before the content
+    // process asks, as stock's own loads do (RemoteWebNavigation's
+    // _speculativeConnect). Without it the page's navigation timing showed a
+    // fresh lookup and connect after fetchStart, where a typed or clicked load
+    // in stock has them before it.
+    if (!browsingContext.parent && (navigationURI.schemeIs('http') || navigationURI.schemeIs('https'))) {
+      try {
+        const principal = Services.scriptSecurityManager.createContentPrincipal(
+            navigationURI, browsingContext.originAttributes);
+        Services.io.speculativeConnect(navigationURI, principal, null, false);
+      } catch (e) {
+        // As in stock: a URI that cannot be pre-connected just loads.
+      }
+    }
+    browsingContext.loadURI(navigationURI, {
       triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
       loadFlags: Ci.nsIWebNavigation.LOAD_FLAGS_IS_LINK,
       referrerInfo,

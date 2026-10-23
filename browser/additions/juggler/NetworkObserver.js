@@ -184,7 +184,9 @@ class NetworkRequest {
 
   // Public interception API.
   resume(url, method, headers, postData) {
-    this._expectingResumedRequest = { method, headers, postData };
+    // The order the intercepted channel had, before the resume rebuilds it.
+    const order = requestHeaders(this.httpChannel).map(header => header.name.toLowerCase());
+    this._expectingResumedRequest = { method, headers, postData, order };
     const newUri = url ? Services.io.newURI(url) : null;
     this._interceptedChannel.resetInterceptionWithURI(newUri);
     this._interceptedChannel = undefined;
@@ -235,7 +237,7 @@ class NetworkRequest {
     // and then the new request is ready to be updated.
     if (!this._expectingResumedRequest)
       return;
-    const { method, headers, postData } = this._expectingResumedRequest;
+    const { method, headers, postData, order } = this._expectingResumedRequest;
     this._overriddenHeadersForRedirect = headers;
     this._expectingResumedRequest = undefined;
 
@@ -244,7 +246,7 @@ class NetworkRequest {
       overrideRequestHeaders(this.httpChannel, headers);
     } else {
       appendExtraHTTPHeaders(this.httpChannel, extraHTTPHeaders);
-      restoreInterceptedHeaderOrder(this.httpChannel, extraHTTPHeaders);
+      restoreInterceptedHeaderOrder(this.httpChannel, extraHTTPHeaders, order);
     }
     if (method)
       this.httpChannel.requestMethod = method;
@@ -534,6 +536,13 @@ class NetworkRequest {
       requestStart: this.httpChannel.requestStartTime,
       responseStart: this.httpChannel.responseStartTime,
     };
+    // Camoufox: Page.navigate pre-connects as a typed load does, so a page's
+    // connection can predate its channel. Report those phases as a reused
+    // connection's (0, which the client reads as -1), not as negative times.
+    for (const phase of ['domainLookupStart', 'domainLookupEnd', 'connectStart', 'secureConnectionStart', 'connectEnd']) {
+      if (timing[phase] && timing[phase] < timing.startTime)
+        timing[phase] = 0;
+    }
 
     const { status, statusText, headers } = responseHead(this.httpChannel, opt_statusCode, opt_statusText);
     if (redirectStatus.includes(status) && this._overriddenHeadersForRedirect)
@@ -834,7 +843,13 @@ const ON_BEFORE_CONNECT_HEADERS = ['upgrade-insecure-requests', 'sec-fetch-dest'
 // everything added from http-on-modify-request onwards. Order on the wire follows
 // nsHttpHeaderArray, and setting a header that is already present updates it in place, so moving
 // one means deleting it and adding it back.
-function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
+//
+// "connection" goes back after the header it followed on the intercepted channel (`order`), when
+// that channel had it. Necko adds it once the channel connects, after every header present by
+// then -- so it follows the defaults for a document, but a subresource's referer, which is set
+// before that, comes first: "accept-encoding, referer, connection". Without that record it
+// follows the defaults.
+function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders, order = []) {
   const headers = requestHeaders(httpChannel);
   const nameOf = header => header.name.toLowerCase();
 
@@ -856,10 +871,22 @@ function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
     return index === -1 ? headers.length : index;
   };
 
+  const afterOriginalNeighbour = name => {
+    const index = order.indexOf(name);
+    if (index <= 0)
+      return -1;
+    const before = headers.findIndex(h => nameOf(h) === order[index - 1]);
+    return before === -1 ? -1 : before + 1;
+  };
   for (const header of displaced) {
-    const boundary = nameOf(header) === 'connection' ?
-        firstIndex(h => !DEFAULT_REQUEST_HEADERS.includes(nameOf(h))) :
-        firstIndex(h => lateHeaders.has(nameOf(h)));
+    let boundary;
+    if (nameOf(header) === 'connection') {
+      boundary = afterOriginalNeighbour('connection');
+      if (boundary === -1)
+        boundary = firstIndex(h => !DEFAULT_REQUEST_HEADERS.includes(nameOf(h)));
+    } else {
+      boundary = firstIndex(h => lateHeaders.has(nameOf(h)));
+    }
     headers.splice(boundary, 0, header);
   }
 
