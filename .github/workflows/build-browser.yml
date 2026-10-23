@@ -20,6 +20,8 @@ on:
         required: false
         type: string
   workflow_dispatch:
+  push:
+    branches: [pgo-trial]
 
 permissions: {}
 
