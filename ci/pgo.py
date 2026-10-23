@@ -6,8 +6,9 @@ kinds instrumented-build, generate-profile and build with `use-pgo`):
 
   1. an instrumented build, cross-compiled on Linux
      (CAMOUFOX_PGO_GENERATE=1: --enable-profile-generate=cross);
-  2. a training run on the target OS: build/pgo/profileserver.py over the
-     in-tree pages, Speedometer3 and JetStream3, merged by llvm-profdata;
+  2. a training run of that build, packaged as it ships, on the target OS:
+     build/pgo/profileserver.py over the in-tree pages, Speedometer3 and
+     JetStream3, merged by llvm-profdata, with the omni.ja order it read;
   3. the release build with that profile (CAMOUFOX_PGO_PROFILE=<dir>:
      --enable-profile-use=cross, LTO as stock picks it; see base.mozconfig).
 
@@ -15,7 +16,7 @@ A profile only fits the code it was trained on, so each one records the
 native-input digest of the tree that built it and `use` refuses any other.
 
 Run:
-    python3 -m ci.pgo train --binary <instrumented camoufox-bin> --platform linux-x86_64 --out D
+    python3 -m ci.pgo train --binary <packaged instrumented camoufox-bin> --platform linux-x86_64 --out D
     python3 -m ci.pgo use --profile D --target linux-arm64
 """
 
@@ -34,7 +35,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ._pytest import source_dir
-from ._util import BROWSER_ROOT, die, log, read_upstream_sh, run, summary
+from ._util import die, log, read_upstream_sh, run, summary
 from .browser_inputs import native_digest
 
 PROFDATA = "merged.profdata"
@@ -102,8 +103,6 @@ def cmd_train(args) -> int:
     text = user_js.read_text(encoding="utf-8")
     if FLUSH_PREF not in text:
         user_js.write_text(text.rstrip("\n") + "\n" + FLUSH_PREF + "\n", encoding="utf-8")
-    # The launcher-free binary still reads properties.json next to itself.
-    shutil.copy(BROWSER_ROOT / "settings" / "properties.json", binary.parent / "properties.json")
     corpus = extended_corpus(src, out)
 
     env = {
@@ -112,6 +111,9 @@ def cmd_train(args) -> int:
         # profileserver.py writes its run logs here and fails on any
         # "LLVM Profile Error" in them, as it does in automation.
         "UPLOAD_PATH": str(out),
+        # With UPLOAD_PATH set it also looks for minidumps with a stackwalker
+        # from here. Camoufox has no crash reporter, so there are none to walk.
+        "MOZ_FETCHES_DIR": str(out),
     }
     for stale in src.glob("*.profraw"):
         stale.unlink()

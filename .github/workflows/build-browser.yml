@@ -86,19 +86,22 @@ jobs:
         if: steps.cached.outputs.cache-hit != 'true'
         run: python3 -m ci.run_prepare
 
+      # Packaged as it ships: stock trains its packaged build, and only a
+      # packaged build reads omni.ja, whose order the training records.
       - name: Instrumented build
         if: steps.cached.outputs.cache-hit != 'true'
         env:
           CAMOUFOX_PGO_GENERATE: "1"
           CARGO_BUILD_JOBS: "1"
-        run: make -C browser build
+        working-directory: browser
+        run: python3 ./multibuild.py --target ${{ matrix.target }} --arch ${{ matrix.arch }}
 
       - name: Train
         if: steps.cached.outputs.cache-hit != 'true'
         run: |
-          binary=$(python3 -c "from ci._pytest import built_binary; print(built_binary())")
+          7z x -oinstrumented browser/camoufox-*.${{ matrix.arch }}.zip > /dev/null
           xvfb-run -a -s "-screen 0 1024x768x24" \
-            python3 -m ci.pgo train --binary "$binary" --platform ${{ matrix.platform }} --out pgo-profile
+            python3 -m ci.pgo train --binary instrumented/camoufox-bin --platform ${{ matrix.platform }} --out pgo-profile
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
