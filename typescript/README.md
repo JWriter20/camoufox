@@ -132,6 +132,16 @@ They are read once per process, so every context gets the launch's, and a
 context claiming another OS lays text out as the launch's OS does. Launch one
 browser per OS your contexts claim, with `os` set to it.
 
+The browser's own OS also decides some things for all its contexts. A browser
+launched as Windows on a Linux or macOS host (`os: "windows"`, or drawn so)
+computes `Math` as the Windows CRT does and uses Windows' keyboard shortcuts
+(on a Linux host; on macOS only the editor caret style), middle-click and
+scrollbars ([docs/HOST-PARITY.md](../docs/HOST-PARITY.md)).
+Those are browser settings, so a macOS context on it has them too, and a
+Windows context on a browser launched as another OS has the host's. `NewContext`
+does not refuse the mix. Pass `os` at launch for the OS whose behaviour matters,
+or use one browser per OS.
+
 ### The canvas on another OS
 
 A page can draw a canvas or a WebGL scene and read the pixels back. Those pixels
