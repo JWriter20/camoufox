@@ -1010,8 +1010,8 @@ index 722f715e45..a192b8b55b 100644
      return true;
    }
  
-+  // Playwright: emulate focused page by never bluring when leaving document.
-+  if (XRE_IsContentProcess() && aIsLeavingDocument && docShell && nsDocShell::Cast(docShell)->ShouldOverrideHasFocus()) {
++  // Playwright: emulate focused page by never bluring when focus leaves the tab. Camoufox: not when it moves into one of the page's frames, which blurs as in stock.
++  if (XRE_IsContentProcess() && aIsLeavingDocument && !aAncestorBrowsingContextToFocus && docShell && nsDocShell::Cast(docShell)->ShouldOverrideHasFocus()) {
 +    return true;
 +  }
 +
