@@ -1950,6 +1950,13 @@ async function buildLaunchOptions(
 			for (const key of Object.keys(grants.gpu.prefs)) userPrefKeys.add(key);
 			// The farm draws the canvas on the identity's own OS, so there is nothing to cover.
 			canvas_noise ??= false;
+			// The farm is reached directly: the page's proxy is for the page, and one that cannot reach
+			// the render gateway leaves every farm call waiting on a route that never opens.
+			if (proxy) {
+				const farmHost = new URL(grants.gpu.render.endpoint).hostname;
+				const bypass = (proxy.bypass ?? "").split(",").filter(Boolean);
+				proxy = { ...proxy, bypass: [...bypass, farmHost].join(",") };
+			}
 		}
 	}
 

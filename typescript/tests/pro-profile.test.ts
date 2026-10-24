@@ -1403,6 +1403,21 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 		expect(await utils.hostIdentity(opts, undefined)).toBeNull();
 	});
 
+	it("reaches the render farm directly, not through the page's proxy", async () => {
+		// A warm session's farm socket went through its proxy, which cannot reach the gateway.
+		cloud.sections = { gpu: GPU };
+		const opts = await launch({
+			proxy: { server: "http://dish:3128", bypass: "intranet.example" },
+		});
+		expect(opts.proxy.server).toBe("http://dish:3128");
+		expect(opts.proxy.bypass.split(",")).toEqual([
+			"intranet.example",
+			"render.example",
+		]);
+		const bare = await launch({ proxy: { server: "http://dish:3128" } });
+		expect(bare.proxy.bypass).toBe("render.example");
+	});
+
 	it("sets none of it without a gpu section", async () => {
 		const opts = await launch({ farm_gpu: false });
 		expect(mint().gpu).toBe(false);
