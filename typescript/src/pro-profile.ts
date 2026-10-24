@@ -338,6 +338,50 @@ async function withLimit<T>(
  * Chunk and seal a captured profile, upload what the store does not hold, and
  * commit it as the next version, releasing the lease with the commit.
  */
+/**
+ * Resolve once Firefox has let go of `dir`, or after `timeoutMs`. Playwright reports a persistent
+ * context closed while Firefox is still writing prefs.js and places.sqlite on its way out, and a
+ * capture taken then reads files mid-write. If it times out the capture's own size check still
+ * refuses a moving file, and the session is kept for the next launch to commit.
+ */
+export async function profileReleased(
+	dir: string,
+	timeoutMs = 30_000,
+	pollMs = 100,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (profileHeld(dir) && Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, pollMs));
+	}
+}
+
+function profileHeld(dir: string): boolean {
+	if (OS_NAME === "win") {
+		// Windows Firefox holds parent.lock open without sharing for as long as it runs.
+		try {
+			fs.closeSync(fs.openSync(path.join(dir, "parent.lock"), "r+"));
+			return false;
+		} catch (error) {
+			return (error as NodeJS.ErrnoException).code !== "ENOENT";
+		}
+	}
+	// Elsewhere it is a `lock` symlink to "<address>:+<pid>", left behind only by a crash.
+	let target: string;
+	try {
+		target = fs.readlinkSync(path.join(dir, "lock"));
+	} catch {
+		return false;
+	}
+	const pid = Number(/\+(\d+)$/.exec(target)?.[1]);
+	if (!pid) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
 async function commitState(
 	lease: Lease,
 	profileId: string,
@@ -741,6 +785,7 @@ export async function openProfile(
 	lease.onClose = async () => {
 		// The commit releases the lease, so a renewal racing it must not mint a new one.
 		lease.stopRenewing();
+		await profileReleased(userDataDir);
 		try {
 			if (keys === null) {
 				await commitServed(lease, section, baseVersion, userDataDir, ffVersion);
