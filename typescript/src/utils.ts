@@ -21,10 +21,10 @@ import {
 	UnknownIPLocation,
 } from "./exceptions.js";
 import {
-	audioSeedFromIdentity,
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
+	dropAudioSeed,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
 	followBaselineProtection,
@@ -117,6 +117,19 @@ export const WINDOWS_UI_COLORS: Readonly<Record<string, string>> =
 // WINDOWS_BEHAVIOUR_PREFS in the Python launcher for each one's reason).
 export const WINDOWS_BEHAVIOUR_PREFS: Record<string, any> =
 	LAUNCHER_CONSTANTS.windowsBehaviourPrefs;
+
+/** Monitor pixels per CSS pixel of the window at the scale it renders at.
+ * Linux reports the monitor in pixels at scale 1. On Windows and macOS the
+ * host's own scaling is already in the bounds and is not known here, so 1. */
+function physicalScale(
+	config: Record<string, any>,
+	prefs: Record<string, any> = {},
+): number {
+	if (utilsDeps.osName() !== "lin") return 1;
+	// -1 is Firefox's "the system's".
+	const pref = Number(prefs["layout.css.devPixelsPerPx"] ?? -1);
+	return pref > 0 ? pref : Number(config["window.devicePixelRatio"] || 1);
+}
 
 /** The host OS in fonts.json / target_os terms ('mac', 'win', 'lin'). */
 function hostOsKey(): TargetOS | null {
@@ -1534,7 +1547,7 @@ export async function launchOptions({
 	const userSetDnt = "navigator.doNotTrack" in config;
 	const userSetGpc = "navigator.globalPrivacyControl" in config;
 	const userSetAcceptEncoding = "headers.Accept-Encoding" in config;
-	const userSetAudioSeed = "audio:seed" in config;
+	dropAudioSeed(config);
 
 	// The salt that makes every seeded draw belong to this identity (see
 	// fingerprints.identitySalt): stable when the caller pinned the identity --
@@ -1653,10 +1666,13 @@ export async function launchOptions({
 		// the screen it is drawn on. headless has no window to overflow, and
 		// headless="virtual" reaches here as headless=false with a 1x1 Xvfb.
 		if (headless === false && !virtual_display && screenCons) {
+			const fit = physicalScale(config);
 			utilsDeps.clampScreenToDisplay(
 				config,
-				screenCons.maxWidth as number,
-				screenCons.maxHeight as number,
+				(screenCons.maxWidth &&
+					Math.trunc(screenCons.maxWidth / fit)) as number,
+				(screenCons.maxHeight &&
+					Math.trunc(screenCons.maxHeight / fit)) as number,
 			);
 		}
 		utilsDeps.followBaselineProtection(config, targetOs);
@@ -1826,16 +1842,6 @@ export async function launchOptions({
 	// so the generated header is dropped unless the caller set it.
 	if (!userSetAcceptEncoding) {
 		delete config["headers.Accept-Encoding"];
-	}
-
-	// The audio noise seed follows the identity: a returning "same device" must
-	// reproduce its audio hash (#442/#765). Never 0 (0 disables the noise).
-	// There is no canvas seed: the browser adds no canvas noise (#528), and no
-	// glyph-spacing noise either (ci/tribal-rules.yml: no-glyph-spacing-noise).
-	if (!userSetAudioSeed) {
-		config["audio:seed"] = audioSeedFromIdentity(
-			utilsDeps.identitySeed(config, salt),
-		);
 	}
 
 	// Set geolocation
@@ -2083,6 +2089,28 @@ export async function launchOptions({
 			console.log(
 				`Incoherent identity (${violation.rule}): ${violation.detail}`,
 			);
+		}
+	}
+
+	// Render at the claimed display scale, so (resolution) and the CSS geometry
+	// agree with devicePixelRatio as on the real machine (#933).
+	const dpr = Number(config["window.devicePixelRatio"] || 1);
+	if (dpr !== 1 && !("layout.css.devPixelsPerPx" in firefox_user_prefs)) {
+		firefox_user_prefs["layout.css.devPixelsPerPx"] = String(dpr);
+	}
+	if (headless === false && !virtual_display && screenCons) {
+		const fit = physicalScale(config, firefox_user_prefs);
+		for (const [axis, cap] of [
+			["Width", screenCons.maxWidth],
+			["Height", screenCons.maxHeight],
+		] as const) {
+			const size = config[`window.outer${axis}`];
+			if (cap && size && size * fit > cap) {
+				throw new Error(
+					`window.outer${axis} ${size} at display scale ${fit} needs ${size * fit} pixels, ` +
+						`but this monitor has ${cap}. Pass a smaller screen and window, or run headless.`,
+				);
+			}
 		}
 	}
 

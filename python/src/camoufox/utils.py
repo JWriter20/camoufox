@@ -22,7 +22,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, public_ipv6, valid_ipv4, valid_ipv6
@@ -79,6 +79,18 @@ WINDOWS_UI_COLORS: Dict[str, str] = LAUNCHER_CONSTANTS['windowsUiColors']
 # Linux build and is left out, as is media.eme.enabled: Windows has PlayReady
 # behind EME, which a Linux build cannot supply.
 WINDOWS_BEHAVIOUR_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['windowsBehaviourPrefs']
+
+
+def _physical_scale(config: Dict[str, Any], prefs: Optional[Dict[str, Any]] = None) -> float:
+    """Monitor pixels per CSS pixel of the window at the scale it renders at.
+
+    Linux reports the monitor in pixels at scale 1. On Windows and macOS the
+    host's own scaling is already in the bounds and is not known here, so 1.
+    """
+    if OS_NAME != 'lin':
+        return 1.0
+    pref = float((prefs or {}).get('layout.css.devPixelsPerPx') or -1)  # -1 is Firefox's "the system's"
+    return pref if pref > 0 else float(config.get('window.devicePixelRatio') or 1)
 
 
 def _host_os_key() -> Optional[str]:
@@ -1186,7 +1198,7 @@ def launch_options(
     _user_set_dnt = 'navigator.doNotTrack' in config
     _user_set_gpc = 'navigator.globalPrivacyControl' in config
     _user_set_accept_encoding = 'headers.Accept-Encoding' in config
-    _user_set_audio_seed = 'audio:seed' in config
+    drop_audio_seed(config)
 
     # The salt that makes every seeded draw belong to this identity (see
     # fingerprints.identity_salt): stable when the caller pinned the identity
@@ -1298,7 +1310,9 @@ def launch_options(
         # headless='virtual' reaches here as headless=False (see async_api) with
         # a 1x1 Xvfb (virtdisplay.py) that is not a real screen.
         if headless is False and not virtual_display and screen_cons:
-            clamp_screen_to_display(config, screen_cons.max_width, screen_cons.max_height)
+            fit = _physical_scale(config)
+            clamp_screen_to_display(config, screen_cons.max_width and int(screen_cons.max_width / fit),
+                                    screen_cons.max_height and int(screen_cons.max_height / fit))
         follow_baseline_protection(config, target_os)
         clamp_window_dimensions(config)
         clamp_window_position(config)
@@ -1515,16 +1529,6 @@ def launch_options(
     # is dropped unless the caller set it.
     if not _user_set_accept_encoding:
         config.pop('headers.Accept-Encoding', None)
-
-    # The audio noise seed follows the identity: a returning "same device" must
-    # reproduce its audio hash (#442/#765). Never 0 (0 disables the noise). A
-    # preset draws its own random seed; it is replaced here too so a pinned
-    # preset reproduces it, but a seed the caller set is kept. There is no
-    # canvas seed: the browser adds no canvas noise (#528), and no glyph-spacing
-    # noise either (ci/tribal-rules.yml: no-glyph-spacing-noise).
-    if not _user_set_audio_seed:
-        _ident = identity_seed(config, _identity_salt)
-        config['audio:seed'] = ((_ident * 2654435761 + 97) & 0xFFFFFFFF) or 1
 
     # Set geolocation
     if geoip:
@@ -1743,6 +1747,20 @@ def launch_options(
     if _incoherent and debug:
         for _violation in _incoherent:
             print(f'Incoherent identity ({_violation.rule}): {_violation.detail}')
+
+    # Render at the claimed display scale, so (resolution) and the CSS geometry
+    # agree with devicePixelRatio as on the real machine (#933).
+    if float(config.get('window.devicePixelRatio') or 1) != 1:
+        firefox_user_prefs.setdefault('layout.css.devPixelsPerPx', f"{float(config['window.devicePixelRatio']):g}")
+    if headless is False and not virtual_display and screen_cons:
+        fit = _physical_scale(config, firefox_user_prefs)
+        for axis, cap in (('Width', screen_cons.max_width), ('Height', screen_cons.max_height)):
+            size = config.get(f'window.outer{axis}')
+            if cap and size and size * fit > cap:
+                raise ValueError(
+                    f'window.outer{axis} {size} at display scale {fit:g} needs {size * fit:g} pixels, '
+                    f'but this monitor has {cap}. Pass a smaller screen and window, or run headless.'
+                )
 
     set_webgpu(firefox_user_prefs, target_os, (config.get('webGl:vendor'), config.get('webGl:renderer')), host)
 

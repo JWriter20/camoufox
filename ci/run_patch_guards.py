@@ -38,13 +38,14 @@ GUARD_DIR = REPO_ROOT / "browser" / "tests" / "playwright" / "patches"
 GROUPS: Dict[str, Tuple[str, ...]] = {
     "spoofing": (
         "animation-timing",
-        "audio-frequency-noise",
+        "audio-matches-stock",
         "baseline-protections",
         "cmap-ucs4-macos",
         "context-app-version",
         "context-lists-across-processes",
         "context-os-system-font",
         "decoding-info-claimed-os",
+        "display-scale-resolution",
         "fingerprint-setter-seal",
         "font-fallback-windows",
         "ipv4-only-network",
@@ -85,6 +86,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "certificate-revocations",
         "contentaccessible-parity",
         "firefox-version-pin",
+        "getter-cost-parity",
         "gfx-probes-packaged",
         "hardware-acceleration-policy",
         "popup-blocker-parity",
