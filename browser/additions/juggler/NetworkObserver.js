@@ -822,8 +822,6 @@ function overrideRequestHeaders(httpChannel, headers) {
 
 // Headers necko adds in HttpBaseChannel::Init, before anything else touches the channel.
 const DEFAULT_REQUEST_HEADERS = ['host', 'user-agent', 'accept', 'accept-language', 'accept-encoding'];
-// The headers present when necko adds "connection".
-const CONNECTION_FOLLOWS = [...DEFAULT_REQUEST_HEADERS, 'referer'];
 // Headers necko adds in nsHttpChannel::OnBeforeConnect, which runs after the cookie header is set
 // and after http-on-modify-request, where we add the extra headers.
 const ON_BEFORE_CONNECT_HEADERS = ['upgrade-insecure-requests', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user'];
@@ -843,9 +841,6 @@ const ON_BEFORE_CONNECT_HEADERS = ['upgrade-insecure-requests', 'sec-fetch-dest'
 // everything added from http-on-modify-request onwards. Order on the wire follows
 // nsHttpHeaderArray, and setting a header that is already present updates it in place, so moving
 // one means deleting it and adding it back.
-//
-// "connection" follows the defaults and, when there is one, the referer: necko sets the referer
-// before it adds "connection", so a subresource sends "accept-encoding, referer, connection".
 function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
   const headers = requestHeaders(httpChannel);
   const nameOf = header => header.name.toLowerCase();
@@ -870,7 +865,7 @@ function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
 
   for (const header of displaced) {
     const boundary = nameOf(header) === 'connection' ?
-        firstIndex(h => !CONNECTION_FOLLOWS.includes(nameOf(h))) :
+        firstIndex(h => !DEFAULT_REQUEST_HEADERS.includes(nameOf(h))) :
         firstIndex(h => lateHeaders.has(nameOf(h)));
     headers.splice(boundary, 0, header);
   }

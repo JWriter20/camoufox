@@ -114,8 +114,8 @@ async def _subresource_headers(context: BrowserContext, server: Server, intercep
 
 
 async def test_page_route_should_not_reorder_subresource_headers(context: BrowserContext, server: Server) -> None:
-    # A subresource's referer is set before necko adds "connection", so the two arrive as
-    # "referer, connection" -- the reverse of a document's defaults-then-connection layout.
+    # A subresource carries a referer, which stock sends after "connection" and before the
+    # sec-fetch-* headers; a resumed request must keep both in those slots.
     for tag in ("img", "fetch"):
         without_route = await _subresource_headers(context, server, intercept=False, tag=tag)
         with_route = await _subresource_headers(context, server, intercept=True, tag=tag)
