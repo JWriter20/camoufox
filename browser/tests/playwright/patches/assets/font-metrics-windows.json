@@ -1,96 +1,285 @@
 {
- "size": 16,
- "fonts": {
-  "Arial": {
-   "fontBoundingBoxAscent": 14.0,
-   "fontBoundingBoxDescent": 3.0,
-   "emHeightAscent": 13.1765,
-   "emHeightDescent": 2.8235,
-   "lineHeight": 18.0
-  },
-  "Times New Roman": {
-   "fontBoundingBoxAscent": 14.0,
-   "fontBoundingBoxDescent": 3.0,
-   "emHeightAscent": 13.1765,
-   "emHeightDescent": 2.8235,
-   "lineHeight": 18.0
-  },
-  "Courier New": {
-   "fontBoundingBoxAscent": 13.0,
-   "fontBoundingBoxDescent": 5.0,
-   "emHeightAscent": 11.5556,
-   "emHeightDescent": 4.4444,
-   "lineHeight": 18.0
-  },
-  "Verdana": {
-   "fontBoundingBoxAscent": 16.0,
-   "fontBoundingBoxDescent": 3.0,
-   "emHeightAscent": 13.4737,
-   "emHeightDescent": 2.5263,
-   "lineHeight": 19.0
-  },
-  "Tahoma": {
-   "fontBoundingBoxAscent": 16.0,
-   "fontBoundingBoxDescent": 3.0,
-   "emHeightAscent": 13.4737,
-   "emHeightDescent": 2.5263,
-   "lineHeight": 19.0
-  },
-  "Georgia": {
-   "fontBoundingBoxAscent": 15.0,
-   "fontBoundingBoxDescent": 4.0,
-   "emHeightAscent": 12.6316,
-   "emHeightDescent": 3.3684,
-   "lineHeight": 19.0
-  },
-  "Trebuchet MS": {
-   "fontBoundingBoxAscent": 15.0,
-   "fontBoundingBoxDescent": 4.0,
-   "emHeightAscent": 12.6316,
-   "emHeightDescent": 3.3684,
-   "lineHeight": 19.0
-  },
-  "Comic Sans MS": {
-   "fontBoundingBoxAscent": 18.0,
-   "fontBoundingBoxDescent": 5.0,
-   "emHeightAscent": 12.5217,
-   "emHeightDescent": 3.4783,
-   "lineHeight": 23.0
-  },
-  "Impact": {
-   "fontBoundingBoxAscent": 16.0,
-   "fontBoundingBoxDescent": 3.0,
-   "emHeightAscent": 13.4737,
-   "emHeightDescent": 2.5263,
-   "lineHeight": 19.0
-  },
-  "Segoe UI": {
-   "fontBoundingBoxAscent": 17.0,
-   "fontBoundingBoxDescent": 4.0,
-   "emHeightAscent": 12.9524,
-   "emHeightDescent": 3.0476,
-   "lineHeight": 21.0
-  },
-  "Calibri": {
-   "fontBoundingBoxAscent": 15.0,
-   "fontBoundingBoxDescent": 4.0,
-   "emHeightAscent": 12.6316,
-   "emHeightDescent": 3.3684,
-   "lineHeight": 19.0
-  },
-  "Consolas": {
-   "fontBoundingBoxAscent": 15.0,
-   "fontBoundingBoxDescent": 4.0,
-   "emHeightAscent": 12.6316,
-   "emHeightDescent": 3.3684,
-   "lineHeight": 19.0
-  },
-  "Arial Black": {
-   "fontBoundingBoxAscent": 14.0,
-   "fontBoundingBoxDescent": 3.0,
-   "emHeightAscent": 13.1765,
-   "emHeightDescent": 2.8235,
-   "lineHeight": 18.0
+  "source": "stock Firefox 158.0 (win64 en-US, BuildID 20261007201254), Windows 11 Home 25H2 build 26200.9711 (DESKTOP-51J77AN), headless, layout.css.devPixelsPerPx 1: devicePixelRatio 1 and (resolution: 1dppx), 2026-10-23. Two runs, identical. Measured after document.fonts.ready + 4 s: until then Windows draws \"Arial Black\" with the serif default (Times New Roman), as Firefox on Windows reads the fonts' other family names in the background",
+  "text": "Hxg",
+  "sizes": {
+    "11": {
+      "Arial": {
+        "fontBoundingBoxAscent": 10,
+        "fontBoundingBoxDescent": 2,
+        "emHeightAscent": 9.1667,
+        "emHeightDescent": 1.8333,
+        "lineHeight": 13
+      },
+      "Times New Roman": {
+        "fontBoundingBoxAscent": 10,
+        "fontBoundingBoxDescent": 2,
+        "emHeightAscent": 9.1667,
+        "emHeightDescent": 1.8333,
+        "lineHeight": 13
+      },
+      "Courier New": {
+        "fontBoundingBoxAscent": 9,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 8.25,
+        "emHeightDescent": 2.75,
+        "lineHeight": 12
+      },
+      "Verdana": {
+        "fontBoundingBoxAscent": 11,
+        "fontBoundingBoxDescent": 2,
+        "emHeightAscent": 9.3077,
+        "emHeightDescent": 1.6923,
+        "lineHeight": 13
+      },
+      "Tahoma": {
+        "fontBoundingBoxAscent": 11,
+        "fontBoundingBoxDescent": 2,
+        "emHeightAscent": 9.3077,
+        "emHeightDescent": 1.6923,
+        "lineHeight": 13
+      },
+      "Georgia": {
+        "fontBoundingBoxAscent": 10,
+        "fontBoundingBoxDescent": 2,
+        "emHeightAscent": 9.1667,
+        "emHeightDescent": 1.8333,
+        "lineHeight": 12
+      },
+      "Trebuchet MS": {
+        "fontBoundingBoxAscent": 10,
+        "fontBoundingBoxDescent": 2,
+        "emHeightAscent": 9.1667,
+        "emHeightDescent": 1.8333,
+        "lineHeight": 12
+      },
+      "Comic Sans MS": {
+        "fontBoundingBoxAscent": 12,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 8.8,
+        "emHeightDescent": 2.2,
+        "lineHeight": 15
+      },
+      "Impact": {
+        "fontBoundingBoxAscent": 11,
+        "fontBoundingBoxDescent": 2,
+        "emHeightAscent": 9.3077,
+        "emHeightDescent": 1.6923,
+        "lineHeight": 13
+      },
+      "Segoe UI": {
+        "fontBoundingBoxAscent": 12,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 8.8,
+        "emHeightDescent": 2.2,
+        "lineHeight": 15
+      },
+      "Calibri": {
+        "fontBoundingBoxAscent": 10,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 8.4615,
+        "emHeightDescent": 2.5385,
+        "lineHeight": 13
+      },
+      "Consolas": {
+        "fontBoundingBoxAscent": 10,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 8.4615,
+        "emHeightDescent": 2.5385,
+        "lineHeight": 13
+      },
+      "Arial Black": {
+        "fontBoundingBoxAscent": 12,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 8.8,
+        "emHeightDescent": 2.2,
+        "lineHeight": 15
+      }
+    },
+    "16": {
+      "Arial": {
+        "fontBoundingBoxAscent": 14,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 13.1765,
+        "emHeightDescent": 2.8235,
+        "lineHeight": 18
+      },
+      "Times New Roman": {
+        "fontBoundingBoxAscent": 14,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 13.1765,
+        "emHeightDescent": 2.8235,
+        "lineHeight": 18
+      },
+      "Courier New": {
+        "fontBoundingBoxAscent": 13,
+        "fontBoundingBoxDescent": 5,
+        "emHeightAscent": 11.5556,
+        "emHeightDescent": 4.4444,
+        "lineHeight": 18
+      },
+      "Verdana": {
+        "fontBoundingBoxAscent": 16,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 13.4737,
+        "emHeightDescent": 2.5263,
+        "lineHeight": 19
+      },
+      "Tahoma": {
+        "fontBoundingBoxAscent": 16,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 13.4737,
+        "emHeightDescent": 2.5263,
+        "lineHeight": 19
+      },
+      "Georgia": {
+        "fontBoundingBoxAscent": 15,
+        "fontBoundingBoxDescent": 4,
+        "emHeightAscent": 12.6316,
+        "emHeightDescent": 3.3684,
+        "lineHeight": 19
+      },
+      "Trebuchet MS": {
+        "fontBoundingBoxAscent": 15,
+        "fontBoundingBoxDescent": 4,
+        "emHeightAscent": 12.6316,
+        "emHeightDescent": 3.3684,
+        "lineHeight": 19
+      },
+      "Comic Sans MS": {
+        "fontBoundingBoxAscent": 18,
+        "fontBoundingBoxDescent": 5,
+        "emHeightAscent": 12.5217,
+        "emHeightDescent": 3.4783,
+        "lineHeight": 23
+      },
+      "Impact": {
+        "fontBoundingBoxAscent": 16,
+        "fontBoundingBoxDescent": 3,
+        "emHeightAscent": 13.4737,
+        "emHeightDescent": 2.5263,
+        "lineHeight": 19
+      },
+      "Segoe UI": {
+        "fontBoundingBoxAscent": 17,
+        "fontBoundingBoxDescent": 4,
+        "emHeightAscent": 12.9524,
+        "emHeightDescent": 3.0476,
+        "lineHeight": 21
+      },
+      "Calibri": {
+        "fontBoundingBoxAscent": 15,
+        "fontBoundingBoxDescent": 4,
+        "emHeightAscent": 12.6316,
+        "emHeightDescent": 3.3684,
+        "lineHeight": 19
+      },
+      "Consolas": {
+        "fontBoundingBoxAscent": 15,
+        "fontBoundingBoxDescent": 4,
+        "emHeightAscent": 12.6316,
+        "emHeightDescent": 3.3684,
+        "lineHeight": 19
+      },
+      "Arial Black": {
+        "fontBoundingBoxAscent": 18,
+        "fontBoundingBoxDescent": 5,
+        "emHeightAscent": 12.5217,
+        "emHeightDescent": 3.4783,
+        "lineHeight": 23
+      }
+    },
+    "37.5": {
+      "Arial": {
+        "fontBoundingBoxAscent": 34,
+        "fontBoundingBoxDescent": 8,
+        "emHeightAscent": 30.3571,
+        "emHeightDescent": 7.1429,
+        "lineHeight": 44
+      },
+      "Times New Roman": {
+        "fontBoundingBoxAscent": 33,
+        "fontBoundingBoxDescent": 8,
+        "emHeightAscent": 30.1829,
+        "emHeightDescent": 7.3171,
+        "lineHeight": 43
+      },
+      "Courier New": {
+        "fontBoundingBoxAscent": 31,
+        "fontBoundingBoxDescent": 11,
+        "emHeightAscent": 27.6786,
+        "emHeightDescent": 9.8214,
+        "lineHeight": 42
+      },
+      "Verdana": {
+        "fontBoundingBoxAscent": 38,
+        "fontBoundingBoxDescent": 8,
+        "emHeightAscent": 30.9783,
+        "emHeightDescent": 6.5217,
+        "lineHeight": 46
+      },
+      "Tahoma": {
+        "fontBoundingBoxAscent": 38,
+        "fontBoundingBoxDescent": 8,
+        "emHeightAscent": 30.9783,
+        "emHeightDescent": 6.5217,
+        "lineHeight": 46
+      },
+      "Georgia": {
+        "fontBoundingBoxAscent": 34,
+        "fontBoundingBoxDescent": 8,
+        "emHeightAscent": 30.3571,
+        "emHeightDescent": 7.1429,
+        "lineHeight": 42
+      },
+      "Trebuchet MS": {
+        "fontBoundingBoxAscent": 35,
+        "fontBoundingBoxDescent": 8,
+        "emHeightAscent": 30.5233,
+        "emHeightDescent": 6.9767,
+        "lineHeight": 43
+      },
+      "Comic Sans MS": {
+        "fontBoundingBoxAscent": 41,
+        "fontBoundingBoxDescent": 11,
+        "emHeightAscent": 29.5673,
+        "emHeightDescent": 7.9327,
+        "lineHeight": 52
+      },
+      "Impact": {
+        "fontBoundingBoxAscent": 38,
+        "fontBoundingBoxDescent": 8,
+        "emHeightAscent": 30.9783,
+        "emHeightDescent": 6.5217,
+        "lineHeight": 46
+      },
+      "Segoe UI": {
+        "fontBoundingBoxAscent": 40,
+        "fontBoundingBoxDescent": 9,
+        "emHeightAscent": 30.6122,
+        "emHeightDescent": 6.8878,
+        "lineHeight": 49
+      },
+      "Calibri": {
+        "fontBoundingBoxAscent": 36,
+        "fontBoundingBoxDescent": 10,
+        "emHeightAscent": 29.3478,
+        "emHeightDescent": 8.1522,
+        "lineHeight": 46
+      },
+      "Consolas": {
+        "fontBoundingBoxAscent": 34,
+        "fontBoundingBoxDescent": 9,
+        "emHeightAscent": 29.6512,
+        "emHeightDescent": 7.8488,
+        "lineHeight": 43
+      },
+      "Arial Black": {
+        "fontBoundingBoxAscent": 41,
+        "fontBoundingBoxDescent": 12,
+        "emHeightAscent": 29.0094,
+        "emHeightDescent": 8.4906,
+        "lineHeight": 53
+      }
+    }
   }
- }
 }

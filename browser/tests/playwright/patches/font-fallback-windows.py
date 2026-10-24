@@ -5,31 +5,38 @@ and lays them out with DirectWrite's line boxes.
 The page draws a sample of 28 scripts (Hangul, Thai, Devanagari, Arabic,
 Georgian, emoji, ...) in serif, sans-serif and monospace, on a canvas and in
 lang-tagged spans, and records the widths. assets/font-fallback-windows.json is
-the same page in stock Firefox 152.0.4 on Windows 10 (devicePixelRatio 1).
-158.0 ships the same Windows font prefs (all.js, which font-prefs.json is
-generated from) and per-script table (gfxWindowsPlatform.cpp), so it is the
-reference until re-measured.
+the same page in stock Firefox 158.0 on Windows 11 25H2 at devicePixelRatio 1
+(its "source" says where and how).
 
 This build is a Linux build, so without the fixes it resolved fonts the Linux
 way: 75 of 168 widths matched Windows (emoji 192 vs 263.6, Thai 323 vs 361.6,
 Mongolian 115.8 vs 74.1). The fixes are Windows' font.name-list defaults from
 the launcher, async fallback off on a Linux host, slight hinting in the bundled
 Windows fonts.conf, and fallback-fonts-claimed-os.patch for the per-script
-table.
+table and the default font. The default font is what a lang-tagged generic
+gets when none of its font.name-list fonts is installed: Arial on Windows
+(lang="he" serif names Narkisim and David, lang="hy" monospace Arial AMU,
+none of them on Windows 11), where fontconfig matched other faces.
 
-Line boxes: for 13 bundled Windows fonts at 16px, canvas measureText()'s
-fontBoundingBox and emHeight ascent and descent (Gecko's maxAscent, maxDescent,
-emAscent, emDescent) and a block's line-height: normal must be what
-gfxDWriteFont::ComputeMetrics derives from the same font file:
-assets/font-metrics-windows.json. Per font: OS/2 usWinAscent/usWinDescent
+The 6 Mongolian widths still differ (74.07 vs 74.83): the bundled
+monbaiti.ttf is an older version than Windows 11 25H2's. That is the font
+bundle, not this code; when the bundle carries the current file, raise
+MIN_MATCHING to 168.
+
+Line boxes: for 13 bundled Windows fonts at 11, 16 and 37.5px, canvas
+measureText()'s fontBoundingBox and emHeight ascent and descent (Gecko's
+maxAscent, maxDescent, emAscent, emDescent) and a block's line-height: normal
+must be stock Windows': assets/font-metrics-windows.json, recorded with the
+widths. They are what gfxDWriteFont::ComputeMetrics derives from the font
+file, which font-metrics-windows.patch does too: OS/2 usWinAscent/usWinDescent
 (sTypo* when fsSelection bit 7 is set), the line gap max(0, hhea ascender -
-descender + lineGap - (winAscent + winDescent)), scale = float(16 / unitsPerEm),
-ascent and descent rounded to pixels, emAscent = 16 * ascent / (ascent +
-descent), external leading ceil(gap * scale), and the line height
+descender + lineGap - (winAscent + winDescent)), scale = float(size /
+unitsPerEm), ascent and descent rounded to pixels, emAscent = size * ascent /
+(ascent + descent), external leading ceil(gap * scale), and the line height
 emHeight + internal + external leading in app units, as GetNormalLineHeight
-adds them; Arial Black takes Arial Bold's tables. Arial is 17/18 px, as
-measured on Windows. FreeType's own hhea values (font-metrics-windows.patch or
-fonts:metrics missing) give other numbers on every font.
+adds them. Arial Black has its own (16px: 18/5, line 23), not Arial Bold's.
+FreeType's own hhea values (font-metrics-windows.patch or fonts:metrics
+missing) give other numbers on every font.
 
 The font list is pinned too: a launch draws its fonts at random, and which
 fonts a draw adds decides some fallbacks, so the guard takes one realistic
@@ -37,11 +44,12 @@ draw every time -- the Windows base (font-bases.json) plus the LibreOffice
 bundle (font-groups.json, 6.6% of Windows draws). That bundle carries DejaVu
 Sans, which this build's global fallback (fontconfig) picked for Lao and
 Inuktitut, where DirectWrite's system fallback on Windows picks Leelawadee UI
-and Gadugi (148 of 168 matched).
+and Gadugi.
 
 The scale is pinned to 1: at devicePixelRatio 1.25 every canvas width moves by
 ~0.26% (FreeType's fixed-point advances at another pixel size), as Windows'
-would at 125% too -- a different reference, not a mismatch.
+would at 125% too, and Windows' emHeight sums to the size less 1/24 px at 2.5
+-- a different reference, not a mismatch.
 
     python browser/tests/playwright/patches/font-fallback-windows.py
 """
@@ -67,24 +75,27 @@ METRICS_TOLERANCE_PX = 0.01
 LINE_BOXES = """(spec) => {
   const c = document.createElement('canvas').getContext('2d');
   const out = {};
-  for (const family of Object.keys(spec.fonts)) {
-    c.font = `${spec.size}px "${family}"`;
-    const m = c.measureText('Hxg');
-    const div = document.createElement('div');
-    div.style.cssText = `font: ${spec.size}px "${family}"; line-height: normal; white-space: nowrap; position: absolute`;
-    div.textContent = 'Hxg';
-    document.body.appendChild(div);
-    out[family] = {
-      fontBoundingBoxAscent: m.fontBoundingBoxAscent, fontBoundingBoxDescent: m.fontBoundingBoxDescent,
-      emHeightAscent: m.emHeightAscent, emHeightDescent: m.emHeightDescent,
-      lineHeight: div.getBoundingClientRect().height,
-    };
-    div.remove();
+  for (const [size, fonts] of Object.entries(spec.sizes)) {
+    out[size] = {};
+    for (const family of Object.keys(fonts)) {
+      c.font = `${size}px "${family}"`;
+      const m = c.measureText(spec.text);
+      const div = document.createElement('div');
+      div.style.cssText = `font: ${size}px "${family}"; line-height: normal; white-space: nowrap; position: absolute`;
+      div.textContent = spec.text;
+      document.body.appendChild(div);
+      out[size][family] = {
+        fontBoundingBoxAscent: m.fontBoundingBoxAscent, fontBoundingBoxDescent: m.fontBoundingBoxDescent,
+        emHeightAscent: m.emHeightAscent, emHeightDescent: m.emHeightDescent,
+        lineHeight: div.getBoundingClientRect().height,
+      };
+      div.remove();
+    }
   }
   return out;
 }"""
 # Matching widths out of 168; raise it as parity improves, never lower it.
-MIN_MATCHING = 160
+MIN_MATCHING = 162
 
 
 class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -152,12 +163,14 @@ def main() -> int:
         print("   ", m)
     print()
     box_mismatches = [
-        f"{family} {key}: {boxes[family][key]:.4f} vs DirectWrite {want:.4f}"
-        for family, metrics in line_boxes["fonts"].items()
+        f"{family} {size}px {key}: {boxes[size][family][key]:.4f} vs Windows {want:.4f}"
+        for size, fonts in line_boxes["sizes"].items()
+        for family, metrics in fonts.items()
         for key, want in metrics.items()
-        if abs(boxes[family][key] - want) > METRICS_TOLERANCE_PX
+        if abs(boxes[size][family][key] - want) > METRICS_TOLERANCE_PX
     ]
-    print(f"{len(line_boxes['fonts'])} fonts' line boxes against DirectWrite's: {len(box_mismatches)} values differ")
+    n_boxes = sum(len(fonts) for fonts in line_boxes["sizes"].values())
+    print(f"{n_boxes} line boxes (fonts x sizes) against Windows': {len(box_mismatches)} values differ")
     for m in box_mismatches:
         print("   ", m)
     print()
@@ -166,11 +179,11 @@ def main() -> int:
         print(f"FAIL: {matching} match, fewer than the {MIN_MATCHING} this build reached")
         failed = True
     if box_mismatches:
-        print("FAIL: line boxes are not DirectWrite's")
+        print("FAIL: line boxes are not Windows'")
         failed = True
     if failed:
         return 1
-    print(f"PASS: at least {MIN_MATCHING} of {total} widths match, and every line box is DirectWrite's.")
+    print(f"PASS: at least {MIN_MATCHING} of {total} widths match, and every line box is Windows'.")
     return 0
 
 

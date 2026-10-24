@@ -1,3 +1,35 @@
+diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFontList.cpp
+index 79bfbaa6e4..d7ca275b5a 100644
+--- a/gfx/thebes/gfxFcPlatformFontList.cpp
++++ b/gfx/thebes/gfxFcPlatformFontList.cpp
+@@ -3,6 +3,7 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "gfxFcPlatformFontList.h"
++#include "MaskConfig.hpp"
+ 
+ #include "SharedFontList-impl.h"
+ #include "gfxFT2Utils.h"
+@@ -2404,6 +2405,19 @@ void gfxFcPlatformFontList::GetFontList(nsAtom* aLangGroup,
+ FontFamily gfxFcPlatformFontList::GetDefaultFontForPlatform(
+     FontVisibilityProvider* aFontVisibilityProvider, const gfxFontStyle* aStyle,
+     nsAtom* aLanguage) {
++  // Camoufox: a Windows identity's default font is stock Windows', which
++  // gfxDWriteFontList::GetDefaultFontForPlatform tries first: Arial. It is
++  // what text gets when none of a generic's font.name-list fonts is installed,
++  // as for lang="he" serif (Narkisim, David) and lang="hy" monospace
++  // (Arial AMU) on Windows 11. Asking fontconfig instead drew those with
++  // whatever face it matched for the language.
++  if (MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows) {
++    FontFamily arial = FindFamily(aFontVisibilityProvider, "Arial"_ns);
++    if (!arial.IsNull()) {
++      return arial;
++    }
++  }
++
+   // Get the default font by using a fake name to retrieve the first
+   // scalable font that fontconfig suggests for the given language.
+   PrefFontList* prefFonts =
 diff --git a/gfx/thebes/gfxPlatformGtk.cpp b/gfx/thebes/gfxPlatformGtk.cpp
 index de866d03d3..7ab800607d 100644
 --- a/gfx/thebes/gfxPlatformGtk.cpp

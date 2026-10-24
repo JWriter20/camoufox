@@ -1427,9 +1427,10 @@ def launch_options(
     # font.name-list defaults, so a Windows identity drew Thai through
     # fontconfig's 'serif' where Windows names Tahoma, and emoji with Noto
     # Color Emoji where Windows names Segoe UI Emoji. With stock Windows'
-    # values (plus fallback-fonts-claimed-os.patch for the per-script table,
-    # and unhinted advances in the bundled fonts.conf), 156 of 168 per-script
-    # widths matched stock 152.0.4 on Windows, against 75.
+    # values (plus fallback-fonts-claimed-os.patch for the per-script table
+    # and default font, and slight hinting in the bundled fonts.conf), 162 of
+    # 168 per-script widths match stock 158.0 on Windows 11, against 75
+    # (font-fallback-windows.py).
     #
     # These and the settings below replace answers that come from the Linux
     # build's platform code (gfxPlatformGtk, FreeType, the GTK theme). Only a

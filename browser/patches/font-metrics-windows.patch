@@ -1,17 +1,16 @@
 diff --git a/gfx/thebes/gfxFT2FontBase.cpp b/gfx/thebes/gfxFT2FontBase.cpp
-index 7c1f76ac8a..79f13409d3 100644
+index 7c1f76ac8a..07672b01c0 100644
 --- a/gfx/thebes/gfxFT2FontBase.cpp
 +++ b/gfx/thebes/gfxFT2FontBase.cpp
-@@ -13,6 +13,8 @@
+@@ -13,6 +13,7 @@
  #include "gfxFontConstants.h"
  #include "gfxFontUtils.h"
  #include "gfxHarfBuzzShaper.h"
-+#include "gfxPlatformFontList.h"
 +#include "MaskConfig.hpp"
  #include "harfbuzz/hb.h"
  #include "mozilla/Likely.h"
  #include "mozilla/StaticPrefs_gfx.h"
-@@ -249,6 +251,92 @@ static double FindClosestSize(FT_Face aFace, double aSize) {
+@@ -249,6 +250,92 @@ static double FindClosestSize(FT_Face aFace, double aSize) {
    return aFace->available_sizes[bestSize].y_ppem / 64.0;
  }
  
@@ -104,43 +103,17 @@ index 7c1f76ac8a..79f13409d3 100644
  void gfxFT2FontBase::InitMetrics() {
    mFUnitsConvFactor = 0.0;
  
-@@ -591,6 +679,44 @@ void gfxFT2FontBase::InitExtraMetrics(gfxFloat aEmHeight,
+@@ -591,6 +678,18 @@ void gfxFT2FontBase::InitExtraMetrics(gfxFloat aEmHeight,
        sum > 0.0 ? mMetrics.emAscent * mMetrics.emHeight / sum : 0.0;
    mMetrics.emDescent = mMetrics.emHeight - mMetrics.emAscent;
  
 +  // mFUnitsConvFactor is set exactly when InitMetrics' FreeType path had a
 +  // design-unit scale for this face (its yScale > 0).
 +  if (mFUnitsConvFactor > 0.0 && UseWindowsMetrics()) {
-+    // gfxDWriteFont::ComputeMetrics substitutes Arial Bold's metrics for the
-+    // system Arial Black (weight 900), so it lays out exactly like Arial.
-+    // DirectWrite's entry is named by the face's full name; a fontconfig
-+    // entry from the shared font list is named by its pattern descriptor, so
-+    // the full name is read from the face's name table instead.
++    // gfxDWriteFont::ComputeMetrics has a branch giving Arial Black Arial
++    // Bold's metrics, but stock 158 on Windows 11 lays Arial Black out with
++    // its own tables (16px: 18/5, line 23), so none is copied here.
 +    WindowsDesignMetrics design = GetWindowsDesignMetrics();
-+    if (mFontEntry->Weight().Min() == FontWeight::FromInt(900) &&
-+        mFontEntry->Weight().Max() == FontWeight::FromInt(900) &&
-+        !mFontEntry->IsUserFont() &&
-+        mFontEntry->RealFaceName().EqualsLiteral("Arial Black")) {
-+      gfxFontStyle style(mStyle);
-+      style.weight = FontWeight::FromInt(700);
-+      gfxFontEntry* fe =
-+          gfxPlatformFontList::PlatformFontList()->FindFontForFamily(
-+              nullptr, "Arial"_ns, &style);
-+      if (fe && fe != mFontEntry) {
-+        RefPtr<gfxFont> arial = fe->FindOrMakeFont(&style);
-+        // On Linux every face is a gfxFontconfigFont (FONT_TYPE_FONTCONFIG);
-+        // both types are gfxFT2FontBase.
-+        if (arial && (arial->GetType() == FONT_TYPE_FT2 ||
-+                      arial->GetType() == FONT_TYPE_FONTCONFIG)) {
-+          WindowsDesignMetrics arialDesign =
-+              static_cast<gfxFT2FontBase*>(arial.get())
-+                  ->GetWindowsDesignMetrics();
-+          if (arialDesign.mValid) {
-+            design = arialDesign;
-+          }
-+        }
-+      }
-+    }
 +    if (design.mValid) {
 +      ApplyWindowsMetrics(design);
 +    }

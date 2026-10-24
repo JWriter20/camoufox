@@ -253,15 +253,21 @@ launchers set none of it):
   a Firefox bump), and turns async fallback off on any Linux host;
 - `fallback-fonts-claimed-os.patch` makes `gfxPlatformGtk` use stock's
   Windows or macOS per-script fallback table, by the launch's
-  `navigator.platform`. Where stock Windows names a face Windows 10 does not
-  ship (Lao UI, Euphemia), the Windows table follows it with the face
+  `navigator.platform`. Where stock Windows names a face Windows 10 and 11 do
+  not ship (Lao UI, Euphemia), the Windows table follows it with the face
   DirectWrite's system fallback picks (Leelawadee UI, Gadugi, as the Windows
   reference measures); this build's own global fallback asks fontconfig, which
-  picked DejaVu Sans whenever a draw had the LibreOffice bundle;
+  picked DejaVu Sans whenever a draw had the LibreOffice bundle. For a Windows
+  identity the patch also makes the default font Arial, as stock Windows'
+  `GetDefaultFontForPlatform` does: it is what a lang-tagged generic gets when
+  none of its `font.name-list` fonts is installed (`lang="he"` serif names
+  Narkisim and David, `lang="hy"` monospace Arial AMU, none on Windows 11),
+  where fontconfig matched another face;
 - a Windows identity gets `fonts:metrics: "windows"`, and
   `font-metrics-windows.patch` lays text out with the ascent, descent, line
   gap and em height DirectWrite derives from the same font tables (OS/2
-  `usWin*`, GDI's external-leading rule, Arial Black measured as Arial Bold)
+  `usWin*`, GDI's external-leading rule; Arial Black with its own tables, as
+  stock 158 on Windows 11 measures it, not Arial Bold's)
   instead of FreeType's pixel-rounded `hhea` values: Arial 16px is 17/18 px
   as on Windows, not 19/19;
 - a macOS identity has `cmap-unicode-ucs4-fallback.patch` read a font's
@@ -279,10 +285,12 @@ Each needs a measurement on stock macOS first.
 The guards in `browser/tests/playwright/patches/`:
 
 - `font-fallback-windows.py` measures 28 scripts in three generics against
-  stock Windows (at least 160 of 168 match) on a pinned draw, the Windows base
-  plus the LibreOffice bundle, and 13 Windows fonts' line boxes
-  against the DirectWrite values derived from their font files
-  (`assets/font-metrics-windows.json`);
+  stock Firefox 158 on Windows 11 at devicePixelRatio 1 (at least 162 of 168
+  match; the other 6 are Mongolian, whose bundled `monbaiti.ttf` is older
+  than Windows 11 25H2's) on a pinned draw, the Windows base plus the
+  LibreOffice bundle, and 13 Windows fonts' line boxes at 11, 16 and 37.5px
+  against the same recording (`assets/font-metrics-windows.json`), which the
+  DirectWrite formula reproduces from the font files;
 - `cmap-ucs4-macos.py` checks that Geneva, Apple Symbols and Heiti TC/SC draw
   with their own advances in a macOS identity, not the next family's;
 - `system-colors-windows.py` checks a Windows identity's 92 CSS system colours
