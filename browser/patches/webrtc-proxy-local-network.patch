@@ -1,5 +1,5 @@
 diff --git a/dom/media/webrtc/transport/nr_socket_prsock.cpp b/dom/media/webrtc/transport/nr_socket_prsock.cpp
-index 824c40de63..3fdbc7fab0 100644
+index 824c40de63..c8bcce464c 100644
 --- a/dom/media/webrtc/transport/nr_socket_prsock.cpp
 +++ b/dom/media/webrtc/transport/nr_socket_prsock.cpp
 @@ -753,7 +753,7 @@ int NrSocket::sendto(const void* msg, size_t len, int flags,
@@ -20,13 +20,10 @@ index 824c40de63..3fdbc7fab0 100644
      return 0;
    }
  
-@@ -1605,9 +1605,12 @@ int NrSocketBase::CreateSocket(
-     ABORT(R_REJECTED);
-   }
- 
--  if (config && config->GetForceProxy() && addr->protocol == IPPROTO_UDP) {
--    ABORT(R_REJECTED);
--  }
+@@ -1600,15 +1600,17 @@ int NrSocketBase::CreateSocket(
+   int r, _status;
+   uint16_t port = 0;
+   std::optional<std::pair<uint16_t, uint16_t>> ports;
 +  // Camoufox: behind a proxy, stock Firefox refuses UDP outright, which leaves
 +  // a page with no host candidate and no connection even to a peer on this
 +  // machine. Make the socket, but let it send only to the local network: the
@@ -34,9 +31,18 @@ index 824c40de63..3fdbc7fab0 100644
 +  const bool localNetworkOnly =
 +      config && config->GetForceProxy() && addr->protocol == IPPROTO_UDP;
  
+   if (IsForbiddenAddress(addr)) {
+     ABORT(R_REJECTED);
+   }
+ 
+-  if (config && config->GetForceProxy() && addr->protocol == IPPROTO_UDP) {
+-    ABORT(R_REJECTED);
+-  }
+-
    // Camoufox: a UDP socket's port reaches the page in its ICE candidates. When
    // the identity's OS gives out ephemeral ports from another range than this
-@@ -1651,6 +1654,7 @@ int NrSocketBase::CreateSocket(
+   // host does, pick one from the identity's range, at random as its kernel
+@@ -1651,6 +1653,7 @@ int NrSocketBase::CreateSocket(
        }
      }
  
@@ -44,7 +50,7 @@ index 824c40de63..3fdbc7fab0 100644
      r = (*sock)->create(ports ? &bindAddr : addr);
      if (!r) break;
    }
-@@ -1665,6 +1669,10 @@ abort:
+@@ -1665,6 +1668,10 @@ abort:
  }
  
  // static
