@@ -244,7 +244,7 @@ class NetworkRequest {
       overrideRequestHeaders(this.httpChannel, headers);
     } else {
       appendExtraHTTPHeaders(this.httpChannel, extraHTTPHeaders);
-      restoreInterceptedHeaderOrder(this.httpChannel, extraHTTPHeaders);
+      restoreInterceptedHeaderOrder(this.httpChannel, extraHTTPHeaders, this._refererBeforeConnection);
     }
     if (method)
       this.httpChannel.requestMethod = method;
@@ -331,6 +331,10 @@ class NetworkRequest {
       // Not our channel? Just in case this happens, don't do anything.
       return false;
     }
+    // Necko has laid out the headers by now, but the channel that replaces this one on
+    // interception does not keep the referer's slot (see restoreInterceptedHeaderOrder).
+    const names = requestHeaders(this.httpChannel).map(header => header.name.toLowerCase());
+    this._refererBeforeConnection = names.includes('referer') && names.indexOf('referer') < names.indexOf('connection');
 
     const shouldIntercept = this._shouldIntercept();
     if (!shouldIntercept) {
@@ -841,7 +845,12 @@ const ON_BEFORE_CONNECT_HEADERS = ['upgrade-insecure-requests', 'sec-fetch-dest'
 // everything added from http-on-modify-request onwards. Order on the wire follows
 // nsHttpHeaderArray, and setting a header that is already present updates it in place, so moving
 // one means deleting it and adding it back.
-function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
+//
+// Whether a referer comes before "connection" depends on the request: necko adds "connection" in
+// BeginConnect and then sets a default-policy referer again (ReEvaluateReferrerAfterTrackingStatus-
+// IsKnown), so an <img> sends "connection, referer" while fetch() sends "referer, connection".
+// The caller reads which from the channel before it was intercepted.
+function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders, refererBeforeConnection) {
   const headers = requestHeaders(httpChannel);
   const nameOf = header => header.name.toLowerCase();
 
@@ -865,7 +874,8 @@ function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
 
   for (const header of displaced) {
     const boundary = nameOf(header) === 'connection' ?
-        firstIndex(h => !DEFAULT_REQUEST_HEADERS.includes(nameOf(h))) :
+        firstIndex(h => !DEFAULT_REQUEST_HEADERS.includes(nameOf(h)) &&
+            !(refererBeforeConnection && nameOf(h) === 'referer')) :
         firstIndex(h => lateHeaders.has(nameOf(h)));
     headers.splice(boundary, 0, header);
   }
