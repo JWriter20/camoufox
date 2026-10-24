@@ -1,16 +1,20 @@
 diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFontList.cpp
-index 79bfbaa6e4..d7ca275b5a 100644
+index 79bfbaa6e4..4b4d7b7382 100644
 --- a/gfx/thebes/gfxFcPlatformFontList.cpp
 +++ b/gfx/thebes/gfxFcPlatformFontList.cpp
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,11 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  #include "gfxFcPlatformFontList.h"
++#include "FontVisibilityProvider.h"
 +#include "MaskConfig.hpp"
++#include "mozilla/dom/Document.h"
++#include "mozilla/dom/NavigatorManager.h"
++#include "mozilla/dom/RoverfoxStorageManager.h"
  
  #include "SharedFontList-impl.h"
  #include "gfxFT2Utils.h"
-@@ -2404,6 +2405,19 @@ void gfxFcPlatformFontList::GetFontList(nsAtom* aLangGroup,
+@@ -2404,6 +2409,29 @@ void gfxFcPlatformFontList::GetFontList(nsAtom* aLangGroup,
  FontFamily gfxFcPlatformFontList::GetDefaultFontForPlatform(
      FontVisibilityProvider* aFontVisibilityProvider, const gfxFontStyle* aStyle,
      nsAtom* aLanguage) {
@@ -19,8 +23,18 @@ index 79bfbaa6e4..d7ca275b5a 100644
 +  // what text gets when none of a generic's font.name-list fonts is installed,
 +  // as for lang="he" serif (Narkisim, David) and lang="hy" monospace
 +  // (Arial AMU) on Windows 11. Asking fontconfig instead drew those with
-+  // whatever face it matched for the language.
-+  if (MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows) {
++  // whatever face it matched for the language. A page sees it, so it follows
++  // the OS of the document's context; the browser's own UI keeps the host's.
++  // (As for system-ui: no document means the launch's identity.)
++  const bool chrome =
++      aFontVisibilityProvider && aFontVisibilityProvider->IsChrome();
++  const mozilla::dom::Document* doc =
++      aFontVisibilityProvider ? aFontVisibilityProvider->GetDocument()
++                              : nullptr;
++  if (!chrome &&
++      mozilla::dom::NavigatorManager::GetSpoofedOS(
++          mozilla::dom::RoverfoxStorageManager::UserContextId(doc)) ==
++          MaskConfig::SpoofedOS::Windows) {
 +    FontFamily arial = FindFamily(aFontVisibilityProvider, "Arial"_ns);
 +    if (!arial.IsNull()) {
 +      return arial;

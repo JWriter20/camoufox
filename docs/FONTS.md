@@ -103,7 +103,14 @@ or PingFang on a machine claiming Linux. No reported name reveals this, and no
 draw test can see it — it is checked directly, by asking fontconfig for every
 file it can reach under each OS's conf and requiring all of them to sit inside
 that OS's own groups (810 / 780 / 793 faces, including browser-shipped
-`TwemojiMozilla.ttf`).
+`TwemojiMozilla.ttf`). The browser adds faces of its own: on startup it
+activates its `fonts/` directory (`gfx.bundled-fonts.activate`), and on Linux
+that call (`FcConfigAppFontAddDir`) is recursive too, so it put all seven
+groups back on every launch's search path; a Windows identity's Arial family
+held macOS's Arial faces. `font-hijacker.patch` makes it add only the
+directory's own files, which is all a stock build's `fonts/` holds.
+`font-fallback-windows.py` catches the leak: with it, `lang="hy"` monospace
+draws with the wrong face.
 
 The reverse direction of invariant 1 is deliberately loose: an OS renders more
 families than it ever reports (529 published vs 335 reported on Windows, 872 vs
@@ -266,7 +273,9 @@ launchers set none of it):
   `GetDefaultFontForPlatform` does: it is what a lang-tagged generic gets when
   none of its `font.name-list` fonts is installed (`lang="he"` serif names
   Narkisim and David, `lang="hy"` monospace Arial AMU, none on Windows 11),
-  where fontconfig matched another face;
+  where fontconfig matched another face. Pages see the default font, so it
+  follows the OS of the document's context, as `system-ui` does: a macOS
+  context of a Windows launch keeps fontconfig's;
 - a Windows identity gets `fonts:metrics: "windows"`, and
   `font-metrics-windows.patch` lays text out with the ascent, descent, line
   gap and em height DirectWrite derives from the same font tables (OS/2

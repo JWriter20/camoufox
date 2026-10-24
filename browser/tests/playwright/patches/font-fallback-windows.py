@@ -16,7 +16,11 @@ Windows fonts.conf, and fallback-fonts-claimed-os.patch for the per-script
 table and the default font. The default font is what a lang-tagged generic
 gets when none of its font.name-list fonts is installed: Arial on Windows
 (lang="he" serif names Narkisim and David, lang="hy" monospace Arial AMU,
-none of them on Windows 11), where fontconfig matched other faces.
+none of them on Windows 11), where fontconfig matched other faces. The
+lang="hy" monospace width also needs font-hijacker.patch's bundled-font
+activation to stay inside the Windows groups: with every OS's set activated,
+macOS's Arial faces (no Armenian) joined the Arial family and the default font
+passed Armenian on to Consolas (184.68 vs 186.15).
 
 The 6 Mongolian widths still differ (74.07 vs 74.83): the bundled
 monbaiti.ttf is an older version than Windows 11 25H2's. That is the font
