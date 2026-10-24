@@ -184,9 +184,7 @@ class NetworkRequest {
 
   // Public interception API.
   resume(url, method, headers, postData) {
-    // The order the intercepted channel had, before the resume rebuilds it.
-    const order = requestHeaders(this.httpChannel).map(header => header.name.toLowerCase());
-    this._expectingResumedRequest = { method, headers, postData, order };
+    this._expectingResumedRequest = { method, headers, postData };
     const newUri = url ? Services.io.newURI(url) : null;
     this._interceptedChannel.resetInterceptionWithURI(newUri);
     this._interceptedChannel = undefined;
@@ -237,7 +235,7 @@ class NetworkRequest {
     // and then the new request is ready to be updated.
     if (!this._expectingResumedRequest)
       return;
-    const { method, headers, postData, order } = this._expectingResumedRequest;
+    const { method, headers, postData } = this._expectingResumedRequest;
     this._overriddenHeadersForRedirect = headers;
     this._expectingResumedRequest = undefined;
 
@@ -246,7 +244,7 @@ class NetworkRequest {
       overrideRequestHeaders(this.httpChannel, headers);
     } else {
       appendExtraHTTPHeaders(this.httpChannel, extraHTTPHeaders);
-      restoreInterceptedHeaderOrder(this.httpChannel, extraHTTPHeaders, order);
+      restoreInterceptedHeaderOrder(this.httpChannel, extraHTTPHeaders);
     }
     if (method)
       this.httpChannel.requestMethod = method;
@@ -824,6 +822,8 @@ function overrideRequestHeaders(httpChannel, headers) {
 
 // Headers necko adds in HttpBaseChannel::Init, before anything else touches the channel.
 const DEFAULT_REQUEST_HEADERS = ['host', 'user-agent', 'accept', 'accept-language', 'accept-encoding'];
+// The headers present when necko adds "connection".
+const CONNECTION_FOLLOWS = [...DEFAULT_REQUEST_HEADERS, 'referer'];
 // Headers necko adds in nsHttpChannel::OnBeforeConnect, which runs after the cookie header is set
 // and after http-on-modify-request, where we add the extra headers.
 const ON_BEFORE_CONNECT_HEADERS = ['upgrade-insecure-requests', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user'];
@@ -844,12 +844,9 @@ const ON_BEFORE_CONNECT_HEADERS = ['upgrade-insecure-requests', 'sec-fetch-dest'
 // nsHttpHeaderArray, and setting a header that is already present updates it in place, so moving
 // one means deleting it and adding it back.
 //
-// "connection" goes back after the header it followed on the intercepted channel (`order`), when
-// that channel had it. Necko adds it once the channel connects, after every header present by
-// then -- so it follows the defaults for a document, but a subresource's referer, which is set
-// before that, comes first: "accept-encoding, referer, connection". Without that record it
-// follows the defaults.
-function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders, order = []) {
+// "connection" follows the defaults and, when there is one, the referer: necko sets the referer
+// before it adds "connection", so a subresource sends "accept-encoding, referer, connection".
+function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
   const headers = requestHeaders(httpChannel);
   const nameOf = header => header.name.toLowerCase();
 
@@ -871,22 +868,10 @@ function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders, order = []
     return index === -1 ? headers.length : index;
   };
 
-  const afterOriginalNeighbour = name => {
-    const index = order.indexOf(name);
-    if (index <= 0)
-      return -1;
-    const before = headers.findIndex(h => nameOf(h) === order[index - 1]);
-    return before === -1 ? -1 : before + 1;
-  };
   for (const header of displaced) {
-    let boundary;
-    if (nameOf(header) === 'connection') {
-      boundary = afterOriginalNeighbour('connection');
-      if (boundary === -1)
-        boundary = firstIndex(h => !DEFAULT_REQUEST_HEADERS.includes(nameOf(h)));
-    } else {
-      boundary = firstIndex(h => lateHeaders.has(nameOf(h)));
-    }
+    const boundary = nameOf(header) === 'connection' ?
+        firstIndex(h => !CONNECTION_FOLLOWS.includes(nameOf(h))) :
+        firstIndex(h => lateHeaders.has(nameOf(h)));
     headers.splice(boundary, 0, header);
   }
 
