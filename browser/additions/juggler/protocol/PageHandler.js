@@ -437,7 +437,16 @@ export class PageHandler {
       try {
         const principal = Services.scriptSecurityManager.createContentPrincipal(
             navigationURI, browsingContext.originAttributes);
-        Services.io.speculativeConnect(navigationURI, principal, null, false);
+        // The callbacks give the connection the tab's load context, as stock's do.
+        const callbacks = {
+          QueryInterface: ChromeUtils.generateQI(['nsIInterfaceRequestor']),
+          getInterface(iid) {
+            if (iid.equals(Ci.nsILoadContext))
+              return browsingContext;
+            throw Components.Exception('', Cr.NS_ERROR_NO_INTERFACE);
+          },
+        };
+        Services.io.speculativeConnect(navigationURI, principal, callbacks, false);
       } catch (e) {
         // As in stock: a URI that cannot be pre-connected just loads.
       }
