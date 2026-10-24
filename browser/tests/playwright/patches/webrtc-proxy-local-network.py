@@ -61,7 +61,7 @@ GATHER = """async (stun) => {
   const pc = new RTCPeerConnection({iceServers: [{urls: stun}]});
   const srflx = [];
   const start = performance.now();
-  const elapsed = await new Promise(resolve => {
+  const ended = new Promise(resolve => {
     setTimeout(() => resolve(null), 30000);
     pc.onicecandidate = e => {
       if (!e.candidate) return resolve(performance.now() - start);
@@ -71,6 +71,7 @@ GATHER = """async (stun) => {
   });
   pc.createDataChannel('probe');
   await pc.setLocalDescription(await pc.createOffer());
+  const elapsed = await ended;
   pc.close();
   return {srflx, elapsed};
 }"""
