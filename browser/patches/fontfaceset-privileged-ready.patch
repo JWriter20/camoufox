@@ -2,17 +2,16 @@ diff --git a/layout/style/FontFaceSet.cpp b/layout/style/FontFaceSet.cpp
 index d79060dd93..42d8c67ab2 100644
 --- a/layout/style/FontFaceSet.cpp
 +++ b/layout/style/FontFaceSet.cpp
-@@ -12,6 +12,9 @@
+@@ -12,6 +12,8 @@
  #include "gfxFontUtils.h"
  #include "mozilla/AsyncEventDispatcher.h"
  #include "mozilla/BasePrincipal.h"
-+#include "ExpandedPrincipal.h"
 +#include "nsContentUtils.h"
 +#include "xpcpublic.h"
  #include "mozilla/FontPropertyTypes.h"
  #include "mozilla/LoadInfo.h"
  #include "mozilla/Logging.h"
-@@ -68,6 +71,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(FontFaceSet,
+@@ -68,6 +70,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(FontFaceSet,
                                                    DOMEventTargetHelper)
    NS_IMPL_CYCLE_COLLECTION_TRAVERSE_RAWPTR(mImpl->GetDocument());
    NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mReady);
@@ -20,7 +19,7 @@ index d79060dd93..42d8c67ab2 100644
    for (size_t i = 0; i < tmp->mRuleFaces.Length(); i++) {
      NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRuleFaces[i].mFontFace);
    }
-@@ -80,6 +84,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(FontFaceSet,
+@@ -80,6 +83,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(FontFaceSet,
                                                  DOMEventTargetHelper)
    tmp->Destroy();
    NS_IMPL_CYCLE_COLLECTION_UNLINK(mReady);
@@ -28,7 +27,7 @@ index d79060dd93..42d8c67ab2 100644
    for (size_t i = 0; i < tmp->mRuleFaces.Length(); i++) {
      NS_IMPL_CYCLE_COLLECTION_UNLINK(mRuleFaces[i].mFontFace);
    }
-@@ -196,9 +201,37 @@ bool FontFaceSet::ReadyPromiseIsPending() const {
+@@ -196,9 +200,37 @@ bool FontFaceSet::ReadyPromiseIsPending() const {
                  : !mResolveLazilyCreatedReadyPromise;
  }
  
@@ -58,7 +57,7 @@ index d79060dd93..42d8c67ab2 100644
 +  if (NS_IsMainThread() && nsContentUtils::GetCurrentJSContext()) {
 +    nsIPrincipal* subject = nsContentUtils::SubjectPrincipal();
 +    if (subject->IsSystemPrincipal() ||
-+        BasePrincipal::Cast(subject)->Is<ExpandedPrincipal>()) {
++        subject->GetIsExpandedPrincipal()) {
 +      return GetPrivilegedReady(aRv);
 +    }
 +  }
@@ -66,7 +65,7 @@ index d79060dd93..42d8c67ab2 100644
    if (!mReady) {
      nsCOMPtr<nsIGlobalObject> global = GetParentObject();
      mReady = Promise::Create(global, aRv);
-@@ -420,6 +453,10 @@ void FontFaceSet::MaybeResolve() {
+@@ -420,6 +452,10 @@ void FontFaceSet::MaybeResolve() {
    } else {
      mResolveLazilyCreatedReadyPromise = true;
    }
