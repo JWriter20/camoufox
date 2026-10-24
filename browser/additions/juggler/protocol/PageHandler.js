@@ -317,7 +317,10 @@ export class PageHandler {
   }
 
   async ['Page.bringToFront'](options) {
-    await this._pageTarget.activateAndRun(() => {});
+    // Camoufox: and the page takes the focus, as when a user clicks into it.
+    // Raising the window alone left focus on nothing once another window had
+    // been open, and the page never learnt it was the active tab again.
+    await this._pageTarget.activateAndRun(() => this._pageTarget.linkedBrowser().focus());
   }
 
   async ['Page.setCacheDisabled']({cacheDisabled}) {
@@ -449,6 +452,15 @@ export class PageHandler {
       hasValidUserGestureActivation: true,
     });
     unsubscribe();
+    // Camoufox: a URL loaded from the address bar hands focus to the page
+    // (UrlbarParentController.focusBrowser). Without it a window that opened on
+    // about:blank keeps focus in its chrome, and once the load moves the tab to
+    // a content process that process never learns it is the active tab:
+    // requestPointerLock() rejected "The document is not focused." where stock
+    // reaches its gesture check.
+    const linkedBrowser = this._pageTarget.linkedBrowser();
+    if (!browsingContext.parent && linkedBrowser === linkedBrowser.ownerDocument?.defaultView?.gBrowser?.selectedBrowser)
+      linkedBrowser.focus();
 
     return {
       navigationId: sameDocumentNavigation ? null : navigationId,
