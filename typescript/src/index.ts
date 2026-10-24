@@ -11,6 +11,24 @@ export {
 	AsyncNewContext,
 } from "./async_api.js";
 export {
+	AccountSuspended,
+	AllowanceExhausted,
+	BuildNotAllowlisted,
+	CapabilityMismatch,
+	GpuUnavailable,
+	InvalidRequest,
+	LeaseLimitReached,
+	LeaseRefused,
+	NotSignedIn,
+	ProClockSkew,
+	ProError,
+	ProfileMismatch,
+	ProUnavailable,
+	RateLimited,
+	StatePoolSealed,
+	SubscriptionRequired,
+} from "./exceptions.js";
+export {
 	generateContextFingerprint,
 	getRandomPreset,
 	loadPresets,
@@ -45,6 +63,7 @@ export {
 } from "./multiversion.js";
 export { INSTALL_DIR, OS_NAME } from "./paths.js";
 export { CamoufoxFetcher, installedVerStr, RepoConfig } from "./pkgman.js";
+export type { LeaseRequest, ProSession } from "./pro.js";
 export { type LaunchServerOptions, launchServer } from "./server.js";
 export {
 	Camoufox,

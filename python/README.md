@@ -285,7 +285,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `geoip` | `bool` or `str` | none | `True` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. Needs the `geoip` extra. |
 | `geoip_db` | `str` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `str` or `list[str]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"` or `["fr-FR", "en-US"]`. The first is used for `Intl`. |
-| `humanize` | `bool` or `float` | off | Human cursor movement. A number caps one movement at that many seconds (default cap 1.5). |
+| `humanize` | `bool`, `float` or `dict` | off | Humanized input. A number caps one cursor movement at that many seconds (default cap 1.5); a dict picks an engine per channel ([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)). |
 | `screen` | `camoufox.fingerprints.Screen` | the real display when headed | Bounds the generated screen: `Screen(max_width=1920, max_height=1080)`. |
 | `window` | `(int, int)` | generated | Fixed outer window size. |
 | `fonts` | `list[str]` | none | Extra font families on top of the OS's own. |
@@ -314,6 +314,9 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `virtual_display` | `str` | none | Use an existing X display, e.g. `":99"`. |
 | `i_know_what_im_doing` | `bool` | `False` | Silence the leak warnings above. |
 | `debug` | `bool` | `False` | Print the config sent to the browser. |
+| `pro_key` | `str` | `CAMOUFOX_PRO_KEY`, then the `camoufox login` key | Camoufox Pro key for a Pro build, which launches with a lease ([docs/pro.md](https://github.com/daijro/camoufox/blob/main/docs/pro.md)). |
+| `profile`, `warm_plan`, `egress`, `farm_gpu` | see docs/pro.md | none | Camoufox Pro lease options: a stored profile, its warm plan, managed egress, and `farm_gpu=False` to render on this machine instead of a remote GPU. |
+| `pool_profile` | `str` | none | Camoufox Pro's pool warmer only: the pool profile this launch presents. |
 
 `NewBrowser` and `AsyncNewBrowser` also take `persistent_context` and
 `from_options` (a dict from `launch_options()` to use as is).
@@ -336,6 +339,9 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `server` | | Start a Playwright server with default options and print its websocket endpoint. |
 | `gpu-setup [GPU]` | | Print the root script that sets this machine up for `headless="virtual-gpu"` on the card `GPU` names (or `CAMOUFOX_GPU`). Run it with `\| sudo sh`. |
 | `gpu-xorg-config [GPU]` | | Print the Xorg config `headless="virtual-gpu"` needs for the card `GPU` names (or `CAMOUFOX_GPU`). |
+| `login` | | Sign in to Camoufox Pro on this machine and store its key. |
+| `logout` | | Delete the stored Camoufox Pro key. |
+| `pro` | `--activate`, `--executable-path PATH`, `--os` | `--activate` mints a lease for the local Pro build, prints what it grants, and releases it; exits 0 only when granted. |
 
 `set` and `fetch` read builds from these repositories (`repos.yml`):
 

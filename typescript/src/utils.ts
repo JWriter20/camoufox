@@ -67,7 +67,12 @@ import {
 	validIPv6,
 } from "./ip.js";
 import { handleLocales } from "./locales.js";
-import { INSTALL_DIR, LAUNCHER_CONSTANTS, OS_NAME } from "./paths.js";
+import {
+	INSTALL_DIR,
+	LAUNCHER_CONSTANTS,
+	OS_NAME,
+	userCacheDir,
+} from "./paths.js";
 import {
 	buildFile,
 	effectiveVersionMin,
@@ -81,6 +86,8 @@ import {
 	Version,
 	warnIfPackageOutdated,
 } from "./pkgman.js";
+import * as pro from "./pro.js";
+import { openProfile } from "./pro-profile.js";
 import {
 	comparePyStr,
 	formatPyFloatRepr,
@@ -563,6 +570,7 @@ interface PropertyEntry {
 	property: string;
 	type: string;
 	removed?: string;
+	min?: number;
 }
 
 /**
@@ -585,7 +593,8 @@ function loadProperties(
 }
 
 /**
- * Validates the config map.
+ * Validates the config map against the build's properties.json, and lifts a
+ * numeric value below its declared `min` up to it.
  */
 export function validateConfig(
 	configMap: Record<string, any>,
@@ -606,15 +615,142 @@ export function validateConfig(
 			continue;
 		}
 		const expectedType = entry.type;
-
 		if (!validateType(value, expectedType)) {
 			throw new InvalidPropertyType(
 				`Invalid type for property ${key}. Expected ${expectedType}, got ${pyTypeName(value)}`,
 			);
 		}
 
+		if (entry.min !== undefined) {
+			const n = value instanceof PyFloat ? value.value : Number(value);
+			if (n < entry.min) configMap[key] = entry.min;
+		}
+
 		if (key === "voices") {
 			validateVoices(value);
+		}
+	}
+}
+
+interface LaunchRule {
+	target?: string[];
+	host?: string[];
+	prefs?: Record<string, any>;
+	env?: Record<string, string>;
+	envPaths?: Record<string, string>;
+	envPathsOptional?: Record<string, string>;
+	envFromConfig?: Record<string, string>;
+	config?: Record<string, any>;
+	ldPreload?: string[];
+	envCacheDirs?: Record<string, string>;
+	exclusive?: boolean;
+	warn?: string;
+}
+
+/**
+ * Applies the prefs and environment variables the build declares in its
+ * launch.json. A build that needs a pref or variable set at launch for a
+ * feature it compiles in says so there, so the launcher needs no knowledge of
+ * any particular build. Most builds ship no launch.json.
+ *
+ * Each rule may restrict itself to identity OSes (`target`) and host OSes
+ * (`host`), both in 'win'/'mac'/'lin' terms. `env` sets variables verbatim,
+ * `envPaths` to a file relative to the build's directory, which must exist,
+ * `envPathsOptional` likewise but only when the file exists, and
+ * `envFromConfig` to the value of a config key when the identity has one.
+ * `config` sets config keys. `ldPreload` appends each build-relative
+ * library that exists to LD_PRELOAD (appended, never replacing one the
+ * caller has), and `envCacheDirs` points each variable at a per-user cache
+ * directory of that name, created on demand. A pref or config key the caller
+ * set, or a variable already in the environment, is never replaced.
+ *
+ * An `exclusive` rule owns its variables: where it does not apply they are
+ * removed from the environment, the caller's included, so a feature meant for
+ * one target/host pairing cannot leak into another through an inherited
+ * variable. A rule's `warn` is emitted as a RuntimeWarning when it applies.
+ */
+export function applyLaunchRules(
+	targetOs: string,
+	config: Record<string, any>,
+	firefoxUserPrefs: Record<string, any>,
+	userPrefKeys: Set<string>,
+	env: Record<string, any>,
+	executablePath?: string | null,
+): void {
+	const launchFile = executablePath
+		? buildFile(executablePath, "launch.json")
+		: utilsDeps.getPath("launch.json");
+	if (!fs.existsSync(launchFile)) return;
+	const rules: LaunchRule[] = JSON.parse(
+		fs.readFileSync(launchFile, "utf-8"),
+	).rules;
+
+	const hostOs = utilsDeps.hostOsKey();
+	const applies = (rule: LaunchRule): boolean =>
+		!(rule.target && !rule.target.includes(targetOs)) &&
+		!(rule.host && !(hostOs && rule.host.includes(hostOs)));
+	const owned = (rule: LaunchRule): string[] => [
+		...Object.keys(rule.env ?? {}),
+		...Object.keys(rule.envPaths ?? {}),
+		...Object.keys(rule.envPathsOptional ?? {}),
+		...Object.keys(rule.envFromConfig ?? {}),
+		...Object.keys(rule.envCacheDirs ?? {}),
+	];
+
+	const matched = rules.filter(applies);
+	const claimed = new Set(matched.flatMap(owned));
+	for (const rule of rules) {
+		if (!rule.exclusive || applies(rule)) continue;
+		for (const key of owned(rule)) {
+			if (!claimed.has(key)) delete env[key];
+		}
+	}
+
+	for (const rule of matched) {
+		if (rule.warn) warn(String(rule.warn), "RuntimeWarning");
+		for (const [key, value] of Object.entries(rule.prefs ?? {})) {
+			if (!userPrefKeys.has(key)) firefoxUserPrefs[key] = value;
+		}
+		for (const [key, value] of Object.entries(rule.env ?? {})) {
+			if (!(key in env)) env[key] = value;
+		}
+		for (const [key, relative] of Object.entries(rule.envPaths ?? {})) {
+			if (key in env) continue;
+			const resolved = path.join(path.dirname(launchFile), relative);
+			if (!fs.existsSync(resolved)) {
+				throw new Error(
+					`${launchFile} needs ${resolved} for ${key}, and it does not exist.`,
+				);
+			}
+			env[key] = resolved;
+		}
+		for (const [key, relative] of Object.entries(rule.envPathsOptional ?? {})) {
+			const resolved = path.join(path.dirname(launchFile), relative);
+			if (!(key in env) && fs.existsSync(resolved)) env[key] = resolved;
+		}
+		for (const [key, value] of Object.entries(rule.config ?? {})) {
+			if (!(key in config)) config[key] = value;
+		}
+		// `env` is the caller's environment (a copy of process.env by default)
+		// and is spread last into the launch environment, so appending here is
+		// what keeps an LD_PRELOAD someone already has.
+		for (const relative of rule.ldPreload ?? []) {
+			const resolved = path.join(path.dirname(launchFile), relative);
+			const preload = env.LD_PRELOAD ? String(env.LD_PRELOAD) : "";
+			if (fs.existsSync(resolved) && !preload.split(":").includes(resolved)) {
+				env.LD_PRELOAD = preload ? `${preload}:${resolved}` : resolved;
+			}
+		}
+		for (const [key, name] of Object.entries(rule.envCacheDirs ?? {})) {
+			if (key in env) continue;
+			const cacheDir = userCacheDir(`camoufox-${name}`);
+			fs.mkdirSync(cacheDir, { recursive: true });
+			env[key] = cacheDir;
+		}
+		for (const [key, configKey] of Object.entries(rule.envFromConfig ?? {})) {
+			if (configKey in config && !(key in env)) {
+				env[key] = pyStr(config[configKey]);
+			}
 		}
 	}
 }
@@ -1108,7 +1244,13 @@ export async function hostIdentity(
 	canvasNoise: boolean | undefined,
 ): Promise<HostIdentity | null> {
 	const prefs = fromOptions.firefoxUserPrefs ?? {};
-	if (canvasNoise != null || hasCanvasPlaceholder(prefs)) return null;
+	// A farm-rendered browser draws on the farm, not on this host.
+	if (
+		canvasNoise != null ||
+		hasCanvasPlaceholder(prefs) ||
+		pro.RENDER_FILE_ENV in (fromOptions.env ?? {})
+	)
+		return null;
 	// Without the placeholder, the launch claimed the host's OS and no named GPU.
 	const hostOs = utilsDeps.hostOsKey();
 	const [covered, gpu] = await planRendering(
@@ -1424,6 +1566,33 @@ export interface LaunchOptions {
 	 * (webgl_config, a preset's, or a host GPU fpgen never recorded), whose
 	 * canvas would otherwise show the host. */
 	canvas_noise?: boolean | null;
+	/** Camoufox Pro key (cfp_live_...) for a Pro build. Defaults to
+	 * CAMOUFOX_PRO_KEY, then the key `camoufox login` stored. A Pro build is
+	 * launched with a lease minted with it (see docs/pro.md); the lease is
+	 * released when the browser closes, or at exit when these options are
+	 * launched without NewBrowser/Camoufox. */
+	pro_key?: string;
+	/** A Camoufox Pro profile's key (any name up to 64 characters). The browser
+	 * presents the profile's identity, the same on every launch, and its state
+	 * (cookies, storage, logins) is restored before the launch and synced back
+	 * when it closes. Needs `os`; the launch is a persistent context. See
+	 * docs/pro.md, "Profiles". */
+	profile?: string;
+	/** The warm plan a new `profile` is created with: `"none"` (the default
+	 * with your own `proxy`) is the only plan whose state syncs to this
+	 * machine; `"standard"` and `"continuous"` profiles are kept warm in the
+	 * cloud and launch with their identity only. Left out, the API decides. */
+	warm_plan?: "none" | "standard" | "continuous";
+	/** Camoufox Pro managed egress: `false` for none, `true` for CamouProxy
+	 * with defaults, or the egress wanted, e.g. `{ class: "residential",
+	 * country: "US" }`, with `provider` naming a partner provider instead of
+	 * CamouProxy. Left out, a `profile` gets CamouProxy and a launch without
+	 * one goes direct.
+	 * With your own `proxy` there is none, and passing both throws. */
+	egress?: boolean | pro.EgressRequest;
+	/** `false` renders WebGL, WebGPU and canvas on this machine's GPU for a
+	 * Camoufox Pro Windows identity, instead of on a remote GPU. */
+	farm_gpu?: false;
 	/** Additional Firefox launch options, passed straight through to Playwright. */
 	[key: string]: any;
 }
@@ -1434,44 +1603,76 @@ export interface LaunchOptions {
  * Accepts all Playwright Firefox launch options, along with the Camoufox ones
  * documented on {@link LaunchOptions}.
  */
-export async function launchOptions({
-	config,
-	os: targetOsOption,
-	block_images,
-	block_webrtc,
-	block_webgl,
-	disable_coop,
-	webgl_config,
-	geoip,
-	geoip_db,
-	humanize,
-	locale,
-	addons,
-	fonts,
-	custom_fonts_only,
-	exclude_addons,
-	screen,
-	window,
-	fingerprint,
-	fingerprint_preset,
-	ff_version,
-	headless,
-	main_world_eval,
-	allow_addon_new_tab,
-	executable_path,
-	browser,
-	firefox_user_prefs,
-	proxy,
-	enable_cache,
-	args,
-	env,
-	i_know_what_im_doing,
-	debug,
-	virtual_display,
-	pin_cpu_cores,
-	canvas_noise,
-	...passthrough
-}: LaunchOptions = {}): Promise<Record<string, any>> {
+export async function launchOptions(
+	options: LaunchOptions = {},
+): Promise<Record<string, any>> {
+	// A Camoufox Pro lease minted along the way goes back if the build fails.
+	const held: { lease: pro.Lease | null } = { lease: null };
+	try {
+		return await buildLaunchOptions(options, held);
+	} catch (error) {
+		await held.lease?.release("error");
+		throw error;
+	}
+}
+
+const OS_CODE: Record<string, string> = {
+	windows: "win",
+	macos: "mac",
+	linux: "lin",
+};
+
+/** The Firefox version of the build at `executablePath`, without Camoufox's release suffix. */
+function firefoxVersion(executablePath: string): string {
+	return resolveVerstr(executablePath).split("-", 1)[0];
+}
+
+async function buildLaunchOptions(
+	{
+		config,
+		os: targetOsOption,
+		block_images,
+		block_webrtc,
+		block_webgl,
+		disable_coop,
+		webgl_config,
+		geoip,
+		geoip_db,
+		humanize,
+		locale,
+		addons,
+		fonts,
+		custom_fonts_only,
+		exclude_addons,
+		screen,
+		window,
+		fingerprint,
+		fingerprint_preset,
+		ff_version,
+		headless,
+		main_world_eval,
+		allow_addon_new_tab,
+		executable_path,
+		browser,
+		firefox_user_prefs,
+		proxy,
+		enable_cache,
+		args,
+		env,
+		i_know_what_im_doing,
+		debug,
+		virtual_display,
+		pin_cpu_cores,
+		canvas_noise,
+		pro_key,
+		profile,
+		warm_plan,
+		egress,
+		farm_gpu,
+		...passthrough
+	}: LaunchOptions,
+	held: { lease: pro.Lease | null },
+): Promise<Record<string, any>> {
 	utilsDeps.ensureBrowserProfileDir(env);
 
 	// The launch fills these in, so it works on copies: a caller's object
@@ -1484,6 +1685,9 @@ export async function launchOptions({
 
 	// Set default values for optional arguments
 	headless ??= false;
+	// The caller's own prefs, before the launcher adds any: a pref the build
+	// declares in launch.json never replaces one of these.
+	const userPrefKeys = new Set(Object.keys(firefox_user_prefs));
 	custom_fonts_only ??= false;
 	i_know_what_im_doing ??= false;
 	// Keep per-launch overrides isolated from the process environment and from
@@ -1509,6 +1713,97 @@ export async function launchOptions({
 	}
 	if (typeof executable_path === "string") {
 		executable_path = path.resolve(executable_path);
+	}
+
+	// The managed install is resolved lazily in Python (camoufox_path() may
+	// download); here that download is async, so do it before any sync lookup.
+	if (!executable_path) {
+		await utilsDeps.ensureCamoufoxInstalled();
+	}
+
+	// A Pro build is recognised by its files, so the binary is resolved before
+	// the lease.
+	const resolvedExecutable = executable_path
+		? String(executable_path)
+		: utilsDeps.launchPath();
+
+	// A Pro build does not start without a lease. The caller's own lease file,
+	// if they hold one, wins, as every other variable in the environment does.
+	const proBuild = pro.readBuild(
+		buildFile(resolvedExecutable, "pro-build.json"),
+	);
+	const leased = Boolean(proBuild) && !(pro.LEASE_FILE_ENV in env);
+	const proRequest: pro.LeaseRequest = {};
+	if (profile !== undefined) proRequest.profile = profile;
+	if (warm_plan !== undefined) {
+		if (profile === undefined) {
+			throw new ValueError("warm_plan applies to a profile: pass profile too.");
+		}
+		proRequest.warm_plan = warm_plan;
+	}
+	// The caller's own proxy is never replaced by managed egress, and asking for both is a mistake
+	// worth naming rather than a request to drop one of them quietly.
+	if (proxy != null && egress !== undefined && egress !== false) {
+		throw new ValueError(
+			"proxy and egress conflict: with your own proxy there is no managed egress. " +
+				"Pass proxy to use your own, or egress (and no proxy) for managed egress.",
+		);
+	}
+	if (egress !== undefined) proRequest.egress = egress;
+	if (farm_gpu === false) proRequest.gpu = false;
+	if (Object.keys(proRequest).length && !leased) {
+		throw new ValueError(
+			proBuild
+				? `profile, warm_plan, egress and farm_gpu are lease options, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
+				: "profile, warm_plan, egress and farm_gpu need a Camoufox Pro build (see docs/pro.md).",
+		);
+	}
+	// Your own proxy, asked for no other way, means no managed egress.
+	if (proxy != null) proRequest.egress = false;
+	// What the lease adds to the environment, after every launch rule.
+	const proEnv: EnvVars = {};
+
+	if (profile !== undefined && proBuild) {
+		if (typeof targetOsOption !== "string") {
+			throw new ValueError(
+				"A profile launch needs `os`: the one OS its identity presents.",
+			);
+		}
+		checkValidOs(targetOsOption);
+		if (
+			fingerprint != null ||
+			pyTruthy(fingerprint_preset) ||
+			pyTruthy(config) ||
+			passthrough.user_data_dir !== undefined ||
+			passthrough.userDataDir !== undefined
+		) {
+			throw new ValueError(
+				"A profile carries its own identity and browser state: pass no config, fingerprint, " +
+					"fingerprint_preset or user_data_dir with it.",
+			);
+		}
+		held.lease = await pro.acquire(
+			proBuild,
+			OS_CODE[targetOsOption],
+			pro_key,
+			proRequest,
+		);
+		const { identity, userDataDir } = await openProfile(
+			held.lease,
+			firefoxVersion(resolvedExecutable),
+		);
+		// The identity is the bundle's, whole: nothing is drawn for it here.
+		config = identity.config;
+		fingerprint = identity.fingerprint;
+		targetOsOption = identity.os;
+		ff_version = identity.ff_version;
+		exclude_addons = identity.exclude_addons as DefaultAddon[];
+		i_know_what_im_doing = true;
+		Object.assign(firefox_user_prefs, identity.firefox_user_prefs);
+		for (const key of Object.keys(identity.firefox_user_prefs)) {
+			userPrefKeys.add(key);
+		}
+		passthrough.user_data_dir = userDataDir;
 	}
 
 	// Handle virtual display
@@ -1571,11 +1866,6 @@ export async function launchOptions({
 		config.addons = addons;
 	}
 
-	// The managed install is resolved lazily in Python (camoufox_path() may
-	// download); here that download is async, so do it before any sync lookup.
-	if (!executable_path) {
-		await utilsDeps.ensureCamoufoxInstalled();
-	}
 	warnIfPackageOutdated();
 
 	// Get the Firefox version
@@ -1632,6 +1922,36 @@ export async function launchOptions({
 	}
 
 	const targetOs = getTargetOs(config);
+
+	if (leased) {
+		held.lease ??= await pro.acquire(
+			proBuild as pro.ProBuild,
+			targetOs,
+			pro_key,
+			proRequest,
+		);
+		proEnv[pro.LEASE_FILE_ENV] = held.lease.path;
+		const grants = held.lease.grants;
+		if (grants.egress) {
+			proxy = {
+				server: grants.egress.server,
+				username: grants.egress.username,
+				password: grants.egress.password,
+				// The egress refuses local destinations, so they go direct.
+				bypass: "localhost,127.0.0.1,::1,*.local",
+			};
+			geoip ??= grants.egress.exit_ip ?? true;
+		}
+		// A profile's bundle leaves timezone and locale to the exit it runs behind.
+		if (grants.profile) geoip ??= true;
+		if (grants.gpu) {
+			proEnv[pro.RENDER_FILE_ENV] = held.lease.renderPath as string;
+			Object.assign(firefox_user_prefs, grants.gpu.prefs);
+			for (const key of Object.keys(grants.gpu.prefs)) userPrefKeys.add(key);
+			// The farm draws the canvas on the identity's own OS, so there is nothing to cover.
+			canvas_noise ??= false;
+		}
+	}
 
 	// A preset whose screen is a phone viewport is not a real desktop device.
 	if (!userSetScreenWindow && coherence.screenIsImplausible(config)) {
@@ -1968,10 +2288,6 @@ export async function launchOptions({
 	// reads the core count and the screen, which the launch replaces above.
 	coherence.dropIncoherentSourceValues(config, targetOs);
 
-	const resolvedExecutable = executable_path
-		? String(executable_path)
-		: utilsDeps.launchPath();
-
 	const [coverCanvas, host] = await planRendering(
 		targetOs,
 		canvas_noise,
@@ -2088,6 +2404,15 @@ export async function launchOptions({
 		console.log(inspect(config, { depth: null, sorted: true }));
 	}
 
+	applyLaunchRules(
+		targetOs,
+		config,
+		firefox_user_prefs,
+		userPrefKeys,
+		env,
+		executable_path,
+	);
+
 	// Validate the config
 	warnIfExecutablePredatesPlaywright(executable_path);
 	utilsDeps.validateConfig(config, executable_path);
@@ -2098,6 +2423,8 @@ export async function launchOptions({
 		...getPrefEnvVars(firefox_user_prefs),
 		...env,
 	};
+
+	Object.assign(envVars, proEnv);
 
 	const result: Record<string, any> = {
 		executablePath: resolvedExecutable,

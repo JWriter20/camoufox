@@ -10,7 +10,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from . import _humanize_custom
+from . import _humanize_custom, pro
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
@@ -159,6 +159,9 @@ def _launch(
     from . import cpu_affinity
     from .utils import driver_pid, pinned_core_count
 
+    lease = pro.claim(from_options, virtual_display)
+    # A Camoufox Pro profile runs in its own user-data directory.
+    persistent_context = persistent_context or bool(lease and lease.grants.get('profile'))
     pin_to = pinned_core_count(from_options)
     pid = driver_pid(playwright) if pin_to else None
     previous = cpu_affinity.pin(pid, pin_to) if pid else None
@@ -167,13 +170,20 @@ def _launch(
             context = playwright.firefox.launch_persistent_context(
                 **persistent_context_options(from_options, no_viewport_default)
             )
+            if lease:
+                pro.attach_lease(lease, context, 'close')
             return sync_attach_vd(context, virtual_display)
 
         identity = host_identity(from_options, canvas_noise)
         browser = playwright.firefox.launch(**from_options)
+        if lease:
+            pro.attach_lease(lease, browser, 'disconnected')
         attach_context_defaults(browser, no_viewport_default)
         browser._camoufox_host_identity = identity
         return sync_attach_vd(browser, virtual_display)
+    except Exception as error:
+        pro.launch_failed(lease, error)
+        raise
     finally:
         if pid:
             cpu_affinity.restore(pid, previous)

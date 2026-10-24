@@ -13,6 +13,7 @@ import { type BrowserServer, firefox } from "playwright-core";
 import { withUnpinnedLaunch } from "./cpu_affinity.js";
 import { GpuDisplay, proveGpu } from "./gpudisplay.js";
 import { customEngines } from "./humanize.js";
+import { attachLease, claim, type Lease, launchFailed } from "./pro.js";
 import { ValueError } from "./pycompat.js";
 import { camelCase } from "./sync_api.js";
 import {
@@ -62,12 +63,17 @@ export async function launchServer({
 	headless,
 	...options
 }: LaunchServerOptions = {}): Promise<BrowserServer> {
-	for (const unsupported of ["persistent_context", "user_data_dir"] as const) {
+	// A Camoufox Pro profile launches as a persistent context too.
+	for (const unsupported of [
+		"persistent_context",
+		"user_data_dir",
+		"profile",
+	] as const) {
 		if (options[unsupported]) {
 			throw new Error(
 				`launch_server() does not support '${unsupported}': Playwright cannot ` +
 					"serve a persistent context over a websocket endpoint. Use " +
-					"Camoufox(persistent_context=True, ...) in-process instead.",
+					"Camoufox(...) in-process instead.",
 			);
 		}
 		delete options[unsupported];
@@ -87,13 +93,16 @@ export async function launchServer({
 		options,
 	);
 
+	let lease: Lease | null = null;
 	try {
 		const config = await launchOptions({ ...options, headless: headlessBool });
+		lease = await claim(config, virtualDisplay);
 		// The server's browser is spawned from this process too, so it must not
 		// start inside another launch's CPU pin.
 		const server = await withUnpinnedLaunch(() =>
 			firefox.launchServer(toCamelCaseDict(config)),
 		);
+		if (lease) attachLease(lease, server, "close");
 
 		if (virtualDisplay) {
 			// BrowserServer has no "disconnected" event; "close" fires on shutdown.
@@ -115,6 +124,7 @@ export async function launchServer({
 		return server;
 	} catch (error) {
 		virtualDisplay?.kill();
+		await launchFailed(lease, error);
 		throw error;
 	}
 }

@@ -921,6 +921,87 @@ def server():
     launch_server()
 
 
+@cli.command(name="login")
+def login():
+    """
+    Sign in to Camoufox Pro on this machine
+    """
+    from .exceptions import ProError
+    from .pro import login as device_login
+
+    try:
+        signed_in = device_login(echo=click.echo)
+    except ProError as error:
+        rprint(str(error), fg="red")
+        raise SystemExit(1) from None
+    rprint(
+        f"Signed in to {signed_in['account']['name']} as {signed_in['user']['github_login']}. "
+        f"The key is stored in {signed_in['path']}.",
+        fg="green",
+    )
+
+
+@cli.command(name="logout")
+def logout():
+    """
+    Delete the Camoufox Pro key stored on this machine
+    """
+    from .pro import forget_key
+
+    forgotten = forget_key()
+    if forgotten is None:
+        rprint("No Camoufox Pro key is stored on this machine.", fg="yellow")
+        return
+    rprint(
+        f"Deleted {forgotten} from this machine. It stays valid until you revoke it "
+        "in the Camoufox Pro dashboard.",
+        fg="green",
+    )
+
+
+@cli.command(name="pro")
+@click.option(
+    "--activate",
+    is_flag=True,
+    help="Mint a lease for the local Pro build, report what it grants, and release it.",
+)
+@click.option(
+    "--executable-path",
+    type=click.Path(dir_okay=False),
+    help="The Pro build's executable. Defaults to CAMOUFOX_EXECUTABLE_PATH, then the active install.",
+)
+@click.option(
+    "--os",
+    "target_os",
+    type=click.Choice(["windows", "macos", "linux"]),
+    help="The identity OS to lease for. Defaults to this machine's.",
+)
+@click.pass_context
+def pro_cmd(ctx, activate, executable_path, target_os):
+    """
+    Check Camoufox Pro on this machine
+    """
+    if not activate:
+        click.echo(ctx.get_help())
+        return
+    from pathlib import Path
+
+    from . import pro
+    from .exceptions import CamoufoxNotInstalled, UnsupportedVersion
+    from .pkgman import build_file, camoufox_path, launch_path
+
+    executable = executable_path or environ.get("CAMOUFOX_EXECUTABLE_PATH", "").strip()
+    if not executable:
+        try:
+            executable = launch_path(camoufox_path(download_if_missing=False))
+        except (CamoufoxNotInstalled, UnsupportedVersion) as error:
+            click.echo(f"[FAIL] no Camoufox Pro build: {error}")
+            raise SystemExit(1) from None
+    os_code = {name: code for code, name in pro.TARGET_OS.items()}[target_os or pro.HOST_OS]
+    if not pro.activate(str(build_file(executable, "pro-build.json")), os_code, echo=click.echo):
+        raise SystemExit(1)
+
+
 @cli.command(name="gpu-xorg-config")
 @click.argument("gpu", required=False)
 def gpu_xorg_config(gpu: Optional[str] = None) -> None:

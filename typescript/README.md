@@ -239,7 +239,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first is used for `Intl`. |
-| `humanize` | `boolean \| number` | off | Human cursor movement. A number caps one movement at that many seconds (default cap 1.5). |
+| `humanize` | `boolean \| number \| object` | off | Humanized input. A number caps one cursor movement at that many seconds (default cap 1.5); an object picks an engine per channel ([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)). |
 | `screen` | `Screen \| { max_width?, max_height?, min_width?, min_height? }` | the real display when headed | Bounds the generated screen. |
 | `window` | `[number, number]` | generated | Fixed outer window size. |
 | `fonts` | `string[]` | none | Extra font families on top of the OS's own. |
@@ -268,6 +268,8 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `virtual_display` | `string` | none | Use an existing X display, e.g. `":99"`. |
 | `i_know_what_im_doing` | `boolean` | `false` | Silence the leak warnings above. |
 | `debug` | `boolean` | `false` | Print the config sent to the browser. |
+| `pro_key` | `string` | `CAMOUFOX_PRO_KEY`, then the `camoufox login` key | Camoufox Pro key for a Pro build, which launches with a lease ([docs/pro.md](https://github.com/daijro/camoufox/blob/main/docs/pro.md)). |
+| `profile`, `warm_plan`, `egress`, `farm_gpu` | see docs/pro.md | none | Camoufox Pro lease options: a stored profile, its warm plan, managed egress, and `farm_gpu: false` to render on this machine instead of a remote GPU. |
 
 `Camoufox()` and `NewBrowser()` also take `persistent_context`, `user_data_dir`
 and `from_options` (an object from `launchOptions()` to use as is).
@@ -334,6 +336,9 @@ The same seed and function give the same events as the Python launcher.
 | `server` | | Start a Playwright server and print its websocket endpoint. |
 | `gpu-setup [gpu]` | | Print the root script that sets this machine up for `headless: "virtual-gpu"` on the card `gpu` names (or `CAMOUFOX_GPU`). Run it with `\| sudo sh`. |
 | `gpu-xorg-config [gpu]` | | Print the Xorg config `headless: "virtual-gpu"` needs for the card `gpu` names (or `CAMOUFOX_GPU`). |
+| `login` | | Sign in to Camoufox Pro on this machine and store its key. |
+| `logout` | | Delete the stored Camoufox Pro key. |
+| `pro` | `--activate`, `--executable-path <path>`, `--os` | `--activate` mints a lease for the local Pro build, prints what it grants, and releases it; exits 0 only when granted. |
 
 Each release is paired with the one browser build it was built and tested with,
 the same build as the Python release of the same version, and every launch uses

@@ -21,6 +21,13 @@ import { generateContextFingerprint } from "./fingerprints.js";
 import * as humanizeCustom from "./humanize-custom.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
 import {
+	attachLease,
+	claim,
+	type Lease,
+	launchFailed,
+	type ProSession,
+} from "./pro.js";
+import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
 	attachNoViewportDefault,
@@ -63,9 +70,12 @@ export interface NewBrowserOptions
  * spawned, is torn down with it.
  */
 export async function Camoufox(
-	options: NewBrowserOptions & { persistent_context: true },
-): Promise<BrowserContext>;
-export async function Camoufox(options?: NewBrowserOptions): Promise<Browser>;
+	options: NewBrowserOptions &
+		({ persistent_context: true } | { profile: string }),
+): Promise<BrowserContext & { pro?: ProSession }>;
+export async function Camoufox(
+	options?: NewBrowserOptions,
+): Promise<Browser & { pro?: ProSession }>;
 export async function Camoufox(
 	options: NewBrowserOptions = {},
 ): Promise<Browser | BrowserContext> {
@@ -81,12 +91,13 @@ export async function Camoufox(
  */
 export async function NewBrowser(
 	playwright: BrowserType,
-	options: NewBrowserOptions & { persistent_context: true },
-): Promise<BrowserContext>;
+	options: NewBrowserOptions &
+		({ persistent_context: true } | { profile: string }),
+): Promise<BrowserContext & { pro?: ProSession }>;
 export async function NewBrowser(
 	playwright: BrowserType,
 	options?: NewBrowserOptions,
-): Promise<Browser>;
+): Promise<Browser & { pro?: ProSession }>;
 export async function NewBrowser(
 	playwright: BrowserType,
 	{
@@ -115,6 +126,7 @@ export async function NewBrowser(
 	// Options the caller built leave its contexts to the caller
 	// (hostIdentity).
 	let canvasNoise: boolean | undefined = false;
+	let lease: Lease | null = null;
 	try {
 		if (!fromOptions || !Object.keys(fromOptions).length) {
 			canvasNoise = kwargs.canvas_noise ?? undefined;
@@ -129,6 +141,7 @@ export async function NewBrowser(
 				debug,
 			});
 		}
+		lease = await claim(fromOptions, virtualDisplay);
 	} catch (error) {
 		// A failed launch must not leave the display behind.
 		virtualDisplay?.kill();
@@ -152,6 +165,7 @@ export async function NewBrowser(
 				noViewportDefault,
 				virtualDisplay,
 				canvasNoise,
+				lease,
 			),
 		);
 	try {
@@ -171,6 +185,7 @@ export async function NewBrowser(
 		});
 	} catch (error) {
 		virtualDisplay?.kill();
+		await launchFailed(lease, error);
 		throw error;
 	}
 }
@@ -182,6 +197,7 @@ async function launchWith(
 	noViewportDefault: boolean,
 	virtualDisplay: VirtualDisplay | null,
 	canvasNoise: boolean | undefined,
+	lease: Lease | null,
 ): Promise<Browser | BrowserContext> {
 	// Persistent context. Python passes user_data_dir inside the options; the
 	// JS API takes it positionally. A user_data_dir alone also selects it.
@@ -207,12 +223,14 @@ async function launchWith(
 			userDataDir ?? "",
 			options,
 		);
+		if (lease) attachLease(lease, context, "close");
 		return attachVirtualDisplay(context, virtualDisplay);
 	}
 
 	// Browser
 	const identity = await hostIdentity(fromOptions, canvasNoise);
 	const browser = await playwright.launch(fromOptions);
+	if (lease) attachLease(lease, browser, "disconnected");
 	if (noViewportDefault) {
 		attachNoViewportDefault(browser);
 	}

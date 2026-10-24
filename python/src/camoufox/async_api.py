@@ -12,7 +12,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from . import _humanize_custom
+from . import _humanize_custom, pro
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
@@ -197,14 +197,39 @@ async def _launch(
     virtual_display: Optional[VirtualDisplay],
     canvas_noise: Optional[bool],
 ) -> Union[Browser, BrowserContext]:
+    lease = pro.claim(from_options, virtual_display)
+    # A Camoufox Pro profile runs in its own user-data directory.
+    persistent_context = persistent_context or bool(lease and lease.grants.get('profile'))
+    try:
+        return await _launch_leased(
+            playwright, from_options, persistent_context, no_viewport_default, virtual_display, canvas_noise, lease
+        )
+    except Exception as error:
+        pro.launch_failed(lease, error)
+        raise
+
+
+async def _launch_leased(
+    playwright: Playwright,
+    from_options: Dict[str, Any],
+    persistent_context: bool,
+    no_viewport_default: bool,
+    virtual_display: Optional[VirtualDisplay],
+    canvas_noise: Optional[bool],
+    lease: Optional[pro.Lease],
+) -> Union[Browser, BrowserContext]:
     if persistent_context:
         context = await playwright.firefox.launch_persistent_context(
             **persistent_context_options(from_options, no_viewport_default)
         )
+        if lease:
+            pro.attach_lease(lease, context, 'close', is_async=True)
         return await async_attach_vd(context, virtual_display)
 
     identity = await asyncio.get_running_loop().run_in_executor(None, host_identity, from_options, canvas_noise)
     browser = await playwright.firefox.launch(**from_options)
+    if lease:
+        pro.attach_lease(lease, browser, 'disconnected', is_async=True)
     attach_context_defaults(browser, no_viewport_default)
     browser._camoufox_host_identity = identity
     return await async_attach_vd(browser, virtual_display)
