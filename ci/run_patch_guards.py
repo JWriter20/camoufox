@@ -63,6 +63,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
     "automation": (
         "addons-install-once",
         "debug-logging-off",
+        "fonts-ready-driver",
         "force-scope-access",
         "humanize-edge-deadlock",
         "humanize-mouse-trajectory",
@@ -89,6 +90,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "hardware-acceleration-policy",
         "popup-blocker-parity",
         "popup-window-size",
+        "startup-size-hold-yields",
         "search-service-init",
         "stock-gpu-parity",
         "stock-parity-probes",

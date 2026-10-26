@@ -108,6 +108,39 @@ function importCertificates() {
   }
 }
 
+function applyWindowPosition(win) {
+  // screenX/screenY are not spoofed: the first window is moved to the
+  // identity's position, so it reports it, and a popup or a moved window
+  // reports where it really is, as in stock. 0 is a position, so an absent
+  // key reads as a value no screen has (the WebIDL argument cannot be NaN).
+  const UNSET = -1e9;
+  const x = ChromeUtils.camouGetDouble("window.screenX", UNSET);
+  const y = ChromeUtils.camouGetDouble("window.screenY", UNSET);
+  if (x === UNSET && y === UNSET) {
+    return;
+  }
+  // The window manager places a window when it maps it, after load, so the
+  // position is held through startup as the size is. A move is only ever
+  // made to a normal window: moving a fullscreen or maximized one restores it.
+  const deadline = Date.now() + 5000;
+  const place = () => {
+    if (Date.now() > deadline) {
+      win.removeEventListener("MozAfterPaint", place);
+      return;
+    }
+    if (win.windowState !== win.STATE_NORMAL) {
+      return;
+    }
+    const tx = x === UNSET ? win.screenX : x;
+    const ty = y === UNSET ? win.screenY : y;
+    if (win.screenX !== tx || win.screenY !== ty) {
+      win.moveTo(tx, ty);
+    }
+  };
+  place();
+  win.addEventListener("MozAfterPaint", place);
+}
+
 function applyWindowSize(win) {
   // The real window is resized to the identity's size; pinning the document
   // instead deadlocks Juggler's viewport handshake (daijro/camoufox#666).
@@ -120,6 +153,7 @@ function applyWindowSize(win) {
   if (appWindow.initialOpenWindowInfo) {
     return;
   }
+  applyWindowPosition(win);
   const outerWidth = ChromeUtils.camouGetInt("window.outerWidth");
   const outerHeight = ChromeUtils.camouGetInt("window.outerHeight");
   const innerWidth = ChromeUtils.camouGetInt("window.innerWidth");
@@ -149,33 +183,22 @@ function applyWindowSize(win) {
   };
   // Hold that size through startup: mutter auto-maximizes a new window
   // covering >= 80% of the work area. After the deadline a change is the user's.
-  const deadline = Date.now() + 5000;
-  const holdStartupSize = () => {
-    if (Date.now() > deadline) {
-      win.removeEventListener("sizemodechange", holdStartupSize);
-      win.removeEventListener("resize", holdStartupSize);
-      return;
-    }
-    if (win.windowState === win.STATE_MAXIMIZED) {
-      win.restore();
-    }
-    const [dw, dh] = misfit();
-    if (dw || dh) {
-      win.resizeBy(dw, dh);
+  // Where the window cannot grow to the identity's viewport, the content is
+  // pinned to that size and still lays out at it. The pin comes off once the
+  // real content area is the identity's: from then on the content area
+  // follows the window, as in stock (fullscreen, the find bar).
+  let pin = null;
+  const unpin = () => {
+    if (pin && !misfit().some(Boolean)) {
+      pin.remove();
+      pin = null;
+      doc.getElementById("browser")?.style.removeProperty("box-sizing");
     }
   };
-  holdStartupSize();
-  win.addEventListener("sizemodechange", holdStartupSize);
-  win.addEventListener("resize", holdStartupSize);
-
-  if (!innerWidth && !innerHeight) {
-    return;
-  }
-  // Where the window cannot grow to the identity's viewport, the content still
-  // lays out at that size.
-  doc.getElementById("browser")?.style.setProperty("box-sizing", "content-box");
-  const style = doc.createElement("style");
-  style.textContent = `
+  if (innerWidth || innerHeight) {
+    doc.getElementById("browser")?.style.setProperty("box-sizing", "content-box");
+    pin = doc.createElement("style");
+    pin.textContent = `
     .browserStack {
       ${innerWidth ? `width: ${innerWidth}px !important;` : ""}
       ${innerHeight ? `height: ${innerHeight}px !important;` : ""}
@@ -185,7 +208,37 @@ function applyWindowSize(win) {
       scrollbar-width: none;
     }
   `;
-  doc.head.appendChild(style);
+    doc.head.appendChild(pin);
+  }
+
+  // Only the window manager's changes are undone: a page entering fullscreen
+  // or the find bar taking room from the content area leaves the outer size
+  // or the size mode to the page and the user, as in stock.
+  const deadline = Date.now() + 5000;
+  let held = null;
+  const holdStartupSize = () => {
+    if (Date.now() > deadline || win.windowState === win.STATE_FULLSCREEN) {
+      win.removeEventListener("sizemodechange", holdStartupSize);
+      win.removeEventListener("resize", holdStartupSize);
+      return;
+    }
+    if (win.windowState === win.STATE_MAXIMIZED) {
+      win.restore();
+    } else if (held && held[0] === win.outerWidth && held[1] === win.outerHeight) {
+      unpin();
+      return;
+    }
+    const [dw, dh] = misfit();
+    if (dw || dh) {
+      win.resizeBy(dw, dh);
+    } else {
+      unpin();
+    }
+    held = [win.outerWidth + dw, win.outerHeight + dh];
+  };
+  holdStartupSize();
+  win.addEventListener("sizemodechange", holdStartupSize);
+  win.addEventListener("resize", holdStartupSize);
 }
 
 function addDebugListeners(win) {

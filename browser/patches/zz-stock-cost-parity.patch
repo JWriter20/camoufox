@@ -164,51 +164,6 @@ index 715019b0dc..468760afad 100644
   private:
    static nsCString MakePrefName(const nsAString& key);
    static void SetPrefValue(const nsCString& prefName, const nsCString& value);
-diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 229047c970..85ad223831 100644
---- a/dom/base/nsGlobalWindowInner.cpp
-+++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -3770,14 +3770,36 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
- 
- int32_t nsGlobalWindowInner::GetScreenX(CallerType aCallerType,
-                                         ErrorResult& aError) {
--  if (auto value = MaskConfig::GetInt32("window.screenX")) return value.value();
--  FORWARD_TO_OUTER_OR_THROW(GetScreenXOuter, (aCallerType, aError), aError, 0);
-+  // Camoufox: stock's work first, then the spoof (timing parity; see
-+  // nsScreen::PixelDepth).
-+  // Stock throws on an inactive window; so does this.
-+  const int32_t stock = [&]() -> int32_t {
-+    FORWARD_TO_OUTER_OR_THROW(GetScreenXOuter, (aCallerType, aError), aError, 0);
-+  }();
-+  if (aError.Failed()) {
-+    return stock;
-+  }
-+  if (auto value = MaskConfig::GetInt32("window.screenX")) {
-+    return value.value();
-+  }
-+  return stock;
- }
- 
- int32_t nsGlobalWindowInner::GetScreenY(CallerType aCallerType,
-                                         ErrorResult& aError) {
--  if (auto value = MaskConfig::GetInt32("window.screenY")) return value.value();
--  FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError, 0);
-+  // Camoufox: stock's work first, then the spoof (timing parity; see
-+  // nsScreen::PixelDepth).
-+  // Stock throws on an inactive window; so does this.
-+  const int32_t stock = [&]() -> int32_t {
-+    FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError, 0);
-+  }();
-+  if (aError.Failed()) {
-+    return stock;
-+  }
-+  if (auto value = MaskConfig::GetInt32("window.screenY")) {
-+    return value.value();
-+  }
-+  return stock;
- }
- 
- float nsGlobalWindowInner::GetMozInnerScreenX(CallerType aCallerType,
 diff --git a/dom/base/nsScreen.cpp b/dom/base/nsScreen.cpp
 index db1b834258..4f6f329e5c 100644
 --- a/dom/base/nsScreen.cpp

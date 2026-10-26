@@ -11,7 +11,7 @@ index c62b3b0424..f9f88078bd 100644
 +LOCAL_INCLUDES += ["/camoucfg"]
 \ No newline at end of file
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 49a25262ca..7d168d6712 100644
+index 49a25262ca..59dcc473d1 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
 @@ -3,6 +3,7 @@
@@ -33,21 +33,25 @@ index 49a25262ca..7d168d6712 100644
    FORWARD_TO_OUTER_OR_THROW(GetOuterWidthOuter, (aCallerType, aError), aError,
                              0);
  }
-@@ -3756,11 +3761,13 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
+@@ -3756,11 +3761,17 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
  
  int32_t nsGlobalWindowInner::GetScreenX(CallerType aCallerType,
                                          ErrorResult& aError) {
-+  if (auto value = MaskConfig::GetInt32("window.screenX")) return value.value();
++  // Camoufox: not read from MaskConfig. CamoufoxWindow.sys.mjs moves the
++  // first window to the identity's position, so every other window (a
++  // popup, a moved window) reports where it is, as in stock.
    FORWARD_TO_OUTER_OR_THROW(GetScreenXOuter, (aCallerType, aError), aError, 0);
  }
  
  int32_t nsGlobalWindowInner::GetScreenY(CallerType aCallerType,
                                          ErrorResult& aError) {
-+  if (auto value = MaskConfig::GetInt32("window.screenY")) return value.value();
++  // Camoufox: not read from MaskConfig. CamoufoxWindow.sys.mjs moves the
++  // first window to the identity's position, so every other window (a
++  // popup, a moved window) reports where it is, as in stock.
    FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError, 0);
  }
  
-@@ -3798,6 +3805,8 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
+@@ -3798,6 +3809,8 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
    RefPtr<nsPresContext> presContext = GetPresContextForRatio(mDoc);
    if (NS_WARN_IF(!presContext)) {
      // Still nothing, oh well.
@@ -56,7 +60,7 @@ index 49a25262ca..7d168d6712 100644
      return 1.0;
    }
  
-@@ -3813,6 +3822,17 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
+@@ -3813,6 +3826,17 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
      }
    }
  
