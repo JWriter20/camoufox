@@ -84,6 +84,8 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
     "parity": (
         "certificate-revocations",
         "contentaccessible-parity",
+        "driven-drag-gtk",
+        "driven-global-order",
         "firefox-version-pin",
         "getter-cost-parity",
         "gfx-probes-packaged",

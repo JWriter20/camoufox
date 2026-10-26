@@ -83,6 +83,10 @@ export class PageHandler {
 
     this._isDragging = false;
     this._dragWatcher = null;
+    // GTK: how many moves the current drag session has had, and whether it has
+    // taken the pointer from the window yet (_dragMotion).
+    this._dragMoves = 0;
+    this._dragHasPointer = false;
     this._lastMousePosition = { x: 0, y: 0 };
     // Camoufox: last position an actual mousemove landed on. Used as the
     // start point for the humanized cursor trajectory (humanize=True).
@@ -647,7 +651,8 @@ export class PageHandler {
       if (type === 'mousemove') {
         this._lastMousePosition = { x, y };
         await this._settleDrag(false);
-        if (this._isDragging) {
+        if (this._isDragging && !this._dragSkipsMove()) {
+          this._dragMotion(dispatch, x, y);
           const watcher = new EventWatcher(this._pageEventSink, ['dragover'], this._pendingEventWatchers);
           await this._contentPage.send('dispatchDragEvent', {type:'dragover', x, y, modifiers});
           await watcher.ensureEventsAndDispose(['dragover']);
@@ -692,10 +697,14 @@ export class PageHandler {
       if (type === 'mouseup') {
         await this._settleDrag(true);
         if (this._isDragging) {
+          this._dragMotion(dispatch, x, y);
           const watcher = new EventWatcher(this._pageEventSink, ['dragover'], this._pendingEventWatchers);
           await this._contentPage.send('dispatchDragEvent', {type: 'dragover', x, y, modifiers});
           await this._contentPage.send('dispatchDragEvent', {type: 'drop', x, y, modifiers});
           await this._contentPage.send('dispatchDragEvent', {type: 'dragend', x, y, modifiers});
+          // The pointer comes back to the window with the button still held.
+          if (this._dragHasPointer)
+            MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {...eventArgs, buttons: 1}).enterWindow(x, y);
           // NOTE:
           // - 'drop' event might not be dispatched at all, depending on dropAction.
           // - 'dragend' event might not be dispatched at all, if the source element was removed
@@ -725,6 +734,26 @@ export class PageHandler {
     this._dragWatcher = null;
     watcher.dispose();
     this._isDragging = !!finalized?.dragSessionStarted;
+    this._dragMoves = 0;
+    this._dragHasPointer = false;
+  }
+
+  // GTK hands the pointer to a new drag session one move late: the move after
+  // the one that fired dragstart still reaches the page as a mousemove with the
+  // button held (measured on X11 against stock 158.0.1). Windows and macOS are
+  // not measured, so they keep dragging from the first move.
+  _dragSkipsMove() {
+    return Services.appinfo.widgetToolkit === 'gtk' && this._dragMoves++ === 0;
+  }
+
+  // The first drag motion takes the pointer from the window, as a GTK drag
+  // session's grab does: a widget exit, so the drag starts with nothing hovered
+  // and the next move after the drop reports no movement.
+  _dragMotion(dispatch, x, y) {
+    if (this._dragHasPointer || Services.appinfo.widgetToolkit !== 'gtk')
+      return;
+    this._dragHasPointer = true;
+    dispatch.leaveWindow(x, y);
   }
 
   _contextMenuOnMouseUp() {

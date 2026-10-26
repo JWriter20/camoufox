@@ -257,6 +257,22 @@ export class MouseDispatch {
     this._sendAbsolute('mousemove', 0, 0);
   }
 
+  /**
+   * The pointer leaves the window, or comes back to it at a relative point, as
+   * when a GTK drag session takes the pointer and gives it back. A widget exit
+   * and enter, sent to the chrome window so the parent's hover state leaves as
+   * well as the page's. Unacked: neither is a mouse event the renderer acks.
+   */
+  leaveWindow(x, y) {
+    const {x: absX, y: absY} = this.toAbsolute(x, y);
+    this._sendAbsolute('mousecancel', absX, absY);
+  }
+
+  enterWindow(x, y) {
+    const {x: absX, y: absY} = this.toAbsolute(x, y);
+    this._sendAbsolute('mouseover', absX, absY);
+  }
+
   /** Wheel events take the same conversion; they are not acked. */
   sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY, nativeNotches = false, noLineDevice = false}) {
     const {x: absX, y: absY} = this.toAbsolute(x, y);
