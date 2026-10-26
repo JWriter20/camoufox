@@ -109,11 +109,11 @@ function importCertificates() {
 }
 
 function applyWindowSize(win) {
-  // outerWidth/outerHeight report the real window, so the real window is resized
-  // to the identity's size; pinning the document instead deadlocks Juggler's
-  // viewport handshake (daijro/camoufox#666). Without an identity size, stock's
-  // own startup sizing applies. So it does for a window a page opened: stock
-  // gives it the size its window.open() features ask for.
+  // The real window is resized to the identity's size; pinning the document
+  // instead deadlocks Juggler's viewport handshake (daijro/camoufox#666).
+  // Without an identity size, stock's own startup sizing applies. So it does
+  // for a window a page opened: stock gives it the size its window.open()
+  // features ask for.
   const appWindow = win.docShell.treeOwner
     .QueryInterface(Ci.nsIInterfaceRequestor)
     .getInterface(Ci.nsIAppWindow);
@@ -122,38 +122,57 @@ function applyWindowSize(win) {
   }
   const outerWidth = ChromeUtils.camouGetInt("window.outerWidth");
   const outerHeight = ChromeUtils.camouGetInt("window.outerHeight");
-  if (outerWidth || outerHeight) {
-    win.resizeTo(outerWidth || win.outerWidth, outerHeight || win.outerHeight);
-    // Hold that size through startup. mutter auto-maximizes a new window
-    // covering >= 80% of the work area, and GTK adds its decoration margins to
-    // the outer size only once the window is mapped, which left a page reading
-    // the identity's size plus 10px. After the deadline a change is the user's.
-    const deadline = Date.now() + 5000;
-    const holdStartupSize = () => {
-      if (Date.now() > deadline) {
-        win.removeEventListener("sizemodechange", holdStartupSize);
-        win.removeEventListener("resize", holdStartupSize);
-        return;
-      }
-      if (win.windowState === win.STATE_MAXIMIZED) {
-        win.restore();
-      }
-      const dw = outerWidth ? outerWidth - win.outerWidth : 0;
-      const dh = outerHeight ? outerHeight - win.outerHeight : 0;
-      if (dw || dh) {
-        win.resizeBy(dw, dh);
-      }
-    };
-    win.addEventListener("sizemodechange", holdStartupSize);
-    win.addEventListener("resize", holdStartupSize);
-  }
-
   const innerWidth = ChromeUtils.camouGetInt("window.innerWidth");
   const innerHeight = ChromeUtils.camouGetInt("window.innerHeight");
-  if (!innerWidth && !innerHeight) {
+  if (!(outerWidth || outerHeight || innerWidth || innerHeight)) {
     return;
   }
   const doc = win.document;
+  const stack = win.gBrowser.selectedBrowser.closest(".browserStack");
+  // An inner size is met by sizing the content area, so the window manager
+  // adds its frame to it as it does for stock, and outerWidth/outerHeight and
+  // the window's placement follow. Sizing to the outer size instead runs before
+  // the frame exists, so the frame lands on top of it. Chrome reads the
+  // identity's innerWidth/innerHeight too, so the window is measured: the
+  // content area starts where the toolbars end and runs to the window's edge.
+  const misfit = () => {
+    const client = doc.documentElement.getBoundingClientRect();
+    const start = stack.getBoundingClientRect();
+    return [
+      innerWidth
+        ? Math.round(innerWidth + start.left - client.width)
+        : outerWidth ? outerWidth - win.outerWidth : 0,
+      innerHeight
+        ? Math.round(innerHeight + start.top - client.height)
+        : outerHeight ? outerHeight - win.outerHeight : 0,
+    ];
+  };
+  // Hold that size through startup: mutter auto-maximizes a new window
+  // covering >= 80% of the work area. After the deadline a change is the user's.
+  const deadline = Date.now() + 5000;
+  const holdStartupSize = () => {
+    if (Date.now() > deadline) {
+      win.removeEventListener("sizemodechange", holdStartupSize);
+      win.removeEventListener("resize", holdStartupSize);
+      return;
+    }
+    if (win.windowState === win.STATE_MAXIMIZED) {
+      win.restore();
+    }
+    const [dw, dh] = misfit();
+    if (dw || dh) {
+      win.resizeBy(dw, dh);
+    }
+  };
+  holdStartupSize();
+  win.addEventListener("sizemodechange", holdStartupSize);
+  win.addEventListener("resize", holdStartupSize);
+
+  if (!innerWidth && !innerHeight) {
+    return;
+  }
+  // Where the window cannot grow to the identity's viewport, the content still
+  // lays out at that size.
   doc.getElementById("browser")?.style.setProperty("box-sizing", "content-box");
   const style = doc.createElement("style");
   style.textContent = `
@@ -167,14 +186,6 @@ function applyWindowSize(win) {
     }
   `;
   doc.head.appendChild(style);
-  if (innerWidth && innerHeight && !(outerWidth || outerHeight)) {
-    // Grow the window so the pinned stack fits.
-    win.requestAnimationFrame(() => {
-      const stack = win.gBrowser?.selectedBrowser?.closest(".browserStack");
-      const top = stack ? stack.getBoundingClientRect().y : 0;
-      win.resizeBy(innerWidth - win.innerWidth, innerHeight + top - win.innerHeight);
-    });
-  }
 }
 
 function addDebugListeners(win) {
