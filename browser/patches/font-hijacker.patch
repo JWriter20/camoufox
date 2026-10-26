@@ -175,6 +175,54 @@ index 0d359b69d7..70740aeefa 100644
      }
    }
    *aHasCurrentFile = hasMore;
+diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFontList.cpp
+index 79bfbaa6e4..0056c5ad0a 100644
+--- a/gfx/thebes/gfxFcPlatformFontList.cpp
++++ b/gfx/thebes/gfxFcPlatformFontList.cpp
+@@ -22,6 +22,8 @@
+ #include "nsDirectoryServiceDefs.h"
+ #include "nsDirectoryServiceUtils.h"
+ #include "nsGkAtoms.h"
++#include "nsIDirectoryEnumerator.h"
++#include "nsIFile.h"
+ #include "nsIConsoleService.h"
+ #include "nsIGfxInfo.h"
+ #include "nsPresContext.h"
+@@ -3111,8 +3113,32 @@ void gfxFcPlatformFontList::ActivateBundledFonts() {
+       return;
+     }
+   }
+-  if (!mBundledFontsPath.IsEmpty()) {
+-    FcConfigAppFontAddDir(nullptr, ToFcChar8Ptr(mBundledFontsPath.get()));
++  if (mBundledFontsPath.IsEmpty()) {
++    return;
++  }
++  // Camoufox: only the files directly in fonts/, as macOS and Windows read it.
++  // FcConfigAppFontAddDir scans recursively, and fonts/ also holds the bundle's
++  // per-OS group directories: registering them all gave every identity on Linux
++  // ~500 extra families, and a family the identity does list (Helvetica, Noto
++  // Serif) then merged with another OS's file of the same name and rendered
++  // from it. An identity's own groups reach it through the launcher's
++  // FONTCONFIG_FILE; a stock install's fonts/ holds only TwemojiMozilla.ttf.
++  nsCOMPtr<nsIFile> dir;
++  if (NS_FAILED(NS_NewNativeLocalFile(mBundledFontsPath, getter_AddRefs(dir)))) {
++    return;
++  }
++  nsCOMPtr<nsIDirectoryEnumerator> entries;
++  if (NS_FAILED(dir->GetDirectoryEntries(getter_AddRefs(entries)))) {
++    return;
++  }
++  nsCOMPtr<nsIFile> file;
++  while (NS_SUCCEEDED(entries->GetNextFile(getter_AddRefs(file))) && file) {
++    bool isFile = false;
++    nsAutoCString path;
++    if (NS_SUCCEEDED(file->IsFile(&isFile)) && isFile &&
++        NS_SUCCEEDED(file->GetNativePath(path))) {
++      FcConfigAppFontAddFile(nullptr, ToFcChar8Ptr(path.get()));
++    }
+   }
+ }
+ #endif
 diff --git a/gfx/thebes/gfxPlatformFontList.cpp b/gfx/thebes/gfxPlatformFontList.cpp
 index 849b3af462..164c33448d 100644
 --- a/gfx/thebes/gfxPlatformFontList.cpp
