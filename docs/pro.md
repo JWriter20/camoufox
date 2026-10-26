@@ -156,6 +156,7 @@ set it:
 | `warm_plan` | `"none"`, `"standard"`, `"continuous"` | the plan a new profile is created with (with `profile` only) |
 | `egress` | `false`, `true`, or `{class, country, sticky, provider}` | no [managed egress](#managed-egress), CamouProxy, or the egress wanted |
 | `farm_gpu` | `false` | no [remote GPU](#remote-rendering): render on this machine |
+| `render_node` | `false`, a path, or `{coordinator, token, gpu}` | WebGL on [your own render node](#your-own-render-node) (Python) |
 
 They need a Pro build; on a stock build, or with a `CAMOU_LEASE_FILE` of your
 own, they raise `ValueError`.
@@ -215,6 +216,41 @@ option that picks the card for `headless: "virtual-gpu"`; that display renders
 on this machine, so a lease that grants a remote GPU with it raises
 `ValueError`: pass `farm_gpu: false` to render locally, or `headless: "virtual"`
 to let the remote GPU draw.
+
+### Your own render node
+
+A Pro build on Linux x86-64 can draw WebGL on a render node you run: a Windows
+machine with a renderfarm renderer serving an ANGLE pack for the build's exact
+Firefox release. Every WebGL call runs there, on that release's own ANGLE
+(Direct3D 11) and the node's GPU, so the page reads the parameters and pixels
+Windows Firefox on that GPU gives it. Nothing is masked and the canvas is not
+covered.
+
+Name the node's coordinator in `~/.config/camoufox/render-node.json`, or in a
+file `CAMOUFOX_RENDER_NODE` names:
+
+```json
+{"coordinator": "http://192.168.1.20:9471", "token": "<client token>",
+ "gpu": "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar"}
+```
+
+`gpu` is optional: the WebGL renderer Windows Firefox reports for the GPU you
+want, as the pack's profile records it. Without it the coordinator picks any
+free GPU. The coordinator must be on your private network, over `http`.
+
+With the file in place every Pro launch uses the node, with no option to pass.
+The identity is Windows (`os` defaults to it); a launch with another `os` draws
+locally. Pass `render_node=False` to draw locally, or a path or dict to name a
+node for one launch, in which case a launch that cannot use it raises
+`ValueError`. The launcher takes an assignment from the coordinator for each
+browser, renews it while the browser runs, and releases it when the lease ends.
+When no node serves the build's release, or every GPU stays busy for 30
+seconds, the launch raises `RenderNodeError`.
+
+WebGPU is not relayed: it is blocked, as on Windows Firefox with a blocklisted
+GPU, so `navigator.gpu.requestAdapter()` returns `null`. Canvas 2D draws on this
+machine as for any Windows identity. Contexts of the browser are Windows and
+claim no WebGL values of their own.
 
 ### Profiles
 

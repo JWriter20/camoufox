@@ -481,6 +481,8 @@ class Lease:
         self.state_dirty: Optional[bool] = None
         # Directories and files that go with the lease: deleted when it ends.
         self.scratch: List[Path] = []
+        # Sessions held for the browser (a render node's assignment): ended with the lease.
+        self.on_end: List[Callable[[], None]] = []
         self._close_lock = threading.Lock()
         self._closed = False
         self._close_error: Optional[BaseException] = None
@@ -704,6 +706,11 @@ class Lease:
                 self._released = True
             _LIVE.pop(str(self.path), None)
             done = released()
+            for end in self.on_end:
+                try:
+                    end()
+                except Exception as error:  # one failed hook must not keep the others' resources
+                    log.warning("camoufox-pro: ending a session held with lease %s failed: %s", self.lease_id, error)
             for path in (self.path, self.render_path):
                 if path is not None:
                     path.unlink(missing_ok=True)

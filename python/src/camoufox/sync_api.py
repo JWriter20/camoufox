@@ -10,7 +10,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from . import _humanize_custom, pro
+from . import _humanize_custom, pro, render_node
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
@@ -180,6 +180,7 @@ def _launch(
             pro.attach_lease(lease, browser, 'disconnected')
         attach_context_defaults(browser, no_viewport_default)
         browser._camoufox_host_identity = identity
+        browser._camoufox_render_node = render_node.RELAY_ENV in from_options.get('env', {})
         return sync_attach_vd(browser, virtual_display)
     except Exception as error:
         pro.launch_failed(lease, error)
@@ -238,7 +239,8 @@ def NewContext(
 
     os, webgl_config = context_identity(browser, os, preset)
     fp = generate_context_fingerprint(
-        preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config
+        preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config,
+        webgl=not vars(browser).get('_camoufox_render_node'),
     )
 
     context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))

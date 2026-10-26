@@ -25,7 +25,7 @@ from .exceptions import (
     UnknownIPLocation,
 )
 from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
-from . import coherence, pro
+from . import coherence, pro, render_node as render_nodes
 from .geolocation import geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
 from .ip import Proxy, public_ip, public_ipv6, valid_ipv4, valid_ipv6
@@ -916,8 +916,9 @@ def host_identity(from_options: Dict[str, Any], canvas_noise: Optional[bool]) ->
     keeps their contexts as they ask. Read before the launch, so a failed probe
     leaves no browser behind."""
     prefs = from_options.get('firefox_user_prefs', {})
-    # A farm-rendered browser draws on the farm, not on this host.
-    if canvas_noise is not None or has_canvas_placeholder(prefs) or pro.RENDER_FILE_ENV in from_options.get('env', {}):
+    # A farm- or node-rendered browser draws there, not on this host.
+    env = from_options.get('env', {})
+    if canvas_noise is not None or has_canvas_placeholder(prefs) or pro.RENDER_FILE_ENV in env or render_nodes.RELAY_ENV in env:
         return None
     # Without the placeholder, the launch claimed the host's OS and no named GPU.
     host_os = _host_os_key()
@@ -936,6 +937,11 @@ def context_identity(
     On a browser without the canvas placeholder they are the host's, since the
     canvas renders there; asking for anything else raises.
     """
+    if vars(browser).get('_camoufox_render_node'):
+        preset_os = platform_to_os(preset.get('navigator', {}).get('platform', '')) if preset else None
+        if (os or 'windows') != 'windows' or (preset_os or 'windows') != 'windows':
+            raise ValueError("This browser draws WebGL on a Windows render node, so its contexts are Windows.")
+        return 'windows', None
     host_identity = vars(browser).get('_camoufox_host_identity')
     if host_identity is None:
         return os, None
@@ -1143,6 +1149,7 @@ def launch_options(
     warm_plan: Optional[Literal["none", "standard", "continuous"]] = None,
     egress: Optional[Union[bool, Dict[str, Any]]] = None,
     farm_gpu: Optional[Literal[False]] = None,
+    render_node: render_nodes.RenderNodeOption = None,
     pool_profile: Optional[str] = None,
     **launch_options: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -1274,6 +1281,14 @@ def launch_options(
         farm_gpu (Optional[bool]):
             False renders WebGL, WebGPU and canvas on this machine's GPU for a
             Camoufox Pro Windows identity, instead of on a remote GPU.
+        render_node (Optional[Union[bool, str, Path, Dict[str, Any]]]):
+            Camoufox Pro: draw WebGL on a render node, a Windows machine that runs
+            every WebGL call on Windows Firefox's own ANGLE and GPU (see
+            camoufox.render_node). A path or dict names the node's coordinator;
+            None (the default) uses CAMOUFOX_RENDER_NODE or
+            ~/.config/camoufox/render-node.json when either exists; False draws
+            locally. The identity is Windows: `os` defaults to it, and another OS
+            raises when the node was named here and draws locally otherwise.
         pool_profile (Optional[str]):
             Camoufox Pro's own pool warmer only: the pool profile ('prf_<uuid>')
             this launch presents, so its lease draws on the GPU that profile is
@@ -1365,6 +1380,24 @@ def launch_options(
         pro_request["egress"] = egress
     if farm_gpu is False:
         pro_request["gpu"] = False
+    # A render node runs Windows Firefox's ANGLE, so it serves Windows identities of a Pro build.
+    named_node = render_node not in (None, False, True)
+    relay = render_nodes.resolve(render_node) if pro_build is not None or named_node else None
+    if relay is not None:
+        oses = [os] if isinstance(os, str) else list(os or ["windows"])
+        refusal = (
+            "render_node needs a Camoufox Pro build (see docs/pro.md)." if pro_build is None
+            else f"render_node is a lease option, and this launch carries its own {pro.LEASE_FILE_ENV}." if not leased
+            else f"render_node draws a Windows identity's WebGL, and os={os!r} has no Windows." if "windows" not in oses
+            else None
+        )
+        if refusal is None:
+            os = "windows"
+            pro_request["gpu"] = False
+        elif named_node:
+            raise ValueError(refusal)
+        else:
+            relay = None
     if pool_profile is not None:
         if profile is not None:
             raise ValueError("pool_profile and profile conflict: a warm launch presents a pool profile.")
@@ -1520,6 +1553,13 @@ def launch_options(
             _HELD.lease = pro.acquire(pro_build, target_os, pro_key, pro_request)
         lease = _HELD.lease
         pro_env[pro.LEASE_FILE_ENV] = str(lease.path)
+        if relay is not None:
+            node = render_nodes.Session(relay, _firefox_version(Path(browser_binary)), lease.path.parent)
+            lease.on_end.append(node.release)
+            pro_env[render_nodes.RELAY_ENV] = str(node.path)
+            # The node draws on the identity's own OS and GPU, so there is nothing to cover.
+            if canvas_noise is None:
+                canvas_noise = False
         grants = lease.grants
         if grants.get("egress"):
             proxy = {
@@ -1919,6 +1959,13 @@ def launch_options(
     if block_webgl:
         firefox_user_prefs['webgl.disabled'] = True
         LeakWarning.warn('block_webgl', i_know_what_im_doing)
+    elif relay is not None:
+        if webgl_config:
+            raise ValueError("webgl_config names a GPU, but a render node reports its own: pass render_node=False.")
+        # Every WebGL value is the node's own, as Windows Firefox reports it there.
+        for key in [k for k in config if k.startswith(('webGl:', 'webGl2:'))]:
+            del config[key]
+        merge_into(firefox_user_prefs, {'webgl.enable-webgl2': True, 'webgl.force-enabled': True})
     else:
         # A pair the caller named, or the preset's own GPU, keeps its name and
         # gets that device's recorded parameters. webgl_for_gpu raises for a GPU
@@ -1995,6 +2042,10 @@ def launch_options(
     apply_launch_rules(
         target_os, config, firefox_user_prefs, _user_pref_keys, env, path=executable_path
     )
+    if relay is not None:
+        # The holo prefs make local GL draw like Windows ANGLE; on a node, Windows ANGLE draws.
+        for name in [k for k in firefox_user_prefs if k.startswith('webgl.holo-')]:
+            firefox_user_prefs[name] = False
 
     # Validate the config
     warn_if_executable_predates_playwright(executable_path)
