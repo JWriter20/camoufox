@@ -740,9 +740,11 @@ export class PageHandler {
     // notches. Each notch is its own event of 3 LINES carrying one native tick,
     // so the page sees deltaMode 1, DOMMouseScroll.detail 3 and wheelDelta -120
     // per notch, and a longer scroll arrives as several such events a few tens
-    // of ms apart. Playwright's pixel delta gives detail = 100 and no line
-    // delta; lines without ticks give wheelDelta -396 for one notch and one big
-    // event for several (measured against XTEST input). 100 px == one notch.
+    // of ms apart. Lines without ticks give wheelDelta -396 for one notch and
+    // one big event for several (measured against XTEST input). 100 px == one
+    // notch. With the notches off, the pixel delta goes as a pixel-only device's
+    // wheel: no line delta (upstream sent the pixels as lines, so
+    // DOMMouseScroll.detail read 100) and through APZ, so scrollend fires.
     //
     // Off by default: mouse.wheel(0, 100) has to deliver deltaY 100 in
     // deltaMode 0, which is the delta the caller asked for and what upstream's
@@ -755,9 +757,6 @@ export class PageHandler {
     const notchesX = nativeNotches ? toNotches(deltaX) : 0;
     const notchesY = nativeNotches ? toNotches(deltaY) : 0;
     const notchCount = nativeNotches ? Math.max(1, Math.abs(notchesX), Math.abs(notchesY)) : 1;
-    // Upstream's conversion, used when the notches are off.
-    const pixelLineOrPageDeltaX = deltaX > 0 ? Math.floor(deltaX) : Math.ceil(deltaX);
-    const pixelLineOrPageDeltaY = deltaY > 0 ? Math.floor(deltaY) : Math.ceil(deltaY);
 
     await this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
@@ -791,8 +790,9 @@ export class PageHandler {
           deltaY,
           deltaZ,
           deltaMode: 0 /* WheelEvent.DOM_DELTA_PIXEL */,
-          lineOrPageDeltaX: pixelLineOrPageDeltaX,
-          lineOrPageDeltaY: pixelLineOrPageDeltaY,
+          lineOrPageDeltaX: 0,
+          lineOrPageDeltaY: 0,
+          noLineDevice: true,
         });
       }
     }, { muteNotificationsPopup: true });

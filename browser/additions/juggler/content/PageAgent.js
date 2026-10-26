@@ -604,7 +604,7 @@ export class PageAgent {
         win.MouseEvent.MOZ_SOURCE_MOUSE /*inputSource*/,
         true /*isDOMEventSynthesized*/,
         false /*isWidgetEventSynthesized*/,
-        0 /*buttons*/,
+        type === 'dragover' ? 1 : 0 /*buttons: the held button; released for drop*/,
         win.windowUtils.DEFAULT_MOUSE_POINTER_ID /* pointerIdentifier */,
         false /*disablePointerEvent*/,
       );
