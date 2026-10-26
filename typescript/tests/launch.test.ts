@@ -952,7 +952,7 @@ describe("test_voices (launch half)", () => {
 	});
 
 	it("fails closed when voice generation fails", async () => {
-		deps.generateRandomVoiceSubset = () => {
+		deps.drawVoiceConfig = () => {
 			throw new OSError("voice-manifests.json unreadable");
 		};
 		const { config, warned } = await launchWarning(

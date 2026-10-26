@@ -48,7 +48,7 @@ be listed there.
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints` |
-| `voice-spoofing.patch` | `voices`, `voices:blockIfNotDefined` |
+| `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:blockIfNotDefined` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |

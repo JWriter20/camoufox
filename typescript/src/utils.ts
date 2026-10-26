@@ -24,6 +24,7 @@ import {
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
+	drawVoiceConfig,
 	dropAudioSeed,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
@@ -241,6 +242,7 @@ export const utilsDeps = {
 	raiseScreenToModernFloor,
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
+	drawVoiceConfig,
 	setMediaDevicesDefaults,
 	hostGpu,
 	selectGpu,
@@ -593,6 +595,9 @@ export function validateConfig(
 			);
 		}
 
+		if (key === "voices:speechd") {
+			validateSpeechdVoices(value);
+		}
 		if (key === "voices") {
 			validateVoices(value);
 		}
@@ -675,6 +680,29 @@ export function validateVoices(voices: any): void {
 			);
 		}
 	});
+}
+
+/**
+ * Validates a `voices:speechd` grid: {"languages": [[name, lang], ...],
+ * "variants": [name, ...]}, the shape MaskConfig::MSpeechdVoices() expands.
+ */
+export function validateSpeechdVoices(grid: any): void {
+	const { languages, variants } = grid ?? {};
+	const ok =
+		Array.isArray(languages) &&
+		languages.every(
+			(e: unknown) =>
+				Array.isArray(e) &&
+				e.length === 2 &&
+				e.every((x) => typeof x === "string"),
+		) &&
+		Array.isArray(variants) &&
+		variants.every((v: unknown) => typeof v === "string");
+	if (!ok) {
+		throw new InvalidPropertyType(
+			'Invalid voices:speechd: expected {"languages": [[name, lang], ...], "variants": [name, ...]}',
+		);
+	}
 }
 
 /**
@@ -1871,7 +1899,10 @@ export async function launchOptions({
 	// `voices` unset exposes every native voice on the box (#731). Drawn after
 	// the locale is resolved: the Windows voice list is the display language's
 	// pack.
-	if (!userSetVoices || !("voices" in config)) {
+	if (
+		!userSetVoices ||
+		(!("voices" in config) && !("voices:speechd" in config))
+	) {
 		const osNameV = OS_NAMES[targetOs] ?? "macos";
 		let voiceLocale = config["navigator.language"];
 		if (pyTruthy(config["locale:language"])) {
@@ -1880,10 +1911,13 @@ export async function launchOptions({
 				.join("-");
 		}
 		try {
-			config.voices = utilsDeps.generateRandomVoiceSubset(
-				osNameV,
-				voiceLocale ?? null,
-				utilsDeps.identitySeed(config, salt),
+			Object.assign(
+				config,
+				utilsDeps.drawVoiceConfig(
+					osNameV,
+					voiceLocale ?? null,
+					utilsDeps.identitySeed(config, salt),
+				),
 			);
 		} catch (e) {
 			if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;

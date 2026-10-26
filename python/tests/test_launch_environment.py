@@ -16,7 +16,7 @@ def isolated_launch_dependencies(monkeypatch):
     monkeypatch.setattr(utils, "from_fpgen", lambda *args, **kwargs: {})
     monkeypatch.setattr(utils, "get_screen_cons", lambda *args, **kwargs: None)
     monkeypatch.setattr(utils, "_generate_random_font_subset", lambda *args, **kwargs: [])
-    monkeypatch.setattr(utils, "_generate_random_voice_subset", lambda *args, **kwargs: [])
+    monkeypatch.setattr(utils, "draw_voice_config", lambda *args, **kwargs: {"voices": []})
     monkeypatch.setattr(utils, "fix_navigator_arch", lambda *args: None)
     monkeypatch.setattr(utils, "follow_baseline_protection", lambda *args: None)
     monkeypatch.setattr(utils, "clamp_window_dimensions", lambda *args: None)
