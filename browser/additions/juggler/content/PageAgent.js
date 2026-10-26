@@ -613,8 +613,20 @@ export class PageAgent {
     if (type === 'dragend') {
       const session = this._getCurrentDragSession();
       session?.endDragSession(true);
+      await this._afterFrame();
       return;
     }
+  }
+
+  // A frame after the drag session ends, by when the page has its pointer back:
+  // the session's end moves the pointer on the next refresh. Bounded, since a
+  // throttled page may not paint.
+  _afterFrame() {
+    const win = this._frameTree.mainFrame().domWindow();
+    return new Promise(resolve => {
+      win.requestAnimationFrame(() => resolve());
+      setTimeout(resolve, 100);
+    });
   }
 
   async _insertText({text}) {
