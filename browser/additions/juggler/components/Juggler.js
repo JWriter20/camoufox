@@ -40,14 +40,12 @@ function installDriverOverrides() {
       },
       child: {
         esModuleURI: 'resource://gre/modules/juggler/JugglerFrameChild.sys.mjs',
+        // Instantiate an actor when a new window is created. An observer topic,
+        // not DOMWindowCreated: an event handed to the actor gets its reflector
+        // in the page's window, which defines `Event` there before the page's
+        // first script runs, as it never is in a browser nobody drives.
+        observers: ['content-document-global-created'],
         events: {
-          // Normally, we instantiate an actor when a new window is created.
-          DOMWindowCreated: {},
-          // However, for same-origin iframes, the navigation from about:blank
-          // to the URL will share the same window, so we need to also create
-          // an actor for a new document via DOMDocElementInserted.
-          DOMDocElementInserted: {},
-          // Also, listening to DOMContentLoaded.
           DOMContentLoaded: {},
           DOMWillOpenModalDialog: {},
           DOMModalDialogClosed: {},
