@@ -29,6 +29,9 @@ function installDriverOverrides() {
   // Juggler follows frames within one content process: keep cross-site iframes in their
   // parent's process. A browser nobody drives keeps Firefox's isolation, which a page can tell.
   Services.prefs.getDefaultBranch("").setIntPref("fission.webContentIsolationStrategy", 0);
+  // Juggler cannot report a page restored from bfcache, so a driven browser keeps none
+  // (this alone disables it; docShell.disallowBFCache does not under SHIP).
+  Services.prefs.getDefaultBranch("").setBoolPref("fission.bfcacheInParent", false);
   // Register JSWindowActors that will be instantiated for each frame.
   ActorManagerParent.addJSWindowActors({
     JugglerFrame: {
