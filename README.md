@@ -490,6 +490,7 @@ claims the host's OS. Details are in
 | Playwright's `evaluate`, selectors and init scripts run in an isolated world the page cannot see | Juggler |
 | `navigator.webdriver` is `false` | `playwright/1-leak-fixes` patch |
 | `select_option`, `fill` on date and colour inputs, and `set_input_files` fire trusted events | `trusted-automation-events` patch |
+| `fill` and `keyboard.insert_text` type the text, key by key at a person's pace | Juggler |
 | Headless reports a fine pointer, like a desktop | `force-default-pointer` patch |
 | `mouse.wheel()` turns notches, as a physical wheel does: 100 px is one notch, each its own event with a native tick | Juggler, `wheel-native-ticks` patch |
 | Juggler's debugger leaves no side effects content can observe | `debugger-invisible-to-content` patch |

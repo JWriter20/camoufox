@@ -112,3 +112,32 @@ notch's distance (120 px here), not the exact pixels asked for, and
 `mouse.wheel(0, 0)` sends nothing. Humanize does not change this.
 `browser/tests/playwright/patches/driven-wheel-notches.py` compares the result
 with stock's.
+
+## Typed text
+
+Playwright's `fill()` and `keyboard.insert_text()` send `Page.insertText`.
+Typing cannot put text in a field without key events, so Juggler types it: in
+stock Firefox 158.0.1 each character arrives as `keydown`, `keypress`,
+`beforeinput` and `input` (`insertText`, that one character) and `keyup`,
+with Shift pressed around a capital (measured with XTest keys). A character
+with a key on the US layout is pressed through the same path as
+`keyboard.type()`, so its `key`, `code` and `keyCode` are that layout's; a line
+break is Enter in a textarea or an editable element. A character the layout
+has no key for (é, 嗨) is inserted as before, with `beforeinput`/`input` and no
+key events.
+
+The pace is a person's, drawn per call from Dhakal et al., "Observations on
+Typing from 136 Million Keystrokes" (CHI 2018): the typist's mean interval
+between key presses from the population's (238.66 ms, SD 111.6, at least
+60 ms), keys held 116.25 ms (SD 23.88). A key goes up after the next one goes
+down when the interval is shorter than the hold; that rollover is rarer here
+than the quarter of keystrokes the paper reports, which an interval model
+cannot produce without the per-key data. How far one typist's
+intervals spread around their own mean is not in the paper; it is taken as
+35%. A fill takes about a quarter of a second per character, so a long one
+needs a longer `timeout`.
+
+Two things stay Playwright's: `fill()` focuses the field from script rather
+than with a click, and selects its text first with `select()`.
+`browser/tests/playwright/patches/driven-fill-keys.py` compares the result
+with stock's.
