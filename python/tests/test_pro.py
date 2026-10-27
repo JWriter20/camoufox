@@ -627,6 +627,56 @@ def test_activate_reads_the_key_camoufox_login_stored(api, pro_build):
     assert api.calls("/api/v1/leases")[0]["auth"] == f"Bearer {KEY}"
 
 
+DEV_API = "https://api-dev.example"
+
+
+@pytest.fixture
+def dev_build(api, pro_build, monkeypatch):
+    """A Pro build made for DEV_API, with CAMOUFOX_PRO_API unset. Returns the origins it called."""
+    fake = os.environ[pro.API_ENV]
+    monkeypatch.delenv(pro.API_ENV)
+    declared = json.loads((pro_build.parent / "pro-build.json").read_text())
+    (pro_build.parent / "pro-build.json").write_text(json.dumps({**declared, "api": DEV_API}))
+    called, request = [], pro.requests.request
+
+    # The fake API speaks http, so a request addressed to DEV_API is served by it.
+    def serve(method, url, **kwargs):
+        called.append(url)
+        return request(method, url.replace(DEV_API, fake), **kwargs)
+
+    monkeypatch.setattr(pro.requests, "request", serve)
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    return SimpleNamespace(path=pro_build, called=called, fake=fake)
+
+
+def test_a_build_leases_from_the_api_it_was_made_for(dev_build):
+    assert activate(dev_build.path).exit_code == 0
+    assert dev_build.called and all(url.startswith(DEV_API + "/api/v1/leases") for url in dev_build.called)
+
+
+def test_camoufox_pro_api_overrides_the_build_s_api(dev_build, monkeypatch):
+    monkeypatch.setenv(pro.API_ENV, dev_build.fake)
+    assert activate(dev_build.path).exit_code == 0
+    assert dev_build.called and all(url.startswith(dev_build.fake) for url in dev_build.called)
+
+
+def test_camoufox_login_signs_in_to_the_installed_build_s_api(dev_build, monkeypatch):
+    signed_in = []
+    monkeypatch.setattr(pro, "login", lambda echo, build: signed_in.append(pro.api_base(build)) or {
+        "account": {"name": "acme"}, "user": {"github_login": "octo"}, "path": "key"})
+    monkeypatch.setenv("CAMOUFOX_EXECUTABLE_PATH", str(dev_build.path))
+    assert CliRunner().invoke(cli.cli, ["login"]).exit_code == 0
+    assert signed_in == [DEV_API]
+
+
+@pytest.mark.parametrize("declared", ["http://api-dev.example", "https://api-dev.example/v1", "api-dev.example"])
+def test_a_build_s_api_must_be_an_https_origin(pro_build, declared):
+    file = pro_build.parent / "pro-build.json"
+    file.write_text(json.dumps({**json.loads(file.read_text()), "api": declared}))
+    with pytest.raises(ValueError, match="not an https origin"):
+        pro.read_build(str(file))
+
+
 def test_activate_reports_a_refused_lease_and_fails(api, pro_build, monkeypatch):
     monkeypatch.setenv(pro.KEY_ENV, KEY)
     api.script(

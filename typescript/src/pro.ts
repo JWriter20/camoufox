@@ -116,11 +116,13 @@ const BY_CODE: Record<
 	gpu_unavailable: GpuUnavailable,
 };
 
-export function apiBase(): string {
-	return ((process.env[API_ENV] ?? "").trim() || DEFAULT_API).replace(
-		/\/+$/,
-		"",
-	);
+/** The API to call: CAMOUFOX_PRO_API, else the one the build was made for, else the default. */
+export function apiBase(build?: ProBuild | null): string {
+	return (
+		(process.env[API_ENV] ?? "").trim() ||
+		build?.api ||
+		DEFAULT_API
+	).replace(/\/+$/, "");
 }
 
 export function clientName(): string {
@@ -289,7 +291,11 @@ export async function call(
 	method: "GET" | "POST" | "PUT",
 	route: string,
 	payload: Record<string, any> | null,
-	{ key, timeoutS = 30 }: { key?: string; timeoutS?: number } = {},
+	{
+		key,
+		timeoutS = 30,
+		base = apiBase(),
+	}: { key?: string; timeoutS?: number; base?: string } = {},
 ): Promise<Record<string, any>> {
 	const headers: Record<string, string> = { "User-Agent": clientName() };
 	if (payload) headers["Content-Type"] = "application/json";
@@ -297,7 +303,7 @@ export async function call(
 	let response: Response;
 	let text: string;
 	try {
-		response = await fetch(`${apiBase()}${route}`, {
+		response = await fetch(`${base}${route}`, {
 			method,
 			headers,
 			body: payload ? JSON.stringify(payload) : undefined,
@@ -306,7 +312,7 @@ export async function call(
 		text = await response.text();
 	} catch (error) {
 		throw new ProUnavailable(
-			`The Camoufox Pro API at ${apiBase()} could not be reached: ${(error as Error).message}`,
+			`The Camoufox Pro API at ${base} could not be reached: ${(error as Error).message}`,
 		);
 	}
 	let body: any = {};
@@ -326,7 +332,7 @@ export async function call(
 export function post(
 	route: string,
 	payload: Record<string, any>,
-	options: { key?: string; timeoutS?: number } = {},
+	options: { key?: string; timeoutS?: number; base?: string } = {},
 ): Promise<Record<string, any>> {
 	return call("POST", route, payload, options);
 }
@@ -348,13 +354,19 @@ export interface SignedIn {
 
 /**
  * Sign in on this machine: show a code to approve in a browser, then create a
- * Camoufox Pro key for this machine and store it.
+ * Camoufox Pro key for this machine and store it. The key is `build`'s API's.
  */
 export async function login(
 	echo: (line: string) => void = console.log,
 	sleep: (seconds: number) => Promise<unknown> = sleepS,
+	build: ProBuild | null = null,
 ): Promise<SignedIn> {
-	const start = await post("/api/v1/device/start", { client: clientName() });
+	const base = apiBase(build);
+	const start = await post(
+		"/api/v1/device/start",
+		{ client: clientName() },
+		{ base },
+	);
 	echo(`Open ${start.verification_uri_complete}`);
 	echo(`and confirm the code ${start.user_code}.`);
 	let interval = Number(start.interval);
@@ -368,9 +380,11 @@ export async function login(
 			);
 		}
 		try {
-			granted = await post("/api/v1/device/token", {
-				device_code: start.device_code,
-			});
+			granted = await post(
+				"/api/v1/device/token",
+				{ device_code: start.device_code },
+				{ base },
+			);
 			break;
 		} catch (error) {
 			if (!(error instanceof ProError)) throw error;
@@ -400,7 +414,7 @@ export async function login(
 	const created = await post(
 		"/api/v1/keys",
 		{ name: `camoufox on ${os.hostname()}`.slice(0, 64) },
-		{ key: granted.access_token },
+		{ key: granted.access_token, base },
 	);
 	return {
 		account: granted.account,
@@ -419,6 +433,8 @@ export interface ProBuild {
 	build_hash: string;
 	version: string;
 	target: string;
+	/** The Pro API whose signing keys the build trusts; absent for the default. */
+	api?: string | null;
 }
 
 /** The build's pro-build.json, or null when the build is not a Pro build. */
@@ -430,10 +446,27 @@ export function readBuild(file: string): ProBuild | null {
 			`${file} does not declare a build_hash of the form sha256:<64 hex>.`,
 		);
 	}
+	const api = declared.api ?? null;
+	if (api !== null) {
+		let origin: URL | null = null;
+		try {
+			origin = new URL(String(api));
+		} catch {}
+		if (
+			origin?.protocol !== "https:" ||
+			origin.pathname.replace(/\/+$/, "") ||
+			origin.search
+		) {
+			throw new Error(
+				`${file} declares api ${JSON.stringify(api)}, which is not an https origin.`,
+			);
+		}
+	}
 	return {
 		build_hash: declared.build_hash,
 		version: String(declared.version),
 		target: String(declared.target),
+		api,
 	};
 }
 
@@ -600,6 +633,7 @@ export class Lease {
 	scratch: string[] = [];
 	claimed = false;
 	readonly #key: string;
+	readonly #base: string;
 	readonly #host: string;
 	#seq = 0;
 	#heartbeatS = 60;
@@ -618,6 +652,7 @@ export class Lease {
 		readonly request: LeaseRequest,
 	) {
 		this.#key = key;
+		this.#base = apiBase(build);
 		this.#host = hostFingerprint();
 	}
 
@@ -641,7 +676,7 @@ export class Lease {
 		route: string,
 		payload: Record<string, any> | null = null,
 	): Promise<Record<string, any>> {
-		return call(method, route, payload, { key: this.#key });
+		return call(method, route, payload, { key: this.#key, base: this.#base });
 	}
 
 	/**
@@ -670,12 +705,12 @@ export class Lease {
 		let response: Response;
 		try {
 			response = await fetch(
-				`${apiBase()}${route}?${new URLSearchParams(params)}`,
+				`${this.#base}${route}?${new URLSearchParams(params)}`,
 				{ method, headers, body, signal: AbortSignal.timeout(timeoutS * 1000) },
 			);
 		} catch (error) {
 			throw new ProUnavailable(
-				`The Camoufox Pro API at ${apiBase()} could not be reached: ${(error as Error).message}`,
+				`The Camoufox Pro API at ${this.#base} could not be reached: ${(error as Error).message}`,
 			);
 		}
 		if (response.status >= 400) {
@@ -715,7 +750,10 @@ export class Lease {
 		let waited = 0;
 		for (;;) {
 			try {
-				lease = await post("/api/v1/leases", body, { key: this.#key });
+				lease = await post("/api/v1/leases", body, {
+					key: this.#key,
+					base: this.#base,
+				});
 				break;
 			} catch (error) {
 				if (error instanceof ProError && error.code === "lease_conflict") {
@@ -823,7 +861,11 @@ export class Lease {
 					host: { fingerprint: this.#host },
 					...(this.stateDirty === null ? {} : { state_dirty: this.stateDirty }),
 				},
-				{ key: this.#key, timeoutS: proTiming.heartbeatTimeoutS },
+				{
+					key: this.#key,
+					timeoutS: proTiming.heartbeatTimeoutS,
+					base: this.#base,
+				},
 			);
 		} catch (error) {
 			if (this.#released || !this.#renewing) return;
@@ -898,7 +940,11 @@ export class Lease {
 				await post(
 					`/api/v1/leases/${this.leaseId}/release`,
 					{ reason },
-					{ key: this.#key, timeoutS: proTiming.releaseTimeoutS },
+					{
+						key: this.#key,
+						timeoutS: proTiming.releaseTimeoutS,
+						base: this.#base,
+					},
 				);
 				return true;
 			} catch (error) {

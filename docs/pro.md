@@ -17,7 +17,9 @@ A Pro build ships `pro-build.json` beside its executable (in
 ```
 
 `build_hash` identifies the release to the Camoufox Pro API. A hash the API
-does not list is refused with `BuildNotAllowlisted`.
+does not list is refused with `BuildNotAllowlisted`. A build made for an API
+other than `https://api.camoufox.com` names it as `"api"`, an https origin;
+the launchers lease from it and `camoufox login` signs in to it.
 
 ## Signing in
 
@@ -58,7 +60,7 @@ or to one launch, as `pro_key`. The key is taken from the first of these that
 is set: the `pro_key` argument, `CAMOUFOX_PRO_KEY`, the key file.
 
 `CAMOUFOX_PRO_API` points both launchers at a different Camoufox Pro API. It
-defaults to `https://api.camoufox.com`.
+defaults to the build's `"api"`, then `https://api.camoufox.com`.
 
 ## Checking a machine
 

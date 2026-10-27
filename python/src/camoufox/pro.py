@@ -32,6 +32,7 @@ from datetime import datetime
 from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import requests
 from platformdirs import user_cache_dir, user_config_dir
@@ -108,8 +109,9 @@ _BY_CODE = {
 }
 
 
-def api_base() -> str:
-    return (os.environ.get(API_ENV, "").strip() or DEFAULT_API).rstrip("/")
+def api_base(build: Optional["ProBuild"] = None) -> str:
+    """The API to call: CAMOUFOX_PRO_API, else the one the build was made for, else the default."""
+    return (os.environ.get(API_ENV, "").strip() or (build.api if build else None) or DEFAULT_API).rstrip("/")
 
 
 def client_name() -> str:
@@ -255,15 +257,17 @@ def call(
     *,
     key: Optional[str] = None,
     timeout: float = 30,
+    base: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Call the Camoufox Pro API. Every failure is a ProError; ProUnavailable is the retryable kind."""
+    base = base or api_base()
     headers = {"User-Agent": client_name()}
     if key:
         headers["Authorization"] = f"Bearer {key}"
     try:
-        response = requests.request(method, f"{api_base()}{route}", json=payload, headers=headers, timeout=timeout)
+        response = requests.request(method, f"{base}{route}", json=payload, headers=headers, timeout=timeout)
     except requests.RequestException as error:
-        raise ProUnavailable(f"The Camoufox Pro API at {api_base()} could not be reached: {error}") from None
+        raise ProUnavailable(f"The Camoufox Pro API at {base} could not be reached: {error}") from None
     try:
         body = response.json()
     except ValueError:
@@ -273,8 +277,10 @@ def call(
     return body
 
 
-def post(route: str, payload: Dict[str, Any], *, key: Optional[str] = None, timeout: float = 30) -> Dict[str, Any]:
-    return call("POST", route, payload, key=key, timeout=timeout)
+def post(
+    route: str, payload: Dict[str, Any], *, key: Optional[str] = None, timeout: float = 30, base: Optional[str] = None
+) -> Dict[str, Any]:
+    return call("POST", route, payload, key=key, timeout=timeout, base=base)
 
 
 def _transient(error: ProError) -> bool:
@@ -294,13 +300,18 @@ def profile_wait_s() -> float:
 # ── sign-in: RFC 8628's device flow ──────────────────────────────────────────
 
 
-def login(echo: Callable[[str], None] = print, sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
+def login(
+    echo: Callable[[str], None] = print,
+    sleep: Callable[[float], None] = time.sleep,
+    build: Optional["ProBuild"] = None,
+) -> Dict[str, Any]:
     """
     Sign in on this machine: show a code to approve in a browser, then create a
     Camoufox Pro key for this machine and store it. Returns the token response's
-    account and user, and where the key was stored.
+    account and user, and where the key was stored. The key is `build`'s API's.
     """
-    start = post("/api/v1/device/start", {"client": client_name()})
+    base = api_base(build)
+    start = post("/api/v1/device/start", {"client": client_name()}, base=base)
     echo(f"Open {start['verification_uri_complete']}")
     echo(f"and confirm the code {start['user_code']}.")
     interval = float(start["interval"])
@@ -310,7 +321,7 @@ def login(echo: Callable[[str], None] = print, sleep: Callable[[float], None] = 
         if time.monotonic() > deadline:
             raise NotSignedIn("The sign-in code expired before it was approved. Run `camoufox login` again.")
         try:
-            granted = post("/api/v1/device/token", {"device_code": start["device_code"]})
+            granted = post("/api/v1/device/token", {"device_code": start["device_code"]}, base=base)
             break
         except ProError as error:
             if error.code == "authorization_pending" or isinstance(error, ProUnavailable):
@@ -327,6 +338,7 @@ def login(echo: Callable[[str], None] = print, sleep: Callable[[float], None] = 
         "/api/v1/keys",
         {"name": f"camoufox on {socket.gethostname()}"[:64]},
         key=granted["access_token"],
+        base=base,
     )
     return {"account": granted["account"], "user": granted["user"], "path": store_key(created["api_key"])}
 
@@ -341,6 +353,8 @@ class ProBuild:
     build_hash: str
     version: str
     target: str
+    # The Pro API whose signing keys the build trusts; None for the default.
+    api: Optional[str] = None
 
 
 def read_build(path: str) -> Optional[ProBuild]:
@@ -352,7 +366,12 @@ def read_build(path: str) -> Optional[ProBuild]:
         return None
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(declared.get("build_hash"))):
         raise ValueError(f"{path} does not declare a build_hash of the form sha256:<64 hex>.")
-    return ProBuild(declared["build_hash"], str(declared.get("version")), str(declared.get("target")))
+    api = declared.get("api")
+    if api is not None:
+        parts = urlsplit(str(api))
+        if parts.scheme != "https" or not parts.hostname or parts.path.strip("/") or parts.query:
+            raise ValueError(f"{path} declares api {api!r}, which is not an https origin.")
+    return ProBuild(declared["build_hash"], str(declared.get("version")), str(declared.get("target")), api)
 
 
 def lease_dir() -> Path:
@@ -465,6 +484,7 @@ class Lease:
         self.target_os = target_os
         self.request = dict(request or {})
         self._key = key
+        self._base = api_base(build)
         self._host = host_fingerprint()
         self.path: Optional[Path] = None
         self.lease_id: Optional[str] = None
@@ -501,7 +521,7 @@ class Lease:
 
     def api(self, method: str, route: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Call the API with this lease's key."""
-        return call(method, route, payload, key=self._key)
+        return call(method, route, payload, key=self._key, base=self._base)
 
     def send(
         self,
@@ -523,10 +543,10 @@ class Lease:
             headers["Content-Type"] = content_type
         try:
             response = requests.request(
-                method, f"{api_base()}{route}", params=params, data=data, headers=headers, stream=stream, timeout=timeout
+                method, f"{self._base}{route}", params=params, data=data, headers=headers, stream=stream, timeout=timeout
             )
         except requests.RequestException as error:
-            raise ProUnavailable(f"The Camoufox Pro API at {api_base()} could not be reached: {error}") from None
+            raise ProUnavailable(f"The Camoufox Pro API at {self._base} could not be reached: {error}") from None
         if response.status_code >= 400:
             try:
                 body = response.json()
@@ -554,7 +574,7 @@ class Lease:
         waited, patience = 0.0, profile_wait_s()
         while True:
             try:
-                lease = post("/api/v1/leases", body, key=self._key)
+                lease = post("/api/v1/leases", body, key=self._key, base=self._base)
                 break
             except ProError as error:
                 if error.code == "lease_conflict":
@@ -629,6 +649,7 @@ class Lease:
                     },
                     key=self._key,
                     timeout=HEARTBEAT_TIMEOUT_S,
+                    base=self._base,
                 )
             except ProError as error:
                 if self._stop.is_set():
@@ -674,7 +695,7 @@ class Lease:
     def _post_release(self, reason: str) -> bool:
         for attempt in range(2):
             try:
-                post(f"/api/v1/leases/{self.lease_id}/release", {"reason": reason}, key=self._key, timeout=RELEASE_TIMEOUT_S)
+                post(f"/api/v1/leases/{self.lease_id}/release", {"reason": reason}, key=self._key, timeout=RELEASE_TIMEOUT_S, base=self._base)
                 return True
             except ProError as error:
                 if attempt or not _transient(error):

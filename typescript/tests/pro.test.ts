@@ -889,3 +889,76 @@ describe("camoufox pro --activate", () => {
 		expect(process.exitCode ?? 0).toBe(0);
 	});
 });
+
+// ── the API a build was made for ────────────────────────────────────────────
+
+describe("a build's own API", () => {
+	const DEV_API = "https://api-dev.example";
+	let buildFile: string;
+	let fake: string;
+	let called: string[];
+	beforeEach(() => {
+		const dir = fs.mkdtempSync(path.join(SCRATCH, "pro-build-"));
+		buildFile = path.join(dir, "pro-build.json");
+		fs.writeFileSync(buildFile, JSON.stringify({ ...BUILD, api: DEV_API }));
+		fake = process.env[pro.API_ENV] as string;
+		delete process.env[pro.API_ENV];
+		process.env[pro.KEY_ENV] = KEY;
+		called = [];
+		// The fake API speaks http, so a request addressed to DEV_API is served by it.
+		const request = globalThis.fetch;
+		vi.spyOn(globalThis, "fetch").mockImplementation((url, init) => {
+			called.push(String(url));
+			return request(String(url).replace(DEV_API, fake), init);
+		});
+	});
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("is where its lease is minted, heartbeated and released", async () => {
+		expect(
+			await pro.activate(buildFile, "win", { echo: () => undefined }),
+		).toBe(true);
+		expect(called.length).toBeGreaterThan(0);
+		expect(
+			called.every((url) => url.startsWith(`${DEV_API}/api/v1/leases`)),
+		).toBe(true);
+	});
+
+	it("gives way to CAMOUFOX_PRO_API", async () => {
+		process.env[pro.API_ENV] = fake;
+		expect(
+			await pro.activate(buildFile, "win", { echo: () => undefined }),
+		).toBe(true);
+		expect(called.every((url) => url.startsWith(fake))).toBe(true);
+	});
+
+	it("is where camoufox login signs in", async () => {
+		api.script("/api/v1/device/start", START);
+		api.script("/api/v1/device/token", [
+			200,
+			{ access_token: "cfp_mgmt_token", account: { name: "acme" }, user: {} },
+		]);
+		api.script("/api/v1/keys", [201, { api_key: KEY }]);
+		await pro.login(
+			() => undefined,
+			async () => undefined,
+			pro.readBuild(buildFile),
+		);
+		expect(called.map((url) => new URL(url).origin)).toEqual([
+			DEV_API,
+			DEV_API,
+			DEV_API,
+		]);
+	});
+
+	it.each([
+		"http://api-dev.example",
+		"https://api-dev.example/v1",
+		"api-dev.example",
+	])("must be an https origin, not %s", (declared) => {
+		fs.writeFileSync(buildFile, JSON.stringify({ ...BUILD, api: declared }));
+		expect(() => pro.readBuild(buildFile)).toThrow("not an https origin");
+	});
+});

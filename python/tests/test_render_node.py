@@ -93,8 +93,6 @@ def coordinator(monkeypatch, tmp_path):
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     fake.origin = f"http://127.0.0.1:{server.server_address[1]}"
     fake.config = {"coordinator": fake.origin, "token": TOKEN, "gpu": GPU}
-    monkeypatch.delenv(render_node.CONFIG_ENV, raising=False)
-    monkeypatch.setattr(render_node, "DEFAULT_PATH", tmp_path / "render-node.json")
     yield fake
     server.shutdown()
 

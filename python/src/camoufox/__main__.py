@@ -921,16 +921,34 @@ def server():
     launch_server()
 
 
+def _active_executable(executable_path=None) -> str:
+    """The browser a launch would run: the option, CAMOUFOX_EXECUTABLE_PATH, then the active install."""
+    from .pkgman import camoufox_path, launch_path
+
+    return executable_path or environ.get("CAMOUFOX_EXECUTABLE_PATH", "").strip() or launch_path(
+        camoufox_path(download_if_missing=False)
+    )
+
+
 @cli.command(name="login")
 def login():
     """
     Sign in to Camoufox Pro on this machine
     """
-    from .exceptions import ProError
-    from .pro import login as device_login
+    from .exceptions import CamoufoxNotInstalled, ProError, UnsupportedVersion
+    from .pkgman import build_file
+    from .pro import login as device_login, read_build
 
+    # The key is for the API the installed Pro build leases from.
     try:
-        signed_in = device_login(echo=click.echo)
+        build = read_build(build_file(_active_executable(), "pro-build.json"))
+    except (CamoufoxNotInstalled, UnsupportedVersion):
+        build = None
+    except ValueError as error:
+        rprint(str(error), fg="red")
+        raise SystemExit(1) from None
+    try:
+        signed_in = device_login(echo=click.echo, build=build)
     except ProError as error:
         rprint(str(error), fg="red")
         raise SystemExit(1) from None
@@ -988,15 +1006,13 @@ def pro_cmd(ctx, activate, executable_path, target_os):
 
     from . import pro
     from .exceptions import CamoufoxNotInstalled, UnsupportedVersion
-    from .pkgman import build_file, camoufox_path, launch_path
+    from .pkgman import build_file
 
-    executable = executable_path or environ.get("CAMOUFOX_EXECUTABLE_PATH", "").strip()
-    if not executable:
-        try:
-            executable = launch_path(camoufox_path(download_if_missing=False))
-        except (CamoufoxNotInstalled, UnsupportedVersion) as error:
-            click.echo(f"[FAIL] no Camoufox Pro build: {error}")
-            raise SystemExit(1) from None
+    try:
+        executable = _active_executable(executable_path)
+    except (CamoufoxNotInstalled, UnsupportedVersion) as error:
+        click.echo(f"[FAIL] no Camoufox Pro build: {error}")
+        raise SystemExit(1) from None
     os_code = {name: code for code, name in pro.TARGET_OS.items()}[target_os or pro.HOST_OS]
     if not pro.activate(str(build_file(executable, "pro-build.json")), os_code, echo=click.echo):
         raise SystemExit(1)
