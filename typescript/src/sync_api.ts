@@ -27,6 +27,7 @@ import {
 	launchFailed,
 	type ProSession,
 } from "./pro.js";
+import { RELAY_ENV } from "./render_node.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
@@ -237,6 +238,7 @@ async function launchWith(
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
+	(browser as any)._camoufoxRenderNode = RELAY_ENV in (fromOptions.env ?? {});
 	return attachVirtualDisplay(browser, virtualDisplay);
 }
 
@@ -314,6 +316,7 @@ export async function NewContext(
 		ff_version: ffVersion,
 		webrtc_ip: webrtcIp,
 		webgl_config: webglConfig,
+		webgl: !(browser as any)._camoufoxRenderNode,
 	});
 
 	// Merge the generated context options with user overrides (user wins). They

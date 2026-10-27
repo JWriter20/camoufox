@@ -631,6 +631,8 @@ export class Lease {
 	stateDirty: boolean | null = null;
 	/** Directories and files that go with the lease: deleted when it ends. */
 	scratch: string[] = [];
+	/** Sessions held for the browser (a render node's assignment): ended with the lease. */
+	onEnd: (() => Promise<void> | void)[] = [];
 	claimed = false;
 	readonly #key: string;
 	readonly #base: string;
@@ -983,6 +985,16 @@ export class Lease {
 			if (this.#timer) clearTimeout(this.#timer);
 			LIVE.delete(this.path);
 			const done = await released();
+			for (const end of this.onEnd) {
+				try {
+					await end();
+				} catch (error) {
+					// One failed hook must not keep the others' resources.
+					console.warn(
+						`camoufox-pro: ending a session held with lease ${this.leaseId} failed: ${(error as Error).message}`,
+					);
+				}
+			}
 			this.#clean();
 			return done;
 		})();

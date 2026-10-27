@@ -1604,6 +1604,8 @@ export function targetOsFromPlatform(plat: string): SupportedOS {
  *   and before the init script is rendered.
  * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
  *   of drawing one.
+ * @param webgl false claims no WebGL values, for a browser whose render node
+ *   reports its own (render_node).
  */
 export function generateContextFingerprint({
 	preset,
@@ -1614,6 +1616,7 @@ export function generateContextFingerprint({
 	locale,
 	config_overrides,
 	webgl_config,
+	webgl: claimWebgl = true,
 }: {
 	preset?: Preset | null;
 	os?: string | null;
@@ -1623,6 +1626,7 @@ export function generateContextFingerprint({
 	locale?: string | null;
 	config_overrides?: Config | null;
 	webgl_config?: [string, string] | null;
+	webgl?: boolean;
 } = {}): ContextFingerprint {
 	let config: Config;
 	let nav: Record<string, any>;
@@ -1694,7 +1698,12 @@ export function generateContextFingerprint({
 			if (oscpu) config["navigator.oscpu"] = oscpu;
 		}
 
-		if (
+		if (!claimWebgl) {
+			for (const key of Object.keys(config)) {
+				if (key.startsWith("webGl:") || key.startsWith("webGl2:"))
+					delete config[key];
+			}
+		} else if (
 			!pyTruthy(config["webGl:vendor"]) ||
 			!pyTruthy(config["webGl:renderer"])
 		) {

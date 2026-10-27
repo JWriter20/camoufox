@@ -158,7 +158,7 @@ set it:
 | `warm_plan` | `"none"`, `"standard"`, `"continuous"` | the plan a new profile is created with (with `profile` only) |
 | `egress` | `false`, `true`, or `{class, country, sticky, provider}` | no [managed egress](#managed-egress), CamouProxy, or the egress wanted |
 | `farm_gpu` | `false` | no [remote GPU](#remote-rendering): render on this machine |
-| `render_node` | `false`, a path, or `{coordinator, token, gpu}` | WebGL on [your own render node](#your-own-render-node) (Python) |
+| `render_node` | `false`, a path, or `{coordinator, token, gpu}` | WebGL on [your own render node](#your-own-render-node) |
 
 They need a Pro build; on a stock build, or with a `CAMOU_LEASE_FILE` of your
 own, they raise `ValueError`.
@@ -242,9 +242,9 @@ free GPU. The coordinator must be on your private network, over `http`.
 
 With the file in place every Pro launch uses the node, with no option to pass.
 The identity is Windows (`os` defaults to it); a launch with another `os` draws
-locally. Pass `render_node=False` to draw locally, or a path or dict to name a
-node for one launch, in which case a launch that cannot use it raises
-`ValueError`. The launcher takes an assignment from the coordinator for each
+locally. Pass `render_node=False` (TypeScript: `render_node: false`) to draw
+locally, or a path or a dict (an object) to name a node for one launch, in
+which case a launch that cannot use it raises `ValueError`. The launcher takes an assignment from the coordinator for each
 browser, renews it while the browser runs, and releases it when the lease ends.
 When no node serves the build's release, or every GPU stays busy for 30
 seconds, the launch raises `RenderNodeError`.

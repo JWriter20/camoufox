@@ -37,6 +37,17 @@ const { getAddonPath } = await import("../src/addons.js");
 fs.mkdirSync(getAddonPath("UBO"), { recursive: true });
 fs.writeFileSync(path.join(getAddonPath("UBO"), "manifest.json"), "{}");
 
+// A Pro launch uses the render node this machine configured; the suites'
+// must not, so none is found. render-node.test.ts writes its own.
+const renderNode = await import("../src/render_node.js");
+renderNode.renderNodeFiles.defaultPath = path.join(
+	HOME,
+	".config",
+	"camoufox",
+	"render-node.json",
+);
+delete process.env[renderNode.CONFIG_ENV];
+
 export const utils = await import("../src/utils.js");
 export const fingerprints = await import("../src/fingerprints.js");
 export const warnings = await import("../src/warnings.js");
