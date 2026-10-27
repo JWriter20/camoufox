@@ -100,6 +100,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "tracking-protection-lists",
         "viewport-no-rdm",
         "webrtc-proxy-local-network",
+        "webrtc-socks5-udp",
         "windows-crt-math",
         "windows-exe-manifest",
         "windows-keyboard",
