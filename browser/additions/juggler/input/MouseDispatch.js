@@ -273,30 +273,23 @@ export class MouseDispatch {
     this._sendAbsolute('mouseover', absX, absY);
   }
 
-  /** Wheel events take the same conversion; they are not acked. */
-  sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY, nativeNotches = false, noLineDevice = false}) {
+  /**
+   * One wheel notch of `linesX`/`linesY` lines, as a mouse wheel's native tick.
+   * Same conversion as mouse events; not acked.
+   */
+  sendWheel(x, y, linesX, linesY) {
     const {x: absX, y: absY} = this.toAbsolute(x, y);
     const utils = this._win.windowUtils;
-    // The widget reads pixel deltas as device pixels. Scale by the chrome
-    // window's real ratio, not this._win.devicePixelRatio (MaskConfig spoofs it).
-    const scale = deltaMode === 0 /* WheelEvent.DOM_DELTA_PIXEL */
-        ? utils.toTopLevelWidgetRect(0, 0, 1, 1).width
-        : 1;
     utils.sendWheelEvent(
       absX,
       absY,
-      deltaX * scale,
-      deltaY * scale,
-      deltaZ * scale,
-      deltaMode,
+      linesX,
+      linesY,
+      0,
+      1 /* WheelEvent.DOM_DELTA_LINE */,
       this._args.modifiers,
-      lineOrPageDeltaX,
-      lineOrPageDeltaY,
-      // A pixel-only wheel (a touchpad, a smooth-scrolling mouse) reports no
-      // line delta, so DOMMouseScroll.detail is derived from the pixels as for
-      // such a device in stock (not the pixel count as lines), and it scrolls
-      // through APZ like any real wheel, so scrollend follows.
-      (nativeNotches ? utils.WHEEL_EVENT_NATIVE_NOTCHES : 0) |
-          (noLineDevice ? utils.WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE | utils.WHEEL_EVENT_ASYNC_ENABLED : 0));
+      linesX,
+      linesY,
+      utils.WHEEL_EVENT_NATIVE_NOTCHES);
   }
 }

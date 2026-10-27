@@ -70,6 +70,15 @@ skip:
       type(). Listed separately because dropping auto-Shift would have to unskip
       both.
 
+  - test: tests/async/test_input.py::test_wheel_should_work
+    reason: >-
+      Asserts mouse.wheel(0, 100) arrives as one wheel event of deltaY 100 in
+      deltaMode 0 and scrolls exactly 100 px. A mouse wheel cannot produce
+      that: stock Firefox on Linux gets one event per notch, deltaMode 1,
+      deltaY 6, wheelDeltaY -120, and scrolls 120 px. Camoufox turns each
+      100 px into one such notch (docs/input-dispatch.md), so the page sees a
+      wheel, and upstream's exact pixel delta is gone.
+
   # --- client certificates the BROWSER has to present ------------------------
   #
   # Not the whole module. Playwright offers client certs two ways, and only one

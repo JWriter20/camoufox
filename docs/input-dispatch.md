@@ -93,3 +93,22 @@ far edges, and `humanize-mouse-trajectory.py` pins `os="linux"` — the one
 fingerprint immune to `#751`.
 `browser/tests/playwright/patches/input-ack-backstop.py` covers the bounded waits
 themselves: a late renderer ack, and a drag whose page answers late.
+
+## Wheel notches
+
+A mouse wheel turns in notches, and stock Firefox delivers each one as its own
+`wheel` event. On Linux (GTK, X11) stock 158.0.1 gives every notch
+`deltaMode` 1, `deltaY` 6, `wheelDeltaY` -120, a `DOMMouseScroll` with
+`detail` 3 and a `MozMousePixelScroll` of three lines, and scrolls 120 px
+(measured with XTest button 5). `Page.dispatchWheelEvent` sends the same: one
+event of three lines per notch, flagged as a native tick
+(`wheel-native-ticks.patch`), so Gecko applies the same system scroll speed.
+
+A Playwright caller asks for pixels, so `mouse.wheel(dx, dy)` maps each axis to
+notches: 100 px is one notch, rounded to the nearest, at least one on an axis
+that moves. The notches of one call are 18 to 60 ms apart, drawn per notch;
+no recording of a person's wheel backs that range yet. The page therefore scrolls a
+notch's distance (120 px here), not the exact pixels asked for, and
+`mouse.wheel(0, 0)` sends nothing. Humanize does not change this.
+`browser/tests/playwright/patches/driven-wheel-notches.py` compares the result
+with stock's.

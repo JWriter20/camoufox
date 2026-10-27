@@ -765,27 +765,18 @@ export class PageHandler {
   }
 
   async ['Page.dispatchWheelEvent']({x, y, button, deltaX, deltaY, deltaZ, modifiers }) {
-    // Camoufox: with humanize on, scroll the way a physical wheel does, in
-    // notches. Each notch is its own event of 3 LINES carrying one native tick,
-    // so the page sees deltaMode 1, DOMMouseScroll.detail 3 and wheelDelta -120
-    // per notch, and a longer scroll arrives as several such events a few tens
-    // of ms apart. Lines without ticks give wheelDelta -396 for one notch and
-    // one big event for several (measured against XTEST input). 100 px == one
-    // notch. With the notches off, the pixel delta goes as a pixel-only device's
-    // wheel: no line delta (upstream sent the pixels as lines, so
-    // DOMMouseScroll.detail read 100) and through APZ, so scrollend fires.
-    //
-    // Off by default: mouse.wheel(0, 100) has to deliver deltaY 100 in
-    // deltaMode 0, which is the delta the caller asked for and what upstream's
-    // own suite asserts. Quantising into notches changes the number the page
-    // sees, so it is opt-in with the rest of the humanized input.
-    const nativeNotches = ChromeUtils.camouGetBool('humanize', false);
+    // Camoufox: scroll the way a mouse wheel does, in notches (docs/input-dispatch.md).
+    // Each notch is its own event of 3 lines carrying one native tick, so the
+    // page sees what stock Firefox gets from a wheel: on GTK deltaMode 1,
+    // deltaY 6, wheelDelta -120, DOMMouseScroll.detail 3 (measured against
+    // XTest input). A longer scroll arrives as several such events tens of ms
+    // apart. 100 px is one notch, rounded, at least one per axis that moves.
     const PX_PER_NOTCH = 100;
     const LINES_PER_NOTCH = 3;
     const toNotches = (d) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / PX_PER_NOTCH)));
-    const notchesX = nativeNotches ? toNotches(deltaX) : 0;
-    const notchesY = nativeNotches ? toNotches(deltaY) : 0;
-    const notchCount = nativeNotches ? Math.max(1, Math.abs(notchesX), Math.abs(notchesY)) : 1;
+    const notchesX = toNotches(deltaX);
+    const notchesY = toNotches(deltaY);
+    const notchCount = Math.max(Math.abs(notchesX), Math.abs(notchesY));
 
     await this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
@@ -806,23 +797,7 @@ export class PageHandler {
         const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {modifiers});
         // Same conversion as a mouse event: a wheel at relative y == 0 would
         // otherwise land on the chrome/content boundary and scroll the tab strip.
-        dispatch.sendWheel(x, y, nativeNotches ? {
-          deltaX: stepX,
-          deltaY: stepY,
-          deltaZ: i ? 0 : deltaZ,
-          deltaMode: 1 /* WheelEvent.DOM_DELTA_LINE */,
-          lineOrPageDeltaX: stepX,
-          lineOrPageDeltaY: stepY,
-          nativeNotches: true,
-        } : {
-          deltaX,
-          deltaY,
-          deltaZ,
-          deltaMode: 0 /* WheelEvent.DOM_DELTA_PIXEL */,
-          lineOrPageDeltaX: 0,
-          lineOrPageDeltaY: 0,
-          noLineDevice: true,
-        });
+        dispatch.sendWheel(x, y, stepX, stepY);
       }
     }, { muteNotificationsPopup: true });
   }

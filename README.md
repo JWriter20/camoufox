@@ -490,7 +490,7 @@ claims the host's OS. Details are in
 | `navigator.webdriver` is `false` | `playwright/1-leak-fixes` patch |
 | `select_option`, `fill` on date and colour inputs, and `set_input_files` fire trusted events | `trusted-automation-events` patch |
 | Headless reports a fine pointer, like a desktop | `force-default-pointer` patch |
-| Wheel events carry native ticks, like a physical wheel | `wheel-native-ticks` patch |
+| `mouse.wheel()` turns notches, as a physical wheel does: 100 px is one notch, each its own event with a native tick | Juggler, `wheel-native-ticks` patch |
 | Juggler's debugger leaves no side effects content can observe | `debugger-invisible-to-content` patch |
 | Per-context fingerprint setters are gone before page script runs | `window-setter-seal` patch |
 | Popup blocker on, as in stock Firefox | `popup-blocker-parity` patch |
