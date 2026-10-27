@@ -1,11 +1,18 @@
 diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
-index 040e7af8de..ea92848d79 100644
+index 040e7af8de..23e3e242e0 100644
 --- a/dom/base/Navigator.cpp
 +++ b/dom/base/Navigator.cpp
-@@ -754,6 +754,21 @@ bool Navigator::GlobalPrivacyControl() {
+@@ -754,30 +754,38 @@ bool Navigator::GlobalPrivacyControl() {
  }
  
  uint64_t Navigator::HardwareConcurrency() {
+-  // Camoufox: per-context hardware concurrency
+-  if (mWindow) {
+-    const uint32_t userContextId =
+-        RoverfoxStorageManager::UserContextId(mWindow);
+-    uint32_t stored = NavigatorManager::GetHardwareConcurrency(userContextId);
+-    if (stored > 0) {
+-      return static_cast<uint64_t>(stored);
 +  // Camoufox: stock's work first, then the spoof (timing parity; see
 +  // nsScreen::PixelDepth).
 +  const uint64_t stock = [&]() -> uint64_t {
@@ -13,37 +20,50 @@ index 040e7af8de..ea92848d79 100644
 +        workerinternals::RuntimeService::GetOrCreateService();
 +    if (!rts) {
 +      return 1;
-+    }
-+
+     }
+-  }
+-  // Camoufox: global config fallback
+-  if (auto value = MaskConfig::GetUint64("navigator.hardwareConcurrency")) {
+-    return value.value();
+-  }
+-  workerinternals::RuntimeService* rts =
+-      workerinternals::RuntimeService::GetOrCreateService();
+-  if (!rts) {
+-    return 1;
+-  }
+ 
+-  return rts->ClampedHardwareConcurrency(
+-      nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
+-          RFPTarget::NavigatorHWConcurrency),
+-      nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
+-          RFPTarget::NavigatorHWConcurrencyTiered));
 +    return rts->ClampedHardwareConcurrency(
 +        nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
 +            RFPTarget::NavigatorHWConcurrency),
 +        nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
 +            RFPTarget::NavigatorHWConcurrencyTiered));
 +  }();
-   // Camoufox: per-context hardware concurrency
-   if (mWindow) {
-     const uint32_t userContextId =
-@@ -767,17 +782,7 @@ uint64_t Navigator::HardwareConcurrency() {
-   if (auto value = MaskConfig::GetUint64("navigator.hardwareConcurrency")) {
-     return value.value();
-   }
--  workerinternals::RuntimeService* rts =
--      workerinternals::RuntimeService::GetOrCreateService();
--  if (!rts) {
--    return 1;
--  }
--
--  return rts->ClampedHardwareConcurrency(
--      nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
--          RFPTarget::NavigatorHWConcurrency),
--      nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
--          RFPTarget::NavigatorHWConcurrencyTiered));
-+  return stock;
++  // Camoufox: per-context hardware concurrency, else the global config.
++  const uint64_t generation = RoverfoxStorageManager::Generation();
++  const uint32_t userContextId =
++      mWindow ? RoverfoxStorageManager::UserContextId(mWindow) : 0;
++  auto& cache = mCamouHardwareConcurrency;
++  if (cache.mGeneration != generation ||
++      cache.mUserContextId != userContextId) {
++    const uint32_t stored =
++        mWindow ? NavigatorManager::GetHardwareConcurrency(userContextId) : 0;
++    cache.mValue = stored > 0 ? stored
++                              : MaskConfig::GetUint64(
++                                    "navigator.hardwareConcurrency")
++                                    .value_or(0);
++    cache.mUserContextId = userContextId;
++    cache.mGeneration = generation;
++  }
++  return cache.mValue ? cache.mValue : stock;
  }
  
  namespace {
-@@ -974,6 +979,39 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
+@@ -974,6 +982,39 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
    // primary pointer. See force-default-pointer.patch for the matching
    // `any-pointer: coarse` half. Stock Firefox's baseline fingerprinting
    // protection collapses the spoofed count as it would the real one.
@@ -83,7 +103,7 @@ index 040e7af8de..ea92848d79 100644
    if (auto value = MaskConfig::GetUint32("navigator.maxTouchPoints")) {
      if (aCallerType != CallerType::System &&
          nsContentUtils::ShouldResistFingerprinting(
-@@ -982,35 +1020,7 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
+@@ -982,35 +1023,7 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
      }
      return value.value();
    }
@@ -120,6 +140,26 @@ index 040e7af8de..ea92848d79 100644
  }
  
  //*****************************************************************************
+diff --git a/dom/base/Navigator.h b/dom/base/Navigator.h
+index 3ff67f4b54..0444fb191e 100644
+--- a/dom/base/Navigator.h
++++ b/dom/base/Navigator.h
+@@ -178,6 +178,15 @@ class Navigator final : public nsISupports, public nsWrapperCache {
+                   ErrorResult& aRv) const;
+   bool JavaEnabled() { return false; }
+   uint64_t HardwareConcurrency();
++  // Camoufox: the spoofed hardwareConcurrency of this context, read once per
++  // RoverfoxStorageManager generation instead of on every call (timing
++  // parity; see nsScreen::CamouSpoofed). 0: none, stock's value applies.
++  struct CamouHardwareConcurrency {
++    uint64_t mGeneration = 0;
++    uint32_t mUserContextId = 0;
++    uint64_t mValue = 0;
++  };
++  CamouHardwareConcurrency mCamouHardwareConcurrency;
+   bool TaintEnabled() { return false; }
+ 
+   already_AddRefed<LegacyMozTCPSocket> MozTCPSocket();
 diff --git a/dom/base/NavigatorManager.cpp b/dom/base/NavigatorManager.cpp
 index b9f1dab9fa..879a3baf89 100644
 --- a/dom/base/NavigatorManager.cpp
@@ -532,13 +572,38 @@ index 4614516ff0..173d604436 100644
  
  namespace mozilla::dom {
 diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
-index 1262c4a6b4..110a33446b 100644
+index 1262c4a6b4..432152fb2f 100644
 --- a/dom/workers/WorkerNavigator.cpp
 +++ b/dom/workers/WorkerNavigator.cpp
-@@ -275,6 +275,20 @@ void WorkerNavigator::GetUserAgent(nsCString& aUserAgent,
+@@ -114,9 +114,10 @@ JSObject* WorkerNavigator::WrapObject(JSContext* aCx,
+ }
+ 
+ bool WorkerNavigator::GlobalPrivacyControl() const {
+-  if (auto value = MaskConfig::GetOptionalBool("navigator.globalPrivacyControl");
+-      value.has_value())
+-    return value.value();
++  // Camoufox: stock's work first, then the spoof, read once per process
++  // (timing parity; see nsScreen::PixelDepth).
++  static const std::optional<bool> sSpoofed =
++      MaskConfig::GetOptionalBool("navigator.globalPrivacyControl");
+   bool gpcStatus = StaticPrefs::privacy_globalprivacycontrol_enabled();
+   if (!gpcStatus) {
+     JSObject* jso = GetWrapper();
+@@ -127,7 +128,7 @@ bool WorkerNavigator::GlobalPrivacyControl() const {
+       }
+     }
+   }
+-  return gpcStatus;
++  return sSpoofed.value_or(gpcStatus);
+ }
+ 
+ void WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages) {
+@@ -275,29 +276,37 @@ void WorkerNavigator::GetUserAgent(nsCString& aUserAgent,
  }
  
  uint64_t WorkerNavigator::HardwareConcurrency() const {
+-  // Camoufox: per-context hardware concurrency for workers
+-  {
 +  // Camoufox: stock's work first, then the spoof (timing parity; see
 +  // nsScreen::PixelDepth).
 +  const uint64_t stock = [&]() -> uint64_t {
@@ -553,13 +618,31 @@ index 1262c4a6b4..110a33446b 100644
 +        aWorkerPrivate->ShouldResistFingerprinting(
 +            RFPTarget::NavigatorHWConcurrencyTiered));
 +  }();
-   // Camoufox: per-context hardware concurrency for workers
-   {
++  // Camoufox: per-context hardware concurrency, else the global config.
++  // A worker's context never changes, so a current cache answers alone.
++  const uint64_t generation = RoverfoxStorageManager::Generation();
++  auto& cache = mCamouHardwareConcurrency;
++  if (cache.mGeneration != generation) {
      WorkerPrivate* wp = GetCurrentThreadWorkerPrivate();
-@@ -288,16 +302,7 @@ uint64_t WorkerNavigator::HardwareConcurrency() const {
+-    if (wp) {
+-      uint32_t ucid = wp->GetOriginAttributes().mUserContextId;
+-      uint32_t stored = mozilla::dom::NavigatorManager::GetHardwareConcurrency(ucid);
+-      if (stored > 0) {
+-        return static_cast<uint64_t>(stored);
+-      }
+-    }
++    const uint32_t ucid = wp ? wp->GetOriginAttributes().mUserContextId : 0;
++    const uint32_t stored =
++        wp ? mozilla::dom::NavigatorManager::GetHardwareConcurrency(ucid) : 0;
++    cache.mValue = stored > 0 ? stored
++                              : MaskConfig::GetUint64(
++                                    "navigator.hardwareConcurrency")
++                                    .value_or(0);
++    cache.mUserContextId = ucid;
++    cache.mGeneration = generation;
    }
-   if (auto value = MaskConfig::GetUint64("navigator.hardwareConcurrency"))
-     return value.value();
+-  if (auto value = MaskConfig::GetUint64("navigator.hardwareConcurrency"))
+-    return value.value();
 -  RuntimeService* rts = RuntimeService::GetService();
 -  MOZ_ASSERT(rts);
 -
@@ -570,10 +653,30 @@ index 1262c4a6b4..110a33446b 100644
 -          RFPTarget::NavigatorHWConcurrency),
 -      aWorkerPrivate->ShouldResistFingerprinting(
 -          RFPTarget::NavigatorHWConcurrencyTiered));
-+  return stock;
++  return cache.mValue ? cache.mValue : stock;
  }
  
  StorageManager* WorkerNavigator::Storage() {
+diff --git a/dom/workers/WorkerNavigator.h b/dom/workers/WorkerNavigator.h
+index a96a6bb290..ebab8e00e5 100644
+--- a/dom/workers/WorkerNavigator.h
++++ b/dom/workers/WorkerNavigator.h
+@@ -108,6 +108,15 @@ class WorkerNavigator final : public nsWrapperCache {
+   void SetLanguages(const nsTArray<nsString>& aLanguages);
+ 
+   uint64_t HardwareConcurrency() const;
++  // Camoufox: the spoofed hardwareConcurrency of this context, read once per
++  // RoverfoxStorageManager generation instead of on every call (timing
++  // parity; see nsScreen::CamouSpoofed). 0: none, stock's value applies.
++  struct CamouHardwareConcurrency {
++    uint64_t mGeneration = 0;
++    uint32_t mUserContextId = 0;
++    uint64_t mValue = 0;
++  };
++  mutable CamouHardwareConcurrency mCamouHardwareConcurrency;
+ 
+   StorageManager* Storage();
+ 
 diff --git a/toolkit/components/resistfingerprinting/moz.build b/toolkit/components/resistfingerprinting/moz.build
 index a4bb89bd34..e4e3e161de 100644
 --- a/toolkit/components/resistfingerprinting/moz.build

@@ -11,7 +11,7 @@ index c62b3b0424..f9f88078bd 100644
 +LOCAL_INCLUDES += ["/camoucfg"]
 \ No newline at end of file
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 49a25262ca..59dcc473d1 100644
+index 49a25262ca..3489102917 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
 @@ -3,6 +3,7 @@
@@ -51,25 +51,40 @@ index 49a25262ca..59dcc473d1 100644
    FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError, 0);
  }
  
-@@ -3798,6 +3809,8 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
+@@ -3791,6 +3802,15 @@ static nsPresContext* GetPresContextForRatio(Document* aDoc) {
+   return nullptr;
+ }
+ 
++// Camoufox: the launch config is fixed for the life of the process, so it is
++// read once, not on every devicePixelRatio call (timing parity: stock's getter
++// is a few member reads).
++static const std::optional<double>& SpoofedDevicePixelRatio() {
++  static const std::optional<double> sValue =
++      MaskConfig::GetDouble("window.devicePixelRatio");
++  return sValue;
++}
++
+ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
+                                                 ErrorResult& aError) {
+   ENSURE_ACTIVE_DOCUMENT(aError, 0.0);
+@@ -3798,6 +3818,7 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
    RefPtr<nsPresContext> presContext = GetPresContextForRatio(mDoc);
    if (NS_WARN_IF(!presContext)) {
      // Still nothing, oh well.
-+    if (auto value = MaskConfig::GetDouble("window.devicePixelRatio"))
-+      return value.value();
++    if (const auto& value = SpoofedDevicePixelRatio()) return *value;
      return 1.0;
    }
  
-@@ -3813,6 +3826,17 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
+@@ -3813,6 +3834,17 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
      }
    }
  
 +  // Camoufox: the identity's ratio is the screen's, at 100% zoom. Zoom scales
 +  // it the way stock scales the real one, rounded to whole app units per device
 +  // pixel, so zooming the page changes devicePixelRatio as it does in stock.
-+  if (auto value = MaskConfig::GetDouble("window.devicePixelRatio")) {
++  if (const auto& value = SpoofedDevicePixelRatio()) {
 +    const int32_t unzoomed =
-+        std::max(1, NSToIntRound(float(AppUnitsPerCSSPixel() / value.value())));
++        std::max(1, NSToIntRound(float(AppUnitsPerCSSPixel() / *value)));
 +    return double(AppUnitsPerCSSPixel()) /
 +           double(nsDeviceContext::ApplyFullZoomToAPD(
 +               unzoomed, presContext->GetFullZoom()));
