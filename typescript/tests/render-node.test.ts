@@ -9,15 +9,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
 import * as path from "node:path";
-import {
-	afterAll,
-	afterEach,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	it,
-} from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	BUNDLE,
 	quietly,
@@ -143,18 +135,17 @@ let api: FakeApi;
 let coordinator: FakeCoordinator;
 const SAVED_ENV = { ...process.env };
 const TIMING = { ...renderNode.renderNodeTiming };
-const NAMES = ["XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"];
+const DIRS: Record<string, string> = {
+	XDG_CONFIG_HOME: path.join(SCRATCH, "node-config"),
+	// Short enough for a socket path, as /run/user/<uid> is.
+	XDG_RUNTIME_DIR: fs.mkdtempSync("/tmp/cf-"),
+};
+const NAMES = Object.keys(DIRS);
 const mode = (file: string) => fs.statSync(file).mode & 0o777;
 
-beforeAll(() => {
-	for (const name of NAMES) {
-		process.env[name] = path.join(SCRATCH, `node-${name.toLowerCase()}`);
-	}
-});
-
 beforeEach(async () => {
-	for (const name of NAMES) {
-		const dir = process.env[name] as string;
+	for (const [name, dir] of Object.entries(DIRS)) {
+		process.env[name] = dir;
 		fs.rmSync(dir, { recursive: true, force: true });
 		fs.mkdirSync(dir, { recursive: true });
 	}
@@ -192,6 +183,7 @@ afterEach(async () => {
 });
 
 afterAll(() => {
+	fs.rmSync(DIRS.XDG_RUNTIME_DIR, { recursive: true, force: true });
 	for (const name of [...NAMES, pro.API_ENV, pro.KEY_ENV]) {
 		if (SAVED_ENV[name] === undefined) delete process.env[name];
 		else process.env[name] = SAVED_ENV[name];
@@ -345,6 +337,47 @@ describe.runIf(modelReady)("a launch", () => {
 		expect(prefs["dom.webgpu.renderfarm.node"] ?? false).toBe(onNode);
 		expect("webGPU:d3d12Limits" in config).toBe(!onNode);
 		expect("HOLO_WEBGPU_NV_ARCH" in opts.env).toBe(!onNode);
+	});
+
+	it.each([
+		[null],
+		[["webgpu"]],
+		[["text"]],
+	])("rasterizes text on a node that serves it (routes %j)", async (routes) => {
+		coordinator.routes = routes;
+		const opts = await launch({ render_node: coordinator.config });
+		const sessionFile = opts.env[renderNode.RELAY_ENV];
+		if (!routes?.includes("text")) {
+			// The build keeps rasterizing with its bundled DirectWrite.
+			expect(renderNode.TEXT_ENV in opts.env).toBe(false);
+			return;
+		}
+		// The build binds it, in the session file's private directory.
+		const socket = opts.env[renderNode.TEXT_ENV];
+		expect(path.dirname(socket)).toBe(path.dirname(sessionFile));
+		expect(mode(path.dirname(socket))).toBe(0o700);
+		expect(fs.existsSync(socket)).toBe(false);
+		fs.writeFileSync(socket, "");
+		await heldLease(opts).release();
+		expect(fs.existsSync(socket)).toBe(false);
+	});
+
+	it("refuses a socket path too long to bind", async () => {
+		const runtime = path.join(SCRATCH, "r".repeat(80));
+		fs.mkdirSync(runtime, { recursive: true });
+		process.env.XDG_RUNTIME_DIR = runtime;
+		coordinator.routes = ["text"];
+		await expect(launch({ render_node: coordinator.config })).rejects.toThrow(
+			/longer than a Unix socket path/,
+		);
+		expect(coordinator.calls("DELETE", ".*").map((r) => r.path)).toEqual([
+			`/assignments/${"a".repeat(32)}`,
+		]);
+		expect(
+			fs
+				.readdirSync(path.join(runtime, "camoufox-pro"))
+				.filter((name) => name.startsWith("render-node-")),
+		).toEqual([]);
 	});
 
 	it("releases the assignment when the lease ends", async () => {

@@ -1991,6 +1991,7 @@ async function buildLaunchOptions(
 			const opened = node;
 			held.lease.onEnd.push(() => opened.release());
 			proEnv[renderNodes.RELAY_ENV] = node.path;
+			if (node.textSocket) proEnv[renderNodes.TEXT_ENV] = node.textSocket;
 			// The node draws on the identity's own OS and GPU, so there is nothing to cover.
 			canvas_noise ??= false;
 		}

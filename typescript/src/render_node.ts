@@ -19,7 +19,8 @@
  * similar"; without it the coordinator picks any free GPU.
  *
  * Each browser holds its own assignment on the coordinator, renewed while the
- * browser runs and released when its Pro lease ends.
+ * browser runs and released when its Pro lease ends. WebGPU and text go to the
+ * node too when its renderer serves those routes (the assignment's angle_routes).
  */
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
@@ -30,6 +31,13 @@ import { writePrivate } from "./pro.js";
 export const CONFIG_ENV = "CAMOUFOX_RENDER_NODE";
 /** Read by the build's relay client (additions/pro/angle-relay): the session to open. */
 export const RELAY_ENV = "ANGLE_RELAY_CONFIG";
+/**
+ * Read by the build's DirectWrite (holo_dwrite): the socket every process sends
+ * its text calls through, when the node's renderer serves the text route.
+ */
+export const TEXT_ENV = "HOLO_DWRITE_NODE_SOCK";
+/** sockaddr_un.sun_path holds 108 bytes on Linux, its terminating NUL included. */
+export const SOCKET_PATH_MAX = 107;
 export const ROUTE = "/angle-relay";
 
 /** Where the configuration is looked for last. Mutable for tests. */
@@ -180,6 +188,7 @@ const sleep = (ms: number) =>
 /** One browser's assignment on the coordinator, and the file its relay client reads. */
 export class Session {
 	path = "";
+	textSocket: string | null = null;
 	assignment: Record<string, any> = {};
 	#timer: NodeJS.Timeout | null = null;
 	#released: Promise<void> | null = null;
@@ -211,6 +220,19 @@ export class Session {
 				version,
 			}),
 		);
+		if (session.routes.has("text")) {
+			// The browser creates it; it only has to be private and short enough to bind.
+			session.textSocket = path.join(
+				directory,
+				`render-node-${id.slice(0, 16)}.sock`,
+			);
+			if (Buffer.byteLength(session.textSocket) > SOCKET_PATH_MAX) {
+				await session.release();
+				throw new RenderNodeError(
+					`${session.textSocket}: longer than a Unix socket path can be; set XDG_RUNTIME_DIR to a shorter directory`,
+				);
+			}
+		}
 		session.#schedule();
 		return session;
 	}
@@ -335,7 +357,7 @@ export class Session {
 		this.#schedule();
 	}
 
-	/** End the assignment and delete the session file. Only the first call does anything. */
+	/** End the assignment and delete the session file and socket. Only the first call does anything. */
 	release(): Promise<void> {
 		this.#released ??= (async () => {
 			if (this.#timer) clearTimeout(this.#timer);
@@ -347,7 +369,9 @@ export class Session {
 			} catch {
 				// It lapses by itself within a minute.
 			}
-			if (this.path) fs.rmSync(this.path, { force: true });
+			for (const file of [this.path, this.textSocket]) {
+				if (file) fs.rmSync(file, { force: true });
+			}
 		})();
 		return this.#released;
 	}
