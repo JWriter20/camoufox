@@ -232,7 +232,7 @@ async def _launch_leased(
         pro.attach_lease(lease, browser, 'disconnected', is_async=True)
     attach_context_defaults(browser, no_viewport_default)
     browser._camoufox_host_identity = identity
-    browser._camoufox_render_node = render_node.RELAY_ENV in from_options.get('env', {})
+    browser._camoufox_render_node = bool({render_node.RELAY_ENV, render_node.NODE_ENV} & set(from_options.get('env', {})))
     return await async_attach_vd(browser, virtual_display)
 
 

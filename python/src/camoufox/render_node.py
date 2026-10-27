@@ -19,6 +19,15 @@ without it the coordinator picks any free GPU.
 
 Each browser holds its own assignment on the coordinator, renewed while the
 browser runs and released when its Pro lease ends.
+
+A test bench with one node and no coordinator names the node itself:
+
+    {"node": "100.64.0.7:9500"}
+
+The build's relay client then dials that relay node over plain TCP
+(ANGLE_RELAY_NODE); there is no assignment, token or GPU choice, since the
+node serves the one GPU its machine has. camoufox-parity's `cross-os --pro`
+uses this to draw on the very machine its stock-Firefox reference ran on.
 """
 
 import json
@@ -40,6 +49,8 @@ log = logging.getLogger("camoufox")
 CONFIG_ENV = "CAMOUFOX_RENDER_NODE"
 # Read by the build's relay client (additions/pro/angle-relay): the session to open.
 RELAY_ENV = "ANGLE_RELAY_CONFIG"
+# Read by the same client when there is no session file: a relay node's host:port, dialled directly.
+NODE_ENV = "ANGLE_RELAY_NODE"
 DEFAULT_PATH = Path.home() / ".config" / "camoufox" / "render-node.json"
 ROUTE = "/angle-relay"
 # The coordinator's assignment lease is one minute; renewing at a third of it
@@ -87,6 +98,14 @@ def resolve(option: RenderNodeOption) -> Optional[Dict[str, Any]]:
 
 
 def _validate(data: Dict[str, Any], where: str) -> Dict[str, Any]:
+    if "node" in data:
+        if set(data) != {"node"}:
+            raise RenderNodeError(f"{where}: a direct node is {{\"node\": \"host:port\"}} alone, without a coordinator")
+        node = data["node"]
+        host, _, port = node.rpartition(":") if isinstance(node, str) else ("", "", "")
+        if not host or not port.isdigit() or not 0 < int(port) < 65536:
+            raise RenderNodeError(f"{where}: node must be host:port, such as 100.64.0.7:9500")
+        return {"node": node}
     unknown = set(data) - {"coordinator", "token", "gpu"}
     if unknown:
         raise RenderNodeError(f"{where}: unknown keys {sorted(unknown)}")

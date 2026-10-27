@@ -918,7 +918,7 @@ def host_identity(from_options: Dict[str, Any], canvas_noise: Optional[bool]) ->
     prefs = from_options.get('firefox_user_prefs', {})
     # A farm- or node-rendered browser draws there, not on this host.
     env = from_options.get('env', {})
-    if canvas_noise is not None or has_canvas_placeholder(prefs) or pro.RENDER_FILE_ENV in env or render_nodes.RELAY_ENV in env:
+    if canvas_noise is not None or has_canvas_placeholder(prefs) or pro.RENDER_FILE_ENV in env or render_nodes.RELAY_ENV in env or render_nodes.NODE_ENV in env:
         return None
     # Without the placeholder, the launch claimed the host's OS and no named GPU.
     host_os = _host_os_key()
@@ -1553,7 +1553,12 @@ def launch_options(
             _HELD.lease = pro.acquire(pro_build, target_os, pro_key, pro_request)
         lease = _HELD.lease
         pro_env[pro.LEASE_FILE_ENV] = str(lease.path)
-        if relay is not None:
+        if relay is not None and "node" in relay:
+            # A node named directly: the relay client dials it, with no coordinator in between.
+            pro_env[render_nodes.NODE_ENV] = relay["node"]
+            if canvas_noise is None:
+                canvas_noise = False
+        elif relay is not None:
             node = render_nodes.Session(relay, _firefox_version(Path(browser_binary)), lease.path.parent)
             lease.on_end.append(node.release)
             pro_env[render_nodes.RELAY_ENV] = str(node.path)

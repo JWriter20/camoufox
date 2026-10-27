@@ -136,6 +136,9 @@ def test_the_configuration_is_found_where_documented(coordinator, monkeypatch, t
         ({"coordinator": "http://farm.example/path", "token": "t"}, "origin"),
         ({"coordinator": "http://farm.example"}, "token"),
         ({"coordinator": "http://farm.example", "token": "t", "adapter": "x"}, "unknown"),
+        ({"node": "10.0.0.5"}, "host:port"),
+        ({"node": "10.0.0.5:0"}, "host:port"),
+        ({"node": "10.0.0.5:9500", "token": "t"}, "alone"),
     ],
 )
 def test_a_bad_configuration_is_refused(config, error):
@@ -248,3 +251,16 @@ def test_contexts_of_a_node_browser_are_windows_and_unmasked():
         utils.context_identity(browser, "linux", None)
     fp = generate_context_fingerprint(os="windows", ff_version="156", webgl=False)
     assert not [k for k in fp["config"] if k.startswith(("webGl:", "webGl2:"))]
+
+
+def test_a_node_named_directly_is_dialled_with_no_coordinator(api, coordinator, pro_build, signed_in, monkeypatch):
+    opts, config = node_launch(pro_build, monkeypatch, os=None, render_node={"node": "100.64.0.7:9500"})
+
+    assert opts["env"][render_node.NODE_ENV] == "100.64.0.7:9500"
+    assert render_node.RELAY_ENV not in opts["env"]
+    assert not coordinator.requests
+    # The same Windows identity with no WebGL of its own as through a coordinator.
+    assert api.calls("/api/v1/leases")[0]["body"]["gpu"] is False
+    assert config["navigator.platform"] == "Win32"
+    assert not [k for k in config if k.startswith(("webGl:", "webGl2:"))]
+    assert not utils.has_canvas_placeholder(opts["firefox_user_prefs"])

@@ -158,7 +158,7 @@ set it:
 | `warm_plan` | `"none"`, `"standard"`, `"continuous"` | the plan a new profile is created with (with `profile` only) |
 | `egress` | `false`, `true`, or `{class, country, sticky, provider}` | no [managed egress](#managed-egress), CamouProxy, or the egress wanted |
 | `farm_gpu` | `false` | no [remote GPU](#remote-rendering): render on this machine |
-| `render_node` | `false`, a path, or `{coordinator, token, gpu}` | WebGL on [your own render node](#your-own-render-node) (Python) |
+| `render_node` | `false`, a path, `{coordinator, token, gpu}` or `{node}` | WebGL on [your own render node](#your-own-render-node) (Python) |
 
 They need a Pro build; on a stock build, or with a `CAMOU_LEASE_FILE` of your
 own, they raise `ValueError`.
@@ -248,6 +248,11 @@ node for one launch, in which case a launch that cannot use it raises
 browser, renews it while the browser runs, and releases it when the lease ends.
 When no node serves the build's release, or every GPU stays busy for 30
 seconds, the launch raises `RenderNodeError`.
+
+A test bench with a single relay node and no coordinator names the node
+itself: `{"node": "host:port"}`. The build dials that node directly; there is
+no assignment, token or GPU choice. camoufox-parity's `cross-os --pro` draws on
+the machine its stock-Firefox reference ran on this way.
 
 WebGPU is not relayed: it is blocked, as on Windows Firefox with a blocklisted
 GPU, so `navigator.gpu.requestAdapter()` returns `null`. Canvas 2D draws on this
