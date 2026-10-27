@@ -677,9 +677,7 @@ describe("test_launch_environment: screenshot caret", () => {
 
 	it("pages under a Camoufox launch keep the caret", async () => {
 		const connection = new Connection();
-		const browser = utils.attachScreenshotDefaults(
-			owner(undefined, connection),
-		);
+		const browser = utils.attachDriverDefaults(owner(undefined, connection));
 		// handle, frame, page, context
 		const handle = owner(
 			owner(owner(owner(browser, connection), connection), connection),
@@ -697,10 +695,38 @@ describe("test_launch_environment: screenshot caret", () => {
 		]);
 	});
 
+	it("fill clicks a text field without focus first, and only then", async () => {
+		const connection = new Connection();
+		const browser = utils.attachDriverDefaults(owner(undefined, connection));
+		const clicks: any[] = [];
+		const field = (focused: boolean) => ({
+			first() {
+				return this;
+			},
+			evaluate: async () => ({ typed: true, focused }),
+			click: async (options: any) => {
+				clicks.push(options);
+			},
+		});
+		for (const focused of [false, true]) {
+			const frame = {
+				...owner(browser, connection),
+				locator: () => field(focused),
+			};
+			await connection.sendMessageToServer(frame, "fill", {
+				selector: "#f",
+				value: "x",
+				timeout: 5,
+			});
+		}
+		expect(clicks).toEqual([{ timeout: 5, force: undefined }]);
+		expect(connection.sent.map(([method]) => method)).toEqual(["fill", "fill"]);
+	});
+
 	it("other browsers on the same connection are left alone", async () => {
 		const connection = new Connection();
-		utils.attachScreenshotDefaults(owner(undefined, connection));
-		utils.attachScreenshotDefaults(owner(undefined, connection));
+		utils.attachDriverDefaults(owner(undefined, connection));
+		utils.attachDriverDefaults(owner(undefined, connection));
 		await connection.sendMessageToServer(
 			owner(owner(undefined, connection), connection),
 			"screenshot",

@@ -492,6 +492,7 @@ claims the host's OS. Details are in
 | `select_option`, `fill` on date and colour inputs, and `set_input_files` fire trusted events | `trusted-automation-events` patch |
 | `fill` and `keyboard.insert_text` type the text, key by key at a person's pace | Juggler |
 | Screenshots leave the page's DOM alone (no caret-hiding style writes) | Launcher |
+| `fill` clicks a text field without focus first, as a person does | Launcher |
 | A SOCKS5 proxy with a username and password works, for the launch and per context: the launcher hands the credentials to Juggler, which Playwright alone refuses | Launcher, Juggler |
 | Headless reports a fine pointer, like a desktop | `force-default-pointer` patch |
 | `mouse.wheel()` turns notches, as a physical wheel does: 100 px is one notch, each its own event with a native tick | Juggler, `wheel-native-ticks` patch |

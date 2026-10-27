@@ -1087,49 +1087,97 @@ export function attachSocks5Auth<T>(target: T): T {
 	return target;
 }
 
-const CAMOUFOX_SCREENSHOTS = Symbol.for("camoufox.screenshots");
+const CAMOUFOX_DRIVER_DEFAULTS = Symbol.for("camoufox.driverDefaults");
 
 /**
- * Screenshots that leave the page alone (python/src/camoufox/screenshots.py).
- *
- * Unless told caret: "initial", Playwright hides the caret for a screenshot by
- * setting `caret-color: transparent !important` in the style attribute of every
- * input, textarea and contenteditable element, from its utility world: the page
- * sees each change, reads the transparent caret while the capture runs, and is
- * left with `style` attributes it did not have. Firefox's capture never paints
- * the caret, so screenshots of every page under `target` (a Browser or
- * BrowserContext from a Camoufox launch) default to caret: "initial". The
- * default is filled in where the client sends the request, so page, element
- * and locator screenshots all get it; an explicit caret is kept.
+ * Whether a fill() target is a text field a person types into, and whether it
+ * has focus. Runs in the page, so it is a function (a string would be an
+ * expression to Playwright's JS client).
  */
-export function attachScreenshotDefaults<T>(target: T): T {
+const FILL_TARGET = (e: any) => {
+	const active = e.ownerDocument.activeElement;
+	const type =
+		e.localName === "input"
+			? (e.getAttribute("type") || "text").toLowerCase()
+			: null;
+	const typed =
+		e.localName === "textarea" ||
+		e.isContentEditable ||
+		["text", "search", "email", "url", "tel", "password", "number"].includes(
+			type,
+		);
+	return {
+		typed,
+		focused: active === e || (e.isContentEditable && e.contains(active)),
+	};
+};
+
+/**
+ * Driver calls that reach the page as a person's actions would
+ * (python/src/camoufox/driver_defaults.py). Applies to every page under
+ * `target` (a Browser or BrowserContext from a Camoufox launch); the defaults
+ * are filled in where the client sends the request, so page, frame, element
+ * and locator calls all get them, and other browsers in the process are left
+ * alone.
+ *
+ * Screenshots leave the page alone. Unless told caret: "initial", Playwright
+ * hides the caret by setting `caret-color: transparent !important` in the
+ * style attribute of every input, textarea and contenteditable element, from
+ * its utility world: the page sees each change, reads the transparent caret
+ * while the capture runs, and is left with `style` attributes it did not have.
+ * Firefox's capture never paints the caret, so screenshots default to
+ * caret: "initial"; an explicit caret is kept.
+ *
+ * fill() clicks the field first. Playwright focuses it by script, so the page
+ * gets focus with no pointer or mouse event before it, where a person clicks
+ * the field. A text field without focus is clicked (Playwright's click,
+ * through the OS-path dispatch) before the fill; a focused one is typed into
+ * as it is, and fields fill() sets without typing are left alone.
+ */
+export function attachDriverDefaults<T>(target: T): T {
 	const owner = target as any;
-	owner[CAMOUFOX_SCREENSHOTS] = true;
+	owner[CAMOUFOX_DRIVER_DEFAULTS] = true;
 	const connection = owner._connection;
-	if (!connection || connection[CAMOUFOX_SCREENSHOTS]) return target;
-	connection[CAMOUFOX_SCREENSHOTS] = true;
+	if (!connection || connection[CAMOUFOX_DRIVER_DEFAULTS]) return target;
+	connection[CAMOUFOX_DRIVER_DEFAULTS] = true;
 	const send = connection.sendMessageToServer;
-	connection.sendMessageToServer = function (
+	connection.sendMessageToServer = async function (
 		object: any,
 		method: string,
 		params: Record<string, any>,
 		...rest: any[]
 	) {
-		if (
-			method === "screenshot" &&
-			params?.caret === undefined &&
-			launchedByCamoufox(object)
-		)
-			params = { ...params, caret: "initial" };
+		if (launchedByCamoufox(object)) {
+			if (method === "screenshot" && params?.caret === undefined)
+				params = { ...params, caret: "initial" };
+			if (method === "fill") await clickToFocus(object, params);
+		}
 		return send.call(this, object, method, params, ...rest);
 	};
 	return target;
 }
 
+async function clickToFocus(object: any, params: Record<string, any>) {
+	// A Frame fills by selector (page, frame and locator fill); an ElementHandle fills itself.
+	let field = object;
+	if (
+		typeof params?.selector === "string" &&
+		typeof object.locator === "function"
+	) {
+		field = object.locator(params.selector);
+		if (!params.strict) field = field.first();
+	}
+	if (typeof field.evaluate !== "function" || typeof field.click !== "function")
+		return;
+	const info = await field.evaluate(FILL_TARGET);
+	if (info?.typed && !info.focused)
+		await field.click({ timeout: params?.timeout, force: params?.force });
+}
+
 /** ElementHandle -> Frame -> Page -> BrowserContext -> Browser. */
 function launchedByCamoufox(object: any): boolean {
 	for (let owner = object; owner; owner = owner._parent)
-		if (owner[CAMOUFOX_SCREENSHOTS]) return true;
+		if (owner[CAMOUFOX_DRIVER_DEFAULTS]) return true;
 	return false;
 }
 

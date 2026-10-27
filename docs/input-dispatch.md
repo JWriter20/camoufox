@@ -137,8 +137,16 @@ intervals spread around their own mean is not in the paper; it is taken as
 35%. A fill takes about a quarter of a second per character, so a long one
 needs a longer `timeout`.
 
-Two things stay Playwright's: `fill()` focuses the field from script rather
-than with a click, and selects its text first with `select()`.
+A person clicks a field before typing into it, while Playwright's `fill()`
+focuses it from script: the page would get `focus` with no pointer or mouse
+event before it. The launchers click a text field that does not have focus
+before the fill (`camoufox/driver_defaults.py`, `attachDriverDefaults` in
+`utils.ts`). The click is Playwright's own, so the mouse moves there and
+presses through the OS-path dispatch. A field that has focus is typed into as
+it is. Fields `fill()` sets without typing (date, color, range and the like)
+are not clicked. A field the click cannot reach, such as one covered by
+another element, now fails the way `click()` does, unless `force` is passed.
+`fill()` still selects the field's text with `select()` first.
 `browser/tests/playwright/patches/driven-fill-keys.py` compares the result
 with stock's.
 
@@ -157,7 +165,7 @@ Juggler captures with `drawSnapshot`, which never paints the caret, so hiding
 it changes no pixel. The launchers therefore default screenshots of pages they
 launched to `caret: "initial"`. Page, element and locator screenshots all get
 it. Python wraps the client's `Page.screenshot` and `ElementHandle.screenshot`
-(`camoufox/screenshots.py`). TypeScript fills the option in where the client
+(`camoufox/driver_defaults.py`). TypeScript fills the option in where the client
 sends the request (`attachScreenshotDefaults` in `utils.ts`). Each checks that
 the page belongs to a Camoufox launch, so other browsers in the same process
 keep Playwright's behaviour. A caller who passes `caret` gets what they ask

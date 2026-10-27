@@ -22,8 +22,8 @@ import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
+	attachDriverDefaults,
 	attachNoViewportDefault,
-	attachScreenshotDefaults,
 	attachSocks5Auth,
 	attachStockMediaDefaults,
 	attachVirtualDisplay,
@@ -198,7 +198,7 @@ async function launchWith(
 			userDataDir ?? "",
 			options,
 		);
-		attachScreenshotDefaults(context);
+		attachDriverDefaults(context);
 		return attachVirtualDisplay(context, virtualDisplay);
 	}
 
@@ -211,7 +211,7 @@ async function launchWith(
 	}
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);
-	attachScreenshotDefaults(browser);
+	attachDriverDefaults(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
 	return attachVirtualDisplay(browser, virtualDisplay);
 }

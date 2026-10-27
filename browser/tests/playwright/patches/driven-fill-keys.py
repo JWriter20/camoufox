@@ -9,6 +9,11 @@ Linux each character arrives as keydown, keypress, beforeinput and input
 capital; measured with cfparity's driven.type (XTest keys on Xvfb, three runs,
 identical) for the text below.
 
+A person clicks the field before typing into it, so fill() clicks a text
+field that does not have focus (the launcher, camoufox/driver_defaults.py):
+the mouse moves there, presses and releases, the field takes focus, and then
+the keys arrive. A field that has focus is typed into as it is.
+
 Key releases may overlap the next key's press (rollover), so they are compared
 apart from the rest of the stream. The pace is a person's: keys held 50 to
 250 ms, presses at least 60 ms apart (Dhakal et al., CHI 2018).
@@ -28,20 +33,30 @@ RECORD = """() => {
   window.__events = [];
   const el = document.getElementById('fill');
   const mods = (e) => ['shift', 'ctrl', 'alt', 'meta'].filter((m) => e[m + 'Key']).join('+');
-  for (const t of ['keydown', 'keypress', 'keyup', 'beforeinput', 'input', 'select']) {
-    el.addEventListener(t, (e) => window.__events.push(e instanceof KeyboardEvent
-      ? [t, e.key, e.code, e.keyCode, e.which, mods(e), e.isComposing, Math.round(e.timeStamp)]
-      : [t, e.inputType ?? null, e.data ?? null, e.isComposing ?? null]));
+  const record = (t, e) => {
+    if (e instanceof KeyboardEvent)
+      return [t, e.key, e.code, e.keyCode, e.which, mods(e), e.isComposing, Math.round(e.timeStamp)];
+    if (t === 'beforeinput' || t === 'input' || t === 'select')
+      return [t, e.inputType ?? null, e.data ?? null, e.isComposing ?? null];
+    return [t];
+  };
+  for (const t of ['keydown', 'keypress', 'keyup', 'beforeinput', 'input', 'select',
+                   'mousemove', 'pointerdown', 'mousedown', 'focus', 'pointerup', 'mouseup', 'click']) {
+    el.addEventListener(t, (e) => {
+      // A run of moves counts once.
+      if (t === 'mousemove' && window.__events.at(-1)?.[0] === 'mousemove') return;
+      window.__events.push(record(t, e));
+    });
   }
 }"""
 
 
 def stock_stream(text):
-    """Stock's events for typing `text` on a US layout, as measured."""
+    """Stock's events for clicking the field and typing `text` on a US layout, as measured."""
     shifted = set('ABCDEFGHIJKLMNOPQRSTUVWXYZ~!@#$%^&*()_+{}|:"<>?')
     digits = {"!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9", ")": "0"}
     named = {" ": "Space", ",": "Comma", ".": "Period", "!": "Digit1"}
-    out = []
+    out = [["mousemove"], ["pointerdown"], ["mousedown"], ["focus"], ["pointerup"], ["mouseup"], ["click"]]
     for ch in text:
         code = named.get(ch) or ("Digit" + digits.get(ch, ch) if ch.isdigit() or ch in digits else "Key" + ch.upper())
         down = ord(digits.get(ch, ch).upper()) if ch.isalnum() or ch in digits else {" ": 32, ",": 188}[ch]
@@ -65,13 +80,21 @@ def probe(binary):
         page.set_content(PAGE)
         page.evaluate(RECORD)
         page.locator("#fill").fill(TEXT, timeout=60000)
-        return page.evaluate("window.__events"), page.locator("#fill").input_value()
+        first = page.evaluate("window.__events"), page.locator("#fill").input_value()
+        # Focused now: a person types straight into it.
+        page.evaluate("window.__events = []")
+        page.locator("#fill").fill("ok", timeout=60000)
+        again = [e[0] for e in page.evaluate("window.__events")]
+        return first, again
 
 
 def main() -> int:
-    events, value = probe(resolve_binary())
+    (events, value), again = probe(resolve_binary())
     stock = stock_stream(TEXT)
     failures = []
+    clicked = [t for t in again if t in ("mousemove", "pointerdown", "mousedown", "focus", "click")]
+    if clicked:
+        failures.append(f"filling the focused field clicked it again: {clicked}")
     if value != TEXT:
         failures.append(f"the field holds {value!r}")
     got = [e[:-1] if e[0].startswith("key") else e for e in events]
