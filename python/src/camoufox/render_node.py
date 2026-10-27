@@ -30,7 +30,7 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Set, Union
 from urllib.parse import urlsplit
 
 from .pro import write_private
@@ -135,6 +135,11 @@ class Session:
             self.assignment.get("renderer_id"),
             self.assignment.get("hello", {}).get("gpu_summary", "unknown GPU"),
         )
+
+    @property
+    def routes(self) -> Set[str]:
+        """The node's routes beyond WebGL: "webgpu" and "text" where its renderer serves them."""
+        return set(self.assignment.get("angle_routes") or ())
 
     @property
     def gpu_summary(self) -> str:

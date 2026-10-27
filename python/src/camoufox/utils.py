@@ -1965,7 +1965,16 @@ def launch_options(
         # Every WebGL value is the node's own, as Windows Firefox reports it there.
         for key in [k for k in config if k.startswith(('webGl:', 'webGl2:'))]:
             del config[key]
-        merge_into(firefox_user_prefs, {'webgl.enable-webgl2': True, 'webgl.force-enabled': True})
+        merge_into(firefox_user_prefs, {
+            'webgl.enable-webgl2': True,
+            'webgl.force-enabled': True,
+            # Windows Firefox draws large canvases with WebGL on its ANGLE; here
+            # that ANGLE is the node's.
+            'gfx.canvas.accelerated': True,
+            'gfx.canvas.accelerated.force-enabled': True,
+        })
+        if 'webgpu' in node.routes:
+            firefox_user_prefs.setdefault('dom.webgpu.renderfarm.node', True)
     else:
         # A pair the caller named, or the preset's own GPU, keeps its name and
         # gets that device's recorded parameters. webgl_for_gpu raises for a GPU

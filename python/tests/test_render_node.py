@@ -26,6 +26,7 @@ class FakeCoordinator:
         self.scripted = []
         self.changed = threading.Condition()
         self.released = set()
+        self.routes = None
 
     def calls(self, method, route):
         return [r for r in self.requests if r["method"] == method and re.fullmatch(route, r["path"])]
@@ -47,6 +48,7 @@ class FakeCoordinator:
                 "webgpu_ready": False,
                 "expires_at": "2026-10-26T17:14:09Z",
                 "route": "angle",
+                **({"angle_routes": self.routes} if self.routes else {}),
             }
         match = re.fullmatch(r"/assignments/(\w+)(/renew)?", path)
         if match and match.group(1) not in self.released:
@@ -173,7 +175,18 @@ def test_a_pro_launch_holds_an_assignment_and_hands_the_build_its_session(
     prefs = opts["firefox_user_prefs"]
     assert prefs["webgl.holo-point-sprites"] is False
     assert prefs["webgl.force-enabled"] is True and prefs["webgl.enable-webgl2"] is True
+    assert prefs["gfx.canvas.accelerated"] is True and prefs["gfx.canvas.accelerated.force-enabled"] is True
     assert not utils.has_canvas_placeholder(prefs)
+    # This node serves no WebGPU, so WebGPU stays as a launch without one has it.
+    assert "dom.webgpu.renderfarm.node" not in prefs
+
+
+def test_webgpu_runs_on_a_node_that_serves_it(api, coordinator, pro_build, signed_in, monkeypatch):
+    coordinator.routes = ["text", "webgpu"]
+    opts, _ = node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+    assert held_lease(opts) is not None
+    prefs = opts["firefox_user_prefs"]
+    assert prefs["dom.webgpu.renderfarm.node"] is True and prefs["dom.webgpu.enabled"] is True
 
 
 def test_ending_the_lease_releases_the_assignment(api, coordinator, pro_build, signed_in, monkeypatch):

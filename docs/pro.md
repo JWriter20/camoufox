@@ -249,10 +249,16 @@ browser, renews it while the browser runs, and releases it when the lease ends.
 When no node serves the build's release, or every GPU stays busy for 30
 seconds, the launch raises `RenderNodeError`.
 
-WebGPU is not relayed: it is blocked, as on Windows Firefox with a blocklisted
-GPU, so `navigator.gpu.requestAdapter()` returns `null`. Canvas 2D draws on this
-machine as for any Windows identity. Contexts of the browser are Windows and
-claim no WebGL values of their own.
+Canvas 2D is accelerated as on Windows Firefox: a canvas of at least 128x128
+pixels draws through WebGL on the node's ANGLE, while smaller canvases and
+`willReadFrequently` ones draw on this machine.
+
+WebGPU runs on the node too when its renderer serves it (the coordinator lists
+`webgpu` in the assignment's `angle_routes`): there it executes on Direct3D 12,
+through the same release's own WebGPU implementation. On a node without it,
+WebGPU is blocked, as on Windows Firefox with a blocklisted GPU, so
+`navigator.gpu.requestAdapter()` returns `null`. Contexts of the browser are
+Windows and claim no WebGL values of their own.
 
 ### Profiles
 
