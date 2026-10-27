@@ -33,6 +33,18 @@
   "macEloquenceVoices": ["Eddy", "Flo", "Grandma", "Grandpa", "Reed", "Rocko", "Sandy", "Shelley"],
   "baselineTaskbarHeight": {"win": 48, "mac": 76, "lin": 0},
   "baselineMultiTouchPoints": 5,
+  "windowsUiColors": {
+    "ui.highlight": "#0078d7",
+    "ui.selecteditem": "#0078d7",
+    "ui.accentcolor": "#0060df",
+    "ui.-moz-dialog": "#ffffff",
+    "ui.-moz-dialogtext": "#000000",
+    "ui.-moz-cellhighlight": "#cecece",
+    "ui.-moz_menuhover": "#0000001e",
+    "ui.-moz_menuhovertext": "#15141a",
+    "ui.-moz_menubarhovertext": "#15141a",
+    "ui.-moz_oddtreerow": "#ffffff"
+  },
   "cachePrefs": {
     "browser.sessionhistory.max_total_viewers": -1,
     "browser.cache.memory.enable": true,

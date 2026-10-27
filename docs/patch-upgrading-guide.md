@@ -443,6 +443,30 @@ it holds on every device of that backend, then follow it where the launchers
 convert a recording (`to_config` in `python/src/camoufox/webgl.py` and
 `typescript/src/webgl.ts`).
 
+### Data Read Out of Firefox
+
+Some launcher data is read out of the Firefox source and goes stale with it.
+The static CI job's `browser/scripts/check-firefox-copies.py` compares both
+copies below with the release in `browser/upstream.sh` (fetched from
+hg.mozilla.org by its release tag) and fails until they match, so a bump
+cannot leave them behind silently.
+`python/src/camoufox/font-prefs.json` holds the `font.*` defaults stock Firefox
+ships on Windows, macOS and Linux, which a Linux host applies for another OS's
+identity ([FONTS.md](FONTS.md#another-oss-identity-on-a-linux-host)).
+Regenerate it from the new release's `all.js`, and commit any change. From the
+repository root:
+
+```bash
+python3 browser/scripts/gen-font-prefs.py browser/camoufox-<version>-<release>/modules/libpref/init/all.js
+```
+
+`fallback-fonts-claimed-os.patch` copies the per-script fallback tables of
+`gfxWindowsPlatform::GetCommonFallbackFonts` and
+`gfxPlatformMac::GetCommonFallbackFonts` verbatim, apart from the additions it
+marks with a `// Camoufox:` comment (listed in the check's `ADDITIONS`). When
+either changes, update the copy with `make workspace ./patches/fallback-fonts-claimed-os.patch` and
+`make diff` (see [Changing a patch](../AGENTS.md#changing-a-patch)).
+
 ---
 
 ## Pitfalls
