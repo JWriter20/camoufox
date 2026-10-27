@@ -116,6 +116,14 @@ per-context proxy filter then picks that context's proxy. The SOCKS5 control
 connection (`WebrtcUdpAssociation`) runs in the socket process, so the relay
 sees the control connection and the datagrams come from the same address.
 
+## Driver input and the page's globals
+
+- `input-coalescing-parity.patch` uses `mJugglerEventId` and the
+  `juggler-mouse-event-hit-renderer` ack from `playwright/0-playwright.patch`.
+  Its JS half is in `additions/juggler` (`MouseDispatch.sendQueuedMove`,
+  `PageHandler.beforeDispatch`), and either half without the other wedges
+  every move until the ack deadline.
+
 ## Backports
 
 These patches carry upstream Firefox changes that `browser/upstream.sh`'s

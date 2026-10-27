@@ -89,6 +89,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "driven-drag-gtk",
         "driven-fill-keys",
         "driven-global-order",
+        "driven-move-coalescing",
         "driven-wheel-notches",
         "firefox-version-pin",
         "getter-cost-parity",

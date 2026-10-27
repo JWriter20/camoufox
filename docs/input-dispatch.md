@@ -94,6 +94,40 @@ fingerprint immune to `#751`.
 `browser/tests/playwright/patches/input-ack-backstop.py` covers the bounded waits
 themselves: a late renderer ack, and a drag whose page answers late.
 
+## Move coalescing
+
+A real mouse reports moves faster than the refresh driver ticks. The content
+process queues them (`CoalescedMouseData`) and, at the next tick, dispatches
+one `pointermove`/`mousemove` that carries the queued moves in
+`getCoalescedEvents()`. A `pointerrawupdate` is dispatched for each move as it
+arrives. Juggler's moves used to skip that queue, so each one reached the page
+by itself: one `pointermove` per move, a coalesced list of length 1, and as
+many `pointermove`s as `pointerrawupdate`s.
+
+`input-coalescing-parity.patch` queues juggler moves the way real ones are
+queued, and `BrowserChild::RecvRealMouseMoveEvent` acks each one with
+`mousequeued <id>` when the renderer has it. A move returns at that ack
+(`MouseDispatch.sendQueuedMove`). Moves are spaced at least 8 ms apart, the
+reports of a 125 Hz mouse, the common rate. A path given as steps
+(`page.mouse.move(x, y, steps=n)`, which Playwright sends as n moves) then
+reaches the page as a real mouse's motion does. Measured with cfparity's
+driven.rate (a 125 Hz XTest sweep on Xvfb against stock 158.0.1): one
+`pointermove` per frame carrying 2 to 4 moves, and a `pointerrawupdate` for
+every move.
+
+The coalesced move reaches the page at the refresh tick and is acked as
+`mousemove <id>`, with the id of the newest move it carries. Any command of the
+page other than another move waits for that ack first (`PageHandler
+.beforeDispatch`, called by the protocol session). So whatever a caller does
+after `page.mouse.move()` returns sees the move, whether that is an evaluate, a
+click or a key. A move with a button held also waits for it before returning,
+because the page decides at that tick whether the move starts a drag.
+
+Both waits are bounded by `kAckDeadlineMs`. A page that blocks its main thread
+past the deadline only ends the wait; the move stays queued and still reaches
+the page. `browser/tests/playwright/patches/driven-move-coalescing.py` checks
+the page's counts.
+
 ## Wheel notches
 
 A mouse wheel turns in notches, and stock Firefox delivers each one as its own

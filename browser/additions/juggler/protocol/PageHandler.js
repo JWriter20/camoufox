@@ -10,6 +10,7 @@ const {NetworkObserver, PageNetwork} = ChromeUtils.importESModule('resource://gr
 const {PageTarget} = ChromeUtils.importESModule('resource://gre/modules/juggler/TargetRegistry.js');
 const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
 const {MouseDispatch, kAckDeadlineMs} = ChromeUtils.importESModule('resource://gre/modules/juggler/input/MouseDispatch.js');
+const kMoveIntervalMs = 8; // a 125 Hz mouse
 const {humanizedSteps} = ChromeUtils.importESModule('resource://gre/modules/juggler/input/CursorTrajectory.js');
 
 const Cc = Components.classes;
@@ -109,6 +110,8 @@ export class PageHandler {
     helper.decorateAsEventEmitter(this._pageEventSink);
 
     this._pendingEventWatchers = new Set();
+    this._moveDelivery = null;
+    this._lastMoveAt = 0;
     this._eventListeners = [
       helper.on(this._pageTarget, PageTarget.Events.DialogOpened, this._onDialogOpened.bind(this)),
       helper.on(this._pageTarget, PageTarget.Events.DialogClosed, this._onDialogClosed.bind(this)),
@@ -566,6 +569,46 @@ export class PageHandler {
     return await this._contentPage.send('dispatchTapEvent', options);
   }
 
+  // Camoufox: a move is queued in the renderer and reaches the page at the
+  // next refresh tick, coalesced with the moves queued since the last one, as
+  // a real mouse's are (input-coalescing-parity.patch). Moves are spaced like
+  // a 125 Hz mouse's reports, the common rate, so a path given as steps
+  // reaches the page as a real mouse's motion does: about two moves per frame
+  // in getCoalescedEvents(), one pointerrawupdate each. The page has seen the
+  // last move before any other command of this page runs (beforeDispatch).
+  async _sendMove(dispatch, watcher, x, y) {
+    const wait = this._lastMoveAt + kMoveIntervalMs - Date.now();
+    if (wait > 0)
+      await new Promise(resolve => setTimeout(resolve, wait));
+    // Listen before dispatching, so the tick cannot come first.
+    const delivery = new EventWatcher(this._pageEventSink, ['mousemove'], this._pendingEventWatchers);
+    const pending = await dispatch.sendQueuedMove(watcher, delivery, x, y);
+    this._lastMoveAt = Date.now();
+    // The newest move is the one the coalesced dispatch acks.
+    this._moveDelivery?.dispose();
+    this._moveDelivery = pending;
+    return pending;
+  }
+
+  async _moveDelivered() {
+    const pending = this._moveDelivery;
+    if (!pending)
+      return;
+    await pending.delivered();
+    if (this._moveDelivery === pending)
+      this._moveDelivery = null;
+    pending.dispose();
+  }
+
+  // Called by the protocol session before each command of this page. Any
+  // command but another move waits until the page has the last move, so what
+  // a caller does after page.mouse.move() sees the move.
+  async beforeDispatch(method, params) {
+    if (method === 'Page.dispatchMouseEvent' && params.type === 'mousemove')
+      return;
+    await this._moveDelivered();
+  }
+
   async ['Page.dispatchMouseEvent']({type, x, y, button, clickCount, modifiers, buttons}) {
     const win = this._pageTarget._window;
     const eventArgs = {button, clickCount, modifiers, buttons};
@@ -588,7 +631,10 @@ export class PageHandler {
       //    mousemove (tests/playwright/patches/near-edge-mouse-deadlock.py, ~1 in 25 runs).
       const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, eventArgs);
 
-      const watcher = new EventWatcher(this._pageEventSink, types, this._pendingEventWatchers);
+      // A move is acked when the renderer queues it (mousequeued); _sendMove
+      // tracks when the page gets it (mousemove, at the refresh tick).
+      const acks = types.includes('mousemove') ? [...types, 'mousequeued'] : types;
+      const watcher = new EventWatcher(this._pageEventSink, acks, this._pendingEventWatchers);
       const promises = [];
       for (const eventType of types) {
         // Camoufox: when humanize is enabled, expand a direct mousemove into a
@@ -601,7 +647,9 @@ export class PageHandler {
               humanizedSteps(this._lastTrackedPos.x, this._lastTrackedPos.y, x, y);
           await dispatch.sendTrajectoryAcked(watcher, 'mousemove', steps, trailingDelayMs);
           // Always finish exactly on the requested destination.
-          promises.push(dispatch.sendAcked(watcher, 'mousemove', x, y));
+          promises.push(this._sendMove(dispatch, watcher, x, y));
+        } else if (eventType === 'mousemove') {
+          promises.push(this._sendMove(dispatch, watcher, x, y));
         } else {
           promises.push(dispatch.sendAcked(watcher, eventType, x, y));
         }
@@ -679,10 +727,14 @@ export class PageHandler {
         // Camoufox: remember where the cursor landed so the next humanized
         // move starts its trajectory from the real previous position.
         this._lastTrackedPos = { x, y };
+        // A move with a button held may start a drag, which the page decides
+        // when the move reaches it, at the refresh tick.
+        if (buttons)
+          await this._moveDelivered();
 
         // The order of events after 'mousemove' is sent:
         // 1. [dragstart] - might or might NOT be emitted
-        // 2. [mousemove] - always emitted. This was awaited as part of `sendEvents` call.
+        // 2. [mousemove] - always emitted. Awaited above when a button is held.
         // 3. [juggler-drag-finalized] - only emitted if dragstart was emitted.
 
         if (watcher.hasEvent('dragstart')) {
