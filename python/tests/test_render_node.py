@@ -5,6 +5,7 @@ The coordinator is a local fake answering as renderfarm's assignment API does
 """
 import json
 import re
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -181,8 +182,18 @@ def test_a_pro_launch_holds_an_assignment_and_hands_the_build_its_session(
     assert "dom.webgpu.renderfarm.node" not in prefs
 
 
+@pytest.fixture
+def short_runtime_dir(monkeypatch):
+    """A runtime directory short enough for a socket path, as /run/user/<uid> is."""
+    with tempfile.TemporaryDirectory(dir="/tmp", prefix="cf-") as directory:
+        monkeypatch.setenv("XDG_RUNTIME_DIR", directory)
+        yield Path(directory)
+
+
 @pytest.mark.parametrize("routes", [None, ["text", "webgpu"]])
-def test_webgpu_runs_on_a_node_that_serves_it(api, coordinator, pro_build, signed_in, monkeypatch, routes):
+def test_webgpu_runs_on_a_node_that_serves_it(
+    api, coordinator, pro_build, signed_in, monkeypatch, short_runtime_dir, routes
+):
     (pro_build.parent / "launch.json").write_text(json.dumps({"rules": [{
         "target": ["win"], "config": {"webGPU:d3d12Limits": True}, "env": {"HOLO_WEBGPU_NV_ARCH": "ampere"},
     }]}))
@@ -195,6 +206,37 @@ def test_webgpu_runs_on_a_node_that_serves_it(api, coordinator, pro_build, signe
     assert prefs.get("dom.webgpu.renderfarm.node", False) is on_node
     assert ("webGPU:d3d12Limits" in config) is not on_node
     assert ("HOLO_WEBGPU_NV_ARCH" in opts["env"]) is not on_node
+
+
+@pytest.mark.parametrize("routes", [None, ["webgpu"], ["text"]])
+def test_text_is_rasterized_on_a_node_that_serves_it(
+    api, coordinator, pro_build, signed_in, monkeypatch, short_runtime_dir, routes
+):
+    coordinator.routes = routes
+    opts, _ = node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+    session_file = Path(opts["env"][render_node.RELAY_ENV])
+    if "text" not in (routes or ()):
+        # The build keeps rasterizing with its bundled DirectWrite.
+        assert render_node.TEXT_ENV not in opts["env"]
+        return
+    # The build binds it, in the session file's private directory.
+    socket_path = Path(opts["env"][render_node.TEXT_ENV])
+    assert socket_path.parent == session_file.parent and mode(socket_path.parent) == 0o700
+    assert not socket_path.exists()
+    socket_path.touch()
+    held_lease(opts).release()
+    assert not socket_path.exists()
+
+
+def test_a_socket_path_too_long_to_bind_is_refused(api, coordinator, pro_build, signed_in, monkeypatch, tmp_path):
+    runtime = tmp_path / ("r" * 80)
+    runtime.mkdir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    coordinator.routes = ["text"]
+    with pytest.raises(render_node.RenderNodeError, match="longer than a Unix socket path"):
+        node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+    assert [r["path"] for r in coordinator.calls("DELETE", ".*")] == ["/assignments/" + "a" * 32]
+    assert [p.name for p in (runtime / "camoufox-pro").iterdir() if p.name.startswith("render-node-")] == []
 
 
 def test_ending_the_lease_releases_the_assignment(api, coordinator, pro_build, signed_in, monkeypatch):

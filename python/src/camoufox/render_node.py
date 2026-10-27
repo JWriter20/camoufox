@@ -18,7 +18,8 @@ node's GPU by the WebGL renderer Windows Firefox reports for it, for example
 without it the coordinator picks any free GPU.
 
 Each browser holds its own assignment on the coordinator, renewed while the
-browser runs and released when its Pro lease ends.
+browser runs and released when its Pro lease ends. WebGPU and text go to the
+node too when its renderer serves those routes (the assignment's angle_routes).
 """
 
 import json
@@ -40,6 +41,11 @@ log = logging.getLogger("camoufox")
 CONFIG_ENV = "CAMOUFOX_RENDER_NODE"
 # Read by the build's relay client (additions/pro/angle-relay): the session to open.
 RELAY_ENV = "ANGLE_RELAY_CONFIG"
+# Read by the build's DirectWrite (holo_dwrite): the socket every process sends
+# its text calls through, when the node's renderer serves the text route.
+TEXT_ENV = "HOLO_DWRITE_NODE_SOCK"
+# sockaddr_un.sun_path holds 108 bytes on Linux, its terminating NUL included.
+SOCKET_PATH_MAX = 107
 DEFAULT_PATH = Path.home() / ".config" / "camoufox" / "render-node.json"
 ROUTE = "/angle-relay"
 # The coordinator's assignment lease is one minute; renewing at a third of it
@@ -112,6 +118,7 @@ class Session:
         self.config = config
         self.version = version
         self.path: Optional[Path] = None
+        self.text_socket: Optional[Path] = None
         self.assignment: Dict[str, Any] = {}
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -128,6 +135,14 @@ class Session:
             "version": version,
         }
         write_private(self.path, json.dumps(session, separators=(",", ":")).encode())
+        if "text" in self.routes:
+            # The browser creates it; it only has to be private and short enough to bind.
+            self.text_socket = directory / f"render-node-{self.assignment['assignment_id'][:16]}.sock"
+            if len(os.fsencode(self.text_socket)) > SOCKET_PATH_MAX:
+                self.release()
+                raise RenderNodeError(
+                    f"{self.text_socket}: longer than a Unix socket path can be; set XDG_RUNTIME_DIR to a shorter directory"
+                )
         self._renewer = threading.Thread(target=self._renew_loop, name="camoufox-render-node", daemon=True)
         self._renewer.start()
         log.info(
@@ -205,7 +220,7 @@ class Session:
                 log.warning("camoufox-pro: renewing the render node assignment is failing; retrying")
 
     def release(self, *_: Any) -> None:
-        """End the assignment and delete the session file. Only the first call does anything."""
+        """End the assignment and delete the session file and socket. Only the first call does anything."""
         with self._lock:
             if self._released:
                 return
@@ -216,5 +231,6 @@ class Session:
         except (OSError, ValueError) as error:
             # It lapses by itself within a minute.
             log.debug("camoufox-pro: releasing the render node assignment failed: %s", error)
-        if self.path is not None:
-            self.path.unlink(missing_ok=True)
+        for path in (self.path, self.text_socket):
+            if path is not None:
+                path.unlink(missing_ok=True)

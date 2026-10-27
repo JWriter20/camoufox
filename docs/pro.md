@@ -260,6 +260,14 @@ WebGPU is blocked, as on Windows Firefox with a blocklisted GPU, so
 `navigator.gpu.requestAdapter()` returns `null`. Contexts of the browser are
 Windows and claim no WebGL values of their own.
 
+Text is rasterized on the node too when its renderer serves it (`text` in
+`angle_routes`): every glyph goes through the node's own DirectWrite instead of
+the build's bundled copy, so canvas and page text match that Windows machine.
+The browser talks to the node through a socket beside the lease file
+(`$XDG_RUNTIME_DIR/camoufox-pro` when that is set); a launch whose socket path
+would exceed 107 bytes raises `RenderNodeError`. On a node without the route, text is
+rasterized locally as before.
+
 ### Profiles
 
 A profile is an identity that stays the same for its whole life, together with

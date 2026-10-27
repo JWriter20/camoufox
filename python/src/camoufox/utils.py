@@ -1557,6 +1557,8 @@ def launch_options(
             node = render_nodes.Session(relay, _firefox_version(Path(browser_binary)), lease.path.parent)
             lease.on_end.append(node.release)
             pro_env[render_nodes.RELAY_ENV] = str(node.path)
+            if node.text_socket is not None:
+                pro_env[render_nodes.TEXT_ENV] = str(node.text_socket)
             # The node draws on the identity's own OS and GPU, so there is nothing to cover.
             if canvas_noise is None:
                 canvas_noise = False
