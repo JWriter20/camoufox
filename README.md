@@ -512,7 +512,7 @@ claims the host's OS. Details are in
 | Feature | Where |
 |---|---|
 | Load extracted addons without a debug server: `addons=["/path/to/addon"]` | launcher, `camoufox-window-module` patch |
-| uBlock Origin installed by default: each browser release bundles the newest uBO release on AMO when it is built (`browser/scripts/fetch-ubo.py`), blocking with the default filter lists packaged in it, never downloaded at launch (`exclude_addons=[DefaultAddons.UBO]` to drop it) | packaging, launcher, `policies.json` |
+| uBlock Origin installed by default: each browser release bundles the newest uBO release on AMO when it is built (`browser/scripts/fetch-ubo.py`), blocking with the default filter lists packaged in it, never downloaded at launch (`exclude_addons=[DefaultAddons.UBO]` to drop it) | packaging (`fetch-ubo.py` freeze_lists), launcher |
 | Addons cannot open tabs unless `allow_addon_new_tab=True` | `disable-extension-newtab` patch |
 | Addons run in private browsing | `all-addons-private-mode` patch |
 
@@ -540,7 +540,6 @@ The full option list is in the [Python README](python/README.md#launch-options).
 |---|---|
 | Telemetry and data reporting removed at compile time | `librewolf/` patches |
 | Onboarding messages disabled | `ghostery/` patch |
-| No bundled search engines | `no-search-engines` patch |
 | Mozilla services and background traffic turned off | [`browser/settings/camoufox.cfg`](browser/settings/camoufox.cfg) |
 | Firefox's bundled certificate revocations (OneCRL) enforced in every profile, with no network fetch | `remote-security-settings` patch |
 | Stock browser UI: no theme, toolbar or dialog changes | |

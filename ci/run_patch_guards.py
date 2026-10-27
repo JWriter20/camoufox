@@ -89,7 +89,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "firefox-version-pin",
         "getter-cost-parity",
         "gfx-probes-packaged",
-        "hardware-acceleration-policy",
+        "enterprise-policies",
         "popup-blocker-parity",
         "popup-window-size",
         "startup-size-hold-yields",

@@ -25,9 +25,7 @@ an invariant stock Firefox 152 holds:
                       about what UTC getters do
   timezone-relaunch   a persistent profile relaunched with another timezone
                       reports the new one, in the page and in a worker
-  web-serial          navigator.serial exists on a secure page. Any enterprise
-                      policy turns Web Serial off unless DefaultSerialGuardSetting
-                      turns it back on
+  web-serial          navigator.serial exists on a secure page, as in stock
 
     python browser/tests/playwright/patches/stock-parity-probes.py
 """
@@ -315,7 +313,7 @@ def main() -> int:
     if not out["secureContext"]:
         failures.append("web-serial: the probe page is not a secure context -- check is vacuous")
     elif not out["serial"]:
-        failures.append("web-serial: navigator.serial is missing (policies.json needs DefaultSerialGuardSetting: 3)")
+        failures.append("web-serial: navigator.serial is missing")
 
     print()
     if failures:
