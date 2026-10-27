@@ -15,6 +15,7 @@ from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
     attach_context_defaults,
+    attach_socks5_auth,
     context_identity,
     host_identity,
     launch_options,
@@ -226,6 +227,8 @@ def NewContext(
         preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config
     )
 
+    # A browser launched elsewhere takes SOCKS5 credentials too.
+    attach_socks5_auth(browser)
     context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
     context.add_init_script(fp['init_script'])
     return context

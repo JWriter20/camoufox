@@ -637,6 +637,23 @@ export class NetworkObserver {
         }
         if (this._targetRegistry.shouldBustHTTPAuthCacheForProxy(proxy))
           Services.obs.notifyObservers(null, "net:clear-active-logins");
+        // Camoufox: a SOCKS5 proxy gets its username and password (RFC 1929);
+        // Firefox takes credentials for SOCKS proxies only.
+        if (proxy.type === 'socks' && (proxy.username || proxy.password)) {
+          proxyFilter.onProxyFilterResult(protocolProxyService.newProxyInfoWithAuth(
+              proxy.type,
+              proxy.host,
+              proxy.port,
+              proxy.username || '',
+              proxy.password || '',
+              '', /* aProxyAuthorizationHeader */
+              '', /* aConnectionIsolationKey */
+              Ci.nsIProxyInfo.TRANSPARENT_PROXY_RESOLVES_HOST, /* aFlags */
+              UINT32_MAX, /* aFailoverTimeout */
+              null, /* failover proxy */
+          ));
+          return;
+        }
         proxyFilter.onProxyFilterResult(protocolProxyService.newProxyInfo(
             proxy.type,
             proxy.host,

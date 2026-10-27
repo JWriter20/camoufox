@@ -18,6 +18,7 @@ from .ip import Proxy, proxy_exit_geo
 from .utils import (
     async_attach_vd,
     attach_context_defaults,
+    attach_socks5_auth,
     context_identity,
     host_identity,
     launch_options,
@@ -262,6 +263,8 @@ async def AsyncNewContext(
         ),
     )
 
+    # A browser launched elsewhere takes SOCKS5 credentials too.
+    attach_socks5_auth(browser)
     context = await browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
     await context.add_init_script(fp['init_script'])
     return context

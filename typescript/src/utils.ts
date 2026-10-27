@@ -57,8 +57,11 @@ import {
 import {
 	type ProxyConfig,
 	ProxyHelper,
+	proxyAuthEnv,
+	proxyAuthInitScript,
 	publicIP,
 	publicIPv6,
+	socks5Auth,
 	validIPv4,
 	validIPv6,
 } from "./ip.js";
@@ -1049,6 +1052,38 @@ export function attachStockMediaDefaults<T>(target: T): T {
 		(target as any)[name] = (options?: Record<string, any>, ...rest: any[]) =>
 			original.call(target, withStockMediaDefaults(options ?? {}), ...rest);
 	}
+	return target;
+}
+
+const CAMOUFOX_SOCKS5_AUTH = Symbol.for("camoufox.socks5Auth");
+
+/**
+ * Let newContext()/newPage() of `target` take a SOCKS5 proxy with a username
+ * and password (python/src/camoufox/utils.py attach_socks5_auth).
+ *
+ * Playwright refuses one ("Browser does not support socks5 proxy
+ * authentication"). The context is made with the proxy alone, and an init
+ * script hands Juggler the credentials before newContext() resolves
+ * (socks5Auth, proxyAuthInitScript). Playwright's newPage() makes its context
+ * through newContext(), so it is covered too.
+ */
+export function attachSocks5Auth<T>(target: T): T {
+	const owner = target as any;
+	const original = owner?.newContext;
+	if (typeof original !== "function" || original[CAMOUFOX_SOCKS5_AUTH])
+		return target;
+	const newContext = async (options?: Record<string, any>, ...rest: any[]) => {
+		const [proxy, auth] = socks5Auth(options?.proxy);
+		const context = await original.call(
+			target,
+			options && auth ? { ...options, proxy } : options,
+			...rest,
+		);
+		if (auth) await context.addInitScript(proxyAuthInitScript(auth));
+		return context;
+	};
+	(newContext as any)[CAMOUFOX_SOCKS5_AUTH] = true;
+	owner.newContext = newContext;
 	return target;
 }
 
@@ -2151,10 +2186,15 @@ export async function launchOptions({
 	warnIfExecutablePredatesPlaywright(executable_path);
 	utilsDeps.validateConfig(config, executable_path);
 
+	// A SOCKS5 proxy's credentials go to Juggler, not through Playwright, which
+	// refuses them (socks5Auth).
+	const [launchProxy, proxyAuth] = socks5Auth(proxy);
+
 	// Prepare environment variables to pass to Camoufox
 	const envVars: EnvVars = {
 		...utilsDeps.getEnvVars(config, targetOs, executable_path),
 		...getPrefEnvVars(firefox_user_prefs),
+		...(proxyAuth ? proxyAuthEnv(proxyAuth) : {}),
 		...env,
 	};
 
@@ -2169,8 +2209,8 @@ export async function launchOptions({
 	// Only include proxy if it's set (Playwright validates this)
 	// https://github.com/coryking/camoufox/commit/1336e8e509e8c12a896a09d9ee51f131f739f106
 	// Thanks @coryking
-	if (proxy != null) {
-		result.proxy = proxy;
+	if (launchProxy != null) {
+		result.proxy = launchProxy;
 	}
 
 	return result;

@@ -24,6 +24,7 @@ import {
 	attachDesktopOnlyWarning,
 	attachNoViewportDefault,
 	attachScreenshotDefaults,
+	attachSocks5Auth,
 	attachStockMediaDefaults,
 	attachVirtualDisplay,
 	contextIdentity,
@@ -204,6 +205,7 @@ async function launchWith(
 	// Browser
 	const identity = await hostIdentity(fromOptions, canvasNoise);
 	const browser = await playwright.launch(fromOptions);
+	attachSocks5Auth(browser);
 	if (noViewportDefault) {
 		attachNoViewportDefault(browser);
 	}
@@ -304,6 +306,8 @@ export async function NewContext(
 		opts.permissions ??= ["geolocation"];
 	}
 
+	// A browser launched elsewhere takes SOCKS5 credentials too.
+	attachSocks5Auth(browser);
 	const context = await browser.newContext(opts);
 	await context.addInitScript(fp.init_script);
 	return context;

@@ -76,6 +76,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "near-edge-mouse-deadlock",
         "noop-mousemove-deadlock",
         "occluded-window-active",
+        "socks5-proxy-auth",
         "trusted-events",
         "ubo-lists-frozen",
         "visible-automation-cues",
