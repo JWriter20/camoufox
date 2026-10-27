@@ -446,6 +446,7 @@ right.
 | Timezone, locale and `Intl` | The identity's, per realm, workers included | They must agree with the IP's country | `timezone-spoofing`, `locale-spoofing` patches |
 | Geolocation | Coordinates from GeoIP, permission granted | They must agree with the IP | `geolocation-spoofing` patch, launcher |
 | WebRTC IP | ICE candidates, SDP and `getStats()` rewritten to the proxy IP | WebRTC otherwise reveals the real IP behind a proxy | `webrtc-ip-spoofing` patch |
+| WebRTC UDP behind a SOCKS5 proxy | STUN, TURN and peer-to-peer UDP go through the proxy's UDP relay (UDP ASSOCIATE), so the srflx candidate is the address the page's STUN server really saw. Without a relay (an HTTP proxy, or a SOCKS5 proxy that refuses UDP), no UDP reaches the internet and the srflx carries the proxy IP | Stock Firefox on the exit machine gathers a real srflx and connects peer to peer | `webrtc-socks5-udp` patch |
 | Touchscreen | A touchscreen laptop, not a phone | Touch points and pointer media must agree with the claimed device | `touchscreen-fingerprint-spoofing`, `force-default-pointer` patches |
 
 Left as stock Firefox has it, on purpose:
