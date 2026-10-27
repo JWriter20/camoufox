@@ -10,6 +10,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
+from . import screenshots
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
@@ -160,6 +161,7 @@ def _launch(
             context = playwright.firefox.launch_persistent_context(
                 **persistent_context_options(from_options, no_viewport_default)
             )
+            screenshots.mark(context)
             return sync_attach_vd(context, virtual_display)
 
         identity = host_identity(from_options, canvas_noise)

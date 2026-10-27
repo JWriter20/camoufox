@@ -141,3 +141,32 @@ Two things stay Playwright's: `fill()` focuses the field from script rather
 than with a click, and selects its text first with `select()`.
 `browser/tests/playwright/patches/driven-fill-keys.py` compares the result
 with stock's.
+
+## Screenshots
+
+Unless told `caret: "initial"`, Playwright hides the text caret for a
+screenshot: from its utility world it sets `caret-color: transparent
+!important` in the style attribute of every input, textarea and
+contenteditable element, and puts the old value back after the capture. The
+page can see all of it. A MutationObserver gets a `style` mutation for each
+element, twice per screenshot. `getComputedStyle` reads the transparent caret
+while the capture runs. Every element that had no inline style is left with an
+empty `style=""` attribute.
+
+Juggler captures with `drawSnapshot`, which never paints the caret, so hiding
+it changes no pixel. The launchers therefore default screenshots of pages they
+launched to `caret: "initial"`. Page, element and locator screenshots all get
+it. Python wraps the client's `Page.screenshot` and `ElementHandle.screenshot`
+(`camoufox/screenshots.py`). TypeScript fills the option in where the client
+sends the request (`attachScreenshotDefaults` in `utils.ts`). Each checks that
+the page belongs to a Camoufox launch, so other browsers in the same process
+keep Playwright's behaviour. A caller who passes `caret` gets what they ask
+for, and `caret: "hide"` writes the page's style attributes as before. A
+client that connects through `launch_server` is not a launcher, so it should
+pass `caret: "initial"` itself. The `@playwright/test` `toHaveScreenshot`
+assertion passes `caret: "hide"` explicitly, so it also hides the caret.
+
+The guard `screenshot-leaves-page` takes page, element and locator screenshots
+with a focused caret. It checks that the page observes no change and is left
+with no new attribute, and that each capture is byte-identical to one taken
+with `caret: "hide"`.

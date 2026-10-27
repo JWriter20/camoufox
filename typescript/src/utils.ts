@@ -1052,6 +1052,52 @@ export function attachStockMediaDefaults<T>(target: T): T {
 	return target;
 }
 
+const CAMOUFOX_SCREENSHOTS = Symbol.for("camoufox.screenshots");
+
+/**
+ * Screenshots that leave the page alone (python/src/camoufox/screenshots.py).
+ *
+ * Unless told caret: "initial", Playwright hides the caret for a screenshot by
+ * setting `caret-color: transparent !important` in the style attribute of every
+ * input, textarea and contenteditable element, from its utility world: the page
+ * sees each change, reads the transparent caret while the capture runs, and is
+ * left with `style` attributes it did not have. Firefox's capture never paints
+ * the caret, so screenshots of every page under `target` (a Browser or
+ * BrowserContext from a Camoufox launch) default to caret: "initial". The
+ * default is filled in where the client sends the request, so page, element
+ * and locator screenshots all get it; an explicit caret is kept.
+ */
+export function attachScreenshotDefaults<T>(target: T): T {
+	const owner = target as any;
+	owner[CAMOUFOX_SCREENSHOTS] = true;
+	const connection = owner._connection;
+	if (!connection || connection[CAMOUFOX_SCREENSHOTS]) return target;
+	connection[CAMOUFOX_SCREENSHOTS] = true;
+	const send = connection.sendMessageToServer;
+	connection.sendMessageToServer = function (
+		object: any,
+		method: string,
+		params: Record<string, any>,
+		...rest: any[]
+	) {
+		if (
+			method === "screenshot" &&
+			params?.caret === undefined &&
+			launchedByCamoufox(object)
+		)
+			params = { ...params, caret: "initial" };
+		return send.call(this, object, method, params, ...rest);
+	};
+	return target;
+}
+
+/** ElementHandle -> Frame -> Page -> BrowserContext -> Browser. */
+function launchedByCamoufox(object: any): boolean {
+	for (let owner = object; owner; owner = owner._parent)
+		if (owner[CAMOUFOX_SCREENSHOTS]) return true;
+	return false;
+}
+
 /**
  * Warn when newPage()/newContext() asks for isMobile: Camoufox only has desktop
  * identities, and Juggler ignores the option (TargetRegistry.js).

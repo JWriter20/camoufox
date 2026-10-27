@@ -95,6 +95,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "popup-blocker-parity",
         "popup-window-size",
         "startup-size-hold-yields",
+        "screenshot-leaves-page",
         "search-service-init",
         "stock-gpu-parity",
         "stock-parity-probes",

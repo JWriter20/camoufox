@@ -23,6 +23,7 @@ import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
 	attachNoViewportDefault,
+	attachScreenshotDefaults,
 	attachStockMediaDefaults,
 	attachVirtualDisplay,
 	contextIdentity,
@@ -196,6 +197,7 @@ async function launchWith(
 			userDataDir ?? "",
 			options,
 		);
+		attachScreenshotDefaults(context);
 		return attachVirtualDisplay(context, virtualDisplay);
 	}
 
@@ -207,6 +209,7 @@ async function launchWith(
 	}
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);
+	attachScreenshotDefaults(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
 	return attachVirtualDisplay(browser, virtualDisplay);
 }

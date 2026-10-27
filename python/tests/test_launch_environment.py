@@ -517,6 +517,56 @@ class TestStockMediaDefaults:
         assert browser.kwargs["reduced_motion"] == "no-override"
 
 
+class TestScreenshotCaret:
+    """A screenshot of a page Camoufox launched defaults to caret="initial":
+    Playwright's caret hiding writes the page's style attributes, and Firefox's
+    capture never paints the caret anyway."""
+
+    class Owner:
+        def __init__(self, parent=None):
+            self._parent = parent
+
+    @staticmethod
+    def shot(owner, **kwargs):
+        import asyncio
+
+        from camoufox import screenshots
+
+        async def original(self, **kw):
+            return kw
+
+        return asyncio.run(screenshots._with_caret_default(original)(owner, **kwargs))
+
+    def test_pages_under_a_camoufox_launch_keep_the_caret(self):
+        from camoufox import screenshots
+
+        browser = screenshots.mark(self.Owner())
+        handle = self.Owner(self.Owner(self.Owner(self.Owner(browser))))  # handle, frame, page, context
+        assert self.shot(handle, caret=None)["caret"] == "initial"
+        assert self.shot(handle)["caret"] == "initial"
+
+    def test_the_callers_caret_wins(self):
+        from camoufox import screenshots
+
+        page = self.Owner(screenshots.mark(self.Owner()))
+        assert self.shot(page, caret="hide")["caret"] == "hide"
+
+    def test_other_browsers_are_left_alone(self):
+        assert self.shot(self.Owner(self.Owner()), caret=None)["caret"] is None
+
+    def test_installs_once_on_page_and_element_handle(self):
+        from playwright._impl._element_handle import ElementHandle
+        from playwright._impl._page import Page
+
+        from camoufox import screenshots
+
+        screenshots.mark(self.Owner())
+        screenshots.mark(self.Owner())
+        for cls in (Page, ElementHandle):
+            assert getattr(cls.screenshot, "_camoufox_screenshots", False)
+            assert not getattr(cls.screenshot.__wrapped__, "_camoufox_screenshots", False)
+
+
 class TestDesktopOnlyWarning:
     """Camoufox has only desktop identities and Juggler never enters Responsive
     Design Mode, so is_mobile on new_page()/new_context() gets a LeakWarning."""

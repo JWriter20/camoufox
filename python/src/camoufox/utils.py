@@ -14,6 +14,7 @@ import orjson
 from typing_extensions import TypeAlias
 from ua_parser import user_agent_parser
 
+from . import screenshots
 from .addons import DefaultAddons, add_default_addons, confirm_paths
 from .display import has_display, largest_display
 from .exceptions import (
@@ -788,6 +789,7 @@ def attach_context_defaults(browser: Any, no_viewport_default: bool) -> None:
         attach_no_viewport_default(browser)
     attach_stock_media_defaults(browser)
     attach_desktop_only_warning(browser)
+    screenshots.mark(browser)
 
 
 def plan_rendering(
