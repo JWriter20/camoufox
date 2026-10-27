@@ -702,6 +702,10 @@ export class PageHandler {
         if (this._isDragging && !this._dragSkipsMove()) {
           this._dragMotion(dispatch, x, y);
           const watcher = new EventWatcher(this._pageEventSink, ['dragover'], this._pendingEventWatchers);
+          // A motion fires `drag` at the source, then dragover at the target,
+          // as GTK's drag session does. The dragover before a drop is not a
+          // motion and has no `drag` (measured on X11 against stock 158.0.1).
+          await this._contentPage.send('dispatchDragEvent', {type: 'drag', x, y, modifiers});
           await this._contentPage.send('dispatchDragEvent', {type:'dragover', x, y, modifiers});
           await watcher.ensureEventsAndDispose(['dragover']);
           return;

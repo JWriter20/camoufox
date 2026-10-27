@@ -128,6 +128,19 @@ past the deadline only ends the wait; the move stays queued and still reaches
 the page. `browser/tests/playwright/patches/driven-move-coalescing.py` checks
 the page's counts.
 
+## Drags
+
+On GTK a drag's motion fires `drag` at the source and then `dragover` at the
+target (`nsDragSession::DispatchMotionEvents`). The `drag` has `buttons` 0.
+The `dragover` GTK sends before a drop is not a motion, so it has no `drag`.
+Juggler sends `drag` ahead of each motion's `dragover`.
+`drag-source-events.patch` adds the `"drag"` type to `jugglerSendMouseEvent`,
+which fires it at the drag session's source. The `pointercancel` that ends the
+pointer stream at `dragstart` carries one coalesced event, the move that
+started the drag, now that the move reaches the page coalesced.
+`browser/tests/playwright/patches/driven-drag-gtk.py` compares the stream
+with stock's.
+
 ## Wheel notches
 
 A mouse wheel turns in notches, and stock Firefox delivers each one as its own

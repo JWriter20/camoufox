@@ -19,11 +19,16 @@ dragenter on the target with the source as relatedTarget, hover events
 carrying the held button after dragend, and a movement on the next move that
 spanned the whole drag.
 
-Two things are not compared. The source's `drag` events: Juggler has no way
-to fire them. And the order of the two hover chains at the drop point: stock's
-mouseover/mouseenter (button held) come before its pointerover/pointerenter
-(released); Juggler's arrive pointer first. Each chain is compared in its own
-order.
+The source gets a `drag` event with each motion of the drag, before the
+target's dragover, as GTK's drag session fires it (buttons 0); the dragover
+GTK sends before a drop is not a motion and has none. The pointercancel that
+ends the pointer stream at dragstart carries one coalesced event, the move
+that started the drag, which reaches the page coalesced like a real one.
+
+One thing is not compared: the order of the two hover chains at the drop
+point. Stock's mouseover/mouseenter (button held) come before its
+pointerover/pointerenter (released); Juggler's arrive pointer first. Each
+chain is compared in its own order.
 
 The guard drives the same path as cfparity, through Playwright on a hidden
 X display, and compares the page's event stream with stock's.
@@ -31,7 +36,9 @@ X display, and compares the page's event stream with stock's.
     python browser/tests/playwright/patches/driven-drag-gtk.py
 """
 
+import http.server
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -39,24 +46,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import hidden_display, resolve_binary  # noqa: E402
 
 STEP = 0.05
-PAGE = """<!doctype html><html><body style="margin:0">
+# Served from 127.0.0.1: getCoalescedEvents() exists only in a secure context.
+PAGE = b"""<!doctype html><html><body style="margin:0">
 <div id="stage" style="position:absolute;left:0;top:0;width:800px;height:600px">
 <div id="src" draggable="true" style="position:absolute;left:40px;top:180px;width:81px;height:41px;background:#cde"></div>
 <div id="dst" style="position:absolute;left:280px;top:210px;width:81px;height:41px;background:#edc"></div>
 </div></body></html>"""
-TYPES = ["dragstart", "dragenter", "dragover", "dragleave", "drop", "dragend",
+TYPES = ["dragstart", "drag", "dragenter", "dragover", "dragleave", "drop", "dragend",
          "pointerover", "pointerenter", "pointerdown", "pointermove", "pointerup", "pointerout",
          "pointerleave", "pointercancel", "mouseover", "mouseenter", "mousedown", "mousemove",
          "mouseup", "mouseout", "mouseleave", "click"]
 RECORD = """(types) => {
   window.__events = [];
   const who = (t) => t ? (t.id || t.nodeName.toLowerCase()) : null;
-  let lastRepeat = null;
+  let sawDragover = false;
   const on = (e) => {
-    // dragover repeats on a timer; a run of them counts once.
-    if (e.type === 'dragover' && lastRepeat === 'dragover') return;
-    lastRepeat = e.type;
-    window.__events.push([e.type, who(e.target), e.buttons, who(e.relatedTarget), e.movementX, e.movementY]);
+    // dragover repeats, on a timer and with each motion's drag; a run of
+    // them counts once.
+    if (e.type === 'dragover' && sawDragover) return;
+    if (e.type !== 'drag') sawDragover = e.type === 'dragover';
+    window.__events.push([e.type, who(e.target), e.buttons, who(e.relatedTarget), e.movementX, e.movementY,
+                          e.getCoalescedEvents ? e.getCoalescedEvents().length : null]);
   };
   for (const t of types) window.addEventListener(t, on, true);
   const accept = (e) => e.preventDefault();
@@ -65,7 +75,7 @@ RECORD = """(types) => {
   document.getElementById('src').addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', 'x'));
 }"""
 
-# stock 158.0.1, GTK/X11, cfparity driven.drag, without the source's `drag` events
+# stock 158.0.1, GTK/X11, cfparity driven.drag
 H = "html"
 B = "body"
 S = "stage"
@@ -87,8 +97,8 @@ STOCK = [
     ("pointerleave", B, 1, None), ("pointerleave", H, 1, None),
     ("mouseout", "src", 1, None), ("mouseleave", "src", 1, None), ("mouseleave", S, 1, None),
     ("mouseleave", B, 1, None), ("mouseleave", H, 1, None),
-    ("dragenter", "dst", 1, None), ("dragover", "dst", 1, None),
-    ("drop", "dst", 0, None), ("dragend", "src", 0, None),
+    ("drag", "src", 0, None), ("dragenter", "dst", 1, None), ("dragover", "dst", 1, None),
+    ("drag", "src", 0, None), ("drop", "dst", 0, None), ("dragend", "src", 0, None),
     ("mouseover", "dst", 1, None), ("mouseenter", H, 1, None), ("mouseenter", B, 1, None),
     ("mouseenter", S, 1, None), ("mouseenter", "dst", 1, None),
     ("pointerover", "dst", 0, None), ("pointerenter", H, 0, None), ("pointerenter", B, 0, None),
@@ -120,14 +130,28 @@ def drive(page):
 def probe(binary):
     from camoufox.sync_api import Camoufox
 
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(PAGE)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     with Camoufox(executable_path=str(binary), headless=False, os="linux", window=(1280, 900)) as browser:
         page = browser.new_page()
-        page.set_content(PAGE)
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
         page.mouse.move(400, 300)
         time.sleep(0.3)
         page.evaluate(RECORD, TYPES)
         drive(page)
-        return page.evaluate("window.__events")
+        events = page.evaluate("window.__events")
+    server.shutdown()
+    return events
 
 
 def after_drop(events):
@@ -150,9 +174,12 @@ def main() -> int:
                                          "stock", "driven", lineterm="", n=1):
             print("  " + line)
         failures.append("the drag's event stream differs from stock's")
+    cancel = [e[6] for e in events if e[0] == "pointercancel"]
+    if cancel != [1]:
+        failures.append(f"pointercancel carries {cancel} coalesced events, stock [1]")
     last_move = [e for e in events if e[0] == "mousemove"][-1]
-    if last_move[4:] != [0, 0]:
-        failures.append(f"the first move after the drop reports movement {last_move[4:]}, stock [0, 0]")
+    if last_move[4:6] != [0, 0]:
+        failures.append(f"the first move after the drop reports movement {last_move[4:6]}, stock [0, 0]")
     for failure in failures:
         print(f"FAIL: {failure}")
     if failures:

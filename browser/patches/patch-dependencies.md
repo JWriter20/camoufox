@@ -123,6 +123,8 @@ sees the control connection and the datagrams come from the same address.
   Its JS half is in `additions/juggler` (`MouseDispatch.sendQueuedMove`,
   `PageHandler.beforeDispatch`), and either half without the other wedges
   every move until the ack deadline.
+- `drag-source-events.patch` extends the drag branch that
+  `playwright/0-playwright.patch` adds to `nsContentUtils::SynthesizeMouseEvent`.
 
 ## Backports
 

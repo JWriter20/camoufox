@@ -590,6 +590,13 @@ export class PageAgent {
     const session = this._getCurrentDragSession();
     const dropEffect = session.dataTransfer.dropEffect;
 
+    if (type === 'drag') {
+      const win = this._frameTree.mainFrame().domWindow();
+      win.windowUtils.jugglerSendMouseEvent(
+        'drag', x, y, 0, 0, modifiers, false, 0.0, win.MouseEvent.MOZ_SOURCE_MOUSE,
+        true, false, 0, win.windowUtils.DEFAULT_MOUSE_POINTER_ID, false);
+      return;
+    }
     if ((type === 'drop' && dropEffect !== 'none') || type ===  'dragover') {
       const win = this._frameTree.mainFrame().domWindow();
       win.windowUtils.jugglerSendMouseEvent(
