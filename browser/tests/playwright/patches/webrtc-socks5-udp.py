@@ -81,13 +81,15 @@ GATHER = """mw:async (stun) => {
 # pages can reach each other only through the relays.
 OFFER = """mw:async (stun) => {
   window.pc = new RTCPeerConnection({iceServers: [{urls: stun}]});
+  window.channel = pc.createDataChannel('probe');
+  // The answerer's reply comes back on this channel: ondatachannel fires only
+  // for channels the other side opens.
   window.received = new Promise(resolve => {
     setTimeout(() => resolve('timeout'), 20000);
-    pc.ondatachannel = e => { e.channel.onmessage = m => resolve(m.data); };
+    channel.onmessage = m => resolve(m.data);
   });
   const gathered = new Promise(resolve => pc.onicegatheringstatechange =
     () => pc.iceGatheringState === 'complete' && resolve());
-  window.channel = pc.createDataChannel('probe');
   window.opened = new Promise(resolve => channel.onopen = resolve);
   await pc.setLocalDescription(await pc.createOffer());
   await gathered;

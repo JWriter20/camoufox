@@ -1056,6 +1056,33 @@ index dc21b541d5..d1bce68c5b 100644
  
        /* https://datatracker.ietf.org/doc/html/draft-ietf-mmusic-mdns-ice-candidates#section-3.3.2-3 */
        // Note: This probably should not hold for FQDN (as opposed to mDNS), but
+diff --git a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp b/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp
+index 04c91642dc..6a9d04e1bf 100644
+--- a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp
++++ b/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp
+@@ -590,7 +590,11 @@ static int nr_ice_get_default_address(nr_ice_ctx *ctx, int ip_version, nr_transp
+       case NR_IPV4:
+         if ((r=nr_str_port_to_transport_addr("0.0.0.0", nullptr, 0, IPPROTO_UDP, &addr)))
+           ABORT(r);
+-        if (!remote_addr || nr_transport_addr_is_loopback(remote_addr)) {
++        // Camoufox: behind a SOCKS proxy that resolves names, the page's
++        // channel reports its peer as the unspecified address, and a connect()
++        // to it finds loopback, which is no route to the internet.
++        if (!remote_addr || nr_transport_addr_is_loopback(remote_addr) ||
++            nr_transport_addr_is_wildcard(remote_addr)) {
+           if ((r=nr_str_port_to_transport_addr("8.8.8.8", nullptr, 53, IPPROTO_UDP, &known_remote_addr)))
+             ABORT(r);
+           remote_addr=&known_remote_addr;
+@@ -599,7 +603,8 @@ static int nr_ice_get_default_address(nr_ice_ctx *ctx, int ip_version, nr_transp
+       case NR_IPV6:
+         if ((r=nr_str_port_to_transport_addr("::0", nullptr, 0, IPPROTO_UDP, &addr)))
+           ABORT(r);
+-        if (!remote_addr || nr_transport_addr_is_loopback(remote_addr)) {
++        if (!remote_addr || nr_transport_addr_is_loopback(remote_addr) ||
++            nr_transport_addr_is_wildcard(remote_addr)) {
+           if ((r=nr_str_port_to_transport_addr("2001:4860:4860::8888", nullptr, 53, IPPROTO_UDP, &known_remote_addr)))
+             ABORT(r);
+           remote_addr=&known_remote_addr;
 diff --git a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_socket.cpp b/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_socket.cpp
 index 5fca22f5e5..c589fa6e50 100644
 --- a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_socket.cpp
