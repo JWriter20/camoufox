@@ -2055,6 +2055,10 @@ def launch_options(
         # The holo prefs make local GL draw like Windows ANGLE; on a node, Windows ANGLE draws.
         for name in [k for k in firefox_user_prefs if k.startswith('webgl.holo-')]:
             firefox_user_prefs[name] = False
+        if firefox_user_prefs.get('dom.webgpu.renderfarm.node'):
+            # Likewise WebGPU's D3D12 limit table and NVIDIA emulation: the node reports its own.
+            config.pop('webGPU:d3d12Limits', None)
+            env.pop('HOLO_WEBGPU_NV_ARCH', None)
 
     # Validate the config
     warn_if_executable_predates_playwright(executable_path)

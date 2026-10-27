@@ -181,12 +181,20 @@ def test_a_pro_launch_holds_an_assignment_and_hands_the_build_its_session(
     assert "dom.webgpu.renderfarm.node" not in prefs
 
 
-def test_webgpu_runs_on_a_node_that_serves_it(api, coordinator, pro_build, signed_in, monkeypatch):
-    coordinator.routes = ["text", "webgpu"]
-    opts, _ = node_launch(pro_build, monkeypatch, render_node=coordinator.config)
-    assert held_lease(opts) is not None
+@pytest.mark.parametrize("routes", [None, ["text", "webgpu"]])
+def test_webgpu_runs_on_a_node_that_serves_it(api, coordinator, pro_build, signed_in, monkeypatch, routes):
+    (pro_build.parent / "launch.json").write_text(json.dumps({"rules": [{
+        "target": ["win"], "config": {"webGPU:d3d12Limits": True}, "env": {"HOLO_WEBGPU_NV_ARCH": "ampere"},
+    }]}))
+    coordinator.routes = routes
+    opts, config = node_launch(pro_build, monkeypatch, render_node=coordinator.config)
     prefs = opts["firefox_user_prefs"]
-    assert prefs["dom.webgpu.renderfarm.node"] is True and prefs["dom.webgpu.enabled"] is True
+    assert prefs["dom.webgpu.enabled"] is True
+    # The node's own adapter answers, so nothing local stands in for D3D12.
+    on_node = routes is not None
+    assert prefs.get("dom.webgpu.renderfarm.node", False) is on_node
+    assert ("webGPU:d3d12Limits" in config) is not on_node
+    assert ("HOLO_WEBGPU_NV_ARCH" in opts["env"]) is not on_node
 
 
 def test_ending_the_lease_releases_the_assignment(api, coordinator, pro_build, signed_in, monkeypatch):
