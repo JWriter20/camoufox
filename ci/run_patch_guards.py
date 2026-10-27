@@ -87,6 +87,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "certificate-revocations",
         "contentaccessible-parity",
         "driven-drag-gtk",
+        "driven-evaluate-globals",
         "driven-fill-keys",
         "driven-global-order",
         "driven-move-coalescing",

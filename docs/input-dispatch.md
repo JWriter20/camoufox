@@ -225,3 +225,50 @@ The guard `screenshot-leaves-page` takes page, element and locator screenshots
 with a focused caret. It checks that the page observes no change and is left
 with no new attribute, and that each capture is byte-identical to one taken
 with `caret: "hide"`.
+
+## The page's globals
+
+A window defines a WebIDL interface's name on itself the first time anything
+needs the interface, so `Object.getOwnPropertyNames(window)` lists the
+interfaces in the order they were first used, followed by the unused ones.
+A driver's work used to show up in that list. Wrapping the page's nodes for
+an isolated world, a locator's reads and an `evaluate` all create interfaces
+in the page's window, and creating one defined its name there:
+HTMLDivElement, CSSStyleDeclaration, DOMRect, MutationObserver, AbortSignal
+and some 30 others moved up the list of a page that had never used them.
+
+`isolated-world-global-order.patch` creates an interface Juggler needs
+without defining its name, and marks it and its prototype in the window's
+`ProtoAndIfaceCache`. The window keeps listing it as unused. The page defines
+it, with its legacy aliases and factory functions in creation order, when it
+first uses it, as stock does:
+
+- by name (`WebIDLGlobalNameHash::DefineIfEnabled`);
+- by creating an object of it or of an interface that inherits from it
+  (`GetPerInterfaceObjectHandle`);
+- by getting an object Juggler had already wrapped, such as an input a
+  browser actor reads on focus (`MaybeDefineForCachedReflector`). The check
+  costs one array read per cached reflector handed out
+  (`DoGetOrCreateDOMReflector`): a count, per interface prototype, of the
+  windows holding it created for Juggler and not yet defined, so a
+  reflector of any other interface costs what it does in stock. An object the page creates is
+  checked against its own interface's mark the same way.
+
+An Xray of a window first resolves a name on the window itself (the
+generated `ResolveOwnPropertyViaResolve`), which defines it there. For
+Juggler that resolve now only creates the interface, and the Xray resolve
+that follows hands it over: Playwright's utility script reads `AbortSignal`
+this way.
+
+Juggler is the caller when the innermost script is one of its
+`resource://gre/modules/juggler/` modules, described from the module's own
+realm because the page's principal does not see system frames, or runs in a
+sandbox one of them created. A callback hides the caller; its incumbent global
+decides then, so a listener in one of Juggler's isolated worlds (Playwright's
+hit target check) is Juggler's, and a page's or a browser actor's is not. The
+entry global is no guide: Juggler's actor messages enter the page's window.
+
+`browser/tests/playwright/patches/driven-evaluate-globals.py` lists a page's
+globals after driver work and after only the input that work causes (a click
+on a field and a key, which Firefox's own actors wrap in the page's window as
+they do for a person's input), and compares the two.

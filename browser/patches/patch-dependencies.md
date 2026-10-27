@@ -125,6 +125,13 @@ sees the control connection and the datagrams come from the same address.
   every move until the ack deadline.
 - `drag-source-events.patch` extends the drag branch that
   `playwright/0-playwright.patch` adds to `nsContentUtils::SynthesizeMouseEvent`.
+- `isolated-world-global-order.patch` stands alone. It recognises Juggler as
+  the scripted caller (its `resource://gre/modules/juggler/` modules, and the
+  sandboxes those modules create, whose location names them) and leaves the
+  interfaces it creates undefined on the page's window until the page uses
+  them. It edits `Codegen.py` (the window Xray's resolve on the window), so
+  every generated binding rebuilds, and `BindingUtils.h`
+  (`DoGetOrCreateDOMReflector`), which most of `dom/` includes.
 
 ## Backports
 
