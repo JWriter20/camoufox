@@ -1191,7 +1191,7 @@ def launch_options(
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
     _user_set_fonts = bool(fonts) or is_domain_set(config, 'fonts')
-    _user_set_voices = is_domain_set(config, 'voices')
+    _user_set_voices = is_domain_set(config, 'voices', 'voices:speechd')
     _user_set_dnt = 'navigator.doNotTrack' in config
     _user_set_gpc = 'navigator.globalPrivacyControl' in config
     _user_set_accept_encoding = 'headers.Accept-Encoding' in config

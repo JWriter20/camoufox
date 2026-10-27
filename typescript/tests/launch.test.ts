@@ -951,6 +951,20 @@ describe("test_voices (launch half)", () => {
 		).toBe(false);
 	});
 
+	it("keeps a caller's speech-dispatcher grid", async () => {
+		const grid = {
+			languages: [["English (America)", "en-US"]],
+			variants: ["Adam"],
+		};
+		const c = await cfg({
+			os: "linux",
+			fingerprint_preset: undefined,
+			config: { "voices:speechd": grid },
+		});
+		expect(c["voices:speechd"]).toEqual(grid);
+		expect(c.voices).toBeUndefined();
+	});
+
 	it("fails closed when voice generation fails", async () => {
 		deps.drawVoiceConfig = () => {
 			throw new OSError("voice-manifests.json unreadable");

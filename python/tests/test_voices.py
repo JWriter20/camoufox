@@ -83,6 +83,15 @@ def test_linux_launch_carries_the_grid():
     assert cfg["voices:blockIfNotDefined"] is True
 
 
+def test_a_given_speechd_grid_is_kept():
+    # A caller's grid (cfparity mirrors the host's) is the identity's voices,
+    # not something to draw over.
+    grid = {"languages": [["English (America)", "en-US"]], "variants": ["Adam"]}
+    cfg = _launch_config(os="linux", config={"voices:speechd": grid})
+    assert cfg["voices:speechd"] == grid
+    assert "voices" not in cfg
+
+
 @pytest.mark.parametrize(
     "value",
     [

@@ -1537,7 +1537,7 @@ export async function launchOptions({
 	const userSetScreenWindow = isDomainSet(config, "screen.", "window.");
 	const userSetMediaDevices = isDomainSet(config, "mediaDevices:");
 	const userSetFonts = Boolean(fonts?.length) || isDomainSet(config, "fonts");
-	const userSetVoices = isDomainSet(config, "voices");
+	const userSetVoices = isDomainSet(config, "voices", "voices:speechd");
 	const userSetDnt = "navigator.doNotTrack" in config;
 	const userSetGpc = "navigator.globalPrivacyControl" in config;
 	const userSetAcceptEncoding = "headers.Accept-Encoding" in config;
