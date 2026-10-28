@@ -33,6 +33,7 @@ be listed there.
 |-------|-------------|
 | `audio-context-spoofing.patch` | `AudioContext:sampleRate`, `AudioContext:outputLatency`, `AudioContext:maxChannelCount` |
 | `chromeutil.patch` | `debug` |
+| `claimed-os-emoji-pref.patch` | `navigator.platform` (through `GetSpoofedOS()` for the launch identity) |
 | `cmap-unicode-ucs4-fallback.patch` | `navigator.platform` (through `GetSpoofedOS()`) |
 | `fallback-fonts-claimed-os.patch` | `navigator.platform` (the launch's through `GetSpoofedOS()` for the per-script table; the context's through `NavigatorManager::GetSpoofedOS()` for the default font) |
 | `fingerprint-injection.patch` | `navigator.*`, `screen.*`, `window.*` |
@@ -66,6 +67,7 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 
 | Patch | Relies on |
 |-------|-----------|
+| `claimed-os-emoji-pref.patch` | `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build` |
 | `cmap-unicode-ucs4-fallback.patch` | `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build` |
 | `fallback-fonts-claimed-os.patch` | `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build`; `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()`, `cross-process-storage.patch` for `RoverfoxStorageManager::UserContextId()` and `anti-font-fingerprinting.patch` for `FontVisibilityProvider::GetDocument()` |
 | `font-metrics-windows.patch` | `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build` |
