@@ -81,17 +81,27 @@ describe.skipIf(!MODEL.ok)("webgl (test_webgl.py)", () => {
 				JSON.parse(fs.readFileSync(GTX_980_FIXTURE, "utf-8")),
 			).filter(([key]) => !removed.has(key)),
 		);
-		// WebGL1's line width range is WebGL2's since Firefox 156, and Firefox
-		// 158 adds EXT_polygon_offset_clamp on this desktop GL device.
+		// WebGL1's line width range is WebGL2's since Firefox 156, Firefox 158
+		// adds EXT_polygon_offset_clamp on this desktop GL device, and Firefox
+		// 159 adds EXT_clip_control, EXT_texture_mirror_clamp_to_edge and, on
+		// WebGL2, EXT_texture_norm16.
 		old["webGl:parameters"]["33902"] = old["webGl2:parameters"]["33902"];
-		for (const key of [
-			"webGl:supportedExtensions",
-			"webGl2:supportedExtensions",
-		]) {
-			old[key] = [...old[key], "EXT_polygon_offset_clamp"].sort((a, b) =>
-				a.toLowerCase() < b.toLowerCase() ? -1 : 1,
-			);
-		}
+		const added = [
+			"EXT_polygon_offset_clamp",
+			"EXT_clip_control",
+			"EXT_texture_mirror_clamp_to_edge",
+		];
+		const firefoxOrder = (a: string, b: string) =>
+			a.toLowerCase() < b.toLowerCase() ? -1 : 1;
+		old["webGl:supportedExtensions"] = [
+			...old["webGl:supportedExtensions"],
+			...added,
+		].sort(firefoxOrder);
+		old["webGl2:supportedExtensions"] = [
+			...old["webGl2:supportedExtensions"],
+			...added,
+			"EXT_texture_norm16",
+		].sort(firefoxOrder);
 		const fresh = JSON.parse(
 			orjsonDumps(webglForGpu("lin", ...GTX_980_LINUX, 0), false),
 		);
@@ -292,6 +302,93 @@ describe.skipIf(!MODEL.ok)("webgl (test_webgl.py)", () => {
 		}
 	});
 
+	it("Firefox 159's extensions follow the backend", () => {
+		// EXT_clip_control: ANGLE's D3D11 from feature level 10_0 (every device
+		// with WebGL2) and Linux desktop GL. EXT_texture_mirror_clamp_to_edge:
+		// ANGLE's D3D11 on every feature level and Linux desktop GL. Neither on
+		// macOS's GL 4.1. EXT_texture_norm16: every WebGL2 context of those
+		// backends and macOS's. fpgen's Firefox 146 records predate all three.
+		for (const os of OSES) {
+			for (let s = 0; s < 100; s++) {
+				const config = sampleWebglForScreen(os, 1920, 1080, s);
+				const desktopGl = (
+					config["webGl:supportedExtensions"] as string[]
+				).includes("EXT_depth_clamp");
+				const webgl2 = Boolean(config.webGl2Enabled);
+				const want: Record<string, boolean> = {
+					EXT_clip_control: { win: webgl2, lin: desktopGl, mac: false }[os],
+					EXT_texture_mirror_clamp_to_edge: {
+						win: true,
+						lin: desktopGl,
+						mac: false,
+					}[os],
+				};
+				for (const key of [
+					"webGl:supportedExtensions",
+					"webGl2:supportedExtensions",
+				]) {
+					if (!(key in config)) continue;
+					for (const [extension, expected] of Object.entries(want)) {
+						expect(
+							(config[key] as string[]).includes(extension),
+							`${os} ${s} ${key} ${extension}`,
+						).toBe(expected);
+					}
+				}
+				expect(
+					(config["webGl:supportedExtensions"] as string[]).includes(
+						"EXT_texture_norm16",
+					),
+					`${os} ${s}`,
+				).toBe(false);
+				if (webgl2) {
+					expect(
+						(config["webGl2:supportedExtensions"] as string[]).includes(
+							"EXT_texture_norm16",
+						),
+						`${os} ${s}`,
+					).toBe(os !== "lin" || desktopGl);
+				}
+			}
+		}
+	});
+
+	it("MAX_UNIFORM_BLOCK_SIZE is capped at 64 KiB", () => {
+		// Firefox 159 caps it; fpgen's Linux records carry drivers' larger values
+		// (up to 4294967292) from Firefox 146.
+		const recorded = {
+			vendor: "v",
+			renderer: "r",
+			params: {},
+			shaderPrecisionFormats: [],
+			supportedExtensions: [],
+		};
+		for (const [value, want] of [
+			[4294967292, 65536],
+			[65536, 65536],
+			[16384, 16384],
+		]) {
+			const webgl2 = {
+				...recorded,
+				params: { "35376": { value }, "33902": { value: [1, 1] } },
+			};
+			expect(
+				toConfig(recorded, webgl2, "lin")["webGl2:parameters"]["35376"],
+			).toBe(want);
+		}
+		for (const os of OSES) {
+			for (let s = 0; s < 100; s++) {
+				const config = sampleWebglForScreen(os, 1920, 1080, s);
+				if (config.webGl2Enabled) {
+					expect(
+						config["webGl2:parameters"]["35376"],
+						`${os} ${s}`,
+					).toBeLessThanOrEqual(65536);
+				}
+			}
+		}
+	});
+
 	it("extensions are in Firefox's order", () => {
 		// WebGLExtensionID order: alphabetical, ignoring case.
 		const firefoxOrder = (exts: string[]) =>
@@ -343,6 +440,7 @@ it("an extension the backend adds takes Firefox's position", () => {
 		"EXT_color_buffer_half_float",
 		"EXT_depth_clamp",
 		"EXT_disjoint_timer_query",
+		"EXT_texture_mirror_clamp_to_edge",
 	]);
 });
 
@@ -370,16 +468,28 @@ it("draft extensions are filtered on every OS", () => {
 	for (const os of OSES) {
 		const config = toConfig(recorded, webgl2, os);
 		// A device with WebGL2 is D3D11 feature level 10_0 or above, where ANGLE
-		// also clamps polygon offsets; the recording carries no desktop GL mark.
+		// also clamps polygon offsets and has clip control; the recording carries
+		// no desktop GL mark. EXT_texture_norm16 is no draft from Firefox 159: the
+		// backend gives it back to WebGL2 on ANGLE and on macOS's GL 4.1.
 		const backend =
-			os === "win" ? ["EXT_depth_clamp", "EXT_polygon_offset_clamp"] : [];
+			os === "win"
+				? [
+						"EXT_clip_control",
+						"EXT_depth_clamp",
+						"EXT_polygon_offset_clamp",
+						"EXT_texture_mirror_clamp_to_edge",
+					]
+				: [];
+		const want2: Record<string, string[]> = {
+			win: [...backend, "EXT_texture_norm16", "OVR_multiview2"],
+			mac: ["EXT_texture_norm16"],
+			lin: [],
+		};
 		expect(config["webGl:supportedExtensions"]).toEqual([
 			"ANGLE_instanced_arrays",
 			...backend,
 		]);
-		expect(config["webGl2:supportedExtensions"]).toEqual(
-			os === "win" ? [...backend, "OVR_multiview2"] : [],
-		);
+		expect(config["webGl2:supportedExtensions"]).toEqual(want2[os]);
 	}
 });
 

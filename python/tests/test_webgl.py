@@ -42,9 +42,11 @@ def test_converter_reproduces_the_recorded_device():
     value, less the UNMASKED_* strings, which the browser takes from
     webGl:vendor/renderer rather than the table. Keys since marked removed
     (contextAttributes) are no longer sent. WebGL1's line width range is
-    WebGL2's since Firefox 156 (test_webgl1_line_width_range_is_webgl2s), and
+    WebGL2's since Firefox 156 (test_webgl1_line_width_range_is_webgl2s),
     Firefox 158 adds EXT_polygon_offset_clamp on this desktop GL device
-    (test_polygon_offset_clamp_follows_the_backend)."""
+    (test_polygon_offset_clamp_follows_the_backend), and Firefox 159 adds
+    EXT_clip_control, EXT_texture_mirror_clamp_to_edge and, on WebGL2,
+    EXT_texture_norm16 (test_firefox_159_extensions_follow_the_backend)."""
     removed = {
         entry["property"]
         for entry in json.loads(PROPERTIES.read_text())
@@ -53,8 +55,11 @@ def test_converter_reproduces_the_recorded_device():
     old = json.loads((Path(__file__).parent / "data" / "webgl-gtx980-linux.json").read_text())
     old = {key: value for key, value in old.items() if key not in removed}
     old["webGl:parameters"]["33902"] = old["webGl2:parameters"]["33902"]
-    for key in ("webGl:supportedExtensions", "webGl2:supportedExtensions"):
-        old[key] = sorted([*old[key], "EXT_polygon_offset_clamp"], key=str.casefold)
+    added = ["EXT_polygon_offset_clamp", "EXT_clip_control", "EXT_texture_mirror_clamp_to_edge"]
+    old["webGl:supportedExtensions"] = sorted([*old["webGl:supportedExtensions"], *added], key=str.casefold)
+    old["webGl2:supportedExtensions"] = sorted(
+        [*old["webGl2:supportedExtensions"], *added, "EXT_texture_norm16"], key=str.casefold
+    )
     new = webgl_for_gpu("lin", *_GTX_980_LINUX, seed=0)
 
     assert new.keys() == old.keys()
@@ -201,10 +206,21 @@ def test_draft_extensions_filtered_on_every_os():
     for target_os in OSES:
         config = webgl.to_config(recorded, webgl2, target_os)
         # A device with WebGL2 is D3D11 feature level 10_0 or above, where ANGLE
-        # also clamps polygon offsets; the recording carries no desktop GL mark.
-        backend = ["EXT_depth_clamp", "EXT_polygon_offset_clamp"] if target_os == "win" else []
+        # also clamps polygon offsets and has clip control; the recording carries
+        # no desktop GL mark. EXT_texture_norm16 is no draft from Firefox 159: the
+        # backend gives it back to WebGL2 on ANGLE and on macOS's GL 4.1.
+        backend = (
+            ["EXT_clip_control", "EXT_depth_clamp", "EXT_polygon_offset_clamp", "EXT_texture_mirror_clamp_to_edge"]
+            if target_os == "win"
+            else []
+        )
+        want2 = {
+            "win": [*backend, "EXT_texture_norm16", "OVR_multiview2"],
+            "mac": ["EXT_texture_norm16"],
+            "lin": [],
+        }[target_os]
         assert config["webGl:supportedExtensions"] == ["ANGLE_instanced_arrays", *backend]
-        assert config["webGl2:supportedExtensions"] == (backend + ["OVR_multiview2"] if target_os == "win" else [])
+        assert config["webGl2:supportedExtensions"] == want2
 
 
 def test_windows_exposes_ext_depth_clamp_on_every_device():
@@ -229,6 +245,46 @@ def test_polygon_offset_clamp_follows_the_backend():
                     assert ("EXT_polygon_offset_clamp" in config[key]) == want, (target_os, s, key)
 
 
+def test_firefox_159_extensions_follow_the_backend():
+    """Firefox 159 exposes EXT_clip_control where the backend has it (ANGLE's
+    D3D11 from feature level 10_0, every device with WebGL2; Linux desktop GL)
+    and EXT_texture_mirror_clamp_to_edge (ANGLE's D3D11 on every feature level;
+    Linux desktop GL), neither on macOS's GL 4.1, and EXT_texture_norm16 on
+    every WebGL2 context of those backends and macOS's. fpgen's Firefox 146
+    records predate all three."""
+    for target_os in OSES:
+        for s in range(100):
+            config = sample_webgl_for_screen(target_os, 1920, 1080, s)
+            desktop_gl = "EXT_depth_clamp" in config["webGl:supportedExtensions"]
+            webgl2 = config["webGl2Enabled"]
+            want = {
+                "EXT_clip_control": {"win": webgl2, "lin": desktop_gl, "mac": False}[target_os],
+                "EXT_texture_mirror_clamp_to_edge": {"win": True, "lin": desktop_gl, "mac": False}[target_os],
+            }
+            for key in ("webGl:supportedExtensions", "webGl2:supportedExtensions"):
+                if key in config:
+                    for extension, expected in want.items():
+                        assert (extension in config[key]) == expected, (target_os, s, key, extension)
+            assert "EXT_texture_norm16" not in config["webGl:supportedExtensions"], (target_os, s)
+            if webgl2:
+                norm16 = target_os != "lin" or desktop_gl
+                assert ("EXT_texture_norm16" in config["webGl2:supportedExtensions"]) == norm16, (target_os, s)
+
+
+def test_max_uniform_block_size_is_capped_at_64_kib():
+    """Firefox 159 caps MAX_UNIFORM_BLOCK_SIZE at 64 KiB; fpgen's Linux records
+    carry drivers' larger values (up to 4294967292) from Firefox 146."""
+    recorded = {"vendor": "v", "renderer": "r", "params": {}, "shaderPrecisionFormats": [], "supportedExtensions": []}
+    for value, want in ((4294967292, 65536), (65536, 65536), (16384, 16384)):
+        webgl2 = {**recorded, "params": {"35376": {"value": value}, "33902": {"value": [1, 1]}}}
+        assert webgl.to_config(recorded, webgl2, "lin")["webGl2:parameters"]["35376"] == want
+    for target_os in OSES:
+        for s in range(100):
+            config = sample_webgl_for_screen(target_os, 1920, 1080, s)
+            if config["webGl2Enabled"]:
+                assert config["webGl2:parameters"]["35376"] <= 65536, (target_os, s)
+
+
 def test_extensions_are_in_firefoxs_order():
     """getSupportedExtensions lists in WebGLExtensionID order: alphabetical,
     ignoring case. An extension the backend adds takes its place there."""
@@ -244,6 +300,7 @@ def test_extensions_are_in_firefoxs_order():
         "EXT_color_buffer_half_float",
         "EXT_depth_clamp",
         "EXT_disjoint_timer_query",
+        "EXT_texture_mirror_clamp_to_edge",
     ]
     for target_os in OSES:
         for s in range(100):
