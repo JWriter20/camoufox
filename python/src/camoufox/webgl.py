@@ -25,7 +25,8 @@ from .fpgen_model import load_fpgen
 # of them, and a spoofed list that names one is a tell on its own. Measured on
 # stock Firefox 152.0.4 on real Windows 11 (ANGLE D3D11) 2026-09-16: none of
 # these four are exposed. WEBGL_provoking_vertex is NOT in this set: stock
-# Firefox on Apple GPUs and on Windows does expose it.
+# Firefox on Apple GPUs and on Windows does expose it. EXT_texture_norm16 left
+# the drafts in Firefox 159 for WebGL2 only; the backend adds it there (below).
 _NEVER_EXPOSED_EXTENSIONS = frozenset(
     {
         'WEBGL_multi_draw',
@@ -57,6 +58,21 @@ _BACKEND_EXTENSIONS = {'win': ('EXT_depth_clamp',)}
 # core in GL 4.6), whose recordings have EXT_depth_clamp. macOS release builds
 # run WebGL on CGL's GL 4.1, which lacks it.
 _POLYGON_OFFSET_CLAMP = 'EXT_polygon_offset_clamp'
+
+# Firefox 159 exposes EXT_clip_control (bug 1885031) and
+# EXT_texture_mirror_clamp_to_edge (bug 1908749) where the GL backend has them
+# (GL 4.5 and 4.4, or their extensions): ANGLE's D3D11 backend sets mirror clamp
+# on every feature level and clip control from 10_0, and Linux desktop GL
+# drivers have both. EXT_texture_norm16 (bug 1735401) is WebGL2-only and needs
+# GL 3.1 or ANGLE's EXT_texture_norm16, which D3D11 has from feature level 10_0,
+# so macOS's GL 4.1 has it and neither of the others.
+_CLIP_CONTROL = 'EXT_clip_control'
+_MIRROR_CLAMP = 'EXT_texture_mirror_clamp_to_edge'
+_TEXTURE_NORM16 = 'EXT_texture_norm16'
+
+# Firefox 159 (bug 2076013) caps MAX_UNIFORM_BLOCK_SIZE at ANGLE's 64 KiB.
+_MAX_UNIFORM_BLOCK_SIZE = '35376'
+_UNIFORM_BLOCK_SIZE_CAP = 64 * 1024
 
 _ALIASED_LINE_WIDTH_RANGE = '33902'
 
@@ -118,14 +134,21 @@ def firefox_gpus(target_os: str) -> FrozenSet[Tuple[str, str]]:
     )
 
 
-def _backend_extensions(target_os: str, webgl: Dict[str, Any], webgl2: Any) -> Tuple[str, ...]:
-    """The extensions the shipped Firefox adds on this device's backend."""
+def _backend_extensions(
+    target_os: str, webgl: Dict[str, Any], webgl2: Any
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """The extensions the shipped Firefox adds on this device's backend, for
+    WebGL1 and for WebGL2."""
     extensions = _BACKEND_EXTENSIONS.get(target_os, ())
-    if (target_os == 'win' and webgl2) or (
-        target_os == 'lin' and 'EXT_depth_clamp' in webgl['supportedExtensions']
-    ):
-        extensions += (_POLYGON_OFFSET_CLAMP,)
-    return extensions
+    desktop_gl = target_os == 'lin' and 'EXT_depth_clamp' in webgl['supportedExtensions']
+    if target_os == 'win':
+        extensions += (_MIRROR_CLAMP,)
+    if (target_os == 'win' and webgl2) or desktop_gl:
+        extensions += (_POLYGON_OFFSET_CLAMP, _CLIP_CONTROL)
+    if desktop_gl:
+        extensions += (_MIRROR_CLAMP,)
+    webgl2_only = (_TEXTURE_NORM16,) if target_os in ('win', 'mac') or desktop_gl else ()
+    return extensions, extensions + webgl2_only
 
 
 def _context_config(
@@ -153,7 +176,7 @@ def to_config(webgl: Dict[str, Any], webgl2: Any, target_os: str) -> Dict[str, A
 
     `webgl2` is `[]` for a device without WebGL2.
     """
-    backend = _backend_extensions(target_os, webgl, webgl2)
+    backend, backend2 = _backend_extensions(target_os, webgl, webgl2)
     config = {
         'webGl:vendor': webgl['vendor'],
         'webGl:renderer': webgl['renderer'],
@@ -161,7 +184,10 @@ def to_config(webgl: Dict[str, Any], webgl2: Any, target_os: str) -> Dict[str, A
         'webGl2Enabled': bool(webgl2),
     }
     if webgl2:
-        config.update(_context_config('webGl2', webgl2, target_os, backend))
+        config.update(_context_config('webGl2', webgl2, target_os, backend2))
+        parameters = config['webGl2:parameters']
+        if parameters.get(_MAX_UNIFORM_BLOCK_SIZE) is not None:
+            parameters[_MAX_UNIFORM_BLOCK_SIZE] = min(parameters[_MAX_UNIFORM_BLOCK_SIZE], _UNIFORM_BLOCK_SIZE_CAP)
         # Firefox 156 creates WebGL1 on the same GL profile as WebGL2, so both
         # report one line width range. 146 forced WebGL1 onto a compatibility
         # profile, and fpgen recorded that profile's driver range.
