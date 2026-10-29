@@ -787,15 +787,15 @@ def acquire(
     return Lease(build, TARGET_OS[target_os], resolved, request)
 
 
-def claim(options: Dict[str, Any], display: Any = None) -> Optional[Lease]:
+def claim(options: Dict[str, Any], display: Any = None) -> Optional[Any]:
     """
-    The lease launch_options() minted for these options, taken by the browser
-    about to launch with them on `display`. None when they carry no lease this
-    process holds: a stock build, or a lease file the caller manages.
+    The lease or named-node session opened for these options, taken by the browser
+    about to launch with them on `display`. None for a stock build with no session.
     """
     lease = _LIVE.get(str(options.get("env", {}).get(LEASE_FILE_ENV)))
     if lease is None:
-        return None
+        from .render_node import claim as claim_node
+        return claim_node(options)
     if lease.claimed:
         raise ValueError(
             "These launch options' Camoufox Pro lease is already held by another browser. "

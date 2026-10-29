@@ -111,10 +111,33 @@ def _validate(data: Dict[str, Any], where: str) -> Dict[str, Any]:
     return {"coordinator": coordinator, "token": data["token"], "gpu": gpu}
 
 
+_SESSIONS: Dict[str, "Session"] = {}
+
+
+def track(session: "Session") -> None:
+    _SESSIONS[str(session.path)] = session
+
+
+def claim(options: Dict[str, Any]) -> Optional["Session"]:
+    session = _SESSIONS.get(str(options.get("env", {}).get(RELAY_ENV)))
+    if session is None:
+        return None
+    if session.claimed:
+        raise ValueError(
+            "These launch options' render node is already held by another browser. "
+            "Each browser needs its own: call launch_options() once per browser."
+        )
+    session.claimed = True
+    return session
+
+
 class Session:
     """One browser's assignment on the coordinator, and the file its relay client reads."""
 
+    grants: Dict[str, Any] = {}
+
     def __init__(self, config: Dict[str, Any], version: str, directory: Path) -> None:
+        self.claimed = False
         self.config = config
         self.version = version
         self.path: Optional[Path] = None
@@ -219,12 +242,20 @@ class Session:
             if failures == 2:
                 log.warning("camoufox-pro: renewing the render node assignment is failing; retrying")
 
+    @property
+    def lease_id(self) -> str:
+        return str(self.assignment["assignment_id"])
+
+    def close(self) -> None:
+        self.release()
+
     def release(self, *_: Any) -> None:
         """End the assignment and delete the session file and socket. Only the first call does anything."""
         with self._lock:
             if self._released:
                 return
             self._released = True
+        _SESSIONS.pop(str(self.path), None)
         self._stop.set()
         try:
             self._request("DELETE", f"/assignments/{self.assignment['assignment_id']}")

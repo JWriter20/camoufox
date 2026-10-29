@@ -279,6 +279,18 @@ def test_the_default_file_is_used_by_a_pro_build_only(api, coordinator, build, p
     held_lease(opts).release()
 
 
+def test_a_named_node_can_use_a_caller_managed_lease(api, coordinator, pro_build, monkeypatch, tmp_path):
+    own_lease = str(tmp_path / "mine.json")
+    monkeypatch.setenv(pro.LEASE_FILE_ENV, own_lease)
+    opts, _ = node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+    assert opts["env"][pro.LEASE_FILE_ENV] == own_lease
+    session = pro.claim(opts)
+    assert session is not None and session.grants == {}
+    session.close()
+    assert [r["path"] for r in coordinator.calls("DELETE", ".*")] == ["/assignments/" + "a" * 32]
+    assert pro.claim(opts) is None
+
+
 def test_a_stock_build_ignores_the_default_file_and_refuses_a_named_node(
     coordinator, build, monkeypatch
 ):

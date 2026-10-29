@@ -1103,7 +1103,7 @@ def resolve_verstr(executable_path: Optional[Path] = None) -> str:
     raise ValueError(f'{ini} names no Version')
 
 
-# The Camoufox Pro lease launch_options() minted on this thread, released if the
+# The Camoufox Pro lease or node session opened on this thread, released if the
 # rest of the build fails.
 _HELD = threading.local()
 
@@ -1112,14 +1112,18 @@ def _release_lease_on_failure(build: Any) -> Any:
     @wraps(build)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         _HELD.lease = None
+        _HELD.node = None
         try:
             return build(*args, **kwargs)
         except BaseException:
             if _HELD.lease is not None:
                 _HELD.lease.release("error")
+            if _HELD.node is not None:
+                _HELD.node.release()
             raise
         finally:
             _HELD.lease = None
+            _HELD.node = None
 
     return wrapper
 
@@ -1413,13 +1417,14 @@ def launch_options(
         oses = [os] if isinstance(os, str) else list(os or ["windows"])
         refusal = (
             "render_node needs a Camoufox Pro build (see docs/pro.md)." if pro_build is None
-            else f"render_node is a lease option, and this launch carries its own {pro.LEASE_FILE_ENV}." if not leased
+            else f"render_node is a lease option, and this launch carries its own {pro.LEASE_FILE_ENV}." if not leased and not named_node
             else f"render_node draws a Windows identity's WebGL, and os={os!r} has no Windows." if "windows" not in oses
             else None
         )
         if refusal is None:
             os = "windows"
-            pro_request["gpu"] = False
+            if leased:
+                pro_request["gpu"] = False
         elif named_node:
             raise ValueError(refusal)
         else:
@@ -1583,15 +1588,6 @@ def launch_options(
             _HELD.lease = pro.acquire(pro_build, target_os, pro_key, pro_request)
         lease = _HELD.lease
         pro_env[pro.LEASE_FILE_ENV] = str(lease.path)
-        if relay is not None:
-            node = render_nodes.Session(relay, _firefox_version(Path(browser_binary)), lease.path.parent)
-            lease.on_end.append(node.release)
-            pro_env[render_nodes.RELAY_ENV] = str(node.path)
-            if node.text_socket is not None:
-                pro_env[render_nodes.TEXT_ENV] = str(node.text_socket)
-            # The node draws on the identity's own OS and GPU, so there is nothing to cover.
-            if canvas_noise is None:
-                canvas_noise = False
         grants = lease.grants
         if grants.get("egress"):
             proxy = {
@@ -1619,6 +1615,20 @@ def launch_options(
                 farm_host = urlsplit(grants["gpu"]["render"]["endpoint"]).hostname
                 bypass = [entry for entry in (proxy.get("bypass") or "").split(",") if entry]
                 proxy = {**proxy, "bypass": ",".join([*bypass, farm_host])}
+
+    if relay is not None:
+        directory = _HELD.lease.path.parent if leased else Path(env[pro.LEASE_FILE_ENV]).parent
+        _HELD.node = render_nodes.Session(relay, _firefox_version(Path(browser_binary)), directory)
+        if leased:
+            _HELD.lease.on_end.append(_HELD.node.release)
+        else:
+            render_nodes.track(_HELD.node)
+        pro_env[render_nodes.RELAY_ENV] = str(_HELD.node.path)
+        if _HELD.node.text_socket is not None:
+            pro_env[render_nodes.TEXT_ENV] = str(_HELD.node.text_socket)
+        # The node draws on the identity's own OS and GPU, so there is nothing to cover.
+        if canvas_noise is None:
+            canvas_noise = False
 
     # A preset whose screen is a phone viewport is not a real desktop device;
     # the floor is normally skipped for presets, on the assumption that a preset
@@ -2051,7 +2061,7 @@ def launch_options(
             'gfx.canvas.accelerated': True,
             'gfx.canvas.accelerated.force-enabled': True,
         })
-        if 'webgpu' in node.routes:
+        if 'webgpu' in _HELD.node.routes:
             firefox_user_prefs.setdefault('dom.webgpu.renderfarm.node', True)
     else:
         # A pair the caller named, or the preset's own GPU, keeps its name and

@@ -185,8 +185,29 @@ class HttpError extends Error {
 const sleep = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+const SESSIONS = new Map<string, Session>();
+
+export function track(session: Session): void {
+	SESSIONS.set(session.path, session);
+}
+
+export function claim(options: Record<string, any>): Session | null {
+	const session = SESSIONS.get(String(options.env?.[RELAY_ENV]));
+	if (!session) return null;
+	if (session.claimed) {
+		throw new Error(
+			"These launch options' render node is already held by another browser. " +
+				"Each browser needs its own: call launchOptions() once per browser.",
+		);
+	}
+	session.claimed = true;
+	return session;
+}
+
 /** One browser's assignment on the coordinator, and the file its relay client reads. */
 export class Session {
+	claimed = false;
+	grants: Record<string, any> = {};
 	path = "";
 	textSocket: string | null = null;
 	assignment: Record<string, any> = {};
@@ -357,9 +378,18 @@ export class Session {
 		this.#schedule();
 	}
 
+	get leaseId(): string {
+		return String(this.assignment.assignment_id);
+	}
+
+	close(): Promise<void> {
+		return this.release();
+	}
+
 	/** End the assignment and delete the session file and socket. Only the first call does anything. */
-	release(): Promise<void> {
+	release(_reason?: string): Promise<void> {
 		this.#released ??= (async () => {
+			SESSIONS.delete(this.path);
 			if (this.#timer) clearTimeout(this.#timer);
 			try {
 				await this.#request(

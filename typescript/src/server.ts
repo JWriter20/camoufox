@@ -13,7 +13,7 @@ import { type BrowserServer, firefox } from "playwright-core";
 import { withUnpinnedLaunch } from "./cpu_affinity.js";
 import { GpuDisplay, proveGpu } from "./gpudisplay.js";
 import { customEngines } from "./humanize.js";
-import { attachLease, claim, type Lease, launchFailed } from "./pro.js";
+import { attachLease, claim, launchFailed } from "./pro.js";
 import { ValueError } from "./pycompat.js";
 import { camelCase } from "./sync_api.js";
 import {
@@ -93,7 +93,7 @@ export async function launchServer({
 		options,
 	);
 
-	let lease: Lease | null = null;
+	let lease: Awaited<ReturnType<typeof claim>> = null;
 	try {
 		const config = await launchOptions({ ...options, headless: headlessBool });
 		lease = await claim(config, virtualDisplay);

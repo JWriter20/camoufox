@@ -20,13 +20,7 @@ import * as cpuAffinity from "./cpu_affinity.js";
 import { generateContextFingerprint } from "./fingerprints.js";
 import * as humanizeCustom from "./humanize-custom.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
-import {
-	attachLease,
-	claim,
-	type Lease,
-	launchFailed,
-	type ProSession,
-} from "./pro.js";
+import { attachLease, claim, launchFailed, type ProSession } from "./pro.js";
 import { RELAY_ENV } from "./render_node.js";
 import {
 	applyNoViewport,
@@ -127,7 +121,7 @@ export async function NewBrowser(
 	// Options the caller built leave its contexts to the caller
 	// (hostIdentity).
 	let canvasNoise: boolean | undefined = false;
-	let lease: Lease | null = null;
+	let lease: Awaited<ReturnType<typeof claim>> = null;
 	try {
 		if (!fromOptions || !Object.keys(fromOptions).length) {
 			canvasNoise = kwargs.canvas_noise ?? undefined;
@@ -198,7 +192,7 @@ async function launchWith(
 	noViewportDefault: boolean,
 	virtualDisplay: VirtualDisplay | null,
 	canvasNoise: boolean | undefined,
-	lease: Lease | null,
+	lease: Awaited<ReturnType<typeof claim>>,
 ): Promise<Browser | BrowserContext> {
 	// Persistent context. Python passes user_data_dir inside the options; the
 	// JS API takes it positionally. A user_data_dir alone also selects it.

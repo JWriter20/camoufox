@@ -161,7 +161,8 @@ set it:
 | `render_node` | `false`, a path, or `{coordinator, token, gpu}` | WebGL on [your own render node](#your-own-render-node) |
 
 They need a Pro build; on a stock build, or with a `CAMOU_LEASE_FILE` of your
-own, they raise `ValueError`.
+own, they raise `ValueError`. An explicitly named `render_node` path or object
+is the exception: it uses your lease without trying to replace it.
 
 ### Managed egress
 
@@ -244,7 +245,8 @@ With the file in place every Pro launch uses the node, with no option to pass.
 The identity is Windows (`os` defaults to it); a launch with another `os` draws
 locally. Pass `render_node=False` (TypeScript: `render_node: false`) to draw
 locally, or a path or a dict (an object) to name a node for one launch, in
-which case a launch that cannot use it raises `ValueError`. The launcher takes an assignment from the coordinator for each
+which case a launch that cannot use it raises `ValueError`. A path or dict also
+works with a caller-managed `CAMOU_LEASE_FILE`. The launcher takes an assignment from the coordinator for each
 browser, renews it while the browser runs, and releases it when the lease ends.
 When no node serves the build's release, or every GPU stays busy for 30
 seconds, the launch raises `RenderNodeError`.

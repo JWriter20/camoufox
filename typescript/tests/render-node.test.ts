@@ -422,6 +422,20 @@ describe.runIf(modelReady)("a launch", () => {
 		expect(renderNode.RELAY_ENV in opts.env).toBe(true);
 	});
 
+	it("uses a named node with a caller-managed lease", async () => {
+		const ownLease = path.join(SCRATCH, "mine.json");
+		process.env[pro.LEASE_FILE_ENV] = ownLease;
+		const opts = await launch({ render_node: coordinator.config });
+		expect(opts.env[pro.LEASE_FILE_ENV]).toBe(ownLease);
+		const session = await pro.claim(opts);
+		expect(session?.grants).toEqual({});
+		await session?.close();
+		expect(coordinator.calls("DELETE", ".*").map((r) => r.path)).toEqual([
+			`/assignments/${"a".repeat(32)}`,
+		]);
+		expect(await pro.claim(opts)).toBeNull();
+	});
+
 	it("ignores the default file on a stock build, and refuses a named node there", async () => {
 		writeDefault();
 		const opts = await launch({ executable_path: build });

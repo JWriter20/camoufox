@@ -1661,12 +1661,16 @@ export interface LaunchOptions {
 export async function launchOptions(
 	options: LaunchOptions = {},
 ): Promise<Record<string, any>> {
-	// A Camoufox Pro lease minted along the way goes back if the build fails.
-	const held: { lease: pro.Lease | null } = { lease: null };
+	// A Camoufox Pro lease or node session opened along the way goes back if the build fails.
+	const held: { lease: pro.Lease | null; node: renderNodes.Session | null } = {
+		lease: null,
+		node: null,
+	};
 	try {
 		return await buildLaunchOptions(options, held);
 	} catch (error) {
 		await held.lease?.release("error");
+		await held.node?.release();
 		throw error;
 	}
 }
@@ -1727,7 +1731,7 @@ async function buildLaunchOptions(
 		render_node,
 		...passthrough
 	}: LaunchOptions,
-	held: { lease: pro.Lease | null },
+	held: { lease: pro.Lease | null; node: renderNodes.Session | null },
 ): Promise<Record<string, any>> {
 	utilsDeps.ensureBrowserProfileDir(env);
 
@@ -1824,14 +1828,14 @@ async function buildLaunchOptions(
 				: [...(targetOsOption ?? ["windows"])];
 		const refusal = !proBuild
 			? "render_node needs a Camoufox Pro build (see docs/pro.md)."
-			: !leased
+			: !leased && !namedNode
 				? `render_node is a lease option, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
 				: !oses.includes("windows")
 					? `render_node draws a Windows identity's WebGL, and os=${JSON.stringify(targetOsOption)} has no Windows.`
 					: null;
 		if (refusal === null) {
 			targetOsOption = "windows";
-			proRequest.gpu = false;
+			if (leased) proRequest.gpu = false;
 		} else if (namedNode) {
 			throw new ValueError(refusal);
 		} else {
@@ -2021,19 +2025,6 @@ async function buildLaunchOptions(
 			proRequest,
 		);
 		proEnv[pro.LEASE_FILE_ENV] = held.lease.path;
-		if (relay) {
-			node = await renderNodes.Session.open(
-				relay,
-				firefoxVersion(resolvedExecutable),
-				path.dirname(held.lease.path),
-			);
-			const opened = node;
-			held.lease.onEnd.push(() => opened.release());
-			proEnv[renderNodes.RELAY_ENV] = node.path;
-			if (node.textSocket) proEnv[renderNodes.TEXT_ENV] = node.textSocket;
-			// The node draws on the identity's own OS and GPU, so there is nothing to cover.
-			canvas_noise ??= false;
-		}
 		const grants = held.lease.grants;
 		if (grants.egress) {
 			proxy = {
@@ -2061,6 +2052,28 @@ async function buildLaunchOptions(
 				proxy = { ...proxy, bypass: [...bypass, farmHost].join(",") };
 			}
 		}
+	}
+
+	if (relay) {
+		const directory = path.dirname(
+			held.lease?.path ?? String(env[pro.LEASE_FILE_ENV]),
+		);
+		node = await renderNodes.Session.open(
+			relay,
+			firefoxVersion(resolvedExecutable),
+			directory,
+		);
+		held.node = node;
+		if (held.lease) {
+			const opened = node;
+			held.lease.onEnd.push(() => opened.release());
+		} else {
+			renderNodes.track(node);
+		}
+		proEnv[renderNodes.RELAY_ENV] = node.path;
+		if (node.textSocket) proEnv[renderNodes.TEXT_ENV] = node.textSocket;
+		// The node draws on the identity's own OS and GPU, so there is nothing to cover.
+		canvas_noise ??= false;
 	}
 
 	// A preset whose screen is a phone viewport is not a real desktop device.

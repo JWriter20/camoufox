@@ -37,6 +37,7 @@ import {
 import { GpuDisplay } from "./gpudisplay.js";
 import { OS_NAME, userCacheDir, userConfigDir } from "./paths.js";
 import { ValueError } from "./pycompat.js";
+import type { Session as RenderNodeSession } from "./render_node.js";
 
 export const API_ENV = "CAMOUFOX_PRO_API";
 export const KEY_ENV = "CAMOUFOX_PRO_KEY";
@@ -1075,16 +1076,18 @@ export async function acquire(
 }
 
 /**
- * The lease launchOptions() minted for these options, taken by the browser
- * about to launch with them on `display`. null when they carry no lease this
- * process holds: a stock build, or a lease file the caller manages.
+ * The lease or named-node session opened for these options, taken by the browser
+ * about to launch with them on `display`. null for a stock build with no session.
  */
 export async function claim(
 	options: Record<string, any>,
 	display?: unknown,
-): Promise<Lease | null> {
+): Promise<Lease | RenderNodeSession | null> {
 	const lease = LIVE.get(String(options.env?.[LEASE_FILE_ENV]));
-	if (!lease) return null;
+	if (!lease) {
+		const { claim: claimNode } = await import("./render_node.js");
+		return claimNode(options);
+	}
 	if (lease.claimed) {
 		throw new Error(
 			"These launch options' Camoufox Pro lease is already held by another browser. " +
@@ -1113,7 +1116,7 @@ export function refusal(error: unknown): string | null {
  * when the browser exited because it refused the lease.
  */
 export async function launchFailed(
-	lease: Lease | null,
+	lease: Lease | RenderNodeSession | null,
 	error: unknown,
 ): Promise<void> {
 	await lease?.release("error");
@@ -1144,7 +1147,7 @@ export function attachLease<
 		close(...args: any[]): Promise<void>;
 	},
 >(
-	lease: Lease,
+	lease: Lease | RenderNodeSession,
 	target: T,
 	event: "disconnected" | "close",
 ): T & { pro: ProSession } {
