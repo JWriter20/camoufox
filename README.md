@@ -494,6 +494,7 @@ claims the host's OS. Details are in
 | Juggler's debugger leaves no side effects content can observe | `debugger-invisible-to-content` patch |
 | Per-context fingerprint setters are gone before page script runs | `window-setter-seal` patch |
 | Popup blocker on, as in stock Firefox | `popup-blocker-parity` patch |
+| On X11, a pointer-locked window partly off the top or left of the screen keeps running (stock Firefox can crash: the X server refuses the cursor barrier and GDK aborts) | `pointer-lock-offscreen` patch |
 | Content-accessible chrome files match stock Firefox | `contentaccessible-parity` patch |
 | Viewports never enter Responsive Design Mode; containers show no automation label | Juggler |
 
@@ -512,7 +513,7 @@ claims the host's OS. Details are in
 | Feature | Where |
 |---|---|
 | Load extracted addons without a debug server: `addons=["/path/to/addon"]` | launcher, `camoufox-window-module` patch |
-| uBlock Origin installed by default, with its own default filter lists (`exclude_addons=[DefaultAddons.UBO]` to drop it) | launcher |
+| uBlock Origin installed by default: each browser release bundles the newest uBO release on AMO when it is built (`browser/scripts/fetch-ubo.py`), blocking with the default filter lists packaged in it, never downloaded at launch (`exclude_addons=[DefaultAddons.UBO]` to drop it) | packaging, launcher, `policies.json` |
 | Addons cannot open tabs unless `allow_addon_new_tab=True` | `disable-extension-newtab` patch |
 | Addons run in private browsing | `all-addons-private-mode` patch |
 
@@ -657,6 +658,7 @@ Artifacts are written to `browser/dist/`.
 cd browser
 docker build -t camoufox-builder .
 docker run -v "$(pwd)/dist:/app/dist" camoufox-builder --target linux --arch x86_64
+docker run -v "$(pwd)/dist:/app/dist" camoufox-builder --target windows --arch x86_64
 ```
 
 The container takes the `multibuild.py` flags. Add

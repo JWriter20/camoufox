@@ -103,10 +103,6 @@ for name in ('geoip aio by daijro-combined.mmdb', 'maxmind geolite2-ipv4.mmdb', 
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(b'')
 
-# The default addon, already "downloaded", so nothing is fetched.
-(CACHE / 'addons' / 'UBO').mkdir(parents=True)
-(CACHE / 'addons' / 'UBO' / 'manifest.json').write_text('{}')
-
 # ------------------------------------------------------------ host probes
 HOST = {
     'cpu_count': 16,
