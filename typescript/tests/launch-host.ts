@@ -32,11 +32,6 @@ export const CACHE = path.join(SCRATCH, "xdg-cache", "camoufox");
 export const HOME = path.join(SCRATCH, "home");
 fs.mkdirSync(HOME, { recursive: true });
 
-// The default addon, already "downloaded", so nothing is fetched.
-const { getAddonPath } = await import("../src/addons.js");
-fs.mkdirSync(getAddonPath("UBO"), { recursive: true });
-fs.writeFileSync(path.join(getAddonPath("UBO"), "manifest.json"), "{}");
-
 // A Pro launch uses the render node this machine configured; the suites'
 // must not, so none is found. render-node.test.ts writes its own.
 const renderNode = await import("../src/render_node.js");
