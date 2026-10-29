@@ -62,7 +62,12 @@ import {
 	validIPv6,
 } from "./ip.js";
 import { handleLocales } from "./locales.js";
-import { INSTALL_DIR, LAUNCHER_CONSTANTS, OS_NAME } from "./paths.js";
+import {
+	INSTALL_DIR,
+	LAUNCHER_CONSTANTS,
+	loadDataFile,
+	OS_NAME,
+} from "./paths.js";
 import {
 	buildFile,
 	effectiveVersionMin,
@@ -103,6 +108,10 @@ const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
 
+// System colours stock Firefox reports on Windows 10/11 in the light theme,
+// where they differ from a Linux host's GTK theme.
+export const WINDOWS_UI_COLORS: Readonly<Record<string, string>> =
+	LAUNCHER_CONSTANTS.windowsUiColors;
 // Prefs whose Firefox default differs between the Windows and Linux builds and
 // that a page or the user can observe, at the Windows default (see
 // WINDOWS_BEHAVIOUR_PREFS in the Python launcher for each one's reason).
@@ -192,6 +201,31 @@ function stockProfileDiskCapacityKb(): number | null {
 		}
 	}
 	return null;
+}
+
+/**
+ * The font.* prefs that make a build for `buildOs` resolve fonts the way stock
+ * Firefox does on `targetOs` (font-prefs.json, from all.js by
+ * browser/scripts/gen-font-prefs.py): the target's values where they differ,
+ * and an empty list for name-lists only the build's platform sets.
+ */
+function stockFontPrefs(
+	targetOs: TargetOS,
+	buildOs: TargetOS = "lin",
+): Record<string, any> {
+	const table: Record<string, Record<string, any>> = loadDataFile(
+		"font-prefs.json",
+	);
+	const target = table[OS_NAMES[targetOs]];
+	const build = table[OS_NAMES[buildOs]];
+	const prefs: Record<string, any> = {};
+	for (const [k, v] of Object.entries(target)) {
+		if (build[k] !== v) prefs[k] = v;
+	}
+	for (const [k, v] of Object.entries(build)) {
+		if (!(k in target) && typeof v === "string") prefs[k] = "";
+	}
+	return prefs;
 }
 
 /**
@@ -1744,9 +1778,44 @@ export async function launchOptions({
 
 	// Per-character font fallback, LINUX ONLY: with async fallback on, the
 	// first measurement of a character only one bundled family provides returns
-	// the primary family's .notdef. macOS must NOT get this.
-	if (targetOs === "lin") {
+	// the primary family's .notdef. macOS must NOT get this. The skip belongs to
+	// the Linux platform code, so another OS's identity on a Linux host needs it
+	// too.
+	const hostOs = utilsDeps.hostOsKey();
+	if (targetOs === "lin" || hostOs === "lin") {
 		setInto(firefox_user_prefs, "gfx.font_rendering.fallback.async", false);
+	}
+
+	// Per-language and generic fonts: the build only has its own platform's
+	// font.name-list defaults, so another OS's identity takes that OS's stock
+	// values (with fallback-fonts-claimed-os.patch for the per-script table).
+	// These and the settings below replace answers that come from the Linux
+	// build's platform code (gfxPlatformGtk, FreeType, the GTK theme). Only a
+	// Linux build has that code, so on a macOS or Windows host nothing is set.
+	// A macOS identity gets the font defaults only: the values below were
+	// measured against stock Windows alone (see utils.py).
+	const rendersAnotherOs =
+		hostOs === "lin" && (targetOs === "win" || targetOs === "mac");
+	if (rendersAnotherOs) {
+		for (const [pref, value] of Object.entries(stockFontPrefs(targetOs))) {
+			setInto(firefox_user_prefs, pref, value);
+		}
+	}
+
+	if (rendersAnotherOs && targetOs === "win") {
+		// Line boxes: DirectWrite's ascent, descent and em height rather than
+		// FreeType's pixel-rounded ones (font-metrics-windows.patch).
+		setInto(config, "fonts:metrics", "windows");
+
+		// canPlayType()/isTypeSupported() and decodingInfo() answer for Windows
+		// instead of the host's decoders (#558), as stock Firefox 158 on
+		// Windows 11 answers.
+		setInto(config, "media:spoof_codecs", true);
+
+		// Windows' system colours instead of the host theme's.
+		for (const [pref, value] of Object.entries(WINDOWS_UI_COLORS)) {
+			setInto(firefox_user_prefs, pref, value);
+		}
 	}
 
 	// Storage quota, from the host's own disk (see stockProfileDiskCapacityKb).

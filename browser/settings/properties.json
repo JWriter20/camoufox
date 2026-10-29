@@ -68,6 +68,8 @@
   { "property": "mediaDevices:speakerLabels", "type": "array" },
   { "property": "mediaDevices:speakerGroups", "type": "array" },
   { "property": "media:spoof_codecs", "type": "bool" },
+  { "property": "media:hwCodecs", "type": "array", "removed": "158.0, before any release" },
+  { "property": "fonts:metrics", "type": "str" },
   { "property": "input:windowsKeyboard", "type": "bool" },
   { "property": "allowMainWorld", "type": "bool" },
   { "property": "disableWorldIsolation", "type": "bool" },

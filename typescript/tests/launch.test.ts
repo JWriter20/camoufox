@@ -193,11 +193,28 @@ describe("test_launch_environment: prefs", () => {
 		it("linux disables it", async () => {
 			expect((await prefsFor(ua(LINUX_UA)))[PREF]).toBe(false);
 		});
+		// On its own host; on a Linux host the Linux platform code needs it off
+		// whatever the identity claims.
+		const onHost = async (
+			host: "mac" | "win" | "lin",
+			opts: Record<string, any>,
+		) => {
+			const before = deps.hostOsKey;
+			deps.hostOsKey = () => host;
+			try {
+				return await prefsFor(opts);
+			} finally {
+				deps.hostOsKey = before;
+			}
+		};
 		it("macOS keeps it", async () => {
-			expect(PREF in (await prefsFor(ua(MAC_UA)))).toBe(false);
+			expect(PREF in (await onHost("mac", ua(MAC_UA)))).toBe(false);
 		});
 		it("windows keeps it", async () => {
-			expect(PREF in (await prefsFor(ua(WIN_UA)))).toBe(false);
+			expect(PREF in (await onHost("win", ua(WIN_UA)))).toBe(false);
+		});
+		it("another OS's identity on a Linux host disables it", async () => {
+			expect((await onHost("lin", ua(WIN_UA)))[PREF]).toBe(false);
 		});
 		it("the caller's pref wins", async () => {
 			const prefs = await prefsFor({
@@ -205,6 +222,49 @@ describe("test_launch_environment: prefs", () => {
 				firefox_user_prefs: { [PREF]: true },
 			});
 			expect(prefs[PREF]).toBe(true);
+		});
+	});
+
+	describe("another OS's rendering, on a Linux host only (test_claimed_os_rendering.py)", () => {
+		// The C++ behind these exists for a Linux build only (gfxPlatformGtk,
+		// FreeType), so another host sets none of it.
+		const CONFIG_KEYS = ["fonts:metrics", "media:spoof_codecs"];
+		const PREFS = [
+			"font.name-list.emoji",
+			...Object.keys(utils.WINDOWS_UI_COLORS),
+		];
+		const launchOn = async (host: "mac" | "win" | "lin", u: string) => {
+			deps.hostOsKey = () => host;
+			let config: Record<string, any> = {};
+			deps.getEnvVars = (c: Record<string, any>) => {
+				config = { ...c };
+				return {};
+			};
+			const result = await launch({ i_know_what_im_doing: true, ...ua(u) });
+			return { config, prefs: result.firefoxUserPrefs };
+		};
+		for (const [host, u] of [
+			["mac", WIN_UA],
+			["mac", LINUX_UA],
+			["win", MAC_UA],
+			["win", LINUX_UA],
+		] as const) {
+			it(`sets nothing on a ${host} host for ${u.slice(13, 20)}`, async () => {
+				const { config, prefs } = await launchOn(host, u);
+				expect(CONFIG_KEYS.filter((k) => k in config)).toEqual([]);
+				expect(PREFS.filter((k) => k in prefs)).toEqual([]);
+			});
+		}
+		it("gives a macOS identity the font defaults only", async () => {
+			const { config, prefs } = await launchOn("lin", MAC_UA);
+			expect(prefs["font.name-list.serif.th"]).toBe("Thonburi");
+			expect(CONFIG_KEYS.filter((k) => k in config)).toEqual([]);
+			expect(PREFS.slice(1).filter((k) => k in prefs)).toEqual([]);
+		});
+		it("sets it for a Windows identity on a Linux host", async () => {
+			const { config, prefs } = await launchOn("lin", WIN_UA);
+			expect(CONFIG_KEYS.filter((k) => !(k in config))).toEqual([]);
+			expect(PREFS.filter((k) => !(k in prefs))).toEqual([]);
 		});
 	});
 

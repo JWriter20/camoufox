@@ -279,6 +279,13 @@ jobs:
       - name: Synthesized input goes through one chokepoint
         run: python3 browser/scripts/check-input-dispatch.py
 
+      - name: Copies of Firefox source match the release
+        # font-prefs.json and the fallback tables in
+        # fallback-fonts-claimed-os.patch are copied out of Firefox, so a bump
+        # changes the original and not the copy. Compared against the release
+        # in browser/upstream.sh; an unreachable source fails, it never passes.
+        run: python3 browser/scripts/check-firefox-copies.py
+
       - name: Windows CRT math is bit-exact
         # Checks that the tables are what gen-ucrt-math-tables.py generates,
         # builds browser/additions/js/src/builtin/UcrtMath*.c on their own and
