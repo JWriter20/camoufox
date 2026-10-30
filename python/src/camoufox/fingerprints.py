@@ -1388,12 +1388,17 @@ def _build_init_script(values: Dict[str, Any]) -> str:
                 f'  if (typeof w.{fn_name} === "function") w.{fn_name}({js_val});'
             )
 
-    # Screen dimensions (requires width + height together)
+    # Screen dimensions (requires width + height together). The available rect
+    # rides along when the identity has one; a build that keeps only the full
+    # size ignores the extra arguments.
     sw = values.get('screenWidth')
     sh = values.get('screenHeight')
     if sw and sh:
+        aw = values.get('screenAvailWidth')
+        ah = values.get('screenAvailHeight')
+        dims = f'{sw}, {sh}, {aw}, {ah}' if aw and ah else f'{sw}, {sh}'
         lines.append(
-            f'  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions({sw}, {sh});'
+            f'  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions({dims});'
         )
         scd = values.get('screenColorDepth')
         if scd:
@@ -1458,6 +1463,7 @@ def generate_context_fingerprint(
     locale: Optional[str] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
     webgl_config: Optional[Tuple[str, str]] = None,
+    webgl: bool = True,
 ) -> Dict[str, Any]:
     """
     Generate fingerprint values for a single per-context identity.
@@ -1477,6 +1483,8 @@ def generate_context_fingerprint(
             is built but before init_script is rendered (e.g. {'timezone': 'UTC'}).
         webgl_config: The (vendor, renderer) a drawn identity claims, instead of
             drawing one.
+        webgl: False claims no WebGL values, for a browser whose render node
+            reports its own (camoufox.render_node).
     """
     if preset is not None:
         # Use real fingerprint preset
@@ -1522,7 +1530,10 @@ def generate_context_fingerprint(
                 config['navigator.oscpu'] = oscpu
 
         # Draw the GPU and its WebGL data (fpgen.yml does not map these)
-        if not config.get('webGl:vendor') or not config.get('webGl:renderer'):
+        if not webgl:
+            for key in [k for k in config if k.startswith(('webGl:', 'webGl2:'))]:
+                del config[key]
+        elif not config.get('webGl:vendor') or not config.get('webGl:renderer'):
             # Not at the top: camoufox.webgl imports this module.
             from .webgl import sample_webgl_for_screen, webgl_for_gpu
 
@@ -1588,6 +1599,8 @@ def generate_context_fingerprint(
         'webglRenderer': webgl.get('unmaskedRenderer'),
         'screenWidth': screen.get('width'),
         'screenHeight': screen.get('height'),
+        'screenAvailWidth': config.get('screen.availWidth'),
+        'screenAvailHeight': config.get('screen.availHeight'),
         'screenColorDepth': screen.get('colorDepth'),
         'timezone': preset.get('timezone') if isinstance(preset.get('timezone'), str) else config.get('timezone'),
         'fontList': config.get('fonts'),

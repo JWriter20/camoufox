@@ -39,7 +39,7 @@ export const OS_NAME: "mac" | "win" | "lin" = OS_MAP[process.platform];
  * launchers share one install directory. Hardcoding ~/.cache would diverge on
  * hosts that set XDG_CACHE_HOME, and on macOS/Windows entirely.
  */
-function userCacheDir(appName: string): string {
+export function userCacheDir(appName: string): string {
 	if (OS_NAME === "win") {
 		const localAppData = process.env.LOCALAPPDATA;
 		const base =
@@ -54,6 +54,22 @@ function userCacheDir(appName: string): string {
 	// platformdirs: any non-blank XDG_CACHE_HOME is taken as-is.
 	const xdg = process.env.XDG_CACHE_HOME ?? "";
 	const base = xdg.trim() ? xdg : path.join(os.homedir(), ".cache");
+	return path.join(base, appName);
+}
+
+/**
+ * platformdirs' user_config_dir(appName), so both launchers read one stored
+ * Camoufox Pro key.
+ */
+export function userConfigDir(appName: string): string {
+	if (OS_NAME === "win") {
+		return path.dirname(userCacheDir(appName));
+	}
+	if (OS_NAME === "mac") {
+		return path.join(os.homedir(), "Library", "Application Support", appName);
+	}
+	const xdg = process.env.XDG_CONFIG_HOME ?? "";
+	const base = xdg.trim() ? xdg : path.join(os.homedir(), ".config");
 	return path.join(base, appName);
 }
 
@@ -102,6 +118,7 @@ export function loadDataFile<T = any>(file: string): T {
 /** Values both launchers use, kept in one file (python/src/camoufox/launcher-constants.json). */
 export interface LauncherConstants {
 	markerFonts: Record<"win" | "mac" | "lin", string[]>;
+	windowsLegacyFontFamilies: Record<string, string[]>;
 	windows11MarkerFonts: string[];
 	plausibleCoreCounts: number[];
 	appleSiliconCores: number[];

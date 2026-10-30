@@ -30,6 +30,7 @@ run 'cp -v ../../settings/camoufox.cfg .'
 run 'cp -v ../../settings/distribution/policies.json .'
 run 'cp -v ../../settings/defaults/pref/local-settings.js .'
 run 'cp -v ../../settings/properties.json .'
+run 'cp -v ../../settings/humanize-engines.json .'
 run 'touch moz.build'
 popd > /dev/null
 

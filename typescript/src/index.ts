@@ -11,11 +11,51 @@ export {
 	AsyncNewContext,
 } from "./async_api.js";
 export {
+	AccountSuspended,
+	AllowanceExhausted,
+	BuildNotAllowlisted,
+	CapabilityMismatch,
+	GpuUnavailable,
+	InvalidRequest,
+	LeaseLimitReached,
+	LeaseRefused,
+	NotSignedIn,
+	ProClockSkew,
+	ProError,
+	ProfileMismatch,
+	ProUnavailable,
+	RateLimited,
+	StatePoolSealed,
+	SubscriptionRequired,
+} from "./exceptions.js";
+export {
 	generateContextFingerprint,
 	getRandomPreset,
 	loadPresets,
 	Screen,
 } from "./fingerprints.js";
+export {
+	auto,
+	type CustomEngineFn,
+	channelStream,
+	cursory,
+	custom,
+	type Engine,
+	engine,
+	type HumanizeSetting,
+	notches,
+	raw,
+	type SeededRng,
+	seededRng,
+	splitmix64,
+} from "./humanize.js";
+export {
+	attach as attachCustom,
+	type CustomEngineContext,
+	type Play,
+	type PlayRecord,
+	type PlayStep,
+} from "./humanize-custom.js";
 export {
 	findInstalledVersion,
 	listInstalled,
@@ -23,6 +63,8 @@ export {
 } from "./multiversion.js";
 export { INSTALL_DIR, OS_NAME } from "./paths.js";
 export { CamoufoxFetcher, installedVerStr, RepoConfig } from "./pkgman.js";
+export type { LeaseRequest, ProSession } from "./pro.js";
+export { RenderNodeError, type RenderNodeOption } from "./render_node.js";
 export { type LaunchServerOptions, launchServer } from "./server.js";
 export {
 	Camoufox,

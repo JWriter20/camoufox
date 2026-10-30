@@ -4,6 +4,11 @@
     "mac": ["Helvetica Neue"],
     "lin": ["Noto Sans", "Noto Serif", "DejaVu Sans Mono", "Arimo", "Cousine", "Tinos", "Twemoji Mozilla"]
   },
+  "windowsLegacyFontFamilies": {
+    "Arial": ["Arial Black"],
+    "Calibri": ["Calibri Light"],
+    "Franklin Gothic": ["Franklin Gothic Medium"]
+  },
   "windows11MarkerFonts": [
     "Sans Serif Collection", "Segoe Fluent Icons", "Segoe UI Variable",
     "Segoe UI Variable Display", "Segoe UI Variable Small", "Segoe UI Variable Text"

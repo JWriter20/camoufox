@@ -55,12 +55,14 @@ import { INSTALL_DIR, rprint, style } from "./paths.js";
 import {
 	AvailableVersion,
 	CamoufoxFetcher,
+	camoufoxPath,
 	formatAssetDate,
 	type IncompatibleBuild,
 	incompatibleMessage,
 	installedPackageVersion,
 	installedVerStr,
 	interfaceSupported,
+	launchPath,
 	listAvailableVersions,
 	RepoConfig,
 	resolvedPlaywrightVersionRaw,
@@ -1171,6 +1173,97 @@ program
 			process.once("SIGTERM", stop);
 		});
 		await server.close();
+	});
+
+/** The browser a launch would run: the option, CAMOUFOX_EXECUTABLE_PATH, then the active install. */
+function activeExecutable(executablePath?: string): string {
+	return (
+		executablePath ||
+		(process.env.CAMOUFOX_EXECUTABLE_PATH ?? "").trim() ||
+		launchPath(camoufoxPath())
+	);
+}
+
+program
+	.command("login")
+	.description("Sign in to Camoufox Pro on this machine")
+	.action(async () => {
+		const { login, readBuild } = await import("./pro.js");
+		const { buildFile } = await import("./pkgman.js");
+		// The key is for the API the installed Pro build leases from.
+		let executable: string | null;
+		try {
+			executable = activeExecutable();
+		} catch {
+			executable = null;
+		}
+		const build = executable
+			? readBuild(buildFile(executable, "pro-build.json"))
+			: null;
+		const signedIn = await login(undefined, undefined, build);
+		rprint(
+			`Signed in to ${signedIn.account.name} as ${signedIn.user.github_login}. ` +
+				`The key is stored in ${signedIn.path}.`,
+			"green",
+		);
+	});
+
+program
+	.command("logout")
+	.description("Delete the Camoufox Pro key stored on this machine")
+	.action(async () => {
+		const { forgetKey } = await import("./pro.js");
+		const forgotten = forgetKey();
+		if (forgotten === null) {
+			rprint("No Camoufox Pro key is stored on this machine.", "yellow");
+			return;
+		}
+		rprint(
+			`Deleted ${forgotten} from this machine. It stays valid until you revoke it ` +
+				"in the Camoufox Pro dashboard.",
+			"green",
+		);
+	});
+
+program
+	.command("pro")
+	.description("Check Camoufox Pro on this machine")
+	.option(
+		"--activate",
+		"Mint a lease for the local Pro build, report what it grants, and release it.",
+	)
+	.option(
+		"--executable-path <path>",
+		"The Pro build's executable. Defaults to CAMOUFOX_EXECUTABLE_PATH, then the active install.",
+	)
+	.addOption(
+		new Option(
+			"--os <os>",
+			"The identity OS to lease for. Defaults to this machine's.",
+		).choices(["windows", "macos", "linux"]),
+	)
+	.action(async (opts, command: Command) => {
+		if (!opts.activate) {
+			command.help();
+		}
+		const pro = await import("./pro.js");
+		const { buildFile } = await import("./pkgman.js");
+		let executable: string;
+		try {
+			executable = activeExecutable(opts.executablePath);
+		} catch (error) {
+			console.log(`[FAIL] no Camoufox Pro build: ${(error as Error).message}`);
+			process.exitCode = 1;
+			return;
+		}
+		const osCode = Object.entries(pro.TARGET_OS).find(
+			([, name]) => name === (opts.os ?? pro.HOST_OS),
+		)?.[0] as string;
+		const verified = await pro.activate(
+			buildFile(executable, "pro-build.json"),
+			osCode,
+		);
+		if (!verified) process.exitCode = 1;
 	});
 
 // --------------------------------------------------------------------------
