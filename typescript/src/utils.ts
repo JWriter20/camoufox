@@ -24,6 +24,7 @@ import {
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
+	drawVoiceConfig,
 	dropAudioSeed,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
@@ -56,8 +57,11 @@ import {
 import {
 	type ProxyConfig,
 	ProxyHelper,
+	proxyAuthEnv,
+	proxyAuthInitScript,
 	publicIP,
 	publicIPv6,
+	socks5Auth,
 	validIPv4,
 	validIPv6,
 } from "./ip.js";
@@ -275,6 +279,7 @@ export const utilsDeps = {
 	raiseScreenToModernFloor,
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
+	drawVoiceConfig,
 	setMediaDevicesDefaults,
 	hostGpu,
 	selectGpu,
@@ -627,6 +632,9 @@ export function validateConfig(
 			);
 		}
 
+		if (key === "voices:speechd") {
+			validateSpeechdVoices(value);
+		}
 		if (key === "voices") {
 			validateVoices(value);
 		}
@@ -709,6 +717,29 @@ export function validateVoices(voices: any): void {
 			);
 		}
 	});
+}
+
+/**
+ * Validates a `voices:speechd` grid: {"languages": [[name, lang], ...],
+ * "variants": [name, ...]}, the shape MaskConfig::MSpeechdVoices() expands.
+ */
+export function validateSpeechdVoices(grid: any): void {
+	const { languages, variants } = grid ?? {};
+	const ok =
+		Array.isArray(languages) &&
+		languages.every(
+			(e: unknown) =>
+				Array.isArray(e) &&
+				e.length === 2 &&
+				e.every((x) => typeof x === "string"),
+		) &&
+		Array.isArray(variants) &&
+		variants.every((v: unknown) => typeof v === "string");
+	if (!ok) {
+		throw new InvalidPropertyType(
+			'Invalid voices:speechd: expected {"languages": [[name, lang], ...], "variants": [name, ...]}',
+		);
+	}
 }
 
 /**
@@ -1056,6 +1087,132 @@ export function attachStockMediaDefaults<T>(target: T): T {
 			original.call(target, withStockMediaDefaults(options ?? {}), ...rest);
 	}
 	return target;
+}
+
+const CAMOUFOX_SOCKS5_AUTH = Symbol.for("camoufox.socks5Auth");
+
+/**
+ * Let newContext()/newPage() of `target` take a SOCKS5 proxy with a username
+ * and password (python/src/camoufox/utils.py attach_socks5_auth).
+ *
+ * Playwright refuses one ("Browser does not support socks5 proxy
+ * authentication"). The context is made with the proxy alone, and an init
+ * script hands Juggler the credentials before newContext() resolves
+ * (socks5Auth, proxyAuthInitScript). Playwright's newPage() makes its context
+ * through newContext(), so it is covered too.
+ */
+export function attachSocks5Auth<T>(target: T): T {
+	const owner = target as any;
+	const original = owner?.newContext;
+	if (typeof original !== "function" || original[CAMOUFOX_SOCKS5_AUTH])
+		return target;
+	const newContext = async (options?: Record<string, any>, ...rest: any[]) => {
+		const [proxy, auth] = socks5Auth(options?.proxy);
+		const context = await original.call(
+			target,
+			options && auth ? { ...options, proxy } : options,
+			...rest,
+		);
+		if (auth) await context.addInitScript(proxyAuthInitScript(auth));
+		return context;
+	};
+	(newContext as any)[CAMOUFOX_SOCKS5_AUTH] = true;
+	owner.newContext = newContext;
+	return target;
+}
+
+const CAMOUFOX_DRIVER_DEFAULTS = Symbol.for("camoufox.driverDefaults");
+
+/**
+ * Whether a fill() target is a text field a person types into, and whether it
+ * has focus. Runs in the page, so it is a function (a string would be an
+ * expression to Playwright's JS client).
+ */
+const FILL_TARGET = (e: any) => {
+	const active = e.ownerDocument.activeElement;
+	const type =
+		e.localName === "input"
+			? (e.getAttribute("type") || "text").toLowerCase()
+			: null;
+	const typed =
+		e.localName === "textarea" ||
+		e.isContentEditable ||
+		["text", "search", "email", "url", "tel", "password", "number"].includes(
+			type,
+		);
+	return {
+		typed,
+		focused: active === e || (e.isContentEditable && e.contains(active)),
+	};
+};
+
+/**
+ * Driver calls that reach the page as a person's actions would
+ * (python/src/camoufox/driver_defaults.py). Applies to every page under
+ * `target` (a Browser or BrowserContext from a Camoufox launch); the defaults
+ * are filled in where the client sends the request, so page, frame, element
+ * and locator calls all get them, and other browsers in the process are left
+ * alone.
+ *
+ * Screenshots leave the page alone. Unless told caret: "initial", Playwright
+ * hides the caret by setting `caret-color: transparent !important` in the
+ * style attribute of every input, textarea and contenteditable element, from
+ * its utility world: the page sees each change, reads the transparent caret
+ * while the capture runs, and is left with `style` attributes it did not have.
+ * Firefox's capture never paints the caret, so screenshots default to
+ * caret: "initial"; an explicit caret is kept.
+ *
+ * fill() clicks the field first. Playwright focuses it by script, so the page
+ * gets focus with no pointer or mouse event before it, where a person clicks
+ * the field. A text field without focus is clicked (Playwright's click,
+ * through the OS-path dispatch) before the fill; a focused one is typed into
+ * as it is, and fields fill() sets without typing are left alone.
+ */
+export function attachDriverDefaults<T>(target: T): T {
+	const owner = target as any;
+	owner[CAMOUFOX_DRIVER_DEFAULTS] = true;
+	const connection = owner._connection;
+	if (!connection || connection[CAMOUFOX_DRIVER_DEFAULTS]) return target;
+	connection[CAMOUFOX_DRIVER_DEFAULTS] = true;
+	const send = connection.sendMessageToServer;
+	connection.sendMessageToServer = async function (
+		object: any,
+		method: string,
+		params: Record<string, any>,
+		...rest: any[]
+	) {
+		if (launchedByCamoufox(object)) {
+			if (method === "screenshot" && params?.caret === undefined)
+				params = { ...params, caret: "initial" };
+			if (method === "fill") await clickToFocus(object, params);
+		}
+		return send.call(this, object, method, params, ...rest);
+	};
+	return target;
+}
+
+async function clickToFocus(object: any, params: Record<string, any>) {
+	// A Frame fills by selector (page, frame and locator fill); an ElementHandle fills itself.
+	let field = object;
+	if (
+		typeof params?.selector === "string" &&
+		typeof object.locator === "function"
+	) {
+		field = object.locator(params.selector);
+		if (!params.strict) field = field.first();
+	}
+	if (typeof field.evaluate !== "function" || typeof field.click !== "function")
+		return;
+	const info = await field.evaluate(FILL_TARGET);
+	if (info?.typed && !info.focused)
+		await field.click({ timeout: params?.timeout, force: params?.force });
+}
+
+/** ElementHandle -> Frame -> Page -> BrowserContext -> Browser. */
+function launchedByCamoufox(object: any): boolean {
+	for (let owner = object; owner; owner = owner._parent)
+		if (owner[CAMOUFOX_DRIVER_DEFAULTS]) return true;
+	return false;
 }
 
 /**
@@ -1543,7 +1700,7 @@ export async function launchOptions({
 	const userSetScreenWindow = isDomainSet(config, "screen.", "window.");
 	const userSetMediaDevices = isDomainSet(config, "mediaDevices:");
 	const userSetFonts = Boolean(fonts?.length) || isDomainSet(config, "fonts");
-	const userSetVoices = isDomainSet(config, "voices");
+	const userSetVoices = isDomainSet(config, "voices", "voices:speechd");
 	const userSetDnt = "navigator.doNotTrack" in config;
 	const userSetGpc = "navigator.globalPrivacyControl" in config;
 	const userSetAcceptEncoding = "headers.Accept-Encoding" in config;
@@ -1940,7 +2097,10 @@ export async function launchOptions({
 	// `voices` unset exposes every native voice on the box (#731). Drawn after
 	// the locale is resolved: the Windows voice list is the display language's
 	// pack.
-	if (!userSetVoices || !("voices" in config)) {
+	if (
+		!userSetVoices ||
+		(!("voices" in config) && !("voices:speechd" in config))
+	) {
 		const osNameV = OS_NAMES[targetOs] ?? "macos";
 		let voiceLocale = config["navigator.language"];
 		if (pyTruthy(config["locale:language"])) {
@@ -1949,10 +2109,13 @@ export async function launchOptions({
 				.join("-");
 		}
 		try {
-			config.voices = utilsDeps.generateRandomVoiceSubset(
-				osNameV,
-				voiceLocale ?? null,
-				utilsDeps.identitySeed(config, salt),
+			Object.assign(
+				config,
+				utilsDeps.drawVoiceConfig(
+					osNameV,
+					voiceLocale ?? null,
+					utilsDeps.identitySeed(config, salt),
+				),
 			);
 		} catch (e) {
 			if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
@@ -2140,10 +2303,15 @@ export async function launchOptions({
 	warnIfExecutablePredatesPlaywright(executable_path);
 	utilsDeps.validateConfig(config, executable_path);
 
+	// A SOCKS5 proxy's credentials go to Juggler, not through Playwright, which
+	// refuses them (socks5Auth).
+	const [launchProxy, proxyAuth] = socks5Auth(proxy);
+
 	// Prepare environment variables to pass to Camoufox
 	const envVars: EnvVars = {
 		...utilsDeps.getEnvVars(config, targetOs, executable_path),
 		...getPrefEnvVars(firefox_user_prefs),
+		...(proxyAuth ? proxyAuthEnv(proxyAuth) : {}),
 		...env,
 	};
 
@@ -2158,8 +2326,8 @@ export async function launchOptions({
 	// Only include proxy if it's set (Playwright validates this)
 	// https://github.com/coryking/camoufox/commit/1336e8e509e8c12a896a09d9ee51f131f739f106
 	// Thanks @coryking
-	if (proxy != null) {
-		result.proxy = proxy;
+	if (launchProxy != null) {
+		result.proxy = launchProxy;
 	}
 
 	return result;

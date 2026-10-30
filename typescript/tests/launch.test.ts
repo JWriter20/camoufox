@@ -722,6 +722,80 @@ describe("test_launch_environment: stock media defaults", () => {
 	});
 });
 
+describe("test_launch_environment: screenshot caret", () => {
+	class Connection {
+		sent: Array<[string, Record<string, any>]> = [];
+		sendMessageToServer(_object: any, method: string, params: any) {
+			this.sent.push([method, params]);
+			return Promise.resolve();
+		}
+	}
+	const owner = (parent: any, connection: Connection) => ({
+		_parent: parent,
+		_connection: connection,
+	});
+
+	it("pages under a Camoufox launch keep the caret", async () => {
+		const connection = new Connection();
+		const browser = utils.attachDriverDefaults(owner(undefined, connection));
+		// handle, frame, page, context
+		const handle = owner(
+			owner(owner(owner(browser, connection), connection), connection),
+			connection,
+		);
+		await connection.sendMessageToServer(handle, "screenshot", {});
+		await connection.sendMessageToServer(handle, "screenshot", {
+			caret: "hide",
+		});
+		await connection.sendMessageToServer(handle, "click", {});
+		expect(connection.sent).toEqual([
+			["screenshot", { caret: "initial" }],
+			["screenshot", { caret: "hide" }],
+			["click", {}],
+		]);
+	});
+
+	it("fill clicks a text field without focus first, and only then", async () => {
+		const connection = new Connection();
+		const browser = utils.attachDriverDefaults(owner(undefined, connection));
+		const clicks: any[] = [];
+		const field = (focused: boolean) => ({
+			first() {
+				return this;
+			},
+			evaluate: async () => ({ typed: true, focused }),
+			click: async (options: any) => {
+				clicks.push(options);
+			},
+		});
+		for (const focused of [false, true]) {
+			const frame = {
+				...owner(browser, connection),
+				locator: () => field(focused),
+			};
+			await connection.sendMessageToServer(frame, "fill", {
+				selector: "#f",
+				value: "x",
+				timeout: 5,
+			});
+		}
+		expect(clicks).toEqual([{ timeout: 5, force: undefined }]);
+		expect(connection.sent.map(([method]) => method)).toEqual(["fill", "fill"]);
+	});
+
+	it("other browsers on the same connection are left alone", async () => {
+		const connection = new Connection();
+		utils.attachDriverDefaults(owner(undefined, connection));
+		utils.attachDriverDefaults(owner(undefined, connection));
+		await connection.sendMessageToServer(
+			owner(owner(undefined, connection), connection),
+			"screenshot",
+			{},
+		);
+		expect(connection.sent).toEqual([["screenshot", {}]]);
+	});
+});
+
 describe("test_viewport_default", () => {
 	const opts = (blob: string) => {
 		const chunks: string[] = [];
@@ -1011,8 +1085,22 @@ describe("test_voices (launch half)", () => {
 		).toBe(false);
 	});
 
+	it("keeps a caller's speech-dispatcher grid", async () => {
+		const grid = {
+			languages: [["English (America)", "en-US"]],
+			variants: ["Adam"],
+		};
+		const c = await cfg({
+			os: "linux",
+			fingerprint_preset: undefined,
+			config: { "voices:speechd": grid },
+		});
+		expect(c["voices:speechd"]).toEqual(grid);
+		expect(c.voices).toBeUndefined();
+	});
+
 	it("fails closed when voice generation fails", async () => {
-		deps.generateRandomVoiceSubset = () => {
+		deps.drawVoiceConfig = () => {
 			throw new OSError("voice-manifests.json unreadable");
 		};
 		const { config, warned } = await launchWarning(

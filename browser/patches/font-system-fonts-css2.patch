@@ -75,7 +75,7 @@ index 2ec366ca45..bcdc4301b9 100644
      "/dom/base",
      "/dom/html",
 diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
-index 056c0e2f7f..06dbf09955 100644
+index 1bd85b8c44..ffaf1d7fc8 100644
 --- a/layout/base/nsLayoutUtils.cpp
 +++ b/layout/base/nsLayoutUtils.cpp
 @@ -4,6 +4,8 @@
@@ -87,7 +87,7 @@ index 056c0e2f7f..06dbf09955 100644
  #include <algorithm>
  #include <limits>
  
-@@ -9820,8 +9822,91 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
+@@ -9826,8 +9828,91 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
    return aPresContext->GetMetricsFor(font, params);
  }
  
@@ -180,7 +180,7 @@ index 056c0e2f7f..06dbf09955 100644
  #if defined(XP_MACOSX) || defined(MOZ_WIDGET_UIKIT)
    aName = u"-apple-system"_ns;
    // Values taken from a macOS 10.15 system.
-@@ -9876,9 +9961,27 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
+@@ -9882,9 +9967,34 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
                                        const Document* aDocument) {
    gfxFontStyle fontStyle;
    nsAutoString systemFontName;
@@ -199,11 +199,18 @@ index 056c0e2f7f..06dbf09955 100644
 +  // handing the browser's own UI a family name from another OS ("Segoe UI" on
 +  // Linux, "-apple-system" on Windows) leaves the toolbar and menus falling
 +  // back to the default serif font -- see daijro/camoufox#695.
++  //
++  // So is an identity presenting the host's own OS: the host's system font is
++  // what stock reports on this machine, and a fixed stand-in ("Ubuntu 11" on a
++  // GNOME host whose font is Cantarell or Sans) differs from it.
 +  const bool content = aDocument && !aDocument->IsInChromeDocShell();
-+  const auto os = content ? mozilla::dom::NavigatorManager::GetSpoofedOS(
-+                                mozilla::dom::RoverfoxStorageManager::
-+                                    UserContextId(aDocument))
-+                          : MaskConfig::SpoofedOS::None;
++  auto os = content ? mozilla::dom::NavigatorManager::GetSpoofedOS(
++                          mozilla::dom::RoverfoxStorageManager::UserContextId(
++                              aDocument))
++                    : MaskConfig::SpoofedOS::None;
++  if (os == MaskConfig::HostOS()) {
++    os = MaskConfig::SpoofedOS::None;
++  }
 +  if (content && (os != MaskConfig::SpoofedOS::None ||
 +                  aDocument->ShouldResistFingerprinting(
 +                      RFPTarget::FontVisibilityRestrictGenerics))) {

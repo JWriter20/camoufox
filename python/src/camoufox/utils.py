@@ -14,6 +14,7 @@ import orjson
 from typing_extensions import TypeAlias
 from ua_parser import user_agent_parser
 
+from . import driver_defaults
 from .addons import DefaultAddons, add_default_addons, confirm_paths
 from .display import has_display, largest_display
 from .exceptions import (
@@ -22,10 +23,10 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
-from .ip import Proxy, public_ip, public_ipv6, valid_ipv4, valid_ipv6
+from .ip import Proxy, proxy_auth_env, proxy_auth_init_script, public_ip, public_ipv6, socks5_auth, valid_ipv4, valid_ipv6
 from .locales import handle_locales
 import warnings
 
@@ -404,6 +405,8 @@ def validate_config(config_map: Dict[str, str], path: Optional[Path] = None) -> 
 
         if key == 'voices':
             validate_voices(value)
+        if key == 'voices:speechd':
+            validate_speechd_voices(value)
 
 
 def validate_type(value: Any, expected_type: str) -> bool:
@@ -460,6 +463,27 @@ def validate_voices(voices: Any) -> None:
                 f"Invalid voices[{index}]: missing {', '.join(missing)}. "
                 f"Every voice needs {{{', '.join(VOICE_FIELDS)}}}."
             )
+
+
+def validate_speechd_voices(grid: Any) -> None:
+    """
+    Validates a `voices:speechd` grid: {"languages": [[name, lang], ...],
+    "variants": [name, ...]}, the shape MaskConfig::MSpeechdVoices() expands.
+    """
+    languages = grid.get('languages')
+    variants = grid.get('variants')
+    if not (
+        isinstance(languages, list)
+        and all(
+            isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) for x in entry)
+            for entry in languages
+        )
+        and isinstance(variants, list)
+        and all(isinstance(v, str) for v in variants)
+    ):
+        raise InvalidPropertyType(
+            'Invalid voices:speechd: expected {"languages": [[name, lang], ...], "variants": [name, ...]}'
+        )
 
 
 def get_target_os(config: Dict[str, Any]) -> Literal['mac', 'win', 'lin']:
@@ -785,12 +809,44 @@ def persistent_context_options(from_options: Dict[str, Any], no_viewport_default
     }
 
 
+def attach_socks5_auth(target: Any) -> Any:
+    """
+    Let new_context()/new_page() of `target` take a SOCKS5 proxy with a username
+    and password.
+
+    Playwright refuses one ("Browser does not support socks5 proxy
+    authentication"). The context is made with the proxy alone, and an init
+    script hands Juggler the credentials before new_context() returns
+    (socks5_auth, proxy_auth_init_script). The wrapper sits on Playwright's
+    own Browser object, under both the sync and the async API, where
+    new_page() makes its context too.
+    """
+    impl = getattr(target, '_impl_obj', target)
+    original = getattr(impl, 'new_context', None)
+    if original is None or getattr(original, '_camoufox_socks5_auth', False):
+        return target
+
+    @wraps(original)
+    async def new_context(*args: Any, **kwargs: Any) -> Any:
+        kwargs['proxy'], auth = socks5_auth(kwargs.get('proxy'))
+        context = await original(*args, **kwargs)
+        if auth:
+            await context.add_init_script(script=proxy_auth_init_script(auth))
+        return context
+
+    new_context._camoufox_socks5_auth = True  # type: ignore[attr-defined]
+    impl.new_context = new_context
+    return target
+
+
 def attach_context_defaults(browser: Any, no_viewport_default: bool) -> None:
     """Give every new_page()/new_context() of `browser` Camoufox's defaults."""
+    attach_socks5_auth(browser)
     if no_viewport_default:
         attach_no_viewport_default(browser)
     attach_stock_media_defaults(browser)
     attach_desktop_only_warning(browser)
+    driver_defaults.mark(browser)
 
 
 def plan_rendering(
@@ -1194,7 +1250,7 @@ def launch_options(
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
     _user_set_fonts = bool(fonts) or is_domain_set(config, 'fonts')
-    _user_set_voices = is_domain_set(config, 'voices')
+    _user_set_voices = is_domain_set(config, 'voices', 'voices:speechd')
     _user_set_dnt = 'navigator.doNotTrack' in config
     _user_set_gpc = 'navigator.globalPrivacyControl' in config
     _user_set_accept_encoding = 'headers.Accept-Encoding' in config
@@ -1624,7 +1680,7 @@ def launch_options(
     # Drawn after the locale is resolved (locale= or geoip): the Windows voice
     # list is the display language's pack, so an fr-FR identity has French
     # voices, not the en-US ones.
-    if not _user_set_voices or 'voices' not in config:
+    if not _user_set_voices or ('voices' not in config and 'voices:speechd' not in config):
         os_name_v = OS_NAMES.get(target_os, 'macos')
         voice_locale = config.get('navigator.language')
         if config.get('locale:language'):
@@ -1632,9 +1688,9 @@ def launch_options(
                 part for part in (config['locale:language'], config.get('locale:region')) if part
             )
         try:
-            config['voices'] = _generate_random_voice_subset(
+            config.update(draw_voice_config(
                 os_name_v, voice_locale, seed=identity_seed(config, _identity_salt)
-            )
+            ))
         except (OSError, ValueError, KeyError) as e:
             # An empty list still blocks the host's voices (see below), so a
             # generation failure degrades to "no voices" rather than "all of
@@ -1777,10 +1833,15 @@ def launch_options(
     warn_if_executable_predates_playwright(executable_path)
     validate_config(config, path=executable_path)
 
+    # A SOCKS5 proxy's credentials go to Juggler, not through Playwright, which
+    # refuses them (socks5_auth).
+    proxy, proxy_auth = socks5_auth(proxy)
+
     # Prepare environment variables to pass to Camoufox
     env_vars = {
         **get_env_vars(config, target_os, path=executable_path),
         **get_pref_env_vars(firefox_user_prefs),
+        **(proxy_auth_env(proxy_auth) if proxy_auth else {}),
         **env,
     }
     result = {

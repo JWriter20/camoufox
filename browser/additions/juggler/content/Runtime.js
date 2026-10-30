@@ -546,11 +546,22 @@ class Runtime {
     // Keyed by the Debugger.Object, which is unique per promise: Firefox 158
     // removed Debugger.Object.promiseID (bug 2044184).
     this._pendingPromises.set(obj, {resolve, reject, executionContext, exceptionDetails});
-    // Firefox 156 removed Debugger.onPromiseSettled (bug 2044167). As upstream
-    // Juggler does, attach reactions inside the debuggee that hit a `debugger;`
-    // statement when the promise settles, and sweep the pending promises from
-    // onDebuggerStatement. This also works in workers, which have no Xrays.
-    if (this._pendingPromises.size === 1)
+    // Firefox 156 removed Debugger.onPromiseSettled (bug 2044167).
+    //
+    // Camoufox: in a window, react to the promise from here, through the Xray
+    // unsafeDereference() hands back. A `p.then(...)` run in the page called
+    // whatever the page had put on Promise.prototype.then, and read
+    // p.constructor through any getter it had installed: a page could see the
+    // driver await its value. Through the Xray, neither runs.
+    if (executionContext._domWindow) {
+      const settled = () => this._onDebuggerStatement();
+      Promise.prototype.then.call(obj.unsafeDereference(), settled, settled);
+      return await promise;
+    }
+    // Workers have no Xrays. As upstream Juggler does, attach reactions inside
+    // the debuggee that hit a `debugger;` statement when the promise settles,
+    // and sweep the pending promises from onDebuggerStatement.
+    if (!this._debugger.onDebuggerStatement)
       this._debugger.onDebuggerStatement = this._onDebuggerStatement.bind(this);
     executionContext._debuggee.executeInGlobalWithBindings(
         'p.then(() => { debugger; }, () => { debugger; })', {p: obj}, {useInnerBindings: true});
@@ -841,10 +852,25 @@ class ExecutionContext {
     return this._createRemoteObject(debuggerObj);
   }
 
-  _instanceOf(debuggerObj, rawObj, className) {
-    if (this._domWindow)
-      return rawObj instanceof this._domWindow[className];
-    return this._debuggee.executeInGlobalWithBindings('o instanceof this[className]', {o: debuggerObj, className: this._debuggee.makeDebuggeeValue(className)}, {useInnerBindings: true}).return;
+  // Camoufox: a result's subtype comes from its internal class, which Debugger
+  // reads without running page code. Testing `instanceof page[ClassName]`
+  // resolved the page's lazy standard classes from chrome, in an order no page
+  // does: Object.getOwnPropertyNames(Uint8Array) then listed name before length,
+  // and the globals moved, after any evaluate.
+  static _SUBTYPES = new Map([
+    ['RegExp', 'regexp'], ['Date', 'date'], ['Map', 'map'], ['Set', 'set'],
+    ['WeakMap', 'weakmap'], ['WeakSet', 'weakset'], ['Error', 'error'], ['Promise', 'promise'],
+    ...['Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int32Array',
+        'Uint32Array', 'Float32Array', 'Float64Array'].map(name => [name, 'typedarray']),
+  ]);
+
+  _subtypeOfClass(debuggerObj) {
+    let target = debuggerObj;
+    try {
+      target = debuggerObj.unwrap() || debuggerObj;
+    } catch (e) {
+    }
+    return ExecutionContext._SUBTYPES.get(target.class);
   }
 
   _createRemoteObject(debuggerObj) {
@@ -862,29 +888,8 @@ class ExecutionContext {
         subtype = 'null';
       else if (typeof Node !== 'undefined' && Node.isInstance(rawObj))
         subtype = 'node';
-      else if (this._instanceOf(debuggerObj, rawObj, 'RegExp'))
-        subtype = 'regexp';
-      else if (this._instanceOf(debuggerObj, rawObj, 'Date'))
-        subtype = 'date';
-      else if (this._instanceOf(debuggerObj, rawObj, 'Map'))
-        subtype = 'map';
-      else if (this._instanceOf(debuggerObj, rawObj, 'Set'))
-        subtype = 'set';
-      else if (this._instanceOf(debuggerObj, rawObj, 'WeakMap'))
-        subtype = 'weakmap';
-      else if (this._instanceOf(debuggerObj, rawObj, 'WeakSet'))
-        subtype = 'weakset';
-      else if (this._instanceOf(debuggerObj, rawObj, 'Error'))
-        subtype = 'error';
-      else if (this._instanceOf(debuggerObj, rawObj, 'Promise'))
-        subtype = 'promise';
-      else if ((this._instanceOf(debuggerObj, rawObj, 'Int8Array')) || (this._instanceOf(debuggerObj, rawObj, 'Uint8Array')) ||
-               (this._instanceOf(debuggerObj, rawObj, 'Uint8ClampedArray')) || (this._instanceOf(debuggerObj, rawObj, 'Int16Array')) ||
-               (this._instanceOf(debuggerObj, rawObj, 'Uint16Array')) || (this._instanceOf(debuggerObj, rawObj, 'Int32Array')) ||
-               (this._instanceOf(debuggerObj, rawObj, 'Uint32Array')) || (this._instanceOf(debuggerObj, rawObj, 'Float32Array')) ||
-               (this._instanceOf(debuggerObj, rawObj, 'Float64Array'))) {
-        subtype = 'typedarray';
-      }
+      else
+        subtype = this._subtypeOfClass(debuggerObj);
       return {objectId, type, subtype};
     }
     if (typeof debuggerObj === 'symbol') {

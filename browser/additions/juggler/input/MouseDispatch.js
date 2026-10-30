@@ -166,11 +166,41 @@ export class MouseDispatch {
     const {x: absX, y: absY} = this.toAbsolute(x, y);
     // This dispatches to the renderer synchronously.
     const jugglerEventId = this._sendAbsolute(eventType, absX, absY);
+    // A move reaches the page at the next refresh tick; the renderer acks it
+    // on arrival as "mousequeued" (BrowserChild::RecvRealMouseMoveEvent).
+    const arrival = eventType === 'mousemove' ? 'mousequeued' : eventType;
     const ack = await watcher.ensureEventWithin(
-      eventType, deadlineMs, eventObject => eventObject.jugglerEventId === jugglerEventId);
+      arrival, deadlineMs, eventObject => eventObject.jugglerEventId === jugglerEventId);
     if (!ack)
       warnUndelivered(eventType, x, y, this._box, deadlineMs);
     return ack;
+  }
+
+  /**
+   * Dispatch a move and wait until the renderer has queued it. The page gets
+   * it at the next refresh tick, coalesced with the moves queued since the
+   * last one; the returned handle's delivered() waits for that, under the
+   * same deadline (deliveryWatcher must listen for 'mousemove' from before
+   * the dispatch). Returns null when the move was not queued in time.
+   */
+  async sendQueuedMove(watcher, deliveryWatcher, x, y) {
+    const queued = await this.sendAcked(watcher, 'mousemove', x, y);
+    if (!queued) {
+      deliveryWatcher.dispose();
+      return null;
+    }
+    return {
+      // A newer move disposes this watcher: that move is then the one to wait for.
+      delivered: async () => {
+        const ack = await deliveryWatcher.ensureEventWithin(
+          'mousemove', kAckDeadlineMs, eventObject => eventObject.jugglerEventId === queued.jugglerEventId)
+          .catch(() => true);
+        if (!ack)
+          dump(`[juggler] WARN a queued mousemove at (${x}, ${y}) had not reached the page after ${kAckDeadlineMs}ms; going on\n`);
+        return ack;
+      },
+      dispose: () => deliveryWatcher.dispose(),
+    };
   }
 
   /**
@@ -257,25 +287,39 @@ export class MouseDispatch {
     this._sendAbsolute('mousemove', 0, 0);
   }
 
-  /** Wheel events take the same conversion; they are not acked. */
-  sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY, nativeNotches = false}) {
+  /**
+   * The pointer leaves the window, or comes back to it at a relative point, as
+   * when a GTK drag session takes the pointer and gives it back. A widget exit
+   * and enter, sent to the chrome window so the parent's hover state leaves as
+   * well as the page's. Unacked: neither is a mouse event the renderer acks.
+   */
+  leaveWindow(x, y) {
+    const {x: absX, y: absY} = this.toAbsolute(x, y);
+    this._sendAbsolute('mousecancel', absX, absY);
+  }
+
+  enterWindow(x, y) {
+    const {x: absX, y: absY} = this.toAbsolute(x, y);
+    this._sendAbsolute('mouseover', absX, absY);
+  }
+
+  /**
+   * One wheel notch of `linesX`/`linesY` lines, as a mouse wheel's native tick.
+   * Same conversion as mouse events; not acked.
+   */
+  sendWheel(x, y, linesX, linesY) {
     const {x: absX, y: absY} = this.toAbsolute(x, y);
     const utils = this._win.windowUtils;
-    // The widget reads pixel deltas as device pixels. Scale by the chrome
-    // window's real ratio, not this._win.devicePixelRatio (MaskConfig spoofs it).
-    const scale = deltaMode === 0 /* WheelEvent.DOM_DELTA_PIXEL */
-        ? utils.toTopLevelWidgetRect(0, 0, 1, 1).width
-        : 1;
     utils.sendWheelEvent(
       absX,
       absY,
-      deltaX * scale,
-      deltaY * scale,
-      deltaZ * scale,
-      deltaMode,
+      linesX,
+      linesY,
+      0,
+      1 /* WheelEvent.DOM_DELTA_LINE */,
       this._args.modifiers,
-      lineOrPageDeltaX,
-      lineOrPageDeltaY,
-      nativeNotches ? utils.WHEEL_EVENT_NATIVE_NOTCHES : 0);
+      linesX,
+      linesY,
+      utils.WHEEL_EVENT_NATIVE_NOTCHES);
   }
 }
