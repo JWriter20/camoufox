@@ -159,7 +159,10 @@ notches: 100 px is one notch, rounded to the nearest, at least one on an axis
 that moves. The notches of one call are 18 to 60 ms apart, drawn per notch;
 no recording of a person's wheel backs that range yet. The page therefore scrolls a
 notch's distance (120 px here), not the exact pixels asked for, and
-`mouse.wheel(0, 0)` sends nothing. Humanize does not change this.
+`mouse.wheel(0, 0)` sends nothing. Humanize does not change this: `raw()`
+and a `custom()` scroll engine's wheel steps are rounded the same way, each
+step at least one notch, so a custom engine should plan in notches (100 px)
+to land where it means to.
 `browser/tests/playwright/patches/driven-wheel-notches.py` compares the result
 with stock's.
 

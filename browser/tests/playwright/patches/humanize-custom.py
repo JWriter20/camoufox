@@ -197,7 +197,12 @@ async def main() -> int:
         failures.append("an event was not trusted")
     if state[0] != "Hi there" or not state[2]:
         failures.append(f"expected the text typed and #far in view, got {state}")
-    if [entry[0] for entry in log] != ["mouse", "scroll", "scroll", "mouse", "keyboard", "keyboard", "scroll", "mouse"]:
+    # Every wheel call turns in whole notches, the custom engine's steps too, so
+    # where the two wheel turns leave the page decides whether #name needs a
+    # scroll into view before the fill; #far always does.
+    into_view = [entry for entry in log if entry[:2] == ["scroll", "locator"]]
+    if [entry[0] for entry in log if entry not in into_view] != [
+            "mouse", "scroll", "scroll", "mouse", "keyboard", "keyboard", "mouse"] or not into_view:
         failures.append(f"unexpected engine calls {log}")
     if [entry[1] for entry in log if entry[0] == "keyboard"] != ["fill", "press"]:
         failures.append("fill and press did not reach the keyboard function with their kinds")

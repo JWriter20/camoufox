@@ -141,7 +141,9 @@ export function notches(): Engine {
 /** A client-side engine: `fn` plans the channel's input in this process and
  *  plays it through Playwright. `original` runs Playwright's own behaviour for
  *  the call, `rng` is the channel's seeded stream (the browser's own
- *  derivation), and `play(steps)` dispatches steps on a schedule. */
+ *  derivation), and `play(steps)` dispatches steps on a schedule. Every
+ *  wheel step turns in whole notches, as a physical wheel does: 100 px asked
+ *  is one notch, rounded, at least one per step (docs/input-dispatch.md). */
 export function custom(fn: CustomEngineFn): Engine {
 	if (typeof fn !== "function") {
 		throw new ValueError(

@@ -100,6 +100,9 @@ def custom(fn: Callable[..., Any]) -> Engine:
     `original` runs Playwright's own behaviour for the call, `rng` is the
     channel's seeded stream (the browser's own derivation), and `play(steps)`
     dispatches steps on a schedule. With the async API `fn` may be async.
+
+    Every wheel step turns in whole notches, as a physical wheel does: 100 px
+    asked is one notch, rounded, at least one per step (docs/input-dispatch.md).
     """
     if not callable(fn):
         raise ValueError(f'custom() takes the function that plans the input, got {fn!r}')
