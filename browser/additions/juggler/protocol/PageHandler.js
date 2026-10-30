@@ -784,7 +784,8 @@ export class PageHandler {
         }, {x, y});
         if (planned) {
           await dispatch.sendTrajectoryAcked(watcher, 'mousemove', planned.plan,
-              (plan, dispatchStep) => this._playHumanized(planned, 'Page.dispatchMouseEvent', dispatchStep));
+              (plan, dispatchStep) => this._playHumanized(planned, 'Page.dispatchMouseEvent', dispatchStep),
+              (destX, destY) => this._sendMove(dispatch, watcher, destX, destY));
         } else if (eventType === 'mousemove') {
           promises.push(this._sendMove(dispatch, watcher, x, y));
         } else {

@@ -17,9 +17,12 @@ What PASS means:
     * mouse raw() with scroll notches(): a long move is one mousemove, and a
       wheel turn of 300px arrives as 3 line-mode notches;
     * mouse cursory() with scroll raw(): a long move is a trajectory, and a
-      wheel turn arrives as the one pixel delta Playwright asked for;
+      wheel turn still arrives in line-mode notches: no wheel produces a pixel
+      delta (docs/input-dispatch.md), raw() only drops the engine's pacing;
     * two launches with the same seed plan the same moves and wheel turns, and
-      the page receives the same mousemove coordinates; a different seed plans
+      every mousemove the page receives is a planned point, each move ending on
+      its target (Firefox coalesces moves within a frame, as with a real mouse,
+      so which points arrive depends on frame timing); a different seed plans
       different moves.
 """
 
@@ -50,7 +53,8 @@ async def session(humanize, trace=None):
     if EXECUTABLE_PATH:
         kwargs["executable_path"] = EXECUTABLE_PATH
     if trace:
-        kwargs["env"] = {"CAMOU_HUMANIZE_TRACE": trace}
+        # The caller's environment too: an env= replaces it whole (a Pro build's lease, DISPLAY).
+        kwargs["env"] = {**os.environ, "CAMOU_HUMANIZE_TRACE": trace}
     async with AsyncCamoufox(**kwargs) as browser:
         page = await browser.new_page(viewport={"width": 1000, "height": 700})
         await page.set_content(BODY)
@@ -86,8 +90,8 @@ async def main() -> int:
     moves, wheels = await session({"mouse": cursory(), "scroll": raw()})
     if any(len(m) < 5 for m in moves):
         failures.append(f"mouse cursory(): expected a trajectory per move, got {[len(m) for m in moves]}")
-    if wheels != [[0, 300]] * len(TARGETS):
-        failures.append(f"scroll raw(): expected one pixel wheel event per turn, got {wheels}")
+    if len(wheels) != 3 * len(TARGETS) or any(w[0] != 1 for w in wheels):
+        failures.append(f"scroll raw(): expected 3 line-mode notches per turn, as a wheel, got {wheels}")
 
     with tempfile.TemporaryDirectory() as tmp:
         runs = {}
@@ -106,8 +110,14 @@ async def main() -> int:
             failures.append(f"trace: expected {2 * len(TARGETS) + 1} mouse and scroll plans, got {len(plans_a)} {channels}")
         if plans_a != plans_b:
             failures.append("same seed: the planned input differs between launches")
-        if moves_a != moves_b:
-            failures.append("same seed: the page saw different mousemove coordinates")
+        for name in ("a", "b"):
+            plans, moves, _ = runs[name]
+            points = {(round(s["x"]), round(s["y"])) for c, _, _, p in plans if c == "mouse" for s in p}
+            stray = [m for target in moves for m in target if tuple(m) not in points]
+            if stray:
+                failures.append(f"seed 1234 ({name}): the page saw unplanned mousemoves {stray[:5]}")
+            if [tuple(m[-1]) if m else None for m in moves] != TARGETS:
+                failures.append(f"seed 1234 ({name}): moves did not end on their targets")
         if [p for p in plans_a if p[0] == "mouse"] == [p for p in plans_c if p[0] == "mouse"]:
             failures.append("a different seed planned the same moves")
 

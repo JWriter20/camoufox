@@ -231,8 +231,12 @@ export class MouseDispatch {
    *
    * @param {{steps: Array<{x: number, y: number, t: number}>}} plan
    * @param {(plan: object, dispatchStep: Function) => Promise} play
+   * @param {(x: number, y: number) => Promise} [sendDestination] how the last
+   *     step goes out; PageHandler's _sendMove, so the next command waits until
+   *     the page has it, as after an unplanned move.
    */
-  async sendTrajectoryAcked(watcher, eventType, plan, play) {
+  async sendTrajectoryAcked(watcher, eventType, plan, play,
+                            sendDestination = (x, y) => this.sendAcked(watcher, eventType, x, y)) {
     // A point on the pixel the cursor is already on generates no eMouseMove, so
     // it is never acked and the wait below would burn the whole deadline. The
     // generator already drops those, but it cannot see which points this method
@@ -244,7 +248,7 @@ export class MouseDispatch {
     const destination = plan.steps.length - 1;
     await play(plan, async ({x, y}, i) => {
       if (i === destination) {
-        await this.sendAcked(watcher, eventType, x, y);
+        await sendDestination(x, y);
         return true;
       }
       if (!this.isInViewport(x, y))
