@@ -179,3 +179,17 @@ class TestLookAndFeel:
     def test_caller_values_win(self, launch):
         _, prefs = launch(WIN_UA, firefox_user_prefs={"ui.highlight": "#ff0000"})
         assert prefs["ui.highlight"] == "#ff0000"
+
+
+class TestLegacyFontFamilies:
+    def test_canonical_families_expose_their_legacy_aliases(self, launch):
+        config, _ = launch(WIN_UA, fonts=["Arial", "Calibri", "Franklin Gothic"])
+        assert config["fonts"] == [
+            "Arial", "Calibri", "Franklin Gothic", "Arial Black", "Calibri Light", "Franklin Gothic Medium",
+        ]
+
+    def test_no_alias_without_its_canonical_family(self, launch):
+        config, _ = launch(WIN_UA, fonts=["Times New Roman"])
+        assert "Arial Black" not in config["fonts"]
+        assert "Calibri Light" not in config["fonts"]
+        assert "Franklin Gothic Medium" not in config["fonts"]

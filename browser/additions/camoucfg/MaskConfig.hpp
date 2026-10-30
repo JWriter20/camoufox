@@ -395,6 +395,20 @@ inline bool GetBool(std::string_view key) {
 // platform is configured; Other, one no identity uses.
 enum class SpoofedOS { None, Windows, MacOS, Linux, Other };
 
+// The OS this build runs on. An identity presenting it needs no OS spoof: the
+// host's own answer is the one stock gives on this machine.
+constexpr SpoofedOS HostOS() {
+#if defined(XP_WIN)
+  return SpoofedOS::Windows;
+#elif defined(XP_MACOSX)
+  return SpoofedOS::MacOS;
+#elif defined(MOZ_WIDGET_GTK)
+  return SpoofedOS::Linux;
+#else
+  return SpoofedOS::Other;
+#endif
+}
+
 // Narrow or UTF-16: a context's navigator.platform is stored as UTF-16, and
 // the getters that ask for its OS are page-callable, so it is matched without
 // a conversion.
@@ -539,6 +553,55 @@ inline std::optional<std::array<int32_t, 3UL>> MShaderData(
                                    data["precision"].get<int32_t>()};
   }
   return std::nullopt;
+}
+
+// A Linux voice list is speech-dispatcher's: every espeak-ng language, alone
+// and then with each variant ("Afrikaans", "Afrikaans+Adam", ...), in the
+// order spd_list_synthesis_voices() returns them. It travels as that grid,
+// {"languages": [[name, lang], ...], "variants": [...]}, because the expanded
+// list is ~15000 voices, more than the environment can carry. Returns
+// (name, lang) pairs in speech-dispatcher's order, or nullopt for a malformed
+// grid.
+inline std::optional<std::vector<std::pair<std::string, std::string>>>
+ExpandSpeechdGrid(const nlohmann::json& grid) {
+  if (!grid.is_object() || !grid.contains("languages") ||
+      !grid["languages"].is_array() || !grid.contains("variants") ||
+      !grid["variants"].is_array()) {
+    return std::nullopt;
+  }
+  const auto& languages = grid["languages"];
+  const auto& variants = grid["variants"];
+  std::vector<std::pair<std::string, std::string>> voices;
+  voices.reserve(languages.size() * (variants.size() + 1));
+  for (const auto& language : languages) {
+    if (!language.is_array() || language.size() != 2 ||
+        !language[0].is_string() || !language[1].is_string()) {
+      return std::nullopt;
+    }
+    const auto name = language[0].get<std::string>();
+    const auto lang = language[1].get<std::string>();
+    voices.emplace_back(name, lang);
+    for (const auto& variant : variants) {
+      if (!variant.is_string()) {
+        return std::nullopt;
+      }
+      voices.emplace_back(name + "+" + variant.get<std::string>(), lang);
+    }
+  }
+  return voices;
+}
+
+inline std::optional<std::vector<std::pair<std::string, std::string>>>
+MSpeechdVoices() {
+  const auto* grid = Find("voices:speechd");
+  return grid ? ExpandSpeechdGrid(*grid) : std::nullopt;
+}
+
+// True while Camoufox owns the voice list, whatever its form: an empty or
+// unusable list must mean "no voices", never "all of the host's".
+inline bool SpoofsVoices() {
+  return GetBool("voices:blockIfNotDefined") || Find("voices") ||
+         Find("voices:speechd");
 }
 
 inline std::optional<

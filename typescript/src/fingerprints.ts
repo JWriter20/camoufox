@@ -335,17 +335,22 @@ function loadFontBases(): Record<string, FontBase[]> {
 	return fontBasesCache;
 }
 
-/** Draw one OS-version base by its real-world weight. */
-function pickBase(osKey: string, r: random.Random): string[] {
+/**
+ * Draw the OS version a machine runs (a font-bases.json entry) by its
+ * real-world weight (`_pick_release`). It is the identity's first draw, so the
+ * font list and the voice list, drawn from the same seed, land on the same
+ * version.
+ */
+function pickRelease(osKey: string, r: random.Random): any | null {
 	const bases = loadFontBases()[osKey] ?? [];
-	if (!bases.length) return [];
+	if (!bases.length) return null;
 	const roll = r.random();
 	let cumulative = 0.0;
 	for (const base of bases) {
 		cumulative += base.weight ?? 0.0;
-		if (roll < cumulative) return [...base.fonts];
+		if (roll < cumulative) return base;
 	}
-	return [...bases[bases.length - 1].fonts];
+	return bases[bases.length - 1];
 }
 
 function localeMatches(
@@ -457,7 +462,8 @@ export function generateRandomFontSubset(
 		return result;
 	}
 
-	let base = pickBase(osKey, r);
+	const release = pickRelease(osKey, r);
+	let base: string[] = release ? [...release.fonts] : [];
 	if (!base.length) base = fullList.filter((f) => essential.has(f));
 	const result = [...base];
 	const chosen = new Set(result);
@@ -652,11 +658,55 @@ function codePointGreater(a: string, b: string): boolean {
 	return comparePyStr(a, b) > 0;
 }
 
+/** A Linux identity's speech-dispatcher voices (`voices:speechd`). */
+export interface SpeechdGrid {
+	languages: Array<[string, string]>;
+	variants: string[];
+}
+
+/**
+ * The speech-dispatcher voice grid of the Ubuntu release the identity runs
+ * (`_speechd_grid`).
+ */
+function speechdGrid(seed?: number | bigint | null): SpeechdGrid {
+	const release = pickRelease("lin", rng(seed));
+	const releases = loadVoiceManifests().lin.releases;
+	return release
+		? releases[release.id].speechd
+		: (Object.values(releases)[0] as any).speechd;
+}
+
+/**
+ * (name, lang) per voice in speech-dispatcher's order (`_speechd_voices`):
+ * each language alone, then with every variant.
+ */
+export function speechdVoices(grid: SpeechdGrid): Array<[string, string]> {
+	return grid.languages.flatMap(([name, lang]) => [
+		[name, lang] as [string, string],
+		...grid.variants.map((v) => [`${name}+${v}`, lang] as [string, string]),
+	]);
+}
+
+/**
+ * The identity's voices as the config keys the browser reads
+ * (`draw_voice_config`): `voices` on macOS and Windows, `voices:speechd` on
+ * Linux, whose ~15000 voices only fit in the environment as their grid.
+ */
+export function drawVoiceConfig(
+	targetOs: string,
+	locale?: string | null,
+	seed?: number | bigint | null,
+): Record<string, any> {
+	if (osKeyOf(targetOs) === "lin")
+		return { "voices:speechd": speechdGrid(seed) };
+	return { voices: generateRandomVoiceSubset(targetOs, locale, seed) };
+}
+
 /**
  * The speech voice list for the given OS as MaskConfig voice objects
  * (`_generate_random_voice_subset`), following the measured per-OS model in
  * voice-manifests.json. Seeded by the identity so it always reports the same
- * list. No voice is marked default: stock Firefox marks none.
+ * list. macOS marks its system voice default; Windows and Linux mark none.
  */
 export function generateRandomVoiceSubset(
 	targetOs: string,
@@ -665,6 +715,17 @@ export function generateRandomVoiceSubset(
 ): VoiceObject[] {
 	const r = rng(seed);
 	const osKey = osKeyOf(targetOs);
+	if (osKey === "lin") {
+		return speechdVoices(speechdGrid(seed)).map(([name, lang]) => ({
+			name,
+			lang,
+			voiceUri: voiceUri("lin", name, lang),
+			isDefault: false,
+			// SpeechDispatcherService registers voices as local only when one
+			// is named "default"; espeak-ng has none.
+			isLocalService: false,
+		}));
+	}
 	const manifests = loadVoiceManifests();
 	const manifest = pyTruthy(manifests[osKey])
 		? manifests[osKey]
@@ -758,13 +819,17 @@ export function generateRandomVoiceSubset(
 	}
 
 	const selected = [...out, ...legacy].map(splitVoiceEntry);
-	return selected.map(([name, lang, vtype]) => ({
+	const voices = selected.map(([name, lang, vtype]) => ({
 		name,
 		lang,
 		voiceUri: voiceUri(osKey, name, lang),
 		isDefault: false,
 		isLocalService: vtype === "local",
 	}));
+	const systemVoice = manifest.systemVoice?.default;
+	const def = voices.find((v) => v.name === systemVoice);
+	if (def) def.isDefault = true;
+	return voices;
 }
 
 /**
@@ -1429,10 +1494,9 @@ export function fromPreset(
 		}
 	}
 	try {
-		config.voices = generateRandomVoiceSubset(
-			targetOs,
-			null,
-			identitySeed(config, s),
+		Object.assign(
+			config,
+			drawVoiceConfig(targetOs, null, identitySeed(config, s)),
 		);
 	} catch (e) {
 		if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
@@ -1468,10 +1532,12 @@ export interface InitValues {
 	webglRenderer?: string;
 	screenWidth?: number;
 	screenHeight?: number;
+	screenAvailWidth?: number;
+	screenAvailHeight?: number;
 	screenColorDepth?: number;
 	timezone?: string;
 	fontList?: string[];
-	speechVoices?: Array<string | VoiceObject>;
+	speechVoices?: Array<string | VoiceObject> | { speechd: SpeechdGrid };
 	webrtcIP?: string;
 }
 
@@ -1501,12 +1567,20 @@ export function buildInitScript(values: InitValues): string {
 		}
 	}
 
-	// Screen dimensions (requires width + height together)
+	// Screen dimensions (requires width + height together). The available rect
+	// rides along when the identity has one; a build that keeps only the full
+	// size ignores the extra arguments.
 	const sw = values.screenWidth;
 	const sh = values.screenHeight;
 	if (pyTruthy(sw) && pyTruthy(sh)) {
+		const aw = values.screenAvailWidth;
+		const ah = values.screenAvailHeight;
+		const dims =
+			pyTruthy(aw) && pyTruthy(ah)
+				? `${sw}, ${sh}, ${aw}, ${ah}`
+				: `${sw}, ${sh}`;
 		lines.push(
-			`  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions(${sw}, ${sh});`,
+			`  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions(${dims});`,
 		);
 		const scd = values.screenColorDepth;
 		if (pyTruthy(scd)) {
@@ -1546,9 +1620,14 @@ export function buildInitScript(values: InitValues): string {
 		);
 	}
 
-	// Speech voices (comma-separated names)
+	// Speech voices: comma-separated names, or a Linux identity's
+	// speech-dispatcher grid as JSON
 	const voices = values.speechVoices;
-	if (voices?.length) {
+	if (voices && !Array.isArray(voices)) {
+		lines.push(
+			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${pyJsonDumps(asciiJson(voices))});`,
+		);
+	} else if (voices?.length) {
 		const names = voices.map((v) =>
 			v !== null && typeof v === "object" ? v.name : v,
 		);
@@ -1562,6 +1641,14 @@ export function buildInitScript(values: InitValues): string {
 }
 
 /** json.dumps() with its defaults (ASCII-escaped, ", " / ": " separators) for scalars. */
+/** Python's json.dumps(value, separators=(",", ":")) for plain JSON data. */
+function asciiJson(value: unknown): string {
+	return JSON.stringify(value).replace(
+		/[\u0080-\uffff]/g,
+		(c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+	);
+}
+
 function pyJsonDumps(value: unknown): string {
 	if (typeof value === "string") {
 		return JSON.stringify(value).replace(
@@ -1606,6 +1693,8 @@ export function targetOsFromPlatform(plat: string): SupportedOS {
  *   and before the init script is rendered.
  * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
  *   of drawing one.
+ * @param webgl false claims no WebGL values, for a browser whose render node
+ *   reports its own (render_node).
  */
 export function generateContextFingerprint({
 	preset,
@@ -1616,6 +1705,7 @@ export function generateContextFingerprint({
 	locale,
 	config_overrides,
 	webgl_config,
+	webgl: claimWebgl = true,
 }: {
 	preset?: Preset | null;
 	os?: string | null;
@@ -1625,6 +1715,7 @@ export function generateContextFingerprint({
 	locale?: string | null;
 	config_overrides?: Config | null;
 	webgl_config?: [string, string] | null;
+	webgl?: boolean;
 } = {}): ContextFingerprint {
 	let config: Config;
 	let nav: Record<string, any>;
@@ -1672,12 +1763,11 @@ export function generateContextFingerprint({
 				);
 			}
 		}
-		if (!("voices" in config)) {
+		if (!("voices" in config) && !("voices:speechd" in config)) {
 			try {
-				config.voices = generateRandomVoiceSubset(
-					osName,
-					null,
-					identitySeed(config, salt),
+				Object.assign(
+					config,
+					drawVoiceConfig(osName, null, identitySeed(config, salt)),
 				);
 			} catch (e) {
 				if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
@@ -1696,7 +1786,12 @@ export function generateContextFingerprint({
 			if (oscpu) config["navigator.oscpu"] = oscpu;
 		}
 
-		if (
+		if (!claimWebgl) {
+			for (const key of Object.keys(config)) {
+				if (key.startsWith("webGl:") || key.startsWith("webGl2:"))
+					delete config[key];
+			}
+		} else if (
 			!pyTruthy(config["webGl:vendor"]) ||
 			!pyTruthy(config["webGl:renderer"])
 		) {
@@ -1775,13 +1870,18 @@ export function generateContextFingerprint({
 		webglRenderer: webgl.unmaskedRenderer,
 		screenWidth: screen.width,
 		screenHeight: screen.height,
+		screenAvailWidth: config["screen.availWidth"],
+		screenAvailHeight: config["screen.availHeight"],
 		screenColorDepth: screen.colorDepth,
 		timezone:
 			typeof resolvedPreset.timezone === "string"
 				? resolvedPreset.timezone
 				: config.timezone,
 		fontList: config.fonts,
-		speechVoices: config.voices,
+		speechVoices:
+			"voices:speechd" in config
+				? { speechd: config["voices:speechd"] }
+				: config.voices,
 		webrtcIP: webrtc_ip || "",
 	};
 	const initScript = buildInitScript(initValues);
