@@ -1532,6 +1532,8 @@ export interface InitValues {
 	webglRenderer?: string;
 	screenWidth?: number;
 	screenHeight?: number;
+	screenAvailWidth?: number;
+	screenAvailHeight?: number;
 	screenColorDepth?: number;
 	timezone?: string;
 	fontList?: string[];
@@ -1565,12 +1567,20 @@ export function buildInitScript(values: InitValues): string {
 		}
 	}
 
-	// Screen dimensions (requires width + height together)
+	// Screen dimensions (requires width + height together). The available rect
+	// rides along when the identity has one; a build that keeps only the full
+	// size ignores the extra arguments.
 	const sw = values.screenWidth;
 	const sh = values.screenHeight;
 	if (pyTruthy(sw) && pyTruthy(sh)) {
+		const aw = values.screenAvailWidth;
+		const ah = values.screenAvailHeight;
+		const dims =
+			pyTruthy(aw) && pyTruthy(ah)
+				? `${sw}, ${sh}, ${aw}, ${ah}`
+				: `${sw}, ${sh}`;
 		lines.push(
-			`  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions(${sw}, ${sh});`,
+			`  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions(${dims});`,
 		);
 		const scd = values.screenColorDepth;
 		if (pyTruthy(scd)) {
@@ -1683,6 +1693,8 @@ export function targetOsFromPlatform(plat: string): SupportedOS {
  *   and before the init script is rendered.
  * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
  *   of drawing one.
+ * @param webgl false claims no WebGL values, for a browser whose render node
+ *   reports its own (render_node).
  */
 export function generateContextFingerprint({
 	preset,
@@ -1693,6 +1705,7 @@ export function generateContextFingerprint({
 	locale,
 	config_overrides,
 	webgl_config,
+	webgl: claimWebgl = true,
 }: {
 	preset?: Preset | null;
 	os?: string | null;
@@ -1702,6 +1715,7 @@ export function generateContextFingerprint({
 	locale?: string | null;
 	config_overrides?: Config | null;
 	webgl_config?: [string, string] | null;
+	webgl?: boolean;
 } = {}): ContextFingerprint {
 	let config: Config;
 	let nav: Record<string, any>;
@@ -1772,7 +1786,12 @@ export function generateContextFingerprint({
 			if (oscpu) config["navigator.oscpu"] = oscpu;
 		}
 
-		if (
+		if (!claimWebgl) {
+			for (const key of Object.keys(config)) {
+				if (key.startsWith("webGl:") || key.startsWith("webGl2:"))
+					delete config[key];
+			}
+		} else if (
 			!pyTruthy(config["webGl:vendor"]) ||
 			!pyTruthy(config["webGl:renderer"])
 		) {
@@ -1851,6 +1870,8 @@ export function generateContextFingerprint({
 		webglRenderer: webgl.unmaskedRenderer,
 		screenWidth: screen.width,
 		screenHeight: screen.height,
+		screenAvailWidth: config["screen.availWidth"],
+		screenAvailHeight: config["screen.availHeight"],
 		screenColorDepth: screen.colorDepth,
 		timezone:
 			typeof resolvedPreset.timezone === "string"
