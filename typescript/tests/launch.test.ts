@@ -554,6 +554,39 @@ describe("test_launch_environment: prefs", () => {
 		});
 	});
 
+	describe("Windows legacy font families", () => {
+		const fontsFor = async (fonts: string[]) => {
+			let config: Record<string, any> = {};
+			deps.getEnvVars = ((c: Record<string, any>) => {
+				config = { ...c };
+				return {};
+			}) as any;
+			await launch({
+				os: "windows",
+				block_webgl: true,
+				i_know_what_im_doing: true,
+				...ua(WIN_UA, { fonts }),
+			});
+			return config.fonts;
+		};
+		it("exposes aliases of each presented canonical family", async () => {
+			expect(await fontsFor(["Arial", "Calibri", "Franklin Gothic"])).toEqual([
+				"Arial",
+				"Calibri",
+				"Franklin Gothic",
+				"Arial Black",
+				"Calibri Light",
+				"Franklin Gothic Medium",
+			]);
+		});
+		it("adds no alias without its canonical family", async () => {
+			const fonts = await fontsFor(["Times New Roman"]);
+			expect(fonts).not.toContain("Arial Black");
+			expect(fonts).not.toContain("Calibri Light");
+			expect(fonts).not.toContain("Franklin Gothic Medium");
+		});
+	});
+
 	// test_windows_identity.py
 	describe("a Windows identity on another host behaves as Windows", () => {
 		const STYLE = "widget.non-native-theme.scrollbar.style";

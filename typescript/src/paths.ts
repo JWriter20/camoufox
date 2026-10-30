@@ -118,6 +118,7 @@ export function loadDataFile<T = any>(file: string): T {
 /** Values both launchers use, kept in one file (python/src/camoufox/launcher-constants.json). */
 export interface LauncherConstants {
 	markerFonts: Record<"win" | "mac" | "lin", string[]>;
+	windowsLegacyFontFamilies: Record<string, string[]>;
 	windows11MarkerFonts: string[];
 	plausibleCoreCounts: number[];
 	appleSiliconCores: number[];

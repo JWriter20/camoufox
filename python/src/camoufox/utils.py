@@ -1683,6 +1683,17 @@ def launch_options(
     if fonts:
         config['fonts'] = fonts
 
+    if target_os == 'win':
+        expanded = list(config.get('fonts', []))
+        presented = set(expanded)
+        for canonical, aliases in LAUNCHER_CONSTANTS['windowsLegacyFontFamilies'].items():
+            if canonical in presented:
+                for alias in aliases:
+                    if alias not in presented:
+                        expanded.append(alias)
+                        presented.add(alias)
+        config['fonts'] = expanded
+
     if custom_fonts_only:
         firefox_user_prefs['gfx.bundled-fonts.activate'] = 0
         if fonts:

@@ -2122,6 +2122,23 @@ async function buildLaunchOptions(
 		config.fonts = fonts;
 	}
 
+	if (targetOs === "win") {
+		const expanded = [...(config.fonts || [])];
+		const presented = new Set(expanded);
+		for (const [canonical, aliases] of Object.entries(
+			LAUNCHER_CONSTANTS.windowsLegacyFontFamilies,
+		)) {
+			if (!presented.has(canonical)) continue;
+			for (const alias of aliases) {
+				if (!presented.has(alias)) {
+					expanded.push(alias);
+					presented.add(alias);
+				}
+			}
+		}
+		config.fonts = expanded;
+	}
+
 	if (custom_fonts_only) {
 		firefox_user_prefs["gfx.bundled-fonts.activate"] = 0;
 		if (fonts?.length) {
