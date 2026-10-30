@@ -140,7 +140,8 @@ async def custom_session(seed, humanize_extra=None, trace=None, nested=False):
     if EXECUTABLE_PATH:
         kwargs["executable_path"] = EXECUTABLE_PATH
     if trace:
-        kwargs["env"] = {"CAMOU_HUMANIZE_TRACE": trace}
+        # The caller's environment too: an env= replaces it whole (a Pro build's lease, DISPLAY).
+        kwargs["env"] = {**os.environ, "CAMOU_HUMANIZE_TRACE": trace}
     async with AsyncCamoufox(**kwargs) as browser:
         page = await browser.new_page(viewport={"width": 1000, "height": 700})
         await page.set_content(BODY)
@@ -188,7 +189,9 @@ async def main() -> int:
     print(f"all custom, seed 1234: engine calls {[entry[:2] for entry in log]}")
     print(f"  page saw {len(moves)} mousemoves (planned {sum(planned)}), {kinds.count('keydown')} keydowns, {len(wheels)} wheels, "
           f"{kinds.count('click')} clicks; value/scrollY/far in view: {state}")
-    if len(moves) != sum(planned):
+    # Moves are coalesced per frame as a real mouse's are, so the page sees at
+    # most the planned ones, and which ones depends on frame timing.
+    if not 0 < len(moves) <= sum(planned):
         failures.append(f"the page saw {len(moves)} mousemoves for {sum(planned)} planned ones")
     if not all(e[1] for e in events):
         failures.append("an event was not trusted")
@@ -212,15 +215,20 @@ async def main() -> int:
         if not before or before[-1][2:4] != click[2:4]:
             failures.append(f"the click at {click[2:4]} did not land where the planned path ended")
 
-    # The same seed replays; another seed does not.
+    # The same seed replays; another seed does not. Mousemoves are left out of
+    # the page comparison: coalescing makes which planned moves arrive a matter
+    # of frame timing (each click above still lands where its path ended).
+    def replayed(evs):
+        return [e[2:] for e in evs if e[0] != "mousemove"]
+
     log_b, events_b, _, _ = await custom_session(1234)
-    _, events_c, _, _ = await custom_session(1235)
-    same = [e[2:] for e in events_b] == [e[2:] for e in events]
-    print(f"seed 1234 again: identical page events: {same}; seed 1235 differs: "
-          f"{[e[2:] for e in events_c] != [e[2:] for e in events]}")
+    log_c, _, _, _ = await custom_session(1235)
+    same = replayed(events_b) == replayed(events)
+    print(f"seed 1234 again: identical engine calls and page events but moves: {same and log_b == log}; "
+          f"seed 1235 plans differently: {log_c != log}")
     if not same or log_b != log:
         failures.append("the same seed gave different input")
-    if [e[2:] for e in events_c] == [e[2:] for e in events]:
+    if log_c == log:
         failures.append("another seed gave the same input")
 
     # Custom mouse beside the build's own scroll engine.
@@ -253,7 +261,7 @@ async def main() -> int:
         print("typescript: not built (typescript/dist) or no node; parity not checked")
     else:
         same_log = ts["log"] == json.loads(json.dumps(log))
-        same_events = ts["events"] == json.loads(json.dumps(events))
+        same_events = replayed(ts["events"]) == replayed(json.loads(json.dumps(events)))
         print(f"typescript, seed 1234: engine calls identical: {same_log}; "
               f"{len(ts['events'])} page events identical: {same_events}; state {ts['state']}")
         if not (same_log and same_events and ts["state"] == state):
