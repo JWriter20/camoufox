@@ -51,6 +51,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "ipv4-only-network",
         "locale-explicit-names",
         "media-devices-coherence",
+        "pointer-lock-unadjusted",
         "spoofed-voice-speaks",
         "startup-prefs",
         "system-colors-windows",
