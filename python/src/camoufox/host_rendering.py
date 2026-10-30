@@ -12,7 +12,6 @@ claims the host's GPU.
 """
 
 from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from .fingerprints import is_software_renderer
@@ -38,6 +37,10 @@ FEATURE_BLOCKED_DEVICE = 4
 # What the launcher itself adds to the browser's environment; none of it
 # changes which device Firefox renders on.
 _LAUNCHER_ENV = ('CAMOU_', 'FONTCONFIG_FILE')
+# Except the Camoufox Pro lease (pro.LEASE_FILE_ENV), without which a Pro build
+# exits before it renders anything. It is not part of the cache key: a new
+# lease does not move the GPU.
+_LEASE_ENV = 'CAMOU_LEASE_FILE'
 
 Gpu = Tuple[str, str]
 
@@ -92,15 +95,32 @@ def host_gpu(
         bool(headless),
         tuple(sorted((k, str(v)) for k, v in env.items() if not k.startswith(_LAUNCHER_ENV))),
         tuple(sorted((k, prefs[k]) for k in GPU_PREFS if k in prefs)),
+        env.get(_LEASE_ENV),
     )
 
 
-@lru_cache(maxsize=None)
+_PROBED: Dict[Tuple[Any, ...], Optional[Gpu]] = {}
+
+
 def _host_gpu(
     executable_path: str,
     headless: bool,
     env: Tuple[Tuple[str, str], ...],
     prefs: Tuple[Tuple[str, Any], ...],
+    lease: Optional[str] = None,
+) -> Optional[Gpu]:
+    key = (executable_path, headless, env, prefs)
+    if key not in _PROBED:
+        _PROBED[key] = _read_host_gpu(executable_path, headless, env, prefs, lease)
+    return _PROBED[key]
+
+
+def _read_host_gpu(
+    executable_path: str,
+    headless: bool,
+    env: Tuple[Tuple[str, str], ...],
+    prefs: Tuple[Tuple[str, Any], ...],
+    lease: Optional[str],
 ) -> Optional[Gpu]:
     def read() -> Optional[Gpu]:
         from playwright.sync_api import sync_playwright
@@ -109,7 +129,7 @@ def _host_gpu(
             browser = playwright.firefox.launch(
                 executable_path=executable_path,
                 headless=headless,
-                env=dict(env),
+                env={**dict(env), **({_LEASE_ENV: lease} if lease else {})},
                 # The launch forces WebGL on, which can choose another device.
                 firefox_user_prefs={**dict(prefs), 'webgl.force-enabled': True},
             )

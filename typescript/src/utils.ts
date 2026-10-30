@@ -2632,8 +2632,16 @@ async function buildLaunchOptions(
 		pyTruthy(webgl_config) ||
 			(pyTruthy(config["webGl:vendor"]) && pyTruthy(config["webGl:renderer"])),
 		Boolean(block_webgl),
+		// With the lease this launch carries (minted above): a Pro build will not start without one.
 		() =>
-			utilsDeps.hostGpu(resolvedExecutable, headless, env, firefox_user_prefs),
+			utilsDeps.hostGpu(
+				resolvedExecutable,
+				headless,
+				pro.LEASE_FILE_ENV in proEnv
+					? { ...env, [pro.LEASE_FILE_ENV]: proEnv[pro.LEASE_FILE_ENV] }
+					: env,
+				firefox_user_prefs,
+			),
 	);
 	if (coverCanvas) {
 		addCanvasPlaceholder(firefox_user_prefs);

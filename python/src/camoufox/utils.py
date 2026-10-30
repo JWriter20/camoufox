@@ -2105,7 +2105,13 @@ def launch_options(
         canvas_noise,
         bool(webgl_config or (config.get('webGl:vendor') and config.get('webGl:renderer'))),
         bool(block_webgl),
-        lambda: host_gpu(browser_binary, headless, env, firefox_user_prefs),
+        # With the lease this launch carries (minted above): a Pro build will not start without one.
+        lambda: host_gpu(
+            browser_binary,
+            headless,
+            {**env, **{k: v for k, v in pro_env.items() if k == pro.LEASE_FILE_ENV}},
+            firefox_user_prefs,
+        ),
     )
     if cover_canvas:
         add_canvas_placeholder(firefox_user_prefs)

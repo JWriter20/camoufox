@@ -253,6 +253,20 @@ def test_the_caller_s_own_lease_file_wins(api, pro_build, monkeypatch):
     assert api.requests == []
 
 
+def test_the_host_gpu_probe_launches_with_the_minted_lease(api, pro_build, monkeypatch):
+    # An identity on the host's own OS reads the host GPU from the binary first; a Pro
+    # build without the lease refuses that launch ("lease refused (missing)").
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    monkeypatch.setattr(utils, "_host_os_key", lambda: "lin")
+    probes = []
+    monkeypatch.setattr(utils, "host_gpu", lambda exe, headless, env, prefs: probes.append(dict(env)))
+    monkeypatch.setattr(utils, "get_env_vars", lambda *a, **k: {})
+    monkeypatch.setattr(utils, "resolve_verstr", lambda *a: "156.0.1-beta.32")
+    opts = utils.launch_options(executable_path=pro_build, os="linux", headless=True, i_know_what_im_doing=True)
+
+    assert [env.get(pro.LEASE_FILE_ENV) for env in probes] == [opts["env"][pro.LEASE_FILE_ENV]]
+
+
 def test_mint_request_is_what_the_server_parses(api):
     acquire()
     body = api.requests[0]["body"]

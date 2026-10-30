@@ -187,6 +187,29 @@ describe.runIf(modelReady)("launchOptions", () => {
 		expect(body.build_hash).toBe(BUILD_HASH.replace("sha256:", ""));
 	});
 
+	it("probes the host GPU under the minted lease", async () => {
+		// An identity on the host's own OS reads the host GPU from the binary first; a
+		// Pro build without the lease refuses that launch ("lease refused (missing)").
+		makePro();
+		process.env[pro.KEY_ENV] = KEY;
+		const probes: Array<string | undefined> = [];
+		utils.utilsDeps.hostOsKey = () => "lin";
+		utils.utilsDeps.hostGpu = async (_exe, _headless, env) => {
+			probes.push(env[pro.LEASE_FILE_ENV] as string | undefined);
+			return null;
+		};
+		const opts = await quietly(() =>
+			utils.launchOptions({
+				env: { HOME },
+				executable_path: exe,
+				os: "linux",
+				headless: true,
+				i_know_what_im_doing: true,
+			}),
+		);
+		expect(probes).toEqual([opts.env[pro.LEASE_FILE_ENV]]);
+	});
+
 	it("leaves the caller's own lease file alone", async () => {
 		makePro();
 		const opts = await launch({ [pro.LEASE_FILE_ENV]: "/run/mine.json" });
