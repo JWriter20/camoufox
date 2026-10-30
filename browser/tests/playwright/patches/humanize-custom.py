@@ -222,9 +222,12 @@ async def main() -> int:
 
     # The same seed replays; another seed does not. Mousemoves are left out of
     # the page comparison: coalescing makes which planned moves arrive a matter
-    # of frame timing (each click above still lands where its path ended).
+    # of frame timing (each click above still lands where its path ended). A
+    # wheel is compared by its delta: one that turns while the page bounces off
+    # its top or bottom (APZ overscroll, as in stock) reports its point against
+    # the shifted content, a pixel or so off, depending on frame timing.
     def replayed(evs):
-        return [e[2:] for e in evs if e[0] != "mousemove"]
+        return [[e[0], e[5]] if e[0] == "wheel" else e[2:] for e in evs if e[0] != "mousemove"]
 
     log_b, events_b, _, _ = await custom_session(1234)
     log_c, _, _, _ = await custom_session(1235)
