@@ -317,3 +317,17 @@ class TestHostIdentity:
     @pytest.mark.parametrize("canvas_noise", [False, True])
     def test_a_callers_explicit_choice_records_nothing(self, canvas_noise):
         assert self.attach(False, canvas_noise) is None
+
+
+def test_the_probe_carries_the_pro_lease_without_keying_on_it(monkeypatch):
+    from camoufox import host_rendering
+
+    reads = []
+    monkeypatch.setattr(host_rendering, "_PROBED", {})
+    monkeypatch.setattr(host_rendering, "_read_host_gpu", lambda *args: reads.append(args) or HOST_GPU)
+    for lease in ("/run/camoufox-pro/a.json", "/run/camoufox-pro/b.json"):
+        env = {"DISPLAY": ":5", "CAMOU_CONFIG_1": "{}", "CAMOU_LEASE_FILE": lease}
+        assert host_gpu("/x/camoufox", False, env, {}) == HOST_GPU
+
+    # Read once, under the first launch's lease; the identity's CAMOU_ values stay out.
+    assert reads == [("/x/camoufox", False, (("DISPLAY", ":5"),), (), "/run/camoufox-pro/a.json")]

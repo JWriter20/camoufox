@@ -1,8 +1,8 @@
 diff --git a/dom/media/webspeech/synth/moz.build b/dom/media/webspeech/synth/moz.build
-index ca6ffacb21..fb661fd69e 100644
+index bcec423f08..4387a2291a 100644
 --- a/dom/media/webspeech/synth/moz.build
 +++ b/dom/media/webspeech/synth/moz.build
-@@ -62,3 +62,6 @@ LOCAL_INCLUDES += [
+@@ -61,3 +61,6 @@ LOCAL_INCLUDES += [
      "/dom/base",
      "ipc",
  ]
@@ -10,63 +10,118 @@ index ca6ffacb21..fb661fd69e 100644
 +# DOM Mask
 +LOCAL_INCLUDES += ['/camoucfg']
 diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
-index 3648239545..759e61837b 100644
+index e046255242..57b9766271 100644
 --- a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
 +++ b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
-@@ -23,7 +23,9 @@
+@@ -23,7 +23,14 @@
  #include "nsServiceManagerUtils.h"
  #include "nsSpeechTask.h"
  #include "nsString.h"
+-
 +#include "nsThreadUtils.h"
- 
++#include "nsEscape.h"
++#include "nsRefPtrHashtable.h"
++
 +#include "MaskConfig.hpp"
++#include "mozilla/RandomNum.h"
++#include <algorithm>
++#include <cmath>
  using mozilla::intl::LocaleService;
  
  #undef LOG
-@@ -165,6 +167,20 @@ nsSynthVoiceRegistry* nsSynthVoiceRegistry::GetInstance() {
+@@ -166,12 +173,74 @@ nsSynthVoiceRegistry* nsSynthVoiceRegistry::GetInstance() {
        // Start up all speech synth services.
        NS_CreateServicesFromCategory(NS_SPEECH_SYNTH_STARTED, nullptr,
                                      NS_SPEECH_SYNTH_STARTED);
-+      // Load voices from MaskConfig
-+      if (auto voices = MaskConfig::MVoices()) {
-+        for (const auto& [lang, name, uri, isDefault, isLocal] :
-+             voices.value()) {
-+          gSynthVoiceRegistry->AddVoiceImpl(
-+              nullptr, NS_ConvertUTF8toUTF16(uri), NS_ConvertUTF8toUTF16(name),
-+              NS_ConvertUTF8toUTF16(lang), isLocal,
-+              false);  // queuesUtterances set to false
-+          if (isDefault) {
-+            gSynthVoiceRegistry->SetDefaultVoice(NS_ConvertUTF8toUTF16(uri),
-+                                                 true);
-+          }
-+        }
-+      }
++      gSynthVoiceRegistry->AddSpoofedVoices();
      }
    }
  
-@@ -301,6 +317,21 @@ nsSynthVoiceRegistry::AddVoice(nsISpeechService* aService,
+   return gSynthVoiceRegistry;
+ }
+ 
++namespace {
++// SpeechDispatcherService's voice record, so the table below has its layout.
++class SpoofedSpeechdVoice {
++ public:
++  SpoofedSpeechdVoice(const nsAString& aName, const nsAString& aLanguage)
++      : mName(aName), mLanguage(aLanguage) {}
++  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(SpoofedSpeechdVoice)
++  nsString mName;
++  nsString mLanguage;
++
++ private:
++  ~SpoofedSpeechdVoice() = default;
++};
++}  // namespace
++
++// The identity's voices, registered as the OS backend it claims would register
++// them. A spoofed voice has no service (SpeakImpl speaks it silently).
++void nsSynthVoiceRegistry::AddSpoofedVoices() {
++  if (auto speechd = MaskConfig::MSpeechdVoices()) {
++    // SpeechDispatcherService::Setup builds this table in speech-dispatcher's
++    // order and RegisterVoices adds the voices in the table's iteration order,
++    // which is the order getVoices() reports. Same table, same insertions,
++    // same order.
++    nsRefPtrHashtable<nsStringHashKey, SpoofedSpeechdVoice> table;
++    for (const auto& [name, lang] : speechd.value()) {
++      nsAutoString uri;
++      uri.AssignLiteral("urn:moz-tts:speechd:");
++      nsAutoCString escaped;
++      NS_EscapeURL(name.c_str(), -1,
++                   esc_OnlyNonASCII | esc_Spaces | esc_AlwaysCopy, escaped);
++      uri.Append(NS_ConvertUTF8toUTF16(escaped));
++      uri.AppendLiteral("?");
++      uri.Append(NS_ConvertUTF8toUTF16(lang));
++      table.InsertOrUpdate(uri, MakeRefPtr<SpoofedSpeechdVoice>(
++                                    NS_ConvertUTF8toUTF16(name),
++                                    NS_ConvertUTF8toUTF16(lang)));
++    }
++    for (const auto& entry : table) {
++      const RefPtr<SpoofedSpeechdVoice>& voice = entry.GetData();
++      // As RegisterVoices does: local only for a voice named "default".
++      AddVoiceImpl(nullptr, entry.GetKey(), voice->mName, voice->mLanguage,
++                   voice->mName.EqualsLiteral("default"), true);
++    }
++    return;
++  }
++  if (auto voices = MaskConfig::MVoices()) {
++    for (const auto& [lang, name, uri, isDefault, isLocal] : voices.value()) {
++      const NS_ConvertUTF8toUTF16 voiceUri(uri);
++      // SAPI voices queue their utterances and macOS's do not, as each
++      // backend registers them.
++      const bool queues =
++          StringBeginsWith(voiceUri, u"urn:moz-tts:sapi:"_ns);
++      AddVoiceImpl(nullptr, voiceUri, NS_ConvertUTF8toUTF16(name),
++                   NS_ConvertUTF8toUTF16(lang), isLocal, queues);
++      if (isDefault) {
++        SetDefaultVoice(voiceUri, true);
++      }
++    }
++  }
++}
++
+ already_AddRefed<nsSynthVoiceRegistry>
+ nsSynthVoiceRegistry::GetInstanceForService() {
+   RefPtr<nsSynthVoiceRegistry> registry = GetInstance();
+@@ -302,6 +371,16 @@ nsSynthVoiceRegistry::AddVoice(nsISpeechService* aService,
      return NS_ERROR_NOT_AVAILABLE;
    }
  
 +  // Fail closed whenever Camoufox is managing the voice list.
 +  //
-+  // MVoices() returns a value as soon as the config carries a `voices` array,
-+  // even an empty one or one whose entries were all rejected as malformed.
-+  // Gating only on the explicit `voices:blockIfNotDefined` flag let an empty or
-+  // unusable list fall through to the host's speech-dispatcher backend, which
-+  // registers every native voice -- 14805 espeak-ng entries on a stock Linux
-+  // box -- under a fingerprint claiming macOS or Windows
-+  // (daijro/camoufox#731). An empty spoofed list must mean "no voices", never
-+  // "all of the host's".
-+  if (MaskConfig::GetBool("voices:blockIfNotDefined") ||
-+      MaskConfig::MVoices().has_value()) {
++  // Fail closed as soon as the config carries `voices`, even an empty or
++  // malformed list: otherwise the host's speech-dispatcher registers every
++  // native voice under a fingerprint claiming macOS or Windows
++  // (daijro/camoufox#731).
++  if (MaskConfig::SpoofsVoices()) {
 +    return NS_OK;
 +  }
 +
    return AddVoiceImpl(aService, aUri, aName, aLang, aLocalService,
                        aQueuesUtterances);
  }
-@@ -373,6 +404,16 @@ nsSynthVoiceRegistry::NotifyVoicesChanged() {
+@@ -374,6 +453,16 @@ nsSynthVoiceRegistry::NotifyVoicesChanged() {
  
  NS_IMETHODIMP
  nsSynthVoiceRegistry::NotifyVoicesError(const nsAString& aError) {
@@ -74,7 +129,7 @@ index 3648239545..759e61837b 100644
 +  // start (no speech-dispatcher on a Linux host) says nothing about the
 +  // spoofed voices. Forwarding it would make every page error its queued
 +  // utterances, which a Windows or macOS identity never does.
-+  if (MaskConfig::MVoices()) {
++  if (MaskConfig::SpoofsVoices()) {
 +    LOG(LogLevel::Debug, ("nsSynthVoiceRegistry::NotifyVoicesError ignored: "
 +                          "the voice list is spoofed"));
 +    return NS_OK;
@@ -83,34 +138,172 @@ index 3648239545..759e61837b 100644
    if (XRE_IsParentProcess()) {
      nsTArray<SpeechSynthesisParent*> ssplist;
      GetAllSpeechSynthActors(ssplist);
-@@ -775,6 +816,30 @@ void nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice, nsSpeechTask* aTask,
+@@ -766,6 +855,125 @@ void nsSynthVoiceRegistry::SetIsSpeaking(bool aIsSpeaking) {
+   }
+ }
+ 
++namespace {
++
++// Camoufox: a Windows identity's spoofed voice speaks as SAPI does
++// (windows/SapiService.cpp), as stock Firefox 158 on win-i9 reports it
++// (Microsoft David, Mark, Zira and the Desktop voices, 10 launches):
++//  - start ~0.1 s after speak(), with elapsedTime 0; every later
++//    elapsedTime counts from speak();
++//  - per sentence a "sentence" boundary at its first word, charLength
++//    through its closing . ! or ? (else the last non-space character);
++//  - per word a "word" boundary, charLength without trailing punctuation
++//    ("world." 5, "stop-now," 8); a decimal number is spoken word by word,
++//    one boundary each at the same index ("3.14": four);
++//  - end at the text's length, about 0.9 s after the last word starts at
++//    rate 1; empty text: start, then end at once.
++// Timing: ~58 ms a character at rate 1, a sentence break ~0.9 s and a comma
++// ~0.3 s more, all divided by SAPI's speed 3^(n/10), n = trunc(10 log3 rate)
++// clipped to +-10.
++double SapiJitter(double aSpan) {
++  return aSpan * static_cast<double>(RandomUint64OrDie() >> 11) /
++         9007199254740992.0;
++}
++
++void SpeakLikeSapi(nsSpeechTask* aTask, const nsAString& aText, float aRate) {
++  RefPtr<nsSpeechTask> task = aTask;
++  const TimeStamp origin = TimeStamp::Now();
++  const auto since = [origin]() {
++    return static_cast<float>((TimeStamp::Now() - origin).ToSeconds());
++  };
++  const auto at = [](double aSeconds, auto&& aFn, const char* aName) {
++    NS_DelayedDispatchToCurrentThread(
++        NS_NewRunnableFunction(aName, std::forward<decltype(aFn)>(aFn)),
++        static_cast<uint32_t>(std::max(0.0, aSeconds) * 1000));
++  };
++  const double steps =
++      aRate > 0 ? std::trunc(10 * std::log10(aRate) / std::log10(3.0)) : 0;
++  const double speed = std::pow(3.0, std::clamp(steps, -10.0, 10.0) / 10.0);
++  const double perChar = 0.058 / speed;
++  const double startAt = 0.10 + SapiJitter(0.04);
++  at(startAt, [task]() { (void)task->DispatchStart(); }, "CamouSapiStart");
++
++  const uint32_t length = aText.Length();
++  const auto isSpace = [&](uint32_t i) {
++    return nsContentUtils::IsHTMLWhitespace(aText[i]);
++  };
++  const auto ends = [](char16_t c) { return c == '.' || c == '!' || c == '?'; };
++  const auto trails = [&](char16_t c) {
++    return ends(c) || c == ',' || c == ';' || c == ':' || c == '"' ||
++           c == ')' || c == ']';
++  };
++  double word = startAt + std::max(0.12 / speed, 0.075);
++  bool newSentence = true;
++  double lastWord = -1;
++  uint32_t lastLength = 0;
++  uint32_t i = 0;
++  while (i < length) {
++    while (i < length && isSpace(i)) ++i;
++    if (i >= length) break;
++    const uint32_t start = i;
++    while (i < length && !isSpace(i)) ++i;
++    const uint32_t tokenEnd = i;
++    uint32_t wordEnd = tokenEnd;
++    while (wordEnd > start && trails(aText[wordEnd - 1])) --wordEnd;
++    bool spoken = false;
++    bool decimal = false;
++    uint32_t fraction = 0;
++    for (uint32_t k = start; k < wordEnd; ++k) {
++      spoken |= nsContentUtils::IsAlphanumeric(aText[k]);
++      if (aText[k] == '.' && k > start && k + 1 < wordEnd &&
++          aText[k - 1] >= '0' && aText[k - 1] <= '9') {
++        decimal = true;
++        fraction = 0;
++      } else if (decimal && aText[k] >= '0' && aText[k] <= '9') {
++        ++fraction;
++      }
++    }
++    if (!spoken) continue;
++    if (newSentence) {
++      uint32_t sentenceEnd = start;
++      for (uint32_t k = start; k < length; ++k) {
++        if (!isSpace(k)) sentenceEnd = k + 1;
++        if (ends(aText[k]) && (k + 1 == length || isSpace(k + 1))) break;
++      }
++      at(std::max(startAt, word - 0.1 / speed),
++         [task, since, start, len = sentenceEnd - start]() {
++           (void)task->DispatchBoundary(u"sentence"_ns, since(), start, len, 1);
++         },
++         "CamouSapiSentence");
++      newSentence = false;
++    }
++    const uint32_t spokenWords = decimal ? 2 + fraction : 1;
++    for (uint32_t n = 0; n < spokenWords; ++n) {
++      const double t = word + n * 0.27 / speed + SapiJitter(0.01);
++      at(t,
++         [task, since, start, len = wordEnd - start]() {
++           (void)task->DispatchBoundary(u"word"_ns, since(), start, len, 1);
++         },
++         "CamouSapiWord");
++      lastWord = t;
++    }
++    lastLength = wordEnd - start;
++    word += (spokenWords - 1) * 0.27 / speed + perChar * (tokenEnd - start + 1);
++    const char16_t last = aText[tokenEnd - 1];
++    if (ends(last)) {
++      word += 0.9 / speed;
++      newSentence = true;
++    } else if (last == ',' || last == ';' || last == ':') {
++      word += 0.3 / speed;
++    }
++  }
++  const double endAt =
++      lastWord < 0 ? startAt
++                   : lastWord + perChar * lastLength +
++                         std::max(0.9 / speed, 0.45) + SapiJitter(0.03);
++  at(endAt, [task, since, length]() { (void)task->DispatchEnd(since(), length); },
++     "CamouSapiEnd");
++}
++
++}  // namespace
++
+ void nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice, nsSpeechTask* aTask,
+                                      const nsAString& aText,
+                                      const float& aVolume, const float& aRate,
+@@ -776,6 +984,29 @@ void nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice, nsSpeechTask* aTask,
         NS_ConvertUTF16toUTF8(aText).get(),
         NS_ConvertUTF16toUTF8(aVoice->mUri).get(), aRate, aPitch));
  
-+  // Check if this voice is in our MVoices config
-+  if (auto voices = MaskConfig::MVoices()) {
-+    for (const auto& [lang, name, uri, isDefault, isLocal] : voices.value()) {
-+      if (NS_ConvertUTF8toUTF16(uri).Equals(aVoice->mUri)) {
-+        // A spoofed voice has no engine behind it. Speak it silently for as
-+        // long as the text takes at ~150 words per minute, so start and end
-+        // arrive when they would from a real voice.
-+        aTask->Init();
-+        aTask->DispatchStart();
-+        const float elapsed =
-+            static_cast<float>(aText.Length()) / (12.5f * aRate);
-+        RefPtr<nsSpeechTask> task = aTask;
-+        const uint32_t length = aText.Length();
-+        NS_DelayedDispatchToCurrentThread(
-+            NS_NewRunnableFunction("CamouFakeSpeechEnd",
-+                                   [task, elapsed, length]() {
-+                                     (void)task->DispatchEnd(elapsed, length);
-+                                   }),
-+            static_cast<uint32_t>(elapsed * 1000));
-+        return;
-+      }
++  // Only a spoofed voice has no service here (AddSpoofedVoices). It has no
++  // engine behind it: speak it silently for as long as the text takes at ~150
++  // words per minute, so start and end arrive when they would from a real
++  // voice.
++  if (!aVoice->mService) {
++    aTask->Init();
++    if (MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows) {
++      SpeakLikeSapi(aTask, aText, aRate);
++      return;
 +    }
++    aTask->DispatchStart();
++    const float elapsed = static_cast<float>(aText.Length()) / (12.5f * aRate);
++    RefPtr<nsSpeechTask> task = aTask;
++    const uint32_t length = aText.Length();
++    NS_DelayedDispatchToCurrentThread(
++        NS_NewRunnableFunction("CamouFakeSpeechEnd",
++                               [task, elapsed, length]() {
++                                 (void)task->DispatchEnd(elapsed, length);
++                               }),
++        static_cast<uint32_t>(elapsed * 1000));
++    return;
 +  }
 +
    aTask->Init();
  
    if (NS_FAILED(aVoice->mService->Speak(aText, aVoice->mUri, aVolume, aRate,
+diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.h b/dom/media/webspeech/synth/nsSynthVoiceRegistry.h
+index 6605d69e96..061cfe6777 100644
+--- a/dom/media/webspeech/synth/nsSynthVoiceRegistry.h
++++ b/dom/media/webspeech/synth/nsSynthVoiceRegistry.h
+@@ -72,6 +72,8 @@ class nsSynthVoiceRegistry final : public nsISynthVoiceRegistry {
+ 
+   bool FindVoiceByLang(const nsAString& aLang, VoiceData** aRetval);
+ 
++  void AddSpoofedVoices();
++
+   nsresult AddVoiceImpl(nsISpeechService* aService, const nsAString& aUri,
+                         const nsAString& aName, const nsAString& aLang,
+                         bool aLocalService, bool aQueuesUtterances);

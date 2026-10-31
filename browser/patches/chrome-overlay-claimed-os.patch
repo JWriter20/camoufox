@@ -1,0 +1,573 @@
+Camoufox: pages see the chrome:// files and about: pages of the claimed OS.
+
+A page can load every file of a contentaccessible chrome package and can tell
+a registered chrome package, resource host or about: module from an absent one
+(new Worker() returns for the first and throws for the second). A Linux build
+claiming Windows served Linux's set: aboutWebauthn.* and about:webauthn, no
+aboutThirdParty.*, aboutWindowsMessages.*, printPageSetup.*, migration brand
+PNGs, default-agent image, gfxsanity, about:third-party or
+about:windows-messages, and the Linux preprocessing of browser.xhtml,
+places.xhtml, license.html, buildconfig.html and others (cfparity cross-os
+static.json and page/namespaces, run 6b: 29 files, 5 about: pages, 2 names).
+
+- ManifestParser: a `camouos=<os>` modifier registers a line only for an
+  identity claiming that OS (MaskConfig::GetSpoofedOS, the build's own OS when
+  none). `os=` still matches the build's OS, so the browser UI is unchanged.
+  A `camoucontent` modifier on an override puts it in a second table.
+- nsChromeRegistry: ConvertChromeURLForLoad consults that table first for a
+  load a page triggers (a web, null, expanded or moz-extension principal;
+  query and ref ignored), from nsChromeProtocolHandler::NewChannel. The
+  browser's own loads (system, about:, chrome:, resource:) keep the build's
+  files. The table reaches content processes in OverrideMapping.contentOnly.
+- toolkit/camoufox-overlay (browser/additions, generated per Firefox version
+  by scripts/gen-os-overlay.py from the stock Windows and Linux releases)
+  holds the stock bytes and the manifest lines; mozpack learns both flags.
+- about:third-party, about:windows-messages and about:webauthn are compiled
+  into every desktop build, and nsComponentManagerImpl::Init invalidates the
+  ones a stock build of the claimed OS lacks, in every process, so a lookup
+  fails NS_ERROR_FACTORY_NOT_REGISTERED as for a module never built.
+  about:crashes and about:studies are registered always, as stock does on
+  every desktop OS (Camoufox builds without the crash reporter and Normandy).
+
+Caches: chrome:// stylesheets are cached by URL alone (Loader.cpp KeyEquals),
+so gen-os-overlay.py refuses a content-only override of a subresource the UI
+could also load; markup only runs as a document, which a page cannot load from
+chrome://, and the XUL prototype cache holds system-principal documents only.
+
+Not covered: aboutDialog.xhtml's MOZ_UPDATER deck (a build flag, not OS-keyed);
+a macOS claim keeps the build's files (no stock macOS set is recorded).
+
+Guards: browser/tests/playwright/patches/contentaccessible-parity.py (one
+stock record per claimed OS) and chrome-overlay-claimed-os.py.
+
+diff --git a/browser/components/about/AboutRedirector.cpp b/browser/components/about/AboutRedirector.cpp
+--- a/browser/components/about/AboutRedirector.cpp
++++ b/browser/components/about/AboutRedirector.cpp
+@@ -166,13 +166,11 @@ static const RedirEntry kRedirMap[] = {
+     {"welcomeback", "chrome://browser/content/aboutWelcomeBack.xhtml",
+      nsIAboutModule::ALLOW_SCRIPT | nsIAboutModule::HIDE_FROM_ABOUTABOUT |
+          nsIAboutModule::IS_SECURE_CHROME_UI},
+-#ifdef MOZ_NORMANDY
+     {"studies", "resource://normandy-content/about-studies/about-studies.html",
+      nsIAboutModule::ALLOW_SCRIPT | nsIAboutModule::IS_SECURE_CHROME_UI |
+          nsIAboutModule::URI_CAN_LOAD_IN_PRIVILEGEDABOUT_PROCESS |
+          nsIAboutModule::URI_MUST_LOAD_IN_CHILD |
+          nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT},
+-#endif
+ #ifdef MOZ_SELECTABLE_PROFILES
+     {"deleteprofile", "chrome://browser/content/profiles/delete-profile.html",
+      nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
+diff --git a/browser/components/about/components.conf b/browser/components/about/components.conf
+--- a/browser/components/about/components.conf
++++ b/browser/components/about/components.conf
+@@ -36,8 +36,9 @@ pages = [
+     'welcomeback',
+ ]
+ 
+-if buildconfig.substs.get('MOZ_NORMANDY'):
+-    pages += ['studies']
++# Camoufox: about:studies is registered as in every stock desktop build,
++# whether or not Normandy runs.
++pages += ['studies']
+ 
+ if buildconfig.substs.get('MOZ_SELECTABLE_PROFILES'):
+     pages += [
+diff --git a/chrome/RegistryMessageUtils.h b/chrome/RegistryMessageUtils.h
+--- a/chrome/RegistryMessageUtils.h
++++ b/chrome/RegistryMessageUtils.h
+@@ -46,9 +46,12 @@ struct SubstitutionMapping {
+ struct OverrideMapping {
+   SerializedURI originalURI;
+   SerializedURI overrideURI;
++  // Camoufox: a `camoucontent` override, for page-triggered loads only.
++  bool contentOnly = false;
+ 
+   bool operator==(const OverrideMapping& rhs) const {
+-    return originalURI == rhs.originalURI && overrideURI == rhs.overrideURI;
++    return originalURI == rhs.originalURI && overrideURI == rhs.overrideURI &&
++           contentOnly == rhs.contentOnly;
+   }
+ };
+ 
+@@ -59,7 +62,8 @@ DEFINE_IPC_SERIALIZER_WITH_FIELDS(ChromePackage, package, contentBaseURI,
+                                   localeBaseURI, skinBaseURI, flags);
+ DEFINE_IPC_SERIALIZER_WITH_FIELDS(SubstitutionMapping, scheme, path,
+                                   resolvedURI, flags);
+-DEFINE_IPC_SERIALIZER_WITH_FIELDS(OverrideMapping, originalURI, overrideURI);
++DEFINE_IPC_SERIALIZER_WITH_FIELDS(OverrideMapping, originalURI, overrideURI,
++                                  contentOnly);
+ 
+ }  // namespace IPC
+ 
+diff --git a/chrome/nsChromeProtocolHandler.cpp b/chrome/nsChromeProtocolHandler.cpp
+--- a/chrome/nsChromeProtocolHandler.cpp
++++ b/chrome/nsChromeProtocolHandler.cpp
+@@ -100,8 +100,9 @@ nsChromeProtocolHandler::NewChannel(nsIURI* aURI, nsILoadInfo* aLoadInfo,
+   }
+ 
+   nsCOMPtr<nsIURI> resolvedURI;
+-  rv = nsChromeRegistry::gChromeRegistry->ConvertChromeURL(
+-      aURI, getter_AddRefs(resolvedURI));
++  // Camoufox: a page-triggered load may take a `camoucontent` override.
++  rv = nsChromeRegistry::gChromeRegistry->ConvertChromeURLForLoad(
++      aURI, aLoadInfo, getter_AddRefs(resolvedURI));
+   if (NS_FAILED(rv)) {
+ #ifdef DEBUG
+     printf("Couldn't convert chrome URL: %s\n", aURI->GetSpecOrDefault().get());
+diff --git a/chrome/nsChromeRegistry.cpp b/chrome/nsChromeRegistry.cpp
+--- a/chrome/nsChromeRegistry.cpp
++++ b/chrome/nsChromeRegistry.cpp
+@@ -15,6 +15,8 @@
+ #include "nsQueryObject.h"
+ #include "nsIURIMutator.h"
+ #include "nsIURL.h"
++#include "nsILoadInfo.h"
++#include "nsIPrincipal.h"
+ 
+ #include "mozilla/dom/URL.h"
+ #include "nsIConsoleService.h"
+@@ -269,6 +271,50 @@ nsChromeRegistry::ConvertChromeURL(nsIURI* aChromeURI, nsIURI** aResult) {
+   return NS_NewURI(aResult, path, nullptr, baseURI);
+ }
+ 
++/* static */
++bool nsChromeRegistry::IsPageTriggeredLoad(nsILoadInfo* aLoadInfo) {
++  if (!aLoadInfo) {
++    return false;
++  }
++  nsIPrincipal* principal = aLoadInfo->TriggeringPrincipal();
++  if (!principal || principal->IsSystemPrincipal()) {
++    return false;
++  }
++  // A sandboxed or opaque page, or an extension's content script.
++  if (principal->GetIsNullPrincipal() || principal->GetIsExpandedPrincipal()) {
++    return true;
++  }
++  if (!principal->GetIsContentPrincipal()) {
++    return false;
++  }
++  // about: pages and chrome/resource documents are the browser's own UI.
++  // Everything else with a content principal is a web page or a
++  // moz-extension page.
++  return !principal->SchemeIs("about") && !principal->SchemeIs("chrome") &&
++         !principal->SchemeIs("resource");
++}
++
++nsresult nsChromeRegistry::ConvertChromeURLForLoad(nsIURI* aChromeURI,
++                                                   nsILoadInfo* aLoadInfo,
++                                                   nsIURI** aResult) {
++  if (NS_WARN_IF(!aChromeURI)) {
++    return NS_ERROR_INVALID_ARG;
++  }
++  if (mContentOverrideTable.Count() && IsPageTriggeredLoad(aLoadInfo)) {
++    // A query or ref must not reach the build's own file: stock serves the
++    // same file with or without one.
++    nsCOMPtr<nsIURI> key;
++    nsresult rv = NS_MutateURI(aChromeURI)
++                      .SetQuery(""_ns)
++                      .SetRef(""_ns)
++                      .Finalize(key);
++    if (NS_SUCCEEDED(rv) && mContentOverrideTable.Get(key, aResult)) {
++      return NS_OK;
++    }
++  }
++  return ConvertChromeURL(aChromeURI, aResult);
++}
++
+ ////////////////////////////////////////////////////////////////////////
+ 
+ void nsChromeRegistry::FlushAllCaches() {
+diff --git a/chrome/nsChromeRegistry.h b/chrome/nsChromeRegistry.h
+--- a/chrome/nsChromeRegistry.h
++++ b/chrome/nsChromeRegistry.h
+@@ -20,6 +20,7 @@
+ class nsPIDOMWindowOuter;
+ class nsIPrefBranch;
+ class nsIURL;
++class nsILoadInfo;
+ 
+ // The chrome registry is actually split between nsChromeRegistryChrome and
+ // nsChromeRegistryContent. The work/data that is common to both resides in
+@@ -43,6 +44,14 @@ class nsChromeRegistry : public nsIToolkitChromeRegistry,
+ 
+   NS_IMETHOD ConvertChromeURL(nsIURI* aChromeURI, nsIURI** aResult) override;
+ 
++  // Camoufox: ConvertChromeURL for a channel. A load a page triggers (see
++  // IsPageTriggeredLoad) takes the manifests' `camoucontent` overrides first,
++  // so it gets the claimed OS's stock bytes (toolkit/camoufox-overlay); the
++  // browser's own loads never see them.
++  nsresult ConvertChromeURLForLoad(nsIURI* aChromeURI, nsILoadInfo* aLoadInfo,
++                                   nsIURI** aResult);
++  static bool IsPageTriggeredLoad(nsILoadInfo* aLoadInfo);
++
+   // nsChromeRegistry methods:
+   nsChromeRegistry() : mInitialized(false) {}
+ 
+@@ -116,12 +125,19 @@ class nsChromeRegistry : public nsIToolkitChromeRegistry,
+ 
+     // Content script may access files in this package
+     CONTENT_ACCESSIBLE = 1 << 2,
++
++    // Camoufox: an override for page-triggered loads only (`camoucontent`)
++    CONTENT_ONLY = 1 << 3,
+   };
+ 
+   bool mInitialized;
+ 
+   // "Override" table (chrome URI string -> real URI)
+   nsInterfaceHashtable<nsURIHashKey, nsIURI> mOverrideTable;
++
++  // Camoufox: the `camoucontent` overrides, consulted for page-triggered
++  // loads only (ConvertChromeURLForLoad). Keyed without query or ref.
++  nsInterfaceHashtable<nsURIHashKey, nsIURI> mContentOverrideTable;
+ };
+ 
+ #endif  // nsChromeRegistry_h
+diff --git a/chrome/nsChromeRegistryChrome.cpp b/chrome/nsChromeRegistryChrome.cpp
+--- a/chrome/nsChromeRegistryChrome.cpp
++++ b/chrome/nsChromeRegistryChrome.cpp
+@@ -207,6 +207,7 @@ nsChromeRegistryChrome::CheckForNewChrome() {
+ 
+   mPackagesHash.Clear();
+   mOverrideTable.Clear();
++  mContentOverrideTable.Clear();
+ 
+   mDynamicRegistration = false;
+ 
+@@ -261,7 +262,17 @@ void nsChromeRegistryChrome::SendRegisteredChrome(
+     SerializeURI(entry.GetWeak(), overrideURI);
+ 
+     overrides.AppendElement(
+-        OverrideMapping{std::move(chromeURI), std::move(overrideURI)});
++        OverrideMapping{std::move(chromeURI), std::move(overrideURI), false});
++  }
++
++  for (const auto& entry : mContentOverrideTable) {
++    SerializedURI chromeURI, overrideURI;
++
++    SerializeURI(entry.GetKey(), chromeURI);
++    SerializeURI(entry.GetWeak(), overrideURI);
++
++    overrides.AppendElement(
++        OverrideMapping{std::move(chromeURI), std::move(overrideURI), true});
+   }
+ 
+   nsAutoCString appLocale;
+@@ -590,7 +601,9 @@ void nsChromeRegistryChrome::ManifestOverride(ManifestProcessingContext& cx,
+         "Cannot register non-local URI '%s' for an override.", resolved);
+     return;
+   }
+-  mOverrideTable.InsertOrUpdate(chromeuri, resolveduri);
++  const bool contentOnly = flags & nsChromeRegistry::CONTENT_ONLY;
++  (contentOnly ? mContentOverrideTable : mOverrideTable)
++      .InsertOrUpdate(chromeuri, resolveduri);
+ 
+   if (mDynamicRegistration) {
+     SerializedURI serializedChrome;
+@@ -600,7 +613,7 @@ void nsChromeRegistryChrome::ManifestOverride(ManifestProcessingContext& cx,
+     SerializeURI(resolveduri, serializedOverride);
+ 
+     OverrideMapping override = {std::move(serializedChrome),
+-                                std::move(serializedOverride)};
++                                std::move(serializedOverride), contentOnly};
+     SendManifestEntry(override);
+   }
+ }
+diff --git a/chrome/nsChromeRegistryContent.cpp b/chrome/nsChromeRegistryContent.cpp
+--- a/chrome/nsChromeRegistryContent.cpp
++++ b/chrome/nsChromeRegistryContent.cpp
+@@ -21,6 +21,7 @@ void nsChromeRegistryContent::RegisterRemoteChrome(
+   if (aReset) {
+     mPackagesHash.Clear();
+     mOverrideTable.Clear();
++    mContentOverrideTable.Clear();
+     // XXX Can't clear resources.
+   }
+ 
+@@ -103,7 +104,8 @@ void nsChromeRegistryContent::RegisterOverride(
+   rv = NS_NewURI(getter_AddRefs(overrideURI), aOverride.overrideURI.spec);
+   if (NS_FAILED(rv)) return;
+ 
+-  mOverrideTable.InsertOrUpdate(chromeURI, overrideURI);
++  (aOverride.contentOnly ? mContentOverrideTable : mOverrideTable)
++      .InsertOrUpdate(chromeURI, overrideURI);
+ }
+ 
+ nsIURI* nsChromeRegistryContent::GetBaseURIFromPackage(
+diff --git a/docshell/base/nsAboutRedirector.cpp b/docshell/base/nsAboutRedirector.cpp
+--- a/docshell/base/nsAboutRedirector.cpp
++++ b/docshell/base/nsAboutRedirector.cpp
+@@ -111,10 +111,8 @@ static const RedirEntry kRedirMap[] = {
+      nsIAboutModule::IS_SECURE_CHROME_UI |
+          nsIAboutModule::HIDE_FROM_ABOUTABOUT},
+ #endif
+-#ifdef MOZ_CRASHREPORTER
+     {"crashes", "chrome://global/content/crashes.html",
+      nsIAboutModule::IS_SECURE_CHROME_UI},
+-#endif
+     {"credits", "https://www.mozilla.org/credits/",
+      nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
+          nsIAboutModule::URI_MUST_LOAD_IN_CHILD},
+@@ -155,7 +153,7 @@ static const RedirEntry kRedirMap[] = {
+          nsIAboutModule::IS_SECURE_CHROME_UI},
+     {"mozilla", "chrome://global/content/mozilla.html",
+      nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT},
+-#if !defined(ANDROID) && !defined(XP_WIN)
++#if !defined(ANDROID)
+     {"webauthn", "chrome://global/content/aboutWebauthn.html",
+      nsIAboutModule::ALLOW_SCRIPT | nsIAboutModule::IS_SECURE_CHROME_UI},
+ #endif
+@@ -206,7 +204,7 @@ static const RedirEntry kRedirMap[] = {
+          nsIAboutModule::MAKE_LINKABLE | nsIAboutModule::URI_CAN_LOAD_IN_CHILD},
+     {"support", "chrome://global/content/aboutSupport.xhtml",
+      nsIAboutModule::ALLOW_SCRIPT | nsIAboutModule::IS_SECURE_CHROME_UI},
+-#ifdef XP_WIN
++#ifndef ANDROID
+     {"third-party", "chrome://global/content/aboutThirdParty.html",
+      nsIAboutModule::ALLOW_SCRIPT},
+     {"windows-messages", "chrome://global/content/aboutWindowsMessages.html",
+diff --git a/docshell/build/components.conf b/docshell/build/components.conf
+--- a/docshell/build/components.conf
++++ b/docshell/build/components.conf
+@@ -36,8 +36,9 @@ about_pages = [
+ 
+ if buildconfig.substs['MOZ_WIDGET_TOOLKIT'] != 'android':
+     about_pages.append('addons')
+-if defined('MOZ_CRASHREPORTER'):
+-    about_pages.append('crashes')
++# Camoufox: about:crashes is registered as in every stock desktop build;
++# --disable-crashreporter only drops the reporter itself.
++about_pages.append('crashes')
+ if buildconfig.substs['MOZ_WIDGET_TOOLKIT'] != 'android':
+     about_pages.append('profiles')
+ if buildconfig.substs['MOZ_WIDGET_TOOLKIT'] != 'android':
+@@ -46,12 +47,15 @@ if buildconfig.substs['MOZ_WIDGET_TOOLKIT'] != 'android':
+ if buildconfig.substs['MOZ_WIDGET_TOOLKIT'] == 'android':
+     about_pages.append('crashcontentjava')
+     about_pages.append('home')
+-if buildconfig.substs['MOZ_WIDGET_TOOLKIT'] == 'windows':
++# Camoufox: the Windows-only and the non-Windows pages are all compiled in;
++# nsComponentManagerImpl::Init keeps the ones a stock build for the claimed OS
++# registers (HideAboutPagesForClaimedOS).
++if buildconfig.substs['MOZ_WIDGET_TOOLKIT'] != 'android':
+     about_pages.append('third-party')
+     about_pages.append('windows-messages')
+ if not defined('MOZ_GLEAN_ANDROID'):
+     about_pages.append('glean')
+-if buildconfig.substs['MOZ_WIDGET_TOOLKIT'] != 'android' and buildconfig.substs['MOZ_WIDGET_TOOLKIT'] != 'windows':
++if buildconfig.substs['MOZ_WIDGET_TOOLKIT'] != 'android':
+     about_pages.append('webauthn')
+ if defined('NIGHTLY_BUILD'):
+     about_pages.append('inference')
+diff --git a/python/mozbuild/mozpack/chrome/flags.py b/python/mozbuild/mozpack/chrome/flags.py
+--- a/python/mozbuild/mozpack/chrome/flags.py
++++ b/python/mozbuild/mozpack/chrome/flags.py
+@@ -232,6 +232,10 @@ class Flags(dict):
+         "tablet": Flag,
+         "process": StringFlag,
+         "backgroundtask": StringFlag,
++        # Camoufox: the claimed OS a line registers for, and an override for
++        # page-triggered loads only (toolkit/camoufox-overlay).
++        "camouos": StringFlag,
++        "camoucontent": Flag,
+     }
+     RE = re.compile(r"([!<>=]+)")
+ 
+diff --git a/python/mozbuild/mozpack/chrome/manifest.py b/python/mozbuild/mozpack/chrome/manifest.py
+--- a/python/mozbuild/mozpack/chrome/manifest.py
++++ b/python/mozbuild/mozpack/chrome/manifest.py
+@@ -41,6 +41,8 @@ class ManifestEntry:
+         "process",
+         "contentaccessible",
+         "backgroundtask",
++        "camouos",
++        "camoucontent",
+     ]
+ 
+     def __init__(self, base, *flags):
+diff --git a/toolkit/moz.build b/toolkit/moz.build
+--- a/toolkit/moz.build
++++ b/toolkit/moz.build
+@@ -20,6 +20,9 @@ DIRS += [
+     "mozapps/preferences",
+     "profile",
+     "themes",
++    # Camoufox: the stock bytes pages see under each claimed OS
++    # (browser/additions/toolkit/camoufox-overlay, gen-os-overlay.py).
++    "camoufox-overlay",
+ ]
+ 
+ if CONFIG["OS_ARCH"] == "WINNT":
+diff --git a/xpcom/components/ManifestParser.cpp b/xpcom/components/ManifestParser.cpp
+--- a/xpcom/components/ManifestParser.cpp
++++ b/xpcom/components/ManifestParser.cpp
+@@ -37,6 +37,7 @@
+ #include "nsTextFormatter.h"
+ #include "nsVersionComparator.h"
+ #include "nsXPCOMCIDInternal.h"
++#include "MaskConfig.hpp"
+ 
+ using namespace mozilla;
+ 
+@@ -263,6 +264,28 @@ static bool CheckOsFlag(const nsAString& aFlag, const nsAString& aData,
+   return result;
+ }
+ 
++// Camoufox: the OS the identity claims, in nsIXULRuntime.OS's lowercase
++// form, for the camouos= modifier. A page sees the files a build for that OS
++// ships (toolkit/camoufox-overlay, generated by gen-os-overlay.py), while os=
++// keeps matching the build's own OS so the browser UI is unchanged. No claim,
++// or one no stock build makes, is the build's own OS.
++static void CamouClaimedOS(const nsAString& aHostOS, nsAString& aResult) {
++  switch (MaskConfig::GetSpoofedOS()) {
++    case MaskConfig::SpoofedOS::Windows:
++      aResult.AssignLiteral(u"winnt");
++      return;
++    case MaskConfig::SpoofedOS::Linux:
++      aResult.AssignLiteral(u"linux");
++      return;
++    case MaskConfig::SpoofedOS::MacOS:
++      aResult.AssignLiteral(u"darwin");
++      return;
++    default:
++      aResult = aHostOS;
++      return;
++  }
++}
++
+ /**
+  * Check for a modifier flag of the following form:
+  *   "flag=version"
+@@ -391,6 +414,11 @@ void ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
+   // possible to have conditional manifest contents, so we need to recognize and
+   // discard these tokens even when MOZ_BACKGROUNDTASKS is not set.
+   constexpr auto kBackgroundTask = u"backgroundtask"_ns;
++  // Camoufox: "camouos=winnt" registers a line only for an identity claiming
++  // that OS; "camoucontent" makes an override apply to page-triggered loads
++  // only (nsChromeRegistry::ConvertChromeURLForLoad).
++  constexpr auto kCamouOs = u"camouos"_ns;
++  constexpr auto kCamouContent = u"camoucontent"_ns;
+ 
+   constexpr auto kMain = u"main"_ns;
+   constexpr auto kContent = u"content"_ns;
+@@ -441,6 +469,9 @@ void ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
+     }
+   }
+ 
++  nsAutoString camouOS;
++  CamouClaimedOS(osTarget, camouOS);
++
+   nsAutoString osVersion;
+ #if defined(XP_WIN)
+ #  pragma warning(push)
+@@ -546,6 +577,7 @@ void ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
+     TriState stOs = eUnspecified;
+     TriState stABI = eUnspecified;
+     TriState stProcess = eUnspecified;
++    TriState stCamouOs = eUnspecified;
+ #if defined(MOZ_WIDGET_ANDROID)
+     TriState stTablet = eUnspecified;
+ #endif
+@@ -566,6 +598,7 @@ void ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
+ 
+       if (CheckStringFlag(kApplication, wtoken, appID, stApp) ||
+           CheckOsFlag(kOs, wtoken, osTarget, stOs) ||
++          CheckStringFlag(kCamouOs, wtoken, camouOS, stCamouOs) ||
+           CheckStringFlag(kABI, wtoken, abi, stABI) ||
+           CheckStringFlag(kProcess, wtoken, process, stProcess) ||
+           CheckVersionFlag(kOsVersion, wtoken, osVersion, stOsVersion) ||
+@@ -603,6 +636,14 @@ void ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
+         }
+       }
+ 
++      if (!strcmp(directive->directive, "override")) {
++        bool contentOnly;
++        if (CheckFlag(kCamouContent, wtoken, contentOnly)) {
++          if (contentOnly) flags |= nsChromeRegistry::CONTENT_ONLY;
++          continue;
++        }
++      }
++
+       bool xpcNativeWrappers = true;  // Dummy for CheckFlag.
+       if (CheckFlag(kXPCNativeWrappers, wtoken, xpcNativeWrappers)) {
+         LogMessageWithContext(
+@@ -624,7 +665,7 @@ void ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
+ #ifdef MOZ_BACKGROUNDTASKS
+         stBackgroundTask == eBad ||
+ #endif
+-        stABI == eBad || stProcess == eBad) {
++        stABI == eBad || stProcess == eBad || stCamouOs == eBad) {
+       continue;
+     }
+ 
+diff --git a/xpcom/components/moz.build b/xpcom/components/moz.build
+--- a/xpcom/components/moz.build
++++ b/xpcom/components/moz.build
+@@ -67,6 +67,7 @@ LOCAL_INCLUDES += [
+     "../base",
+     "../build",
+     "../ds",
++    "/camoucfg",
+     "/chrome",
+     "/js/xpconnect/loader",
+     "/js/xpconnect/src",
+diff --git a/xpcom/components/nsComponentManager.cpp b/xpcom/components/nsComponentManager.cpp
+--- a/xpcom/components/nsComponentManager.cpp
++++ b/xpcom/components/nsComponentManager.cpp
+@@ -37,6 +37,7 @@
+ #include "nscore.h"
+ #include "prthread.h"
+ #include "xpcpublic.h"
++#include "MaskConfig.hpp"
+ 
+ using namespace mozilla;
+ using namespace mozilla::xpcom;
+@@ -241,6 +242,39 @@ void nsComponentManagerImpl::InitializeModuleLocations() {
+   sModuleLocations = new nsTArray<ComponentLocation>;
+ }
+ 
++// Camoufox: register the OS-specific about: pages a stock build for the
++// claimed OS registers, and no others. Every one of them is compiled in
++// (docshell/build/components.conf); the rest are invalidated here, in every
++// process, so a lookup fails with NS_ERROR_FACTORY_NOT_REGISTERED exactly as
++// for a module the build never had. A page can tell the two apart:
++// new Worker("about:third-party") returns for a registered module and throws
++// for an absent one. Windows registers about:third-party and
++// about:windows-messages; every other desktop OS registers about:webauthn.
++static void HideAboutPagesForClaimedOS() {
++  MaskConfig::SpoofedOS os = MaskConfig::GetSpoofedOS();
++  if (os == MaskConfig::SpoofedOS::None || os == MaskConfig::SpoofedOS::Other) {
++    os = MaskConfig::HostOS();
++  }
++  const bool windows = os == MaskConfig::SpoofedOS::Windows;
++  static const struct {
++    const char* mPage;
++    bool mWindowsOnly;
++  } kPages[] = {
++      {"third-party", true},
++      {"windows-messages", true},
++      {"webauthn", false},
++  };
++  for (const auto& page : kPages) {
++    if (page.mWindowsOnly == windows) {
++      continue;
++    }
++    // NS_ABOUT_MODULE_CONTRACTID_PREFIX (nsIAboutModule.idl)
++    nsAutoCString contractID("@mozilla.org/network/protocol/about;1?what="_ns);
++    contractID.Append(page.mPage);
++    StaticComponents::InvalidateContractID(contractID);
++  }
++}
++
+ nsresult nsComponentManagerImpl::Init() {
+   {
+     gProcessMatchTable[size_t(ProcessSelector::ANY_PROCESS)] =
+@@ -307,6 +341,8 @@ nsresult nsComponentManagerImpl::Init() {
+ 
+   nsCategoryManager::GetSingleton()->SuppressNotifications(true);
+ 
++  HideAboutPagesForClaimedOS();
++
+   auto* catMan = nsCategoryManager::GetSingleton();
+   for (const auto& cat : gStaticCategories) {
+     for (const auto& entry : cat) {

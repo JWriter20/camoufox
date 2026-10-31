@@ -26,7 +26,7 @@ index 0000000000..044cc7787a
 +}  // namespace mozilla
 diff --git a/dom/base/ScreenDimensionManager.h b/dom/base/ScreenDimensionManager.h
 new file mode 100644
-index 0000000000..a36944f3c6
+index 0000000000..892ccd7958
 --- /dev/null
 +++ b/dom/base/ScreenDimensionManager.h
 @@ -0,0 +1,75 @@
@@ -106,10 +106,10 @@ index 0000000000..a36944f3c6
 +
 +#endif  // mozilla_dom_ScreenDimensionManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index 97ea29a739..6dbe3a775f 100644
+index 3992e585ea..704f103e9c 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -265,6 +265,7 @@ EXPORTS.mozilla.dom += [
+@@ -264,6 +264,7 @@ EXPORTS.mozilla.dom += [
      "ResponsiveImageSelector.h",
      "RoverfoxStorageManager.h",
      "SameProcessMessageQueue.h",
@@ -117,7 +117,7 @@ index 97ea29a739..6dbe3a775f 100644
      "ScreenLuminance.h",
      "ScreenOrientation.h",
      "Selection.h",
-@@ -567,6 +568,9 @@ SOURCES += [
+@@ -561,6 +562,9 @@ SOURCES += [
  # (includes RoverfoxStorageManager.h which can affect compilation units)
  SOURCES += ["NavigatorManager.cpp"]
  
@@ -128,7 +128,7 @@ index 97ea29a739..6dbe3a775f 100644
  SOURCES += ["FontListManager.cpp"]
  
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 23381f7b3c..7c0dc63631 100644
+index e35c850fce..66d55552cc 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
 @@ -5,6 +5,7 @@
@@ -139,7 +139,7 @@ index 23381f7b3c..7c0dc63631 100644
  
  #include <inttypes.h>
  #include <stdio.h>
-@@ -7837,6 +7838,28 @@ void nsGlobalWindowInner::SetNavigatorUserAgent(const nsAString& ua,
+@@ -7839,6 +7840,28 @@ void nsGlobalWindowInner::SetNavigatorUserAgent(const nsAString& ua,
    RoverfoxStorageManager::RemoveSetter("setNavigatorUserAgent");
  }
  
@@ -169,11 +169,11 @@ index 23381f7b3c..7c0dc63631 100644
      bool aGranted) {
    // Invalidate cached StorageAllowed field so that calls to GetLocalStorage
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index ac500caabd..ce72137a32 100644
+index 98354d75cc..b82745159b 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -706,6 +706,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
-                                        mozilla::ErrorResult& aRv);
+@@ -705,6 +705,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+                               mozilla::ErrorResult& aRv);
    void SetNavigatorUserAgent(const nsAString& ua, mozilla::ErrorResult& aRv);
  
 +  // Per-context screen geometry
@@ -289,7 +289,7 @@ index 4b989dd48a..db1b834258 100644
  
    nsDeviceContext* context = GetDeviceContext();
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index e04cc674c7..8c739fc656 100644
+index e1afacd91b..243a69f40b 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
 @@ -986,6 +986,18 @@ partial interface Window {
@@ -337,14 +337,22 @@ index f9fcb084a7..fc6c39473f 100644
  
  #include <algorithm>  // for max
  
-@@ -196,6 +197,13 @@ bool nsDeviceContext::GetScreenIsHDR() {
+@@ -196,6 +197,21 @@ bool nsDeviceContext::GetScreenIsHDR() {
  }
  
  nsSize nsDeviceContext::GetDeviceSurfaceDimensions() {
-+  // Check for height and width overrides from MaskConfig
++  // Camoufox: the claimed screen. A real screen whose device pixels round to
++  // it is that screen, and its size stays fractional as stock's does: 3456
++  // device px at 250 % is 1382.4 CSS px, so device-width matches no 1382px
++  // query although screen.width reads 1382.
 +  if (auto height = MaskConfig::GetInt32("screen.height"),
 +      width = MaskConfig::GetInt32("screen.width");
 +      height && width) {
++    nsSize real = GetRect().Size();
++    if (NSAppUnitsToIntPixels(real.width, AppUnitsPerCSSPixel()) == width.value() &&
++        NSAppUnitsToIntPixels(real.height, AppUnitsPerCSSPixel()) == height.value()) {
++      return real;
++    }
 +    nsRect outRect = CSSPixel::ToAppUnits(CSSIntRect(0, 0, width.value(), height.value()));
 +    return outRect.Size();
 +  }
@@ -352,7 +360,7 @@ index f9fcb084a7..fc6c39473f 100644
  }
  
 diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
-index 1587fcffd8..4b1952bc5d 100644
+index 1587fcffd8..612037bbb4 100644
 --- a/layout/style/nsMediaFeatures.cpp
 +++ b/layout/style/nsMediaFeatures.cpp
 @@ -4,6 +4,7 @@
@@ -376,15 +384,26 @@ index 1587fcffd8..4b1952bc5d 100644
  #include "mozilla/gfx/gfxVars.h"
  #include "nsCSSProps.h"
  #include "nsCSSValue.h"
-@@ -58,6 +61,26 @@ static nsSize GetSize(const Document& aDocument) {
+@@ -58,6 +61,40 @@ static nsSize GetSize(const Document& aDocument) {
  
  // A helper for three features below.
  static nsSize GetDeviceSize(const Document& aDocument) {
 +  // Camoufox: per-context size first, for the same internal-consistency reason
 +  // as the global override below -- CSS device-width has to agree with
 +  // screen.width or the disagreement is itself the fingerprint.
++  // A real screen whose device pixels round to the claimed size is that
++  // screen, kept fractional as stock keeps it (nsDeviceContext::
++  // GetDeviceSurfaceDimensions).
++  nsPresContext* claimedPc = aDocument.GetPresContext();
 +  if (uint32_t w = 0, h = 0; ScreenDimensionManager::GetDimensions(
 +          RoverfoxStorageManager::UserContextId(&aDocument), w, h)) {
++    if (claimedPc) {
++      nsSize real = claimedPc->DeviceContext()->GetRect().Size();
++      if (NSAppUnitsToIntPixels(real.width, AppUnitsPerCSSPixel()) == int32_t(w) &&
++          NSAppUnitsToIntPixels(real.height, AppUnitsPerCSSPixel()) == int32_t(h)) {
++        return real;
++      }
++    }
 +    return CSSPixel::ToAppUnits(
 +        CSSIntSize(static_cast<int32_t>(w), static_cast<int32_t>(h)));
 +  }
@@ -397,6 +416,9 @@ index 1587fcffd8..4b1952bc5d 100644
 +  if (auto width = MaskConfig::GetInt32("screen.width"),
 +      height = MaskConfig::GetInt32("screen.height");
 +      width && height) {
++    if (claimedPc && !claimedPc->IsRootPaginatedDocument()) {
++      return claimedPc->DeviceContext()->GetDeviceSurfaceDimensions();
++    }
 +    return CSSPixel::ToAppUnits(CSSIntSize(width.value(), height.value()));
 +  }
 +
@@ -431,6 +453,24 @@ index 1587fcffd8..4b1952bc5d 100644
    // Use depth of 24 when resisting fingerprinting, or when we're not being
    // rendered.
    int32_t depth = 24;
+@@ -201,6 +245,17 @@ float Gecko_MediaFeatures_GetResolution(const Document* aDocument) {
+     return pc->GetOverrideDPPX();
+   }
+ 
++  // Camoufox: the identity's devicePixelRatio, zoomed as stock zooms the real
++  // one, so `resolution` agrees with window.devicePixelRatio
++  // (nsGlobalWindowInner::GetDevicePixelRatio) at every zoom level.
++  if (auto value = MaskConfig::GetDouble("window.devicePixelRatio")) {
++    const int32_t unzoomed =
++        std::max(1, NSToIntRound(float(AppUnitsPerCSSPixel() / value.value())));
++    return float(AppUnitsPerCSSPixel()) /
++           float(nsDeviceContext::ApplyFullZoomToAPD(unzoomed,
++                                                     pc->GetFullZoom()));
++  }
++
+   if (aDocument->ShouldResistFingerprinting(RFPTarget::CSSResolution)) {
+     return float(nsRFPService::GetDevicePixelRatioAtZoom(pc->GetFullZoom()));
+   }
 diff --git a/toolkit/components/resistfingerprinting/nsRFPService.cpp b/toolkit/components/resistfingerprinting/nsRFPService.cpp
 index 6ce393b112..c48bac2b05 100644
 --- a/toolkit/components/resistfingerprinting/nsRFPService.cpp

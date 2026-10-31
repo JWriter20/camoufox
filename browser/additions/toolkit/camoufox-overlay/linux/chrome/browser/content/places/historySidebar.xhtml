@@ -1,0 +1,313 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<?csp default-src chrome:; style-src chrome: 'unsafe-inline'; ?>
+
+<!DOCTYPE window>
+
+<window id="history-panel"
+        class="sidebar-panel"
+        orient="vertical"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        data-l10n-id="places-history">
+
+  <script src="chrome://browser/content/places/historySidebar.js"/>
+  <script src="chrome://global/content/globalOverlay.js"/>
+  <script src="chrome://browser/content/utilityOverlay.js"/>
+  <script src="chrome://browser/content/contentTheme.js"/>
+  <script src="chrome://browser/content/places/places-tree.js"/>
+  <script src="chrome://global/content/editMenuOverlay.js"/>
+
+  <linkset>
+    <html:link
+      rel="stylesheet"
+      href="chrome://browser/content/places/places.css"
+    />
+    <html:link
+      rel="stylesheet"
+      href="chrome://browser/content/usercontext/usercontext.css"
+    />
+    <html:link rel="stylesheet" href="chrome://global/skin/global.css" />
+    <html:link
+      rel="stylesheet"
+      href="chrome://browser/skin/places/tree-icons.css"
+    />
+    <html:link
+      rel="stylesheet"
+      href="chrome://browser/skin/places/sidebar.css"
+    />
+
+    <html:link rel="localization" href="toolkit/global/textActions.ftl"/>
+    <html:link rel="localization" href="browser/places.ftl"/>
+  </linkset>
+
+
+<commandset id="placesCommands"
+            commandupdater="true"
+            events="focus,sort,places">
+  <script src="chrome://browser/content/places/places-commands.js" />
+
+  <command id="Browser:ShowAllBookmarks"/>
+  <command id="Browser:ShowAllHistory"/>
+
+  <command id="placesCmd_open"/>
+  <command id="placesCmd_open:window"/>
+  <command id="placesCmd_open:privatewindow"/>
+  <command id="placesCmd_open:tab"/>
+
+  <command id="placesCmd_new:bookmark"/>
+  <command id="placesCmd_new:folder"/>
+  <command id="placesCmd_new:separator"/>
+  <command id="placesCmd_show:info"/>
+  <command id="placesCmd_sortBy:name"/>
+  <command id="placesCmd_deleteDataHost"/>
+  <command id="placesCmd_createBookmark"/>
+
+  <!-- Special versions of cut/copy/paste/delete which check for an open context menu. -->
+  <command id="placesCmd_cut"/>
+  <command id="placesCmd_copy"/>
+  <command id="placesCmd_paste"/>
+  <command id="placesCmd_delete"/>
+  <command id="placesCmd_showInFolder"/>
+</commandset>
+
+
+  <!-- These key nodes are here only for show. The real bindings come from
+       XBL, in platformHTMLBindings.xml. See bugs 57078 and 71779. -->
+
+  <keyset id="editMenuKeys">
+    <key id="key_undo" data-l10n-id="text-action-undo-shortcut" modifiers="accel" command="cmd_undo"/>
+    <key id="key_redo"
+    data-l10n-id="text-action-undo-shortcut"
+    modifiers="accel,shift"
+    command="cmd_redo"/>
+    <key id="key_cut" data-l10n-id="text-action-cut-shortcut" modifiers="accel" command="cmd_cut"/>
+    <key id="key_copy" data-l10n-id="text-action-copy-shortcut" modifiers="accel" command="cmd_copy"/>
+    <key id="key_paste" data-l10n-id="text-action-paste-shortcut" modifiers="accel" command="cmd_paste"/>
+    <key id="key_delete" keycode="VK_DELETE" command="cmd_delete"/>
+    <key id="key_selectAll" data-l10n-id="text-action-select-all-shortcut" modifiers="accel" command="cmd_selectAll"/>
+  </keyset>
+
+
+<menupopup id="placesContext">
+  <script src="chrome://browser/content/places/placesContextMenu.js" />
+
+  <menuitem id="placesContext_open"
+            command="placesCmd_open"
+            data-l10n-id="places-open"
+            default="true"
+            selection-type="single"
+            node-type="link"
+            hide-if-single-click-opens="true"/>
+  <menuitem id="placesContext_openBookmarkContainer:tabs"
+            data-l10n-id="places-open-all-bookmarks"
+            selection-type="single|none"
+            node-type="folder|query_tag"/>
+  <menuitem id="placesContext_openBookmarkLinks:tabs"
+            data-l10n-id="places-open-all-bookmarks"
+            selection-type="multiple"
+            node-type="link_bookmark|separator"/>
+  <menuitem id="placesContext_open:newtab"
+            command="placesCmd_open:tab"
+            data-l10n-id="places-open-in-tab"
+            selection-type="single"
+            node-type="link"/>
+  <menu id="placesContext_open:newcontainertab"
+            data-l10n-id="places-open-in-container-tab"
+            selection-type="single"
+            node-type="link"
+            hide-if-private-browsing="true"
+            hide-if-usercontext-disabled="true">
+      <menupopup id="placesContext_open_newcontainertab_popup"/>
+  </menu>
+  <menuitem id="placesContext_openContainer:tabs"
+            data-l10n-id="places-open-all-in-tabs"
+            selection-type="single|none"
+            node-type="query"
+            hide-if-node-type="query_tag"/>
+  <menuitem id="placesContext_openLinks:tabs"
+            data-l10n-id="places-open-all-in-tabs"
+            selection-type="multiple"
+            node-type="link"
+            hide-if-node-type="link_bookmark"/>
+  <menuitem id="placesContext_open:newwindow"
+            command="placesCmd_open:window"
+            data-l10n-id="places-open-in-window"
+            selection-type="single"
+            node-type="link"
+            hide-if-private-browsing="true"/>
+  <menuitem id="placesContext_open:newprivatewindow"
+            command="placesCmd_open:privatewindow"
+            data-l10n-id="places-open-in-private-window"
+            selection-type="single"
+            node-type="link"
+            hide-if-disabled-private-browsing="true"/>
+  <menuitem id="placesContext_showInFolder"
+            data-l10n-id="places-show-in-folder"
+            command="placesCmd_showInFolder"
+            closemenu="single"
+            node-type="link_bookmark"
+            hide-if-not-search="true"
+            selection-type="single"/>
+  <menuitem id="contentsharing_sharefolder"
+            class="badge-new"
+            data-l10n-attrs="badge"
+            data-l10n-id="places-share-folder3"
+            selection-type="single|multiple"
+            node-type="folder"
+            hide-if-content-sharing-disabled="true"
+            hide-if-no-URI-children="true" />
+  <menuseparator id="placesContext_openSeparator"/>
+  <menuitem id="placesContext_show_bookmark:info"
+            command="placesCmd_show:info"
+            data-l10n-id="places-edit-bookmark"
+            node-type="link_bookmark"/>
+  <menuitem id="placesContext_show:info"
+            command="placesCmd_show:info"
+            data-l10n-id="places-edit-generic"
+            node-type="query"
+            hide-if-node-type="query_host|query_day"/>
+  <menuitem id="placesContext_show_folder:info"
+            command="placesCmd_show:info"
+            data-l10n-id="places-edit-folder2"
+            node-type="folder"/>
+  <menuitem id="placesContext_deleteBookmark"
+            data-l10n-id="places-delete-bookmark"
+            data-l10n-args='{"count":"1"}'
+            command="placesCmd_delete"
+            closemenu="single"
+            node-type="link_bookmark"
+            hide-if-node-type="link_bookmark_tag"/>
+  <menuitem id="placesContext_removeTag"
+            data-l10n-id="places-untag-bookmark"
+            command="placesCmd_delete"
+            closemenu="single"
+            node-type="link_bookmark_tag"/>
+  <menuitem id="placesContext_deleteFolder"
+            data-l10n-id="places-delete-folder"
+            data-l10n-args='{"count":"1"}'
+            command="placesCmd_delete"
+            node-type="folder"
+            closemenu="single"/>
+  <menuitem id="placesContext_delete"
+            data-l10n-id="text-action-delete"
+            command="placesCmd_delete"
+            closemenu="single"
+            hide-if-node-type-is-only="link|folder"/>
+  <menuitem id="placesContext_delete_history"
+            data-l10n-id="places-delete-page"
+            data-l10n-args='{"count":"1"}'
+            command="placesCmd_delete"
+            closemenu="single"
+            node-type="link"
+            hide-if-node-type="link_bookmark"/>
+  <menuitem id="placesContext_deleteHost"
+            command="placesCmd_deleteDataHost"
+            data-l10n-id="places-forget-domain-data"
+            closemenu="single"
+            node-type="link|query_host"
+            selection-type="single"
+            hide-if-node-type="link_bookmark"/>
+  <menuitem id="placesContext_sortBy:name"
+            command="placesCmd_sortBy:name"
+            data-l10n-id="places-sortby-name"
+            closemenu="single"
+            node-type="folder"/>
+  <menuseparator id="placesContext_deleteSeparator"/>
+  <menuitem id="placesContext_cut"
+            command="placesCmd_cut"
+            data-l10n-id="text-action-cut"
+            closemenu="single"
+            node-type="link_bookmark|folder|separator|query"
+            hide-if-node-type="link_bookmark_tag|query_host|query_day|query_tag"/>
+  <menuitem id="placesContext_copy"
+            command="placesCmd_copy"
+            data-l10n-id="text-action-copy"
+            closemenu="single"/>
+  <menuitem id="placesContext_paste_group"
+            data-l10n-id="text-action-paste"
+            command="placesCmd_paste"
+            closemenu="single"
+            hide-if-no-insertion-point="true"/>
+  <menuseparator id="placesContext_editSeparator"/>
+  <menuitem id="placesContext_new:bookmark"
+            command="placesCmd_new:bookmark"
+            data-l10n-id="places-add-bookmark"
+            selection-type="any"
+            hide-if-no-insertion-point="true"/>
+  <menuitem id="placesContext_new:folder"
+            command="placesCmd_new:folder"
+            data-l10n-id="places-add-folder-contextmenu"
+            selection-type="any"
+            hide-if-no-insertion-point="true"/>
+  <menuitem id="placesContext_new:separator"
+            command="placesCmd_new:separator"
+            data-l10n-id="places-add-separator"
+            closemenu="single"
+            selection-type="any"
+            hide-if-no-insertion-point="true"/>
+  <menuseparator id="placesContext_newSeparator"/>
+  <menuitem id="placesContext_paste"
+            data-l10n-id="text-action-paste"
+            command="placesCmd_paste"
+            closemenu="single"
+            selection-type="none"
+            hide-if-no-insertion-point="true"/>
+  <menuseparator id="placesContext_pasteSeparator"/>
+  <menuitem id="placesContext_createBookmark"
+            data-l10n-id="places-create-bookmark"
+            data-l10n-args='{"count":"1"}'
+            command="placesCmd_createBookmark"
+            node-type="link"
+            hide-if-node-type="link_bookmark"/>
+  <menuitem id="placesContext_showAllBookmarks"
+            data-l10n-id="places-manage-bookmarks"
+            command="Browser:ShowAllBookmarks"
+            ignore-item="true"
+            hidden="true"/>
+
+</menupopup>
+
+<!-- Bookmarks and history tooltip -->
+<tooltip id="bhTooltip" noautohide="true"
+         class="places-tooltip">
+  <box class="places-tooltip-box">
+    <description class="tooltip-label places-tooltip-title"/>
+    <description crop="center" class="tooltip-label places-tooltip-uri uri-element"/>
+  </box>
+</tooltip>
+
+  <hbox id="sidebar-search-container">
+    <html:moz-input-search id="search-box"
+        data-l10n-id="places-history-search"
+        data-l10n-attrs="placeholder"
+        aria-controls="historyTree"/>
+    <button id="viewButton" style="min-width:0px !important;" type="menu"
+            data-l10n-id="places-view" selectedsort="day"
+            persist="selectedsort">
+      <menupopup>
+        <menuitem id="bydayandsite" data-l10n-id="places-by-day-and-site" type="radio"/>
+        <menuitem id="bysite" data-l10n-id="places-by-site" type="radio"/>
+        <menuitem id="byday" data-l10n-id="places-by-date" type="radio"/>
+        <menuitem id="byvisited" data-l10n-id="places-by-most-visited" type="radio"/>
+        <menuitem id="bylastvisited" data-l10n-id="places-by-last-visited" type="radio"/>
+      </menupopup>
+    </button>
+  </hbox>
+
+  <tree id="historyTree"
+        class="sidebar-placesTree"
+        flex="1"
+        is="places-tree"
+        hidecolumnpicker="true"
+        context="placesContext"
+        singleclickopens="true">
+    <treecols>
+      <treecol id="title" flex="1" primary="true" hideheader="true"/>
+    </treecols>
+    <treechildren class="sidebar-placesTreechildren" flex="1" tooltip="bhTooltip"/>
+  </tree>
+</window>

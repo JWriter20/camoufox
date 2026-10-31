@@ -8,9 +8,11 @@ cfparity css.system probe resolves, the same in each of its three launches.
 The page resolves the same names the same way in a Windows identity and must
 get every one. The launcher's windowsUiColors prefs (launcher-constants.json)
 supply the ones the host theme answers otherwise: Highlight and SelectedItem
-rgb(0, 120, 215), -moz-dialog white, -moz-cellhighlight rgb(206, 206, 206),
+rgb(0, 120, 212) (the Windows 11 default accent, #0078d4), -moz-dialog white, -moz-cellhighlight rgb(206, 206, 206),
 -moz-menuhover rgba(0, 0, 0, 0.118), -moz-menuhovertext and
--moz-menubarhovertext rgb(21, 20, 26). A Linux identity on the same host must
+-moz-menubarhovertext rgb(21, 20, 26). Under color-scheme: dark, stock answers
+Firefox's own dark selection colours (the "dark" map), which the .dark prefs
+supply; the host's GTK theme and the light accent are wrong there. A Linux identity on the same host must
 differ on Highlight and -moz-dialog, so the check is not vacuous.
 
     python browser/tests/playwright/patches/system-colors-windows.py
@@ -25,8 +27,9 @@ from helpers import resolve_binary  # noqa: E402
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 # The probe's own resolution (cfparity/web/probes/css.js, css.system).
-RESOLVE = """(names) => {
+RESOLVE = """([names, scheme]) => {
   const el = document.createElement('div');
+  el.style.colorScheme = scheme;
   document.body.appendChild(el);
   const out = {};
   for (const c of names) {
@@ -38,24 +41,29 @@ RESOLVE = """(names) => {
 }"""
 
 
-def resolve(binary, os_name, names):
+def resolve(binary, os_name, names, scheme="normal"):
     from camoufox.sync_api import Camoufox
 
     with Camoufox(os=os_name, headless=True, executable_path=str(binary),
                   i_know_what_im_doing=True) as browser:
         page = browser.new_page()
         page.set_content("<body></body>")
-        return page.evaluate(RESOLVE, names)
+        return page.evaluate(RESOLVE, [names, scheme])
 
 
 def main() -> int:
-    recorded = json.loads((ASSETS / "system-colors-windows.json").read_text(encoding="utf-8"))["colors"]
+    record = json.loads((ASSETS / "system-colors-windows.json").read_text(encoding="utf-8"))
+    recorded = record["colors"]
     binary = resolve_binary()
     windows = resolve(binary, "windows", list(recorded))
     linux = resolve(binary, "linux", ["Highlight", "-moz-dialog"])
 
+    dark = resolve(binary, "windows", list(record["dark"]), "dark")
+
     mismatches = [f"{name}: {windows[name]} vs Windows 11 {want}"
                   for name, want in recorded.items() if windows[name] != want]
+    mismatches += [f"{name} (dark): {dark[name]} vs Windows 11 {want}"
+                   for name, want in record["dark"].items() if dark[name] != want]
     print(f"{len(recorded) - len(mismatches)}/{len(recorded)} system colours match stock Firefox 158 on Windows 11")
     for m in mismatches:
         print("   ", m)

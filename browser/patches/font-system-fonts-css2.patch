@@ -75,7 +75,7 @@ index 2ec366ca45..bcdc4301b9 100644
      "/dom/base",
      "/dom/html",
 diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
-index 056c0e2f7f..06dbf09955 100644
+index 1bd85b8c44..ffaf1d7fc8 100644
 --- a/layout/base/nsLayoutUtils.cpp
 +++ b/layout/base/nsLayoutUtils.cpp
 @@ -4,6 +4,8 @@
@@ -87,7 +87,7 @@ index 056c0e2f7f..06dbf09955 100644
  #include <algorithm>
  #include <limits>
  
-@@ -9820,8 +9822,91 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
+@@ -9826,8 +9828,84 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
    return aPresContext->GetMetricsFor(font, params);
  }
  
@@ -136,16 +136,9 @@ index 056c0e2f7f..06dbf09955 100644
 +    return;
 +  }
 +  if (aOS == MaskConfig::SpoofedOS::Windows) {
-+    // Windows reports the system font in device pixels, so every keyword is
-+    // 12 px x the display scale (30 px at 250 %). Use the DPR the identity
-+    // presents, which is the one the page cross-checks it against.
-+    static const float sWinScale = []() {
-+      if (auto dpr = MaskConfig::GetDouble("window.devicePixelRatio");
-+          dpr && *dpr > 0) {
-+        return static_cast<float>(*dpr);
-+      }
-+      return 1.0f;
-+    }();
++    // Stock Windows converts the NONCLIENTMETRICS height to CSS px, so every
++    // keyword is 12 px at any display scale (Firefox 158 on win-i9 at 250 %:
++    // font: caption "12px Segoe UI" in 6/6 launches).
 +    // Form controls resolve -moz-button/-moz-field/-moz-list, which stock
 +    // Windows maps to the dialog font "MS Shell Dlg 2" (nsLookAndFeel::
 +    // GetLookAndFeelFont, aUseShellDlg); every other keyword is the
@@ -162,7 +155,7 @@ index 056c0e2f7f..06dbf09955 100644
 +        aName = u"Segoe UI"_ns;
 +        break;
 +    }
-+    aStyle.size = 12.0f * sWinScale;
++    aStyle.size = 12;
 +    aStyle.systemFont = true;
 +    return;
 +  }
@@ -180,7 +173,7 @@ index 056c0e2f7f..06dbf09955 100644
  #if defined(XP_MACOSX) || defined(MOZ_WIDGET_UIKIT)
    aName = u"-apple-system"_ns;
    // Values taken from a macOS 10.15 system.
-@@ -9876,9 +9961,27 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
+@@ -9882,9 +9960,39 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
                                        const Document* aDocument) {
    gfxFontStyle fontStyle;
    nsAutoString systemFontName;
@@ -195,17 +188,29 @@ index 056c0e2f7f..06dbf09955 100644
 +  // getComputedStyle().fontFamily for the CSS2 system-font keywords, exposing
 +  // the host OS (CreepJS "platform hints: sans-serif:Linux").
 +  //
-+  // Chrome documents are excluded. They are not reachable by the page, and
-+  // handing the browser's own UI a family name from another OS ("Segoe UI" on
-+  // Linux, "-apple-system" on Windows) leaves the toolbar and menus falling
-+  // back to the default serif font -- see daijro/camoufox#695.
++  // Chrome documents take the browser's claimed OS, and only a Windows claim:
++  // the font bundle ships its faces (Segoe UI) for that claim, while a family
++  // the host lacks ("-apple-system" on Linux) leaves the toolbar and menus
++  // falling back to the default serif font -- see daijro/camoufox#695. The
++  // page cannot read chrome styles, but it reads their size: an infobar (pop-up
++  // blocked, find bar, notifications) takes its height out of innerHeight, and
++  // in GTK's "Sans" 10pt the pop-up bar was 39.2 CSS px where stock Windows's
++  // Segoe UI 9pt bar is 39.6 (Firefox 158, win-i9 at 250 %).
++  //
++  // An identity presenting the host's own OS is excluded: the host's system
++  // font is what stock reports on this machine, and a fixed stand-in ("Ubuntu
++  // 11" on a GNOME host whose font is Cantarell or Sans) differs from it.
 +  const bool content = aDocument && !aDocument->IsInChromeDocShell();
-+  const auto os = content ? mozilla::dom::NavigatorManager::GetSpoofedOS(
-+                                mozilla::dom::RoverfoxStorageManager::
-+                                    UserContextId(aDocument))
-+                          : MaskConfig::SpoofedOS::None;
-+  if (content && (os != MaskConfig::SpoofedOS::None ||
-+                  aDocument->ShouldResistFingerprinting(
++  auto os = content ? mozilla::dom::NavigatorManager::GetSpoofedOS(
++                          mozilla::dom::RoverfoxStorageManager::UserContextId(
++                              aDocument))
++                    : MaskConfig::GetSpoofedOS();
++  if (os == MaskConfig::HostOS() ||
++      (!content && os != MaskConfig::SpoofedOS::Windows)) {
++    os = MaskConfig::SpoofedOS::None;
++  }
++  if (os != MaskConfig::SpoofedOS::None ||
++      (content && aDocument->ShouldResistFingerprinting(
 +                      RFPTarget::FontVisibilityRestrictGenerics))) {
 +    GetSpoofedSystemFontForRFP(os, aFontID, fontStyle, systemFontName);
    } else if (!LookAndFeel::GetFont(aFontID, systemFontName, fontStyle)) {

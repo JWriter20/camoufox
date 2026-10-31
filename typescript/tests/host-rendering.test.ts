@@ -320,6 +320,31 @@ it("the probe ignores what the launcher adds to the environment", () => {
 	expect(launch).toHaveBeenCalledTimes(1);
 });
 
+it("the probe carries the Pro lease without keying on it", () => {
+	const launch = vi
+		.spyOn(firefox, "launch")
+		.mockImplementation(() => new Promise(() => undefined));
+	const [first, second] = ["a", "b"].map((lease) =>
+		hostGpu(
+			"/nonexistent/camoufox-lease",
+			true,
+			{
+				DISPLAY: ":0",
+				CAMOU_CONFIG_1: "{}",
+				CAMOU_LEASE_FILE: `/run/camoufox-pro/${lease}.json`,
+			},
+			{},
+		),
+	);
+
+	expect(second).toBe(first);
+	expect(launch).toHaveBeenCalledTimes(1);
+	expect(launch.mock.calls[0][0]?.env).toEqual({
+		DISPLAY: ":0",
+		CAMOU_LEASE_FILE: "/run/camoufox-pro/a.json",
+	});
+});
+
 function browserOnHost(gpu: Gpu | null) {
 	const calls: { script?: string } = {};
 	const browser = {

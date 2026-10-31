@@ -18,8 +18,11 @@ steps never finished in Camoufox:
 
 webdriver-bidi-app-name.patch opens windows for Camoufox as for Firefox, and
 webdriver-bidi-force-active.patch does not wait for "hidden" on a docshell that
-is forced active. Neither changes what a page observes, so the guard also checks
-that the tab put in the background still reports "visible".
+is forced active. Juggler now installs its frame actor (and with it
+forceActiveState) only when a Juggler driver is attached (-juggler-pipe,
+juggler/components/Juggler.js installDriverOverrides), so under BiDi alone no
+docshell is forced and the tab put in the background reports "hidden", as in
+stock Firefox; the guard checks that.
 
 Playwright opens every page in a window of its own, so the guard gets a second
 tab in one window from window.open() and switches back with bring_to_front()
@@ -64,7 +67,7 @@ def run_child() -> int:
         background = popup.evaluate("document.visibilityState")
         browser.close()
     print(f"    the background tab reports {background!r}", flush=True)
-    return 0 if background == "visible" else 2
+    return 0 if background == "hidden" else 2
 
 
 def main() -> int:
@@ -80,7 +83,7 @@ def main() -> int:
             return 1
     sys.stdout.write(r.stdout.decode(errors="replace"))
     if r.returncode == 2:
-        print("FAIL: a background tab's visibilityState changed; pages would see it")
+        print("FAIL: a background tab does not report 'hidden' as stock Firefox's does")
         return 1
     if r.returncode:
         print(f"FAIL: child exit {r.returncode}")

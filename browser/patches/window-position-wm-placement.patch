@@ -1,8 +1,63 @@
 diff --git a/xpfe/appshell/AppWindow.cpp b/xpfe/appshell/AppWindow.cpp
-index ff293fde9f..54fec820cb 100644
 --- a/xpfe/appshell/AppWindow.cpp
 +++ b/xpfe/appshell/AppWindow.cpp
-@@ -2441,8 +2441,25 @@ void AppWindow::SizeShell() {
+@@ -7,6 +7,7 @@
+ 
+ // Local includes
+ #include "AppWindow.h"
++#include "MaskConfig.hpp"
+ #include <algorithm>
+ 
+ // Helper classes
+@@ -1334,6 +1335,47 @@ bool AppWindow::UpdateWindowStateFromMiscXULAttributes() {
+   return true;
+ }
+ 
++// Camoufox: StaggerPosition from the first other window of this type's
++// current position, for an independent window that LoadPositionFromXUL does
++// not place (see SizeShell).
++void AppWindow::StaggerFromOtherWindow(int32_t aSpecWidth,
++                                       int32_t aSpecHeight) {
++  nsCOMPtr<nsIWindowMediator> wm(do_GetService(NS_WINDOWMEDIATOR_CONTRACTID));
++  RefPtr<dom::Element> root = GetWindowDOMElement();
++  if (!wm || !root) {
++    return;
++  }
++  nsAutoString windowType;
++  root->GetAttr(nsGkAtoms::windowtype, windowType);
++  nsCOMPtr<nsISimpleEnumerator> windows;
++  wm->GetAppWindowEnumerator(windowType.get(), getter_AddRefs(windows));
++  if (!windows) {
++    return;
++  }
++  nsCOMPtr<nsIAppWindow> self(this);
++  bool more = false;
++  while (NS_SUCCEEDED(windows->HasMoreElements(&more)) && more) {
++    nsCOMPtr<nsISupports> next;
++    windows->GetNext(getter_AddRefs(next));
++    nsCOMPtr<nsIAppWindow> other(do_QueryInterface(next));
++    nsCOMPtr<nsIBaseWindow> otherBase(do_QueryInterface(next));
++    if (!otherBase || other == self) {
++      continue;
++    }
++    DesktopIntPoint point = RoundedToInt(
++        otherBase->GetPosition() / otherBase->DevicePixelsPerDesktopPixel());
++    const CSSIntSize size =
++        aSpecWidth > 0 && aSpecHeight > 0
++            ? CSSIntSize(aSpecWidth, aSpecHeight)
++            : RoundedToInt(GetPositionAndSize().Size() /
++                           UnscaledDevicePixelsPerCSSPixel());
++    StaggerPosition(point.x.value, point.y.value, size.width, size.height);
++    mWindow->ConstrainPosition(point);
++    SetPositionDesktopPix(point.x, point.y);
++    return;
++  }
++}
++
+ /* Stagger windows of the same type so they don't appear on top of each other.
+    This code does have a scary double loop -- it'll keep passing through
+    the entire list of open windows until it finds a non-collision. Doesn't
+@@ -2439,8 +2481,36 @@ void AppWindow::SizeShell() {
    // on the resolution of the screen we're on. But positioning needs to
    // know the size so that it can constrain to screen bounds.... as an
    // initial guess here, we'll use the specified size (if any).
@@ -21,6 +76,17 @@ index ff293fde9f..54fec820cb 100644
 +  // Dependent windows still get placed relative to their parent.
 +  if (!parentWindow) {
 +    positionSet = false;
++    // A Windows identity's window still lands where Windows Firefox puts a
++    // second window: 22 CSS px right of and below the browser window it would
++    // otherwise cover (StaggerPosition; stock 158 on win-i9, window.open
++    // without left/top, at every scale from 100 to 250 %). Stock starts from
++    // the persisted position, which a fresh profile has at the first
++    // window's; this starts from that window itself, so no profile state
++    // reaches screenX/screenY.
++    if (MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
++        MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows) {
++      StaggerFromOtherWindow(specWidth, specHeight);
++    }
 +  }
 +#endif
 +
@@ -30,3 +96,25 @@ index ff293fde9f..54fec820cb 100644
  
    if (gotSize) {
      SetSpecifiedSize(specWidth, specHeight);
+diff --git a/xpfe/appshell/AppWindow.h b/xpfe/appshell/AppWindow.h
+--- a/xpfe/appshell/AppWindow.h
++++ b/xpfe/appshell/AppWindow.h
+@@ -195,6 +195,7 @@ class AppWindow final : public nsIBaseWindow,
+ 
+   MOZ_CAN_RUN_SCRIPT_BOUNDARY void SizeShell();
+   void OnChromeLoaded();
++  void StaggerFromOtherWindow(int32_t aSpecWidth, int32_t aSpecHeight);
+   void StaggerPosition(int32_t& aRequestedX, int32_t& aRequestedY,
+                        int32_t aSpecWidth, int32_t aSpecHeight);
+   bool LoadPositionFromXUL(int32_t aSpecWidth, int32_t aSpecHeight);
+diff --git a/xpfe/appshell/moz.build b/xpfe/appshell/moz.build
+--- a/xpfe/appshell/moz.build
++++ b/xpfe/appshell/moz.build
+@@ -37,6 +37,7 @@ XPCOM_MANIFESTS += [
+ ]
+ 
+ LOCAL_INCLUDES += [
++    "/camoucfg",
+     "/dom/base",
+     "/dom/xul",
+ ]

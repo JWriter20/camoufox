@@ -43,7 +43,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from helpers import resolve_binary  # noqa: E402
+from helpers import hidden_display, resolve_binary  # noqa: E402
 
 REPO_ROOT = HERE.parents[3]
 sys.path.insert(0, str(REPO_ROOT))
@@ -60,6 +60,22 @@ FIRST_READ_GAP_MS = 5.0
 FIRST_READS = ["navigator.hardwareConcurrency", "screen.width", "screen.colorDepth",
                "devicePixelRatio", "navigator.globalPrivacyControl"]
 
+# WebGL, on a canvas in the page and an OffscreenCanvas in the worker. 37446 is
+# WEBGL_debug_renderer_info's UNMASKED_RENDERER_WEBGL; the renderer strings are
+# a synchronous round trip to the GPU process in stock, which a spoofed string
+# must not skip.
+WEBGL = [
+    "G.getParameter(G.MAX_TEXTURE_SIZE)", "G.getParameter(G.MAX_VERTEX_ATTRIBS)",
+    "G.getParameter(G.VENDOR)", "G.getParameter(G.RENDERER)", "G.getParameter(37446)",
+    "G.getExtension('OES_texture_float')", "G.getSupportedExtensions().length",
+]
+GL_SETUP = "G.getExtension('WEBGL_debug_renderer_info');"
+# In a worker the renderer strings cost ~23 us in one browser session and
+# ~60 us in another, in stock and Camoufox alike (measured 2026-10-26: stock
+# 62.5 us in every launch of one guard run and 22.5-24.4 us in three others,
+# Camoufox 22.5-26.3 us and then 51.9 us), so the worker times only the rest.
+WORKER_WEBGL = [e for e in WEBGL if e not in ("G.getParameter(G.RENDERER)", "G.getParameter(37446)")]
+
 # Spoofed getters, and controls Camoufox does not touch (a sanity check that
 # the two browsers are comparable on this machine).
 WINDOW = [
@@ -67,13 +83,13 @@ WINDOW = [
     "screen.colorDepth", "screen.pixelDepth", "devicePixelRatio", "innerWidth",
     "innerHeight", "outerWidth", "screenX", "history.length",
     "navigator.hardwareConcurrency", "navigator.globalPrivacyControl",
-    "navigator.maxTouchPoints", "G.getParameter(G.MAX_TEXTURE_SIZE)",
+    "navigator.maxTouchPoints", *WEBGL,
     "C.measureText('mmmmmmmmmmlli').width",
     "matchMedia('(color: 8)').matches", "matchMedia('(resolution: 1dppx)').matches",
 ]
 WORKER = [
     "navigator.hardwareConcurrency", "navigator.globalPrivacyControl",
-    "new Date(1e12).getTimezoneOffset()",
+    "new Date(1e12).getTimezoneOffset()", *WORKER_WEBGL,
 ]
 CONTROLS = ["screen.orientation.type", "navigator.onLine"]
 
@@ -104,15 +120,22 @@ function bench(exprs, setup) {
     f();
     first[e] = performance.now() - t;
   }
-  const src = 'const bench = ' + bench.toString() + '; onmessage = e => postMessage(bench(e.data, ""));';
+  const src = 'const bench = ' + bench.toString() + '; onmessage = e => postMessage(bench(e.data, ' +
+    JSON.stringify("var C = new OffscreenCanvas(16, 16).getContext('2d'); var G = new OffscreenCanvas(16, 16).getContext('webgl');" + spec.gl) + '));';
   const w = new Worker(URL.createObjectURL(new Blob([src])));
   const worker = await new Promise(r => { w.onmessage = e => r(e.data); w.postMessage(spec.worker); });
   const win = bench(spec.window,
-    "var C = document.createElement('canvas').getContext('2d'); var G = document.createElement('canvas').getContext('webgl');");
+    "var C = document.createElement('canvas').getContext('2d'); var G = document.createElement('canvas').getContext('webgl');" + spec.gl);
   const res = {window: win, worker, first};
   document.body.dataset.result = JSON.stringify(res);
   fetch('/result', {method: 'POST', body: JSON.stringify(res)});
-})();
+})().catch(e => {
+  // Reported, not left to the timeout: without a WebGL context (a browser on
+  // no display has none) the GL setup throws and nothing would be sent.
+  const res = {error: String(e)};
+  document.body.dataset.result = JSON.stringify(res);
+  fetch('/result', {method: 'POST', body: JSON.stringify(res)});
+});
 </script></body>"""
 
 
@@ -209,7 +232,10 @@ def run_camoufox(binary, url, identity):
             page = browser.new_page()
         page.goto(url)
         page.wait_for_function("document.body.dataset.result", timeout=PAGE_TIMEOUT_S * 1000)
-        return json.loads(page.evaluate("document.body.dataset.result"))
+        result = json.loads(page.evaluate("document.body.dataset.result"))
+        if "error" in result:
+            raise SystemExit(f"FAIL: Camoufox's page failed ({identity} identity): {result['error']}")
+        return result
 
 
 def fastest(runs):
@@ -223,13 +249,21 @@ def fastest(runs):
 
 
 def main() -> int:
+    # Both browsers on a private X display: WebGL is part of the bench, and a
+    # browser started with no display at all (the guard runner unsets DISPLAY)
+    # gets no GL context, so stock's page threw before it reported.
+    with hidden_display():
+        return measure()
+
+
+def measure() -> int:
     camoufox_bin = resolve_binary()
     stock_bin = stock_firefox()
 
     server = Server(("127.0.0.1", 0), Handler)
     server.results = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    spec = json.dumps({"window": WINDOW + CONTROLS, "worker": WORKER + CONTROLS[1:], "first": FIRST_READS})
+    spec = json.dumps({"window": WINDOW + CONTROLS, "worker": WORKER + CONTROLS[1:], "first": FIRST_READS, "gl": GL_SETUP})
     url = f"http://127.0.0.1:{server.server_address[1]}/#" + urllib.request.quote(spec)
 
     stock_runs = []
@@ -244,6 +278,9 @@ def main() -> int:
             stop_stock(profile, proc)
             if not server.results:
                 print("FAIL: stock Firefox never reported -- check is vacuous")
+                return 1
+            if "error" in server.results[0]:
+                print(f"FAIL: stock Firefox's page failed: {server.results[0]['error']}")
                 return 1
             stock_runs.append(server.results[0])
             for identity, runs in camou_runs.items():

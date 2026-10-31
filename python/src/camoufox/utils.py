@@ -1,7 +1,10 @@
+import ctypes.util
 import json
 import os
+from urllib.parse import urlsplit
 import platform
 import shutil
+import threading
 from functools import wraps
 from os import environ
 from os.path import abspath
@@ -14,6 +17,7 @@ import orjson
 from typing_extensions import TypeAlias
 from ua_parser import user_agent_parser
 
+from . import driver_defaults
 from .addons import DefaultAddons, add_default_addons, confirm_paths
 from .display import has_display, largest_display
 from .exceptions import (
@@ -22,10 +26,11 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
-from . import coherence
-from .geolocation import geoip_allowed, get_geolocation
-from .ip import Proxy, public_ip, public_ipv6, valid_ipv4, valid_ipv6
+from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from . import coherence, pro, render_node as render_nodes
+from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
+from .humanize import HumanizeSetting, humanize_config
+from .ip import Proxy, proxy_auth_env, proxy_auth_init_script, public_ip, public_ipv6, socks5_auth, valid_ipv4, valid_ipv6
 from .locales import handle_locales
 import warnings
 
@@ -45,6 +50,7 @@ from .pkgman import (
 )
 from .gpudisplay import GPU_PREFS, GpuDisplay, async_prove_gpu, prove_gpu, select_gpu
 from .virtdisplay import VirtualDisplay
+from platformdirs import user_cache_dir
 from ._warnings import FallbackWarning, LeakWarning
 from .host_rendering import Gpu, add_canvas_placeholder, has_canvas_placeholder, host_gpu, renders_on_hardware, set_webgpu
 from .webgl import firefox_gpus, sample_webgl_for_screen, webgl_for_gpu
@@ -75,9 +81,12 @@ WINDOWS_UI_COLORS: Dict[str, str] = LAUNCHER_CONSTANTS['windowsUiColors']
 #     click pages rather than jumps (GTK otherwise reads the desktop setting),
 #     a thumb dragged far off snaps back, and holding on the track stops at
 #     the pointer.
+#   - media.eme.enabled: Linux builds default EME off, so Widevine said "EME has
+#     been preffed off" where stock Windows grants it (the Widevine CDM a Linux
+#     build downloads answers the same configuration). PlayReady, which Windows
+#     has through Media Foundation, is the eme-playready-claimed-os patch.
 # Windows-only machinery (DirectComposition, ClearType, WMF) does nothing in a
-# Linux build and is left out, as is media.eme.enabled: Windows has PlayReady
-# behind EME, which a Linux build cannot supply.
+# Linux build and is left out.
 WINDOWS_BEHAVIOUR_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['windowsBehaviourPrefs']
 
 
@@ -381,9 +390,21 @@ def _load_properties(path: Optional[Path] = None) -> Dict[str, Dict[str, str]]:
     return {prop['property']: prop for prop in prop_dict}
 
 
-def validate_config(config_map: Dict[str, str], path: Optional[Path] = None) -> None:
+def _load_humanize_engines(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     """
-    Validates the config map.
+    Loads humanize-engines.json, found the same way as properties.json. None
+    for a build that predates it.
+    """
+    manifest = Path(build_file(path, "humanize-engines.json") if path else get_path("humanize-engines.json"))
+    if not manifest.exists():
+        return None
+    return orjson.loads(manifest.read_bytes())
+
+
+def validate_config(config_map: Dict[str, Any], path: Optional[Path] = None) -> None:
+    """
+    Validates the config map against the build's properties.json, and lifts a
+    numeric value below its declared `min` up to it.
     """
     properties = _load_properties(path=path)
 
@@ -396,14 +417,116 @@ def validate_config(config_map: Dict[str, str], path: Optional[Path] = None) -> 
             print(f'Skipping {key}: removed in {entry["removed"]}, it has no effect')
             continue
         expected_type = entry['type']
-
         if not validate_type(value, expected_type):
             raise InvalidPropertyType(
                 f"Invalid type for property {key}. Expected {expected_type}, got {type(value).__name__}"
             )
 
+        if 'min' in entry and value < entry['min']:
+            config_map[key] = entry['min']
+
         if key == 'voices':
             validate_voices(value)
+        if key == 'voices:speechd':
+            validate_speechd_voices(value)
+
+
+def apply_launch_rules(
+    target_os: str,
+    config: Dict[str, Any],
+    firefox_user_prefs: Dict[str, Any],
+    user_pref_keys: set,
+    env: Dict[str, Union[str, float, bool]],
+    path: Optional[Path] = None,
+) -> None:
+    """
+    Applies the prefs and environment variables the build declares in its
+    launch.json. A build that needs a pref or variable set at launch for a
+    feature it compiles in says so there, so the launcher needs no knowledge of
+    any particular build. Most builds ship no launch.json.
+
+    Each rule may restrict itself to identity OSes (`target`) and host OSes
+    (`host`), both in 'win'/'mac'/'lin' terms. `env` sets variables verbatim,
+    `envPaths` to a file relative to the build's directory, which must exist,
+    `envPathsOptional` likewise but only when the file exists, and
+    `envFromConfig` to the value of a config key when the identity has one.
+    `config` sets config keys. `ldPreload` appends each build-relative
+    library that exists to LD_PRELOAD (appended, never replacing one the
+    caller has), and `envCacheDirs` points each variable at a per-user cache
+    directory of that name, created on demand. A pref or config key the
+    caller set, or a variable already in the environment, is never replaced.
+
+    An `exclusive` rule owns its variables: where it does not apply they are
+    removed from the environment, the caller's included, so a feature meant for
+    one target/host pairing cannot leak into another through an inherited
+    variable. A rule's `warn` is emitted as a RuntimeWarning when it applies.
+    """
+    launch_file = str(build_file(path, "launch.json") if path else get_path("launch.json"))
+    if not os.path.exists(launch_file):
+        return
+    with open(launch_file, "rb") as f:
+        rules = orjson.loads(f.read())['rules']
+
+    host_os = _host_os_key()
+
+    def applies(rule: Dict[str, Any]) -> bool:
+        return target_os in rule.get('target', [target_os]) and host_os in rule.get(
+            'host', [host_os]
+        )
+
+    def owned(rule: Dict[str, Any]) -> set:
+        return {
+            key
+            for field in ('env', 'envPaths', 'envPathsOptional', 'envFromConfig', 'envCacheDirs')
+            for key in rule.get(field, {})
+        }
+
+    matched = [rule for rule in rules if applies(rule)]
+    claimed = set().union(*(owned(rule) for rule in matched))
+    for rule in rules:
+        if rule.get('exclusive') and not applies(rule):
+            for key in owned(rule) - claimed:
+                env.pop(key, None)
+
+    for rule in matched:
+        if rule.get('warn'):
+            warnings.warn(str(rule['warn']), RuntimeWarning, stacklevel=3)
+        for key, value in rule.get('prefs', {}).items():
+            if key not in user_pref_keys:
+                firefox_user_prefs[key] = value
+        for key, value in rule.get('env', {}).items():
+            env.setdefault(key, value)
+        for key, relative in rule.get('envPaths', {}).items():
+            if key in env:
+                continue
+            resolved = os.path.normpath(os.path.join(os.path.dirname(launch_file), relative))
+            if not os.path.exists(resolved):
+                raise FileNotFoundError(
+                    f"{launch_file} needs {resolved} for {key}, and it does not exist."
+                )
+            env[key] = resolved
+        for key, relative in rule.get('envPathsOptional', {}).items():
+            resolved = os.path.normpath(os.path.join(os.path.dirname(launch_file), relative))
+            if key not in env and os.path.exists(resolved):
+                env[key] = resolved
+        for key, value in rule.get('config', {}).items():
+            config.setdefault(key, value)
+        # `env` is the caller's environment (a copy of os.environ by default)
+        # and is spread last into the launch environment, so appending here is
+        # what keeps an LD_PRELOAD someone already has.
+        for relative in rule.get('ldPreload', []):
+            resolved = os.path.normpath(os.path.join(os.path.dirname(launch_file), relative))
+            preload = str(env.get('LD_PRELOAD') or '')
+            if os.path.exists(resolved) and resolved not in preload.split(':'):
+                env['LD_PRELOAD'] = f'{preload}:{resolved}' if preload else resolved
+        for key, name in rule.get('envCacheDirs', {}).items():
+            if key not in env:
+                cache_dir = user_cache_dir(f'camoufox-{name}')
+                os.makedirs(cache_dir, exist_ok=True)
+                env[key] = cache_dir
+        for key, config_key in rule.get('envFromConfig', {}).items():
+            if config_key in config:
+                env.setdefault(key, str(config[config_key]))
 
 
 def validate_type(value: Any, expected_type: str) -> bool:
@@ -460,6 +583,27 @@ def validate_voices(voices: Any) -> None:
                 f"Invalid voices[{index}]: missing {', '.join(missing)}. "
                 f"Every voice needs {{{', '.join(VOICE_FIELDS)}}}."
             )
+
+
+def validate_speechd_voices(grid: Any) -> None:
+    """
+    Validates a `voices:speechd` grid: {"languages": [[name, lang], ...],
+    "variants": [name, ...]}, the shape MaskConfig::MSpeechdVoices() expands.
+    """
+    languages = grid.get('languages')
+    variants = grid.get('variants')
+    if not (
+        isinstance(languages, list)
+        and all(
+            isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) for x in entry)
+            for entry in languages
+        )
+        and isinstance(variants, list)
+        and all(isinstance(v, str) for v in variants)
+    ):
+        raise InvalidPropertyType(
+            'Invalid voices:speechd: expected {"languages": [[name, lang], ...], "variants": [name, ...]}'
+        )
 
 
 def get_target_os(config: Dict[str, Any]) -> Literal['mac', 'win', 'lin']:
@@ -785,12 +929,44 @@ def persistent_context_options(from_options: Dict[str, Any], no_viewport_default
     }
 
 
+def attach_socks5_auth(target: Any) -> Any:
+    """
+    Let new_context()/new_page() of `target` take a SOCKS5 proxy with a username
+    and password.
+
+    Playwright refuses one ("Browser does not support socks5 proxy
+    authentication"). The context is made with the proxy alone, and an init
+    script hands Juggler the credentials before new_context() returns
+    (socks5_auth, proxy_auth_init_script). The wrapper sits on Playwright's
+    own Browser object, under both the sync and the async API, where
+    new_page() makes its context too.
+    """
+    impl = getattr(target, '_impl_obj', target)
+    original = getattr(impl, 'new_context', None)
+    if original is None or getattr(original, '_camoufox_socks5_auth', False):
+        return target
+
+    @wraps(original)
+    async def new_context(*args: Any, **kwargs: Any) -> Any:
+        kwargs['proxy'], auth = socks5_auth(kwargs.get('proxy'))
+        context = await original(*args, **kwargs)
+        if auth:
+            await context.add_init_script(script=proxy_auth_init_script(auth))
+        return context
+
+    new_context._camoufox_socks5_auth = True  # type: ignore[attr-defined]
+    impl.new_context = new_context
+    return target
+
+
 def attach_context_defaults(browser: Any, no_viewport_default: bool) -> None:
     """Give every new_page()/new_context() of `browser` Camoufox's defaults."""
+    attach_socks5_auth(browser)
     if no_viewport_default:
         attach_no_viewport_default(browser)
     attach_stock_media_defaults(browser)
     attach_desktop_only_warning(browser)
+    driver_defaults.mark(browser)
 
 
 def plan_rendering(
@@ -826,7 +1002,9 @@ def host_identity(from_options: Dict[str, Any], canvas_noise: Optional[bool]) ->
     keeps their contexts as they ask. Read before the launch, so a failed probe
     leaves no browser behind."""
     prefs = from_options.get('firefox_user_prefs', {})
-    if canvas_noise is not None or has_canvas_placeholder(prefs):
+    # A farm- or node-rendered browser draws there, not on this host.
+    env = from_options.get('env', {})
+    if canvas_noise is not None or has_canvas_placeholder(prefs) or pro.RENDER_FILE_ENV in env or render_nodes.RELAY_ENV in env:
         return None
     # Without the placeholder, the launch claimed the host's OS and no named GPU.
     host_os = _host_os_key()
@@ -845,6 +1023,11 @@ def context_identity(
     On a browser without the canvas placeholder they are the host's, since the
     canvas renders there; asking for anything else raises.
     """
+    if vars(browser).get('_camoufox_render_node'):
+        preset_os = platform_to_os(preset.get('navigator', {}).get('platform', '')) if preset else None
+        if (os or 'windows') != 'windows' or (preset_os or 'windows') != 'windows':
+            raise ValueError("This browser draws WebGL on a Windows render node, so its contexts are Windows.")
+        return 'windows', None
     host_identity = vars(browser).get('_camoufox_host_identity')
     if host_identity is None:
         return os, None
@@ -980,6 +1163,40 @@ def resolve_verstr(executable_path: Optional[Path] = None) -> str:
     raise ValueError(f'{ini} names no Version')
 
 
+# The Camoufox Pro lease or node session opened on this thread, released if the
+# rest of the build fails.
+_HELD = threading.local()
+
+
+def _release_lease_on_failure(build: Any) -> Any:
+    @wraps(build)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        _HELD.lease = None
+        _HELD.node = None
+        try:
+            return build(*args, **kwargs)
+        except BaseException:
+            if _HELD.lease is not None:
+                _HELD.lease.release("error")
+            if _HELD.node is not None:
+                _HELD.node.release()
+            raise
+        finally:
+            _HELD.lease = None
+            _HELD.node = None
+
+    return wrapper
+
+
+_OS_CODE = {"windows": "win", "macos": "mac", "linux": "lin"}
+
+
+def _firefox_version(executable_path: Path) -> str:
+    """The Firefox version of the build at `executable_path`, without Camoufox's release suffix."""
+    return resolve_verstr(executable_path).split("-", 1)[0]
+
+
+@_release_lease_on_failure
 def launch_options(
     *,
     config: Optional[Dict[str, Any]] = None,
@@ -991,7 +1208,7 @@ def launch_options(
     webgl_config: Optional[Tuple[str, str]] = None,
     geoip: Optional[Union[str, bool]] = None,
     geoip_db: Optional[str] = None,
-    humanize: Optional[Union[bool, float]] = None,
+    humanize: HumanizeSetting = None,
     locale: Optional[Union[str, List[str]]] = None,
     addons: Optional[List[str]] = None,
     fonts: Optional[List[str]] = None,
@@ -1017,6 +1234,13 @@ def launch_options(
     virtual_display: Optional[str] = None,
     pin_cpu_cores: Optional[bool] = None,
     canvas_noise: Optional[bool] = None,
+    pro_key: Optional[str] = None,
+    profile: Optional[str] = None,
+    warm_plan: Optional[Literal["none", "standard", "continuous"]] = None,
+    egress: Optional[Union[bool, Dict[str, Any]]] = None,
+    farm_gpu: Optional[Literal[False]] = None,
+    render_node: render_nodes.RenderNodeOption = None,
+    pool_profile: Optional[str] = None,
     **launch_options: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
@@ -1045,10 +1269,12 @@ def launch_options(
         geoip_db (Optional[str]):
             Name of the GeoIP database to use (e.g., "GeoIP AIO by daijro").
             If not specified, uses the one chosen with `camoufox set --geoip`, or the default.
-        humanize (Optional[Union[bool, float]]):
-            Humanize the cursor movement.
-            Takes either `True`, or the MAX duration in seconds of the cursor movement.
-            The cursor typically takes up to 1.5 seconds to move across the window.
+        humanize (Optional[Union[bool, float, dict]]):
+            Humanize mouse, keyboard and scroll input, per channel.
+            `True` uses the best engine the build offers on every channel; a number is the
+            MAX duration in seconds of a cursor movement (typically up to 1.5 seconds across
+            the window); a dict picks an engine per channel with the factories in
+            `camoufox.humanize`, e.g. `{"mouse": cursory(max_time=1.0), "scroll": raw(), "seed": 1234}`.
         locale (Optional[Union[str, List[str]]]):
             Locale(s) to use in Camoufox. The first listed locale will be used for the Intl API.
         addons (Optional[List[str]]):
@@ -1118,6 +1344,45 @@ def launch_options(
             told. OFF by default -- it costs real CPU and serializes concurrent
             launches. Without it the host's own (snapped) count is reported,
             which is equally coherent, just less diverse.
+        pro_key (Optional[str]):
+            Camoufox Pro key (cfp_live_...) for a Pro build. Defaults to
+            CAMOUFOX_PRO_KEY, then the key `camoufox login` stored. A Pro build
+            is launched with a lease minted with it (see docs/pro.md); the lease
+            is released when the browser closes, or at exit when these options
+            are launched without NewBrowser/Camoufox.
+        profile (Optional[str]):
+            A Camoufox Pro profile's key (any name up to 64 characters). The
+            browser presents the profile's identity, the same on every launch,
+            and its state (cookies, storage, logins) is restored before the
+            launch and synced back when it closes. Needs `os`; the launch is a
+            persistent context. See docs/pro.md, "Profiles".
+        warm_plan (Optional[str]):
+            The warm plan a new `profile` is created with: "none" (the default
+            with your own `proxy`) is the only plan whose state syncs to this
+            machine; "standard" and "continuous" profiles are kept warm in the
+            cloud and launch with their identity only. Left out, the API decides.
+        egress (Optional[Union[bool, Dict[str, Any]]]):
+            Camoufox Pro managed egress: False for none, True for CamouProxy
+            with defaults, or the egress wanted, e.g. {"class": "residential",
+            "country": "US"}, with "provider" naming a partner provider instead
+            of CamouProxy. Left out, a `profile` gets CamouProxy and a launch
+            without one goes direct. With your own `proxy` there is none, and passing
+            both raises ValueError.
+        farm_gpu (Optional[bool]):
+            False renders WebGL, WebGPU and canvas on this machine's GPU for a
+            Camoufox Pro Windows identity, instead of on a remote GPU.
+        render_node (Optional[Union[bool, str, Path, Dict[str, Any]]]):
+            Camoufox Pro: draw WebGL on a render node, a Windows machine that runs
+            every WebGL call on Windows Firefox's own ANGLE and GPU (see
+            camoufox.render_node). A path or dict names the node's coordinator;
+            None (the default) uses CAMOUFOX_RENDER_NODE or
+            ~/.config/camoufox/render-node.json when either exists; False draws
+            locally. The identity is Windows: `os` defaults to it, and another OS
+            raises when the node was named here and draws locally otherwise.
+        pool_profile (Optional[str]):
+            Camoufox Pro's own pool warmer only: the pool profile ('prf_<uuid>')
+            this launch presents, so its lease draws on the GPU that profile is
+            pinned to. Any other account's mint is refused.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
             The pair must be one fpgen has recorded from Firefox on `os`
@@ -1146,6 +1411,9 @@ def launch_options(
     # Set default values for optional arguments
     if headless is None:
         headless = False
+    # The caller's own prefs, before the launcher adds any: a pref the build
+    # declares in launch.json never replaces one of these.
+    _user_pref_keys = set(firefox_user_prefs)
     if custom_fonts_only is None:
         custom_fonts_only = False
     if i_know_what_im_doing is None:
@@ -1174,6 +1442,99 @@ def launch_options(
         # Convert executable path to a Path object
         executable_path = Path(abspath(executable_path))
 
+    # Resolve the binary that will launch before reading its version:
+    # launch_path() downloads the browser when none is installed, and the
+    # identity has to match the Firefox that actually runs. A Pro build is
+    # recognised by its files, so this comes before the lease too.
+    browser_binary = str(executable_path) if executable_path else launch_path()
+
+    # A Pro build does not start without a lease. The caller's own lease file,
+    # if they hold one, wins, as every other variable in the environment does.
+    pro_build = pro.read_build(build_file(browser_binary, "pro-build.json"))
+    leased = pro_build is not None and pro.LEASE_FILE_ENV not in env
+    pro_request: Dict[str, Any] = {}
+    if profile is not None:
+        pro_request["profile"] = profile
+    if warm_plan is not None:
+        if profile is None:
+            raise ValueError("warm_plan applies to a profile: pass profile too.")
+        pro_request["warm_plan"] = warm_plan
+    # The caller's own proxy is never replaced by managed egress, and asking for both is a mistake
+    # worth naming rather than a request to drop one of them quietly.
+    if proxy is not None and egress not in (None, False):
+        raise ValueError(
+            "proxy and egress conflict: with your own proxy there is no managed egress. "
+            "Pass proxy to use your own, or egress (and no proxy) for managed egress."
+        )
+    if egress is not None:
+        pro_request["egress"] = egress
+    if farm_gpu is False:
+        pro_request["gpu"] = False
+    # A render node runs Windows Firefox's ANGLE, so it serves Windows identities of a Pro build.
+    named_node = render_node not in (None, False, True)
+    relay = render_nodes.resolve(render_node) if pro_build is not None or named_node else None
+    if relay is not None:
+        oses = [os] if isinstance(os, str) else list(os or ["windows"])
+        refusal = (
+            "render_node needs a Camoufox Pro build (see docs/pro.md)." if pro_build is None
+            else f"render_node is a lease option, and this launch carries its own {pro.LEASE_FILE_ENV}." if not leased and not named_node
+            else f"render_node draws a Windows identity's WebGL, and os={os!r} has no Windows." if "windows" not in oses
+            else None
+        )
+        if refusal is None:
+            os = "windows"
+            if leased:
+                pro_request["gpu"] = False
+        elif named_node:
+            raise ValueError(refusal)
+        else:
+            relay = None
+    if pool_profile is not None:
+        if profile is not None:
+            raise ValueError("pool_profile and profile conflict: a warm launch presents a pool profile.")
+        pro_request["pool_profile"] = pool_profile
+    if pro_request and not leased:
+        raise ValueError(
+            "profile, warm_plan, egress and farm_gpu are lease options, and this launch carries its own "
+            f"{pro.LEASE_FILE_ENV}."
+            if pro_build
+            else "profile, warm_plan, egress and farm_gpu need a Camoufox Pro build (see docs/pro.md)."
+        )
+    # Your own proxy, asked for no other way, means no managed egress.
+    if proxy is not None:
+        pro_request["egress"] = False
+    # What the lease adds to the environment, after every launch rule.
+    pro_env: Dict[str, str] = {}
+
+    if profile is not None and pro_build is not None:
+        if not isinstance(os, str):
+            raise ValueError("A profile launch needs `os`: the one OS its identity presents.")
+        check_valid_os(os)
+        if (
+            fingerprint is not None
+            or fingerprint_preset
+            or config
+            or "user_data_dir" in launch_options
+        ):
+            raise ValueError(
+                "A profile carries its own identity and browser state: pass no config, fingerprint, "
+                "fingerprint_preset or user_data_dir with it."
+            )
+        _HELD.lease = pro.acquire(pro_build, _OS_CODE[os], pro_key, pro_request)
+        from .pro_profile import open_profile
+
+        identity, user_data_dir = open_profile(_HELD.lease, _firefox_version(Path(browser_binary)))
+        # The identity is the bundle's, whole: nothing is drawn for it here.
+        config = identity["config"]
+        fingerprint = identity["fingerprint"]
+        os = identity["os"]
+        ff_version = identity["ff_version"]
+        exclude_addons = identity["exclude_addons"]
+        i_know_what_im_doing = True
+        firefox_user_prefs.update(identity["firefox_user_prefs"])
+        _user_pref_keys.update(identity["firefox_user_prefs"])
+        launch_options["user_data_dir"] = str(user_data_dir)
+
     # Handle virtual display
     if virtual_display:
         env['DISPLAY'] = virtual_display
@@ -1194,7 +1555,7 @@ def launch_options(
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
     _user_set_fonts = bool(fonts) or is_domain_set(config, 'fonts')
-    _user_set_voices = is_domain_set(config, 'voices')
+    _user_set_voices = is_domain_set(config, 'voices', 'voices:speechd')
     _user_set_dnt = 'navigator.doNotTrack' in config
     _user_set_gpc = 'navigator.globalPrivacyControl' in config
     _user_set_accept_encoding = 'headers.Accept-Encoding' in config
@@ -1282,6 +1643,53 @@ def launch_options(
 
     target_os = get_target_os(config)
 
+    if leased:
+        if _HELD.lease is None:
+            _HELD.lease = pro.acquire(pro_build, target_os, pro_key, pro_request)
+        lease = _HELD.lease
+        pro_env[pro.LEASE_FILE_ENV] = str(lease.path)
+        grants = lease.grants
+        if grants.get("egress"):
+            proxy = {
+                "server": grants["egress"]["server"],
+                "username": grants["egress"]["username"],
+                "password": grants["egress"]["password"],
+                # The egress refuses local destinations, so they go direct.
+                "bypass": "localhost,127.0.0.1,::1,*.local",
+            }
+            if geoip is None:
+                geoip = grants["egress"].get("exit_ip") or True
+        # A profile's bundle leaves timezone and locale to the exit it runs behind.
+        if grants.get("profile") and geoip is None:
+            geoip = True
+        if grants.get("gpu"):
+            pro_env[pro.RENDER_FILE_ENV] = str(lease.render_path)
+            firefox_user_prefs.update(grants["gpu"]["prefs"])
+            _user_pref_keys.update(grants["gpu"]["prefs"])
+            # The farm draws the canvas on the identity's own OS, so there is nothing to cover.
+            if canvas_noise is None:
+                canvas_noise = False
+            # The farm is reached directly: the page's proxy is for the page, and one that cannot reach
+            # the render gateway leaves every farm call waiting on a route that never opens.
+            if proxy:
+                farm_host = urlsplit(grants["gpu"]["render"]["endpoint"]).hostname
+                bypass = [entry for entry in (proxy.get("bypass") or "").split(",") if entry]
+                proxy = {**proxy, "bypass": ",".join([*bypass, farm_host])}
+
+    if relay is not None:
+        directory = _HELD.lease.path.parent if leased else Path(env[pro.LEASE_FILE_ENV]).parent
+        _HELD.node = render_nodes.Session(relay, _firefox_version(Path(browser_binary)), directory)
+        if leased:
+            _HELD.lease.on_end.append(_HELD.node.release)
+        else:
+            render_nodes.track(_HELD.node)
+        pro_env[render_nodes.RELAY_ENV] = str(_HELD.node.path)
+        if _HELD.node.text_socket is not None:
+            pro_env[render_nodes.TEXT_ENV] = str(_HELD.node.text_socket)
+        # The node draws on the identity's own OS and GPU, so there is nothing to cover.
+        if canvas_noise is None:
+            canvas_noise = False
+
     # A preset whose screen is a phone viewport is not a real desktop device;
     # the floor is normally skipped for presets, on the assumption that a preset
     # IS a real machine, which 736x414 disproves.
@@ -1327,12 +1735,24 @@ def launch_options(
     # Pinning it on top of that is strictly worse than leaving it alone: the
     # value would no longer move across navigations, and a fresh tab would claim
     # a depth of, say, 4 while history.back() -- which reads the real session
-    # history -- does nothing. Any page can check that pair. The property stays
-    # in properties.json for callers who want to override it by hand.
+    # history -- does nothing. Any page can check that pair. A build that
+    # implements the key declares it in its own properties.json, with the floor
+    # it needs, and callers set it by hand.
 
     # Update fonts list
     if fonts:
         config['fonts'] = fonts
+
+    if target_os == 'win':
+        expanded = list(config.get('fonts', []))
+        presented = set(expanded)
+        for canonical, aliases in LAUNCHER_CONSTANTS['windowsLegacyFontFamilies'].items():
+            if canonical in presented:
+                for alias in aliases:
+                    if alias not in presented:
+                        expanded.append(alias)
+                        presented.add(alias)
+        config['fonts'] = expanded
 
     if custom_fonts_only:
         firefox_user_prefs['gfx.bundled-fonts.activate'] = 0
@@ -1368,6 +1788,13 @@ def launch_options(
     # a wrong label after a grant is a spoof tell.
     if not _user_set_media_devices:
         set_media_devices_defaults(config, _identity_salt)
+
+    # The output device's AudioContext.outputLatency, for an identity of
+    # another OS (audio-output-latency.json).
+    set_output_latency_default(config, _identity_salt, target_os, _host_os_key())
+
+    # When the Windows legacy styled-family aliases land (fonts.detect timing).
+    set_windows_alias_load_default(config, target_os, _host_os_key())
 
     # Scrollbars: a stock Firefox on a GNOME/KDE desktop and on macOS draws
     # overlay scrollbars (no layout gutter, scrollbar-width "auto"). On Windows it
@@ -1407,6 +1834,15 @@ def launch_options(
 
         for pref, value in WINDOWS_BEHAVIOUR_PREFS.items():
             firefox_user_prefs.setdefault(pref, value)
+
+        # WebCodecs H.264 encoding: Windows Firefox always has Media
+        # Foundation's encoder; Linux Firefox only the system FFmpeg's
+        # (libavcodec with libx264), so on a host without it
+        # VideoEncoder.isConfigSupported('avc1...') is false, which no
+        # Windows machine answers. It is not faked: an encoder that says yes
+        # and cannot encode is worse.
+        if _host_os_key() == 'lin' and not ctypes.util.find_library('avcodec'):
+            LeakWarning.warn('no_h264_encoder', i_know_what_im_doing)
 
         # The scrollbars pinned above are drawn by the host build's theme: on
         # a Linux host a Windows 10 identity's classic scrollbars measured
@@ -1530,6 +1966,20 @@ def launch_options(
     if not _user_set_accept_encoding:
         config.pop('headers.Accept-Encoding', None)
 
+    # A proxied identity is a machine at the exit: its position, timezone and
+    # locale are the exit's. Without geoip a page that is allowed location gets
+    # no position there (or, where Firefox can locate, this host's), so a real
+    # proxy resolves the exit through itself whenever the geoip extra is
+    # installed; the caller's geoip=False or own coordinates win.
+    if (
+        geoip is None
+        and ALLOW_GEOIP
+        and proxy
+        and 'localhost' not in proxy.get('server', '')
+        and not is_domain_set(config, 'geolocation')
+    ):
+        geoip = True
+
     # Set geolocation
     if geoip:
         geoip_allowed()  # Assert that geoip is allowed
@@ -1565,19 +2015,14 @@ def launch_options(
         ):
             config['network:ipv4Only'] = True
 
-    # A page that receives a position without a prompt must also see
-    # permissions.query({name: 'geolocation'}) report "granted" -- that is
-    # what a real Firefox with a stored site grant does. The C++ auto-grant
-    # alone delivers the fix while the Permissions API still says "prompt",
-    # which is an incoherence a page can test (daijro/camoufox#769). The
-    # allow-by-default pref is the same state a user creates by choosing
-    # "Always allow", so both APIs agree without any per-site permission.
-    if 'geolocation:latitude' in config and 'geolocation:longitude' in config:
-        firefox_user_prefs.setdefault('permissions.default.geo', 1)
+    # Geolocation asks as stock Firefox does: a site never granted reads
+    # permissions.query 'prompt' and getCurrentPosition shows the prompt; the
+    # identity's coordinates are what a granted site receives. (No
+    # allow-by-default pref: a first visit reading 'granted' is the tell.)
 
     # Raise a warning when a proxy is being used without spoofing geolocation.
     # This is a very bad idea; the warning cannot be ignored with i_know_what_im_doing.
-    elif (
+    if (
         proxy
         and 'localhost' not in proxy.get('server', '')
         and not is_domain_set(config, 'geolocation')
@@ -1586,6 +2031,9 @@ def launch_options(
 
     # After geoip, which decides whether the machine has IPv6 at all.
     set_host_ipv6_default(config, _identity_salt)
+
+    # After geoip too: an identity given coordinates has location on.
+    set_location_setting_default(config, _identity_salt, target_os, _host_os_key())
 
     # Set locale
     if locale:
@@ -1627,7 +2075,7 @@ def launch_options(
     # Drawn after the locale is resolved (locale= or geoip): the Windows voice
     # list is the display language's pack, so an fr-FR identity has French
     # voices, not the en-US ones.
-    if not _user_set_voices or 'voices' not in config:
+    if not _user_set_voices or ('voices' not in config and 'voices:speechd' not in config):
         os_name_v = OS_NAMES.get(target_os, 'macos')
         voice_locale = config.get('navigator.language')
         if config.get('locale:language'):
@@ -1635,9 +2083,9 @@ def launch_options(
                 part for part in (config['locale:language'], config.get('locale:region')) if part
             )
         try:
-            config['voices'] = _generate_random_voice_subset(
+            config.update(draw_voice_config(
                 os_name_v, voice_locale, seed=identity_seed(config, _identity_salt)
-            )
+            ))
         except (OSError, ValueError, KeyError) as e:
             # An empty list still blocks the host's voices (see below), so a
             # generation failure degrades to "no voices" rather than "all of
@@ -1653,13 +2101,11 @@ def launch_options(
     # leaves an explicit caller value alone.
     set_into(config, 'voices:blockIfNotDefined', True)
 
-    # Pass the humanize option
-    if humanize:
-        set_into(config, 'humanize', True)
-        # bool is a subclass of int, but MaskConfig expects maxTime to be a
-        # JSON number with a floating-point representation.
-        if isinstance(humanize, (int, float)) and not isinstance(humanize, bool):
-            set_into(config, 'humanize:maxTime', float(humanize))
+    # Pass the humanize option, checked against the engines the build ships
+    for key, value in humanize_config(
+        humanize, _load_humanize_engines(executable_path), i_know_what_im_doing
+    ).items():
+        set_into(config, key, value)
 
     # Enable the main world context creation
     if main_world_eval:
@@ -1694,7 +2140,13 @@ def launch_options(
         canvas_noise,
         bool(webgl_config or (config.get('webGl:vendor') and config.get('webGl:renderer'))),
         bool(block_webgl),
-        lambda: host_gpu(browser_binary, headless, env, firefox_user_prefs),
+        # With the lease this launch carries (minted above): a Pro build will not start without one.
+        lambda: host_gpu(
+            browser_binary,
+            headless,
+            {**env, **{k: v for k, v in pro_env.items() if k == pro.LEASE_FILE_ENV}},
+            firefox_user_prefs,
+        ),
     )
     if cover_canvas:
         add_canvas_placeholder(firefox_user_prefs)
@@ -1703,6 +2155,22 @@ def launch_options(
     if block_webgl:
         firefox_user_prefs['webgl.disabled'] = True
         LeakWarning.warn('block_webgl', i_know_what_im_doing)
+    elif relay is not None:
+        if webgl_config:
+            raise ValueError("webgl_config names a GPU, but a render node reports its own: pass render_node=False.")
+        # Every WebGL value is the node's own, as Windows Firefox reports it there.
+        for key in [k for k in config if k.startswith(('webGl:', 'webGl2:'))]:
+            del config[key]
+        merge_into(firefox_user_prefs, {
+            'webgl.enable-webgl2': True,
+            'webgl.force-enabled': True,
+            # Windows Firefox draws large canvases with WebGL on its ANGLE; here
+            # that ANGLE is the node's.
+            'gfx.canvas.accelerated': True,
+            'gfx.canvas.accelerated.force-enabled': True,
+        })
+        if 'webgpu' in _HELD.node.routes:
+            firefox_user_prefs.setdefault('dom.webgpu.renderfarm.node', True)
     else:
         # A pair the caller named, or the preset's own GPU, keeps its name and
         # gets that device's recorded parameters. webgl_for_gpu raises for a GPU
@@ -1776,16 +2244,35 @@ def launch_options(
         print('[DEBUG] Config:')
         pprint(config)
 
+    apply_launch_rules(
+        target_os, config, firefox_user_prefs, _user_pref_keys, env, path=executable_path
+    )
+    if relay is not None:
+        # The holo prefs make local GL draw like Windows ANGLE; on a node, Windows ANGLE draws.
+        for name in [k for k in firefox_user_prefs if k.startswith('webgl.holo-')]:
+            firefox_user_prefs[name] = False
+        if firefox_user_prefs.get('dom.webgpu.renderfarm.node'):
+            # Likewise WebGPU's D3D12 limit table and NVIDIA emulation: the node reports its own.
+            config.pop('webGPU:d3d12Limits', None)
+            env.pop('HOLO_WEBGPU_NV_ARCH', None)
+
     # Validate the config
     warn_if_executable_predates_playwright(executable_path)
     validate_config(config, path=executable_path)
+
+    # A SOCKS5 proxy's credentials go to Juggler, not through Playwright, which
+    # refuses them (socks5_auth).
+    proxy, proxy_auth = socks5_auth(proxy)
 
     # Prepare environment variables to pass to Camoufox
     env_vars = {
         **get_env_vars(config, target_os, path=executable_path),
         **get_pref_env_vars(firefox_user_prefs),
+        **(proxy_auth_env(proxy_auth) if proxy_auth else {}),
         **env,
     }
+    env_vars.update(pro_env)
+
     result = {
         "executable_path": browser_binary,
         "args": args,

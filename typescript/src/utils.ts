@@ -3,6 +3,7 @@
  * launch_options() does (tests/launch-golden.test.ts). `utilsDeps` holds what the
  * Python tests monkeypatch.
  */
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -24,6 +25,7 @@ import {
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
+	drawVoiceConfig,
 	dropAudioSeed,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
@@ -40,11 +42,14 @@ import {
 	raiseScreenToModernFloor,
 	Screen,
 	setHostIpv6Default,
+	setLocationSettingDefault,
 	setMediaDevicesDefaults,
+	setOutputLatencyDefault,
+	setWindowsAliasLoadDefault,
 	targetOsFromPlatform,
 	WINDOWS_11_MARKER_FONTS,
 } from "./fingerprints.js";
-import { geoipAllowed, getGeolocation } from "./geolocation.js";
+import { allowGeoip, geoipAllowed, getGeolocation } from "./geolocation.js";
 import { GPU_PREFS, GpuDisplay, proveGpu, selectGpu } from "./gpudisplay.js";
 import {
 	addCanvasPlaceholder,
@@ -55,10 +60,18 @@ import {
 	setWebgpu,
 } from "./host_rendering.js";
 import {
+	type HumanizeManifest,
+	type HumanizeSetting,
+	humanizeConfig,
+} from "./humanize.js";
+import {
 	type ProxyConfig,
 	ProxyHelper,
+	proxyAuthEnv,
+	proxyAuthInitScript,
 	publicIP,
 	publicIPv6,
+	socks5Auth,
 	validIPv4,
 	validIPv6,
 } from "./ip.js";
@@ -68,6 +81,7 @@ import {
 	LAUNCHER_CONSTANTS,
 	loadDataFile,
 	OS_NAME,
+	userCacheDir,
 } from "./paths.js";
 import {
 	buildFile,
@@ -82,6 +96,8 @@ import {
 	Version,
 	warnIfPackageOutdated,
 } from "./pkgman.js";
+import * as pro from "./pro.js";
+import { openProfile } from "./pro-profile.js";
 import {
 	comparePyStr,
 	formatPyFloatRepr,
@@ -95,6 +111,7 @@ import {
 	pyTypeName,
 	ValueError,
 } from "./pycompat.js";
+import * as renderNodes from "./render_node.js";
 import { VirtualDisplay } from "./virtdisplay.js";
 import { FallbackWarning, LeakWarning, warn } from "./warnings.js";
 import { firefoxGpus, sampleWebglForScreen, webglForGpu } from "./webgl.js";
@@ -108,6 +125,23 @@ const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
+
+/**
+ * Whether the dynamic linker can find a system libavcodec, which Linux
+ * Firefox loads for H.264 (as Python's ctypes.util.find_library('avcodec')).
+ */
+function hasSystemAvcodec(): boolean {
+	for (const ldconfig of ["/sbin/ldconfig", "/usr/sbin/ldconfig", "ldconfig"]) {
+		try {
+			const out = execFileSync(ldconfig, ["-p"], {
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+			return /\blibavcodec\.so/.test(out);
+		} catch {}
+	}
+	return true; // cannot tell: do not warn
+}
 
 // System colours stock Firefox reports on Windows 10/11 in the light theme,
 // where they differ from a Linux host's GTK theme.
@@ -205,6 +239,20 @@ function stockProfileDiskCapacityKb(): number | null {
 }
 
 /**
+ * Loads humanize-engines.json, found the same way as properties.json. null for
+ * a build that predates it.
+ */
+function loadHumanizeEngines(
+	executablePath?: string | null,
+): HumanizeManifest | null {
+	const manifest = executablePath
+		? buildFile(executablePath, "humanize-engines.json")
+		: utilsDeps.getPath("humanize-engines.json");
+	if (!fs.existsSync(manifest)) return null;
+	return JSON.parse(fs.readFileSync(manifest, "utf-8"));
+}
+
+/**
  * The font.* prefs that make a build for `buildOs` resolve fonts the way stock
  * Firefox does on `targetOs` (font-prefs.json, from all.js by
  * browser/scripts/gen-font-prefs.py): the target's values where they differ,
@@ -255,6 +303,7 @@ export const utilsDeps = {
 	getPath,
 	launchPath,
 	selectedLaunchPath,
+	loadHumanizeEngines,
 	identitySalt,
 	identitySeed,
 	generateFingerprint: async (
@@ -276,6 +325,7 @@ export const utilsDeps = {
 	raiseScreenToModernFloor,
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
+	drawVoiceConfig,
 	setMediaDevicesDefaults,
 	hostGpu,
 	selectGpu,
@@ -578,6 +628,7 @@ interface PropertyEntry {
 	property: string;
 	type: string;
 	removed?: string;
+	min?: number;
 }
 
 /**
@@ -600,7 +651,8 @@ function loadProperties(
 }
 
 /**
- * Validates the config map.
+ * Validates the config map against the build's properties.json, and lifts a
+ * numeric value below its declared `min` up to it.
  */
 export function validateConfig(
 	configMap: Record<string, any>,
@@ -621,15 +673,145 @@ export function validateConfig(
 			continue;
 		}
 		const expectedType = entry.type;
-
 		if (!validateType(value, expectedType)) {
 			throw new InvalidPropertyType(
 				`Invalid type for property ${key}. Expected ${expectedType}, got ${pyTypeName(value)}`,
 			);
 		}
 
+		if (entry.min !== undefined) {
+			const n = value instanceof PyFloat ? value.value : Number(value);
+			if (n < entry.min) configMap[key] = entry.min;
+		}
+
+		if (key === "voices:speechd") {
+			validateSpeechdVoices(value);
+		}
 		if (key === "voices") {
 			validateVoices(value);
+		}
+	}
+}
+
+interface LaunchRule {
+	target?: string[];
+	host?: string[];
+	prefs?: Record<string, any>;
+	env?: Record<string, string>;
+	envPaths?: Record<string, string>;
+	envPathsOptional?: Record<string, string>;
+	envFromConfig?: Record<string, string>;
+	config?: Record<string, any>;
+	ldPreload?: string[];
+	envCacheDirs?: Record<string, string>;
+	exclusive?: boolean;
+	warn?: string;
+}
+
+/**
+ * Applies the prefs and environment variables the build declares in its
+ * launch.json. A build that needs a pref or variable set at launch for a
+ * feature it compiles in says so there, so the launcher needs no knowledge of
+ * any particular build. Most builds ship no launch.json.
+ *
+ * Each rule may restrict itself to identity OSes (`target`) and host OSes
+ * (`host`), both in 'win'/'mac'/'lin' terms. `env` sets variables verbatim,
+ * `envPaths` to a file relative to the build's directory, which must exist,
+ * `envPathsOptional` likewise but only when the file exists, and
+ * `envFromConfig` to the value of a config key when the identity has one.
+ * `config` sets config keys. `ldPreload` appends each build-relative
+ * library that exists to LD_PRELOAD (appended, never replacing one the
+ * caller has), and `envCacheDirs` points each variable at a per-user cache
+ * directory of that name, created on demand. A pref or config key the caller
+ * set, or a variable already in the environment, is never replaced.
+ *
+ * An `exclusive` rule owns its variables: where it does not apply they are
+ * removed from the environment, the caller's included, so a feature meant for
+ * one target/host pairing cannot leak into another through an inherited
+ * variable. A rule's `warn` is emitted as a RuntimeWarning when it applies.
+ */
+export function applyLaunchRules(
+	targetOs: string,
+	config: Record<string, any>,
+	firefoxUserPrefs: Record<string, any>,
+	userPrefKeys: Set<string>,
+	env: Record<string, any>,
+	executablePath?: string | null,
+): void {
+	const launchFile = executablePath
+		? buildFile(executablePath, "launch.json")
+		: utilsDeps.getPath("launch.json");
+	if (!fs.existsSync(launchFile)) return;
+	const rules: LaunchRule[] = JSON.parse(
+		fs.readFileSync(launchFile, "utf-8"),
+	).rules;
+
+	const hostOs = utilsDeps.hostOsKey();
+	const applies = (rule: LaunchRule): boolean =>
+		!(rule.target && !rule.target.includes(targetOs)) &&
+		!(rule.host && !(hostOs && rule.host.includes(hostOs)));
+	const owned = (rule: LaunchRule): string[] => [
+		...Object.keys(rule.env ?? {}),
+		...Object.keys(rule.envPaths ?? {}),
+		...Object.keys(rule.envPathsOptional ?? {}),
+		...Object.keys(rule.envFromConfig ?? {}),
+		...Object.keys(rule.envCacheDirs ?? {}),
+	];
+
+	const matched = rules.filter(applies);
+	const claimed = new Set(matched.flatMap(owned));
+	for (const rule of rules) {
+		if (!rule.exclusive || applies(rule)) continue;
+		for (const key of owned(rule)) {
+			if (!claimed.has(key)) delete env[key];
+		}
+	}
+
+	for (const rule of matched) {
+		if (rule.warn) warn(String(rule.warn), "RuntimeWarning");
+		for (const [key, value] of Object.entries(rule.prefs ?? {})) {
+			if (!userPrefKeys.has(key)) firefoxUserPrefs[key] = value;
+		}
+		for (const [key, value] of Object.entries(rule.env ?? {})) {
+			if (!(key in env)) env[key] = value;
+		}
+		for (const [key, relative] of Object.entries(rule.envPaths ?? {})) {
+			if (key in env) continue;
+			const resolved = path.join(path.dirname(launchFile), relative);
+			if (!fs.existsSync(resolved)) {
+				throw new Error(
+					`${launchFile} needs ${resolved} for ${key}, and it does not exist.`,
+				);
+			}
+			env[key] = resolved;
+		}
+		for (const [key, relative] of Object.entries(rule.envPathsOptional ?? {})) {
+			const resolved = path.join(path.dirname(launchFile), relative);
+			if (!(key in env) && fs.existsSync(resolved)) env[key] = resolved;
+		}
+		for (const [key, value] of Object.entries(rule.config ?? {})) {
+			if (!(key in config)) config[key] = value;
+		}
+		// `env` is the caller's environment (a copy of process.env by default)
+		// and is spread last into the launch environment, so appending here is
+		// what keeps an LD_PRELOAD someone already has.
+		for (const relative of rule.ldPreload ?? []) {
+			const resolved = path.join(path.dirname(launchFile), relative);
+			const preload = env.LD_PRELOAD ? String(env.LD_PRELOAD) : "";
+			if (fs.existsSync(resolved) && !preload.split(":").includes(resolved)) {
+				env.LD_PRELOAD = preload ? `${preload}:${resolved}` : resolved;
+			}
+		}
+		for (const [key, name] of Object.entries(rule.envCacheDirs ?? {})) {
+			if (key in env) continue;
+			const cacheDir = userCacheDir(`camoufox-${name}`);
+			fs.mkdirSync(cacheDir, { recursive: true });
+			env[key] = cacheDir;
+		}
+		for (const [key, configKey] of Object.entries(rule.envFromConfig ?? {})) {
+			if (configKey in config && !(key in env)) {
+				env[key] = pyStr(config[configKey]);
+			}
 		}
 	}
 }
@@ -710,6 +892,29 @@ export function validateVoices(voices: any): void {
 			);
 		}
 	});
+}
+
+/**
+ * Validates a `voices:speechd` grid: {"languages": [[name, lang], ...],
+ * "variants": [name, ...]}, the shape MaskConfig::MSpeechdVoices() expands.
+ */
+export function validateSpeechdVoices(grid: any): void {
+	const { languages, variants } = grid ?? {};
+	const ok =
+		Array.isArray(languages) &&
+		languages.every(
+			(e: unknown) =>
+				Array.isArray(e) &&
+				e.length === 2 &&
+				e.every((x) => typeof x === "string"),
+		) &&
+		Array.isArray(variants) &&
+		variants.every((v: unknown) => typeof v === "string");
+	if (!ok) {
+		throw new InvalidPropertyType(
+			'Invalid voices:speechd: expected {"languages": [[name, lang], ...], "variants": [name, ...]}',
+		);
+	}
 }
 
 /**
@@ -1059,6 +1264,132 @@ export function attachStockMediaDefaults<T>(target: T): T {
 	return target;
 }
 
+const CAMOUFOX_SOCKS5_AUTH = Symbol.for("camoufox.socks5Auth");
+
+/**
+ * Let newContext()/newPage() of `target` take a SOCKS5 proxy with a username
+ * and password (python/src/camoufox/utils.py attach_socks5_auth).
+ *
+ * Playwright refuses one ("Browser does not support socks5 proxy
+ * authentication"). The context is made with the proxy alone, and an init
+ * script hands Juggler the credentials before newContext() resolves
+ * (socks5Auth, proxyAuthInitScript). Playwright's newPage() makes its context
+ * through newContext(), so it is covered too.
+ */
+export function attachSocks5Auth<T>(target: T): T {
+	const owner = target as any;
+	const original = owner?.newContext;
+	if (typeof original !== "function" || original[CAMOUFOX_SOCKS5_AUTH])
+		return target;
+	const newContext = async (options?: Record<string, any>, ...rest: any[]) => {
+		const [proxy, auth] = socks5Auth(options?.proxy);
+		const context = await original.call(
+			target,
+			options && auth ? { ...options, proxy } : options,
+			...rest,
+		);
+		if (auth) await context.addInitScript(proxyAuthInitScript(auth));
+		return context;
+	};
+	(newContext as any)[CAMOUFOX_SOCKS5_AUTH] = true;
+	owner.newContext = newContext;
+	return target;
+}
+
+const CAMOUFOX_DRIVER_DEFAULTS = Symbol.for("camoufox.driverDefaults");
+
+/**
+ * Whether a fill() target is a text field a person types into, and whether it
+ * has focus. Runs in the page, so it is a function (a string would be an
+ * expression to Playwright's JS client).
+ */
+const FILL_TARGET = (e: any) => {
+	const active = e.ownerDocument.activeElement;
+	const type =
+		e.localName === "input"
+			? (e.getAttribute("type") || "text").toLowerCase()
+			: null;
+	const typed =
+		e.localName === "textarea" ||
+		e.isContentEditable ||
+		["text", "search", "email", "url", "tel", "password", "number"].includes(
+			type,
+		);
+	return {
+		typed,
+		focused: active === e || (e.isContentEditable && e.contains(active)),
+	};
+};
+
+/**
+ * Driver calls that reach the page as a person's actions would
+ * (python/src/camoufox/driver_defaults.py). Applies to every page under
+ * `target` (a Browser or BrowserContext from a Camoufox launch); the defaults
+ * are filled in where the client sends the request, so page, frame, element
+ * and locator calls all get them, and other browsers in the process are left
+ * alone.
+ *
+ * Screenshots leave the page alone. Unless told caret: "initial", Playwright
+ * hides the caret by setting `caret-color: transparent !important` in the
+ * style attribute of every input, textarea and contenteditable element, from
+ * its utility world: the page sees each change, reads the transparent caret
+ * while the capture runs, and is left with `style` attributes it did not have.
+ * Firefox's capture never paints the caret, so screenshots default to
+ * caret: "initial"; an explicit caret is kept.
+ *
+ * fill() clicks the field first. Playwright focuses it by script, so the page
+ * gets focus with no pointer or mouse event before it, where a person clicks
+ * the field. A text field without focus is clicked (Playwright's click,
+ * through the OS-path dispatch) before the fill; a focused one is typed into
+ * as it is, and fields fill() sets without typing are left alone.
+ */
+export function attachDriverDefaults<T>(target: T): T {
+	const owner = target as any;
+	owner[CAMOUFOX_DRIVER_DEFAULTS] = true;
+	const connection = owner._connection;
+	if (!connection || connection[CAMOUFOX_DRIVER_DEFAULTS]) return target;
+	connection[CAMOUFOX_DRIVER_DEFAULTS] = true;
+	const send = connection.sendMessageToServer;
+	connection.sendMessageToServer = async function (
+		object: any,
+		method: string,
+		params: Record<string, any>,
+		...rest: any[]
+	) {
+		if (launchedByCamoufox(object)) {
+			if (method === "screenshot" && params?.caret === undefined)
+				params = { ...params, caret: "initial" };
+			if (method === "fill") await clickToFocus(object, params);
+		}
+		return send.call(this, object, method, params, ...rest);
+	};
+	return target;
+}
+
+async function clickToFocus(object: any, params: Record<string, any>) {
+	// A Frame fills by selector (page, frame and locator fill); an ElementHandle fills itself.
+	let field = object;
+	if (
+		typeof params?.selector === "string" &&
+		typeof object.locator === "function"
+	) {
+		field = object.locator(params.selector);
+		if (!params.strict) field = field.first();
+	}
+	if (typeof field.evaluate !== "function" || typeof field.click !== "function")
+		return;
+	const info = await field.evaluate(FILL_TARGET);
+	if (info?.typed && !info.focused)
+		await field.click({ timeout: params?.timeout, force: params?.force });
+}
+
+/** ElementHandle -> Frame -> Page -> BrowserContext -> Browser. */
+function launchedByCamoufox(object: any): boolean {
+	for (let owner = object; owner; owner = owner._parent)
+		if (owner[CAMOUFOX_DRIVER_DEFAULTS]) return true;
+	return false;
+}
+
 /**
  * Warn when newPage()/newContext() asks for isMobile: Camoufox only has desktop
  * identities, and Juggler ignores the option (TargetRegistry.js).
@@ -1123,7 +1454,15 @@ export async function hostIdentity(
 	canvasNoise: boolean | undefined,
 ): Promise<HostIdentity | null> {
 	const prefs = fromOptions.firefoxUserPrefs ?? {};
-	if (canvasNoise != null || hasCanvasPlaceholder(prefs)) return null;
+	// A farm- or node-rendered browser draws there, not on this host.
+	const env = fromOptions.env ?? {};
+	if (
+		canvasNoise != null ||
+		hasCanvasPlaceholder(prefs) ||
+		pro.RENDER_FILE_ENV in env ||
+		renderNodes.RELAY_ENV in env
+	)
+		return null;
 	// Without the placeholder, the launch claimed the host's OS and no named GPU.
 	const hostOs = utilsDeps.hostOsKey();
 	const [covered, gpu] = await planRendering(
@@ -1153,6 +1492,20 @@ export function contextIdentity(
 	os: string | undefined,
 	preset: Record<string, any> | undefined,
 ): [string | undefined, Gpu | null] {
+	if (browser._camoufoxRenderNode) {
+		const presetOs = pyTruthy(preset)
+			? targetOsFromPlatform(preset?.navigator?.platform ?? "")
+			: null;
+		if (
+			(os || "windows") !== "windows" ||
+			(presetOs || "windows") !== "windows"
+		) {
+			throw new ValueError(
+				"This browser draws WebGL on a Windows render node, so its contexts are Windows.",
+			);
+		}
+		return ["windows", null];
+	}
 	const hostIdentity: [TargetOS, Gpu | null] | undefined =
 		browser._camoufoxHostIdentity;
 	if (!hostIdentity) return [os, null];
@@ -1374,8 +1727,12 @@ export interface LaunchOptions {
 	geoip?: string | boolean;
 	/** Name of the GeoIP database to use (e.g. "GeoIP AIO by daijro"). */
 	geoip_db?: string;
-	/** Humanize the cursor movement: `true`, or the MAX duration in seconds. */
-	humanize?: boolean | number;
+	/** Humanize mouse, keyboard and scroll input, per channel. `true` uses the
+	 * best engine the build offers on every channel; a number is the MAX
+	 * duration in seconds of a cursor movement; an object picks an engine per
+	 * channel with the factories in humanize.ts, e.g.
+	 * `{ mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 }`. */
+	humanize?: HumanizeSetting;
 	/** Locale(s) to use. The first listed locale is used for the Intl API. */
 	locale?: string | string[];
 	/** List of Firefox addons to use (paths to extracted addons). */
@@ -1435,6 +1792,41 @@ export interface LaunchOptions {
 	 * (webgl_config, a preset's, or a host GPU fpgen never recorded), whose
 	 * canvas would otherwise show the host. */
 	canvas_noise?: boolean | null;
+	/** Camoufox Pro key (cfp_live_...) for a Pro build. Defaults to
+	 * CAMOUFOX_PRO_KEY, then the key `camoufox login` stored. A Pro build is
+	 * launched with a lease minted with it (see docs/pro.md); the lease is
+	 * released when the browser closes, or at exit when these options are
+	 * launched without NewBrowser/Camoufox. */
+	pro_key?: string;
+	/** A Camoufox Pro profile's key (any name up to 64 characters). The browser
+	 * presents the profile's identity, the same on every launch, and its state
+	 * (cookies, storage, logins) is restored before the launch and synced back
+	 * when it closes. Needs `os`; the launch is a persistent context. See
+	 * docs/pro.md, "Profiles". */
+	profile?: string;
+	/** The warm plan a new `profile` is created with: `"none"` (the default
+	 * with your own `proxy`) is the only plan whose state syncs to this
+	 * machine; `"standard"` and `"continuous"` profiles are kept warm in the
+	 * cloud and launch with their identity only. Left out, the API decides. */
+	warm_plan?: "none" | "standard" | "continuous";
+	/** Camoufox Pro managed egress: `false` for none, `true` for CamouProxy
+	 * with defaults, or the egress wanted, e.g. `{ class: "residential",
+	 * country: "US" }`, with `provider` naming a partner provider instead of
+	 * CamouProxy. Left out, a `profile` gets CamouProxy and a launch without
+	 * one goes direct.
+	 * With your own `proxy` there is none, and passing both throws. */
+	egress?: boolean | pro.EgressRequest;
+	/** `false` renders WebGL, WebGPU and canvas on this machine's GPU for a
+	 * Camoufox Pro Windows identity, instead of on a remote GPU. */
+	farm_gpu?: false;
+	/** Camoufox Pro: draw WebGL on a render node, a Windows machine that runs
+	 * every WebGL call on Windows Firefox's own ANGLE and GPU (see
+	 * docs/pro.md). A path or object names the node's coordinator; undefined
+	 * (the default) uses CAMOUFOX_RENDER_NODE or
+	 * ~/.config/camoufox/render-node.json when either exists; `false` draws
+	 * locally. The identity is Windows: `os` defaults to it, and another OS
+	 * throws when the node was named here and draws locally otherwise. */
+	render_node?: renderNodes.RenderNodeOption;
 	/** Additional Firefox launch options, passed straight through to Playwright. */
 	[key: string]: any;
 }
@@ -1445,44 +1837,81 @@ export interface LaunchOptions {
  * Accepts all Playwright Firefox launch options, along with the Camoufox ones
  * documented on {@link LaunchOptions}.
  */
-export async function launchOptions({
-	config,
-	os: targetOsOption,
-	block_images,
-	block_webrtc,
-	block_webgl,
-	disable_coop,
-	webgl_config,
-	geoip,
-	geoip_db,
-	humanize,
-	locale,
-	addons,
-	fonts,
-	custom_fonts_only,
-	exclude_addons,
-	screen,
-	window,
-	fingerprint,
-	fingerprint_preset,
-	ff_version,
-	headless,
-	main_world_eval,
-	allow_addon_new_tab,
-	executable_path,
-	browser,
-	firefox_user_prefs,
-	proxy,
-	enable_cache,
-	args,
-	env,
-	i_know_what_im_doing,
-	debug,
-	virtual_display,
-	pin_cpu_cores,
-	canvas_noise,
-	...passthrough
-}: LaunchOptions = {}): Promise<Record<string, any>> {
+export async function launchOptions(
+	options: LaunchOptions = {},
+): Promise<Record<string, any>> {
+	// A Camoufox Pro lease or node session opened along the way goes back if the build fails.
+	const held: { lease: pro.Lease | null; node: renderNodes.Session | null } = {
+		lease: null,
+		node: null,
+	};
+	try {
+		return await buildLaunchOptions(options, held);
+	} catch (error) {
+		await held.lease?.release("error");
+		await held.node?.release();
+		throw error;
+	}
+}
+
+const OS_CODE: Record<string, string> = {
+	windows: "win",
+	macos: "mac",
+	linux: "lin",
+};
+
+/** The Firefox version of the build at `executablePath`, without Camoufox's release suffix. */
+function firefoxVersion(executablePath: string): string {
+	return resolveVerstr(executablePath).split("-", 1)[0];
+}
+
+async function buildLaunchOptions(
+	{
+		config,
+		os: targetOsOption,
+		block_images,
+		block_webrtc,
+		block_webgl,
+		disable_coop,
+		webgl_config,
+		geoip,
+		geoip_db,
+		humanize,
+		locale,
+		addons,
+		fonts,
+		custom_fonts_only,
+		exclude_addons,
+		screen,
+		window,
+		fingerprint,
+		fingerprint_preset,
+		ff_version,
+		headless,
+		main_world_eval,
+		allow_addon_new_tab,
+		executable_path,
+		browser,
+		firefox_user_prefs,
+		proxy,
+		enable_cache,
+		args,
+		env,
+		i_know_what_im_doing,
+		debug,
+		virtual_display,
+		pin_cpu_cores,
+		canvas_noise,
+		pro_key,
+		profile,
+		warm_plan,
+		egress,
+		farm_gpu,
+		render_node,
+		...passthrough
+	}: LaunchOptions,
+	held: { lease: pro.Lease | null; node: renderNodes.Session | null },
+): Promise<Record<string, any>> {
 	utilsDeps.ensureBrowserProfileDir(env);
 
 	// The launch fills these in, so it works on copies: a caller's object
@@ -1495,6 +1924,9 @@ export async function launchOptions({
 
 	// Set default values for optional arguments
 	headless ??= false;
+	// The caller's own prefs, before the launcher adds any: a pref the build
+	// declares in launch.json never replaces one of these.
+	const userPrefKeys = new Set(Object.keys(firefox_user_prefs));
 	custom_fonts_only ??= false;
 	i_know_what_im_doing ??= false;
 	// Keep per-launch overrides isolated from the process environment and from
@@ -1522,6 +1954,122 @@ export async function launchOptions({
 		executable_path = path.resolve(executable_path);
 	}
 
+	// The managed install is resolved lazily in Python (camoufox_path() may
+	// download); here that download is async, so do it before any sync lookup.
+	if (!executable_path) {
+		await utilsDeps.ensureCamoufoxInstalled();
+	}
+
+	// A Pro build is recognised by its files, so the binary is resolved before
+	// the lease.
+	const resolvedExecutable = executable_path
+		? String(executable_path)
+		: utilsDeps.launchPath();
+
+	// A Pro build does not start without a lease. The caller's own lease file,
+	// if they hold one, wins, as every other variable in the environment does.
+	const proBuild = pro.readBuild(
+		buildFile(resolvedExecutable, "pro-build.json"),
+	);
+	const leased = Boolean(proBuild) && !(pro.LEASE_FILE_ENV in env);
+	const proRequest: pro.LeaseRequest = {};
+	if (profile !== undefined) proRequest.profile = profile;
+	if (warm_plan !== undefined) {
+		if (profile === undefined) {
+			throw new ValueError("warm_plan applies to a profile: pass profile too.");
+		}
+		proRequest.warm_plan = warm_plan;
+	}
+	// The caller's own proxy is never replaced by managed egress, and asking for both is a mistake
+	// worth naming rather than a request to drop one of them quietly.
+	if (proxy != null && egress !== undefined && egress !== false) {
+		throw new ValueError(
+			"proxy and egress conflict: with your own proxy there is no managed egress. " +
+				"Pass proxy to use your own, or egress (and no proxy) for managed egress.",
+		);
+	}
+	if (egress !== undefined) proRequest.egress = egress;
+	if (farm_gpu === false) proRequest.gpu = false;
+	if (Object.keys(proRequest).length && !leased) {
+		throw new ValueError(
+			proBuild
+				? `profile, warm_plan, egress and farm_gpu are lease options, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
+				: "profile, warm_plan, egress and farm_gpu need a Camoufox Pro build (see docs/pro.md).",
+		);
+	}
+	// A render node runs Windows Firefox's ANGLE, so it serves Windows identities of a Pro build.
+	const namedNode = render_node != null && typeof render_node !== "boolean";
+	let relay = proBuild || namedNode ? renderNodes.resolve(render_node) : null;
+	if (relay) {
+		const oses =
+			typeof targetOsOption === "string"
+				? [targetOsOption]
+				: [...(targetOsOption ?? ["windows"])];
+		const refusal = !proBuild
+			? "render_node needs a Camoufox Pro build (see docs/pro.md)."
+			: !leased && !namedNode
+				? `render_node is a lease option, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
+				: !oses.includes("windows")
+					? `render_node draws a Windows identity's WebGL, and os=${JSON.stringify(targetOsOption)} has no Windows.`
+					: null;
+		if (refusal === null) {
+			targetOsOption = "windows";
+			if (leased) proRequest.gpu = false;
+		} else if (namedNode) {
+			throw new ValueError(refusal);
+		} else {
+			relay = null;
+		}
+	}
+	let node: renderNodes.Session | null = null;
+	// Your own proxy, asked for no other way, means no managed egress.
+	if (proxy != null) proRequest.egress = false;
+	// What the lease adds to the environment, after every launch rule.
+	const proEnv: EnvVars = {};
+
+	if (profile !== undefined && proBuild) {
+		if (typeof targetOsOption !== "string") {
+			throw new ValueError(
+				"A profile launch needs `os`: the one OS its identity presents.",
+			);
+		}
+		checkValidOs(targetOsOption);
+		if (
+			fingerprint != null ||
+			pyTruthy(fingerprint_preset) ||
+			pyTruthy(config) ||
+			passthrough.user_data_dir !== undefined ||
+			passthrough.userDataDir !== undefined
+		) {
+			throw new ValueError(
+				"A profile carries its own identity and browser state: pass no config, fingerprint, " +
+					"fingerprint_preset or user_data_dir with it.",
+			);
+		}
+		held.lease = await pro.acquire(
+			proBuild,
+			OS_CODE[targetOsOption],
+			pro_key,
+			proRequest,
+		);
+		const { identity, userDataDir } = await openProfile(
+			held.lease,
+			firefoxVersion(resolvedExecutable),
+		);
+		// The identity is the bundle's, whole: nothing is drawn for it here.
+		config = identity.config;
+		fingerprint = identity.fingerprint;
+		targetOsOption = identity.os;
+		ff_version = identity.ff_version;
+		exclude_addons = identity.exclude_addons as DefaultAddon[];
+		i_know_what_im_doing = true;
+		Object.assign(firefox_user_prefs, identity.firefox_user_prefs);
+		for (const key of Object.keys(identity.firefox_user_prefs)) {
+			userPrefKeys.add(key);
+		}
+		passthrough.user_data_dir = userDataDir;
+	}
+
 	// Handle virtual display
 	if (virtual_display) {
 		env.DISPLAY = virtual_display;
@@ -1544,7 +2092,7 @@ export async function launchOptions({
 	const userSetScreenWindow = isDomainSet(config, "screen.", "window.");
 	const userSetMediaDevices = isDomainSet(config, "mediaDevices:");
 	const userSetFonts = Boolean(fonts?.length) || isDomainSet(config, "fonts");
-	const userSetVoices = isDomainSet(config, "voices");
+	const userSetVoices = isDomainSet(config, "voices", "voices:speechd");
 	const userSetDnt = "navigator.doNotTrack" in config;
 	const userSetGpc = "navigator.globalPrivacyControl" in config;
 	const userSetAcceptEncoding = "headers.Accept-Encoding" in config;
@@ -1648,6 +2196,65 @@ export async function launchOptions({
 
 	const targetOs = getTargetOs(config);
 
+	if (leased) {
+		held.lease ??= await pro.acquire(
+			proBuild as pro.ProBuild,
+			targetOs,
+			pro_key,
+			proRequest,
+		);
+		proEnv[pro.LEASE_FILE_ENV] = held.lease.path;
+		const grants = held.lease.grants;
+		if (grants.egress) {
+			proxy = {
+				server: grants.egress.server,
+				username: grants.egress.username,
+				password: grants.egress.password,
+				// The egress refuses local destinations, so they go direct.
+				bypass: "localhost,127.0.0.1,::1,*.local",
+			};
+			geoip ??= grants.egress.exit_ip ?? true;
+		}
+		// A profile's bundle leaves timezone and locale to the exit it runs behind.
+		if (grants.profile) geoip ??= true;
+		if (grants.gpu) {
+			proEnv[pro.RENDER_FILE_ENV] = held.lease.renderPath as string;
+			Object.assign(firefox_user_prefs, grants.gpu.prefs);
+			for (const key of Object.keys(grants.gpu.prefs)) userPrefKeys.add(key);
+			// The farm draws the canvas on the identity's own OS, so there is nothing to cover.
+			canvas_noise ??= false;
+			// The farm is reached directly: the page's proxy is for the page, and one that cannot reach
+			// the render gateway leaves every farm call waiting on a route that never opens.
+			if (proxy) {
+				const farmHost = new URL(grants.gpu.render.endpoint).hostname;
+				const bypass = (proxy.bypass ?? "").split(",").filter(Boolean);
+				proxy = { ...proxy, bypass: [...bypass, farmHost].join(",") };
+			}
+		}
+	}
+
+	if (relay) {
+		const directory = path.dirname(
+			held.lease?.path ?? String(env[pro.LEASE_FILE_ENV]),
+		);
+		node = await renderNodes.Session.open(
+			relay,
+			firefoxVersion(resolvedExecutable),
+			directory,
+		);
+		held.node = node;
+		if (held.lease) {
+			const opened = node;
+			held.lease.onEnd.push(() => opened.release());
+		} else {
+			renderNodes.track(node);
+		}
+		proEnv[renderNodes.RELAY_ENV] = node.path;
+		if (node.textSocket) proEnv[renderNodes.TEXT_ENV] = node.textSocket;
+		// The node draws on the identity's own OS and GPU, so there is nothing to cover.
+		canvas_noise ??= false;
+	}
+
 	// A preset whose screen is a phone viewport is not a real desktop device.
 	if (!userSetScreenWindow && coherence.screenIsImplausible(config)) {
 		coherence.repairScreenOrientation(config);
@@ -1694,6 +2301,23 @@ export async function launchOptions({
 		config.fonts = fonts;
 	}
 
+	if (targetOs === "win") {
+		const expanded = [...(config.fonts || [])];
+		const presented = new Set(expanded);
+		for (const [canonical, aliases] of Object.entries(
+			LAUNCHER_CONSTANTS.windowsLegacyFontFamilies,
+		)) {
+			if (!presented.has(canonical)) continue;
+			for (const alias of aliases) {
+				if (!presented.has(alias)) {
+					expanded.push(alias);
+					presented.add(alias);
+				}
+			}
+		}
+		config.fonts = expanded;
+	}
+
 	if (custom_fonts_only) {
 		firefox_user_prefs["gfx.bundled-fonts.activate"] = 0;
 		if (fonts?.length) {
@@ -1737,6 +2361,13 @@ export async function launchOptions({
 		await utilsDeps.setMediaDevicesDefaults(config, salt);
 	}
 
+	// The output device's AudioContext.outputLatency, for an identity of
+	// another OS (audio-output-latency.json).
+	setOutputLatencyDefault(config, salt, targetOs, utilsDeps.hostOsKey());
+
+	// When the Windows legacy styled-family aliases land (fonts.detect timing).
+	setWindowsAliasLoadDefault(config, targetOs, utilsDeps.hostOsKey());
+
 	// Scrollbars: pin the look-and-feel to the claimed OS so headless == headed
 	// == stock, and for Windows to the version the identity's font draw
 	// presents (Win11 fonts with classic scrollbars is a pair no real machine
@@ -1764,6 +2395,13 @@ export async function launchOptions({
 
 		for (const [pref, value] of Object.entries(WINDOWS_BEHAVIOUR_PREFS)) {
 			setInto(firefox_user_prefs, pref, value);
+		}
+
+		// WebCodecs H.264 encoding: Windows always has Media Foundation's
+		// encoder, Linux Firefox only the system FFmpeg's. Not faked; see
+		// launch_options in the Python launcher.
+		if (utilsDeps.hostOsKey() === "lin" && !hasSystemAvcodec()) {
+			LeakWarning.warn("no_h264_encoder", i_know_what_im_doing);
 		}
 
 		// The scrollbars pinned above are drawn by the host build's theme (GTK's
@@ -1849,6 +2487,18 @@ export async function launchOptions({
 		delete config["headers.Accept-Encoding"];
 	}
 
+	// A proxied identity is a machine at the exit: a real proxy resolves the
+	// exit through itself whenever geoip is available (Python's launch_options).
+	if (
+		geoip == null &&
+		allowGeoip() &&
+		pyTruthy(proxy) &&
+		!(proxy?.server ?? "").includes("localhost") &&
+		!isDomainSet(config, "geolocation")
+	) {
+		geoip = true;
+	}
+
 	// Set geolocation
 	if (pyTruthy(geoip)) {
 		geoipAllowed(); // Assert that geoip is allowed
@@ -1902,11 +2552,10 @@ export async function launchOptions({
 		}
 	}
 
-	// A page that receives a position without a prompt must also see
-	// permissions.query({name: 'geolocation'}) report "granted" (#769).
-	if ("geolocation:latitude" in config && "geolocation:longitude" in config) {
-		setInto(firefox_user_prefs, "permissions.default.geo", 1);
-	} else if (
+	// Geolocation asks as stock Firefox does: a site never granted reads
+	// permissions.query 'prompt' and getCurrentPosition shows the prompt; the
+	// identity's coordinates are what a granted site receives.
+	if (
 		// Raise a warning when a proxy is being used without spoofing
 		// geolocation. This warning cannot be ignored with i_know_what_im_doing.
 		pyTruthy(proxy) &&
@@ -1918,6 +2567,9 @@ export async function launchOptions({
 
 	// After geoip, which decides whether the machine has IPv6 at all.
 	setHostIpv6Default(config, salt);
+
+	// After geoip too: an identity given coordinates has location on.
+	setLocationSettingDefault(config, salt, targetOs, utilsDeps.hostOsKey());
 
 	// Set locale
 	if (pyTruthy(locale)) {
@@ -1944,7 +2596,10 @@ export async function launchOptions({
 	// `voices` unset exposes every native voice on the box (#731). Drawn after
 	// the locale is resolved: the Windows voice list is the display language's
 	// pack.
-	if (!userSetVoices || !("voices" in config)) {
+	if (
+		!userSetVoices ||
+		(!("voices" in config) && !("voices:speechd" in config))
+	) {
 		const osNameV = OS_NAMES[targetOs] ?? "macos";
 		let voiceLocale = config["navigator.language"];
 		if (pyTruthy(config["locale:language"])) {
@@ -1953,10 +2608,13 @@ export async function launchOptions({
 				.join("-");
 		}
 		try {
-			config.voices = utilsDeps.generateRandomVoiceSubset(
-				osNameV,
-				voiceLocale ?? null,
-				utilsDeps.identitySeed(config, salt),
+			Object.assign(
+				config,
+				utilsDeps.drawVoiceConfig(
+					osNameV,
+					voiceLocale ?? null,
+					utilsDeps.identitySeed(config, salt),
+				),
 			);
 		} catch (e) {
 			if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
@@ -1977,14 +2635,15 @@ export async function launchOptions({
 	// it. setInto leaves an explicit caller value alone.
 	setInto(config, "voices:blockIfNotDefined", true);
 
-	// Pass the humanize option
-	if (pyTruthy(humanize)) {
-		setInto(config, "humanize", true);
-		// MaskConfig expects maxTime to be a JSON number.
-		// float(humanize): a JSON number with a floating-point representation.
-		if (typeof humanize === "number") {
-			setInto(config, "humanize:maxTime", new PyFloat(humanize));
-		}
+	// Pass the humanize option, checked against the engines the build ships
+	for (const [key, value] of Object.entries(
+		humanizeConfig(
+			humanize,
+			utilsDeps.loadHumanizeEngines(executable_path),
+			i_know_what_im_doing,
+		),
+	)) {
+		setInto(config, key, value);
 	}
 
 	// Enable the main world context creation
@@ -2020,18 +2679,22 @@ export async function launchOptions({
 	// reads the core count and the screen, which the launch replaces above.
 	coherence.dropIncoherentSourceValues(config, targetOs);
 
-	const resolvedExecutable = executable_path
-		? String(executable_path)
-		: utilsDeps.launchPath();
-
 	const [coverCanvas, host] = await planRendering(
 		targetOs,
 		canvas_noise,
 		pyTruthy(webgl_config) ||
 			(pyTruthy(config["webGl:vendor"]) && pyTruthy(config["webGl:renderer"])),
 		Boolean(block_webgl),
+		// With the lease this launch carries (minted above): a Pro build will not start without one.
 		() =>
-			utilsDeps.hostGpu(resolvedExecutable, headless, env, firefox_user_prefs),
+			utilsDeps.hostGpu(
+				resolvedExecutable,
+				headless,
+				pro.LEASE_FILE_ENV in proEnv
+					? { ...env, [pro.LEASE_FILE_ENV]: proEnv[pro.LEASE_FILE_ENV] }
+					: env,
+				firefox_user_prefs,
+			),
 	);
 	if (coverCanvas) {
 		addCanvasPlaceholder(firefox_user_prefs);
@@ -2041,6 +2704,31 @@ export async function launchOptions({
 	if (block_webgl) {
 		firefox_user_prefs["webgl.disabled"] = true;
 		LeakWarning.warn("block_webgl", i_know_what_im_doing);
+	} else if (node) {
+		if (pyTruthy(webgl_config)) {
+			throw new ValueError(
+				"webgl_config names a GPU, but a render node reports its own: pass render_node: false.",
+			);
+		}
+		// Every WebGL value is the node's own, as Windows Firefox reports it there.
+		for (const key of Object.keys(config)) {
+			if (key.startsWith("webGl:") || key.startsWith("webGl2:"))
+				delete config[key];
+		}
+		mergeInto(firefox_user_prefs, {
+			"webgl.enable-webgl2": true,
+			"webgl.force-enabled": true,
+			// Windows Firefox draws large canvases with WebGL on its ANGLE; here
+			// that ANGLE is the node's.
+			"gfx.canvas.accelerated": true,
+			"gfx.canvas.accelerated.force-enabled": true,
+		});
+		if (
+			node.routes.has("webgpu") &&
+			!("dom.webgpu.renderfarm.node" in firefox_user_prefs)
+		) {
+			firefox_user_prefs["dom.webgpu.renderfarm.node"] = true;
+		}
 	} else {
 		let webglFp: Record<string, any>;
 		const seed = () =>
@@ -2140,16 +2828,43 @@ export async function launchOptions({
 		console.log(inspect(config, { depth: null, sorted: true }));
 	}
 
+	applyLaunchRules(
+		targetOs,
+		config,
+		firefox_user_prefs,
+		userPrefKeys,
+		env,
+		executable_path,
+	);
+	if (node) {
+		// The holo prefs make local GL draw like Windows ANGLE; on a node, Windows ANGLE draws.
+		for (const name of Object.keys(firefox_user_prefs)) {
+			if (name.startsWith("webgl.holo-")) firefox_user_prefs[name] = false;
+		}
+		if (firefox_user_prefs["dom.webgpu.renderfarm.node"]) {
+			// Likewise WebGPU's D3D12 limit table and NVIDIA emulation: the node reports its own.
+			delete config["webGPU:d3d12Limits"];
+			delete env.HOLO_WEBGPU_NV_ARCH;
+		}
+	}
+
 	// Validate the config
 	warnIfExecutablePredatesPlaywright(executable_path);
 	utilsDeps.validateConfig(config, executable_path);
+
+	// A SOCKS5 proxy's credentials go to Juggler, not through Playwright, which
+	// refuses them (socks5Auth).
+	const [launchProxy, proxyAuth] = socks5Auth(proxy);
 
 	// Prepare environment variables to pass to Camoufox
 	const envVars: EnvVars = {
 		...utilsDeps.getEnvVars(config, targetOs, executable_path),
 		...getPrefEnvVars(firefox_user_prefs),
+		...(proxyAuth ? proxyAuthEnv(proxyAuth) : {}),
 		...env,
 	};
+
+	Object.assign(envVars, proEnv);
 
 	const result: Record<string, any> = {
 		executablePath: resolvedExecutable,
@@ -2162,8 +2877,8 @@ export async function launchOptions({
 	// Only include proxy if it's set (Playwright validates this)
 	// https://github.com/coryking/camoufox/commit/1336e8e509e8c12a896a09d9ee51f131f739f106
 	// Thanks @coryking
-	if (proxy != null) {
-		result.proxy = proxy;
+	if (launchProxy != null) {
+		result.proxy = launchProxy;
 	}
 
 	return result;

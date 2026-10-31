@@ -12,11 +12,13 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
+from . import _humanize_custom, driver_defaults, pro, render_node
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
     async_attach_vd,
     attach_context_defaults,
+    attach_socks5_auth,
     context_identity,
     host_identity,
     launch_options,
@@ -105,6 +107,9 @@ async def AsyncNewBrowser(
         **kwargs:
             All other keyword arguments passed to `launch_options()`.
     """
+    # custom() humanize engines run in this process: checked before the launch,
+    # attached to the browser after it (also with from_options).
+    _humanize_custom.check(kwargs.get('humanize'), is_async=True)
     virtual_display, headless = await asyncio.get_running_loop().run_in_executor(
         None, start_virtual_display, headless, debug, kwargs
     )
@@ -113,8 +118,11 @@ async def AsyncNewBrowser(
     # close, which used to strand one Xvfb and its /tmp/.X<n> lock per failed
     # launch.
     try:
-        return await _new_browser(
+        browser = await _new_browser(
             playwright, virtual_display, headless, from_options, persistent_context, debug, kwargs
+        )
+        return _humanize_custom.attach(
+            browser, kwargs.get('humanize'), i_know_what_im_doing=kwargs.get('i_know_what_im_doing')
         )
     except BaseException:
         if virtual_display:
@@ -190,16 +198,43 @@ async def _launch(
     virtual_display: Optional[VirtualDisplay],
     canvas_noise: Optional[bool],
 ) -> Union[Browser, BrowserContext]:
+    lease = pro.claim(from_options, virtual_display)
+    # A Camoufox Pro profile runs in its own user-data directory.
+    persistent_context = persistent_context or bool(lease and lease.grants.get('profile'))
+    try:
+        return await _launch_leased(
+            playwright, from_options, persistent_context, no_viewport_default, virtual_display, canvas_noise, lease
+        )
+    except Exception as error:
+        pro.launch_failed(lease, error)
+        raise
+
+
+async def _launch_leased(
+    playwright: Playwright,
+    from_options: Dict[str, Any],
+    persistent_context: bool,
+    no_viewport_default: bool,
+    virtual_display: Optional[VirtualDisplay],
+    canvas_noise: Optional[bool],
+    lease: Optional[pro.Lease],
+) -> Union[Browser, BrowserContext]:
     if persistent_context:
         context = await playwright.firefox.launch_persistent_context(
             **persistent_context_options(from_options, no_viewport_default)
         )
+        driver_defaults.mark(context)
+        if lease:
+            pro.attach_lease(lease, context, 'close', is_async=True)
         return await async_attach_vd(context, virtual_display)
 
     identity = await asyncio.get_running_loop().run_in_executor(None, host_identity, from_options, canvas_noise)
     browser = await playwright.firefox.launch(**from_options)
+    if lease:
+        pro.attach_lease(lease, browser, 'disconnected', is_async=True)
     attach_context_defaults(browser, no_viewport_default)
     browser._camoufox_host_identity = identity
+    browser._camoufox_render_node = render_node.RELAY_ENV in from_options.get('env', {})
     return await async_attach_vd(browser, virtual_display)
 
 
@@ -256,10 +291,13 @@ async def AsyncNewContext(
     fp = await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: generate_context_fingerprint(
-            preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config
+            preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config,
+            webgl=not vars(browser).get('_camoufox_render_node'),
         ),
     )
 
+    # A browser launched elsewhere takes SOCKS5 credentials too.
+    attach_socks5_auth(browser)
     context = await browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
     await context.add_init_script(fp['init_script'])
     return context

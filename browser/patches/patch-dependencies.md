@@ -52,11 +52,11 @@ be listed there.
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints` |
-| `voice-spoofing.patch` | `voices`, `voices:blockIfNotDefined` |
+| `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:blockIfNotDefined` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
-| `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*`, `window.screenX`, `window.screenY` (re-orders the getters above so stock's work runs first) |
+| `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*` (re-orders the getters above so stock's work runs first) |
 
 To regenerate the list: `grep -l 'MaskConfig::' patches/*.patch`.
 
@@ -99,6 +99,23 @@ at hand. A browsing context is not used, because a document created by
 shares its creator's principal. A value is stored only under its own context;
 nothing writes a fallback copy under context 0.
 
+## Driver input and the page's globals
+
+- `input-coalescing-parity.patch` uses `mJugglerEventId` and the
+  `juggler-mouse-event-hit-renderer` ack from `playwright/0-playwright.patch`.
+  Its JS half is in `additions/juggler` (`MouseDispatch.sendQueuedMove`,
+  `PageHandler.beforeDispatch`), and either half without the other wedges
+  every move until the ack deadline.
+- `drag-source-events.patch` extends the drag branch that
+  `playwright/0-playwright.patch` adds to `nsContentUtils::SynthesizeMouseEvent`.
+- `isolated-world-global-order.patch` stands alone. It recognises Juggler as
+  the scripted caller (its `resource://gre/modules/juggler/` modules, and the
+  sandboxes those modules create, whose location names them) and leaves the
+  interfaces it creates undefined on the page's window until the page uses
+  them. It edits `Codegen.py` (the window Xray's resolve on the window), so
+  every generated binding rebuilds, and `BindingUtils.h`
+  (`DoGetOrCreateDOMReflector`), which most of `dom/` includes.
+
 ## WebRTC behind a proxy
 
 `webrtc-socks5-udp.patch` builds on two earlier patches and uses their lines as
@@ -132,7 +149,7 @@ the change.
 
 | Patch | Upstream change |
 |-------|-----------------|
-| `remote-security-settings.patch` | The startup import of the bundled OneCRL list into certificate storage, from mozilla-firefox's `release` branch ([Bug 2084311](https://bugzilla.mozilla.org/show_bug.cgi?id=2084311)). Firefox 158.0.1 ships the matching `security-state/onecrl.json` dump. Camoufox turns Remote Settings off, so without the import a fresh profile has no revocations. |
+| `remote-security-settings.patch` | The startup import of the bundled OneCRL list into certificate storage, from mozilla-firefox's `release` branch ([Bug 2084311](https://bugzilla.mozilla.org/show_bug.cgi?id=2084311)). Firefox 158.0.1 ships the matching `security-state/onecrl.json` dump. Without the import a fresh profile has no revocations until its first Remote Settings sync, or none at all when that sync cannot reach Mozilla. |
 
 ## Playwright
 

@@ -400,7 +400,7 @@ class TestLaunch:
         monkeypatch.setattr(host_rendering, '_host_gpu', lambda *args: calls.append(args))
         host_rendering.host_gpu('/x/camoufox', False, {'DISPLAY': ':77'}, {**GPU_PREFS, 'intl.locale.requested': 'en-US'})
 
-        assert calls == [('/x/camoufox', False, (('DISPLAY', ':77'),), tuple(sorted(GPU_PREFS.items())))]
+        assert calls == [('/x/camoufox', False, (('DISPLAY', ':77'),), tuple(sorted(GPU_PREFS.items())), None)]
 
     def test_a_failed_launch_tears_the_display_down(self, monkeypatch):
         display = mock.Mock()

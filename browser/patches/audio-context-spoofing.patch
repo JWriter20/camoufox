@@ -19,6 +19,88 @@ index 72551b795a..5bbe58e8a3 100644
    if (aShouldResistFingerprinting) {
      return 44100;
    }
+diff --git a/dom/media/MediaTrackGraph.cpp b/dom/media/MediaTrackGraph.cpp
+index 5510e3d149..5763e4d698 100644
+--- a/dom/media/MediaTrackGraph.cpp
++++ b/dom/media/MediaTrackGraph.cpp
+@@ -3,6 +3,7 @@
+  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "AudioCaptureTrack.h"
++#include "MaskConfig.hpp"
+ #include "AudioDeviceInfo.h"
+ #include "AudioNodeExternalInputTrack.h"
+ #include "AudioNodeTrack.h"
+@@ -26,6 +27,7 @@
+ #  include "MediaEngineWebRTCAudio.h"
+ #endif  // MOZ_WEBRTC
+ #include <algorithm>
++#include <cmath>
+ 
+ #include "GeckoProfiler.h"
+ #include "GraphRunner.h"
+@@ -3454,6 +3456,7 @@ void MediaTrackGraphImpl::Init(GraphDriverType aDriverRequested,
+   mSelfRef = this;
+   mEndTime = aDriverRequested == OFFLINE_THREAD_DRIVER ? 0 : GRAPH_TIME_MAX;
+   mRealtime = aDriverRequested != OFFLINE_THREAD_DRIVER;
++  mSpoofedLatencyEpoch = TimeStamp::Now();
+   // The caller queries the default output device's channel count off the graph
+   // thread and passes it in. Offline graphs have no audio output device, so
+   // they pass 0 here and avoid the (potentially expensive) query entirely.
+@@ -4079,6 +4082,35 @@ double MediaTrackGraphImpl::AudioOutputLatency() {
+   if (mAudioOutputLatency != 0.0) {
+     return mAudioOutputLatency;
+   }
++  // Camoufox: the identity's output device instead of the host's. Stock reads
++  // 0 until the device's stream has opened (cubeb_stream_get_latency fails
++  // before then, and a 0 is not cached), then the stream's latency in whole
++  // frames at the graph's rate, cached for the graph's life. The launcher
++  // draws the latency and the opening delay from devices measured on the
++  // claimed OS. Stock 158 on win-i9 (0.022 s device): floor(latency * rate)
++  // frames at 8000-96000 Hz (176, 704, 720 at 32768, 1056, 2112), 128 at
++  // 3000 Hz; and Windows' TimeDuration counts 100 ns ticks
++  // (AudioCallbackDriver::AudioOutputLatency), so 720/32768 reads 0.0219726.
++  if (auto spoofed = MaskConfig::GetDouble("AudioContext:outputLatency")) {
++    if (!(*spoofed > 0.0) || !mRealtime) {
++      return 0.0;
++    }
++    const double openMs =
++        MaskConfig::GetDouble("AudioContext:outputLatencyDelayMs").value_or(100.0);
++    if ((TimeStamp::Now() - mSpoofedLatencyEpoch).ToMilliseconds() < openMs) {
++      return 0.0;
++    }
++    const double frames =
++        std::max(std::floor(*spoofed * GraphRate() + 1e-9), 128.0);
++    double seconds = frames / GraphRate();
++    if (MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows) {
++      // TimeDuration::FromSeconds: milliseconds times 10^4 ticks per ms,
++      // truncated; ToSeconds divides by 10^7.
++      seconds = std::trunc(frames / GraphRate() * 1000.0 * 10000.0) / 1e7;
++    }
++    mAudioOutputLatency = seconds;
++    return mAudioOutputLatency;
++  }
+   MonitorAutoLock lock(mMonitor);
+   if (CurrentDriver()->AsAudioCallbackDriver()) {
+     mAudioOutputLatency = CurrentDriver()
+diff --git a/dom/media/MediaTrackGraphImpl.h b/dom/media/MediaTrackGraphImpl.h
+index 7ec59bf6d6..d295e86fb2 100644
+--- a/dom/media/MediaTrackGraphImpl.h
++++ b/dom/media/MediaTrackGraphImpl.h
+@@ -1191,6 +1191,13 @@ class MediaTrackGraphImpl : public MediaTrackGraph,
+    */
+   double mAudioOutputLatency;
+ 
++  /**
++   * Camoufox: when this realtime graph started opening its output device,
++   * from which a spoofed AudioContext:outputLatency stays 0 for
++   * AudioContext:outputLatencyDelayMs, as stock's does until the stream opens.
++   */
++  TimeStamp mSpoofedLatencyEpoch;
++
+   /**
+    * The max audio output channel count the default audio output device
+    * supports. This is cached here because it can be expensive to query. The
 diff --git a/dom/media/moz.build b/dom/media/moz.build
 index af9a8c99f0..caa1eaf516 100644
 --- a/dom/media/moz.build
@@ -32,7 +114,7 @@ index af9a8c99f0..caa1eaf516 100644
  
  SPHINX_TREES["/media"] = "docs"
 diff --git a/dom/media/webaudio/AudioContext.cpp b/dom/media/webaudio/AudioContext.cpp
-index 7921349caf..355d9d4c13 100644
+index 6e7f17e7c3..f5c83ea753 100644
 --- a/dom/media/webaudio/AudioContext.cpp
 +++ b/dom/media/webaudio/AudioContext.cpp
 @@ -4,6 +4,7 @@
@@ -43,20 +125,27 @@ index 7921349caf..355d9d4c13 100644
  #include "AudioBuffer.h"
  #include "AudioBufferSourceNode.h"
  #include "AudioChannelService.h"
-@@ -561,6 +562,8 @@ double AudioContext::OutputLatency() {
+@@ -561,6 +562,12 @@ double AudioContext::OutputLatency() {
    }
    // When reduceFingerprinting is enabled, return a latency figure that is
    // fixed, but plausible for the platform.
-+  if (auto value = MaskConfig::GetDouble("AudioContext:outputLatency"))
-+    return value.value();
++  // Camoufox: the identity's output device. Its graph answers as stock's does
++  // (MediaTrackGraphImpl::AudioOutputLatency), so a read before the device's
++  // stream opens is 0 there too.
++  if (MaskConfig::GetDouble("AudioContext:outputLatency")) {
++    return Graph()->AudioOutputLatency();
++  }
    double latency_s = 0.0;
    if (mShouldResistFingerprinting) {
  #ifdef XP_MACOSX
-@@ -714,6 +717,8 @@ void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
+@@ -714,6 +721,11 @@ void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
  }
  
  uint32_t AudioContext::MaxChannelCount() const {
-+  if (auto value = MaskConfig::GetUint32("AudioContext:maxChannelCount"))
++  // Camoufox: the identity's count is the output device's. An offline context
++  // has no device: its destination takes the channel count it was made with.
++  if (auto value = MaskConfig::GetUint32("AudioContext:maxChannelCount");
++      value && !mIsOffline)
 +    return value.value();
    if (mShouldResistFingerprinting) {
      return 2;

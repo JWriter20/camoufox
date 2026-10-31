@@ -277,18 +277,21 @@ def _load_font_bases() -> Dict[str, List[Dict[str, Any]]]:
     return _FONT_BASES_CACHE
 
 
-def _pick_base(os_key: str, rng: Any) -> List[str]:
-    """Draw one OS-version base by its real-world weight."""
+def _pick_release(os_key: str, rng: Any) -> Optional[Dict[str, Any]]:
+    """Draw the OS version a machine runs (a font-bases.json entry) by its
+    real-world weight. It is the identity's first draw, so the font list and
+    the voice list -- both drawn from the same seed -- land on the same
+    version."""
     bases = _load_font_bases().get(os_key) or []
     if not bases:
-        return []
+        return None
     roll = rng.random()
     cumulative = 0.0
     for base in bases:
         cumulative += base.get('weight', 0.0)
         if roll < cumulative:
-            return list(base['fonts'])
-    return list(bases[-1]['fonts'])
+            return base
+    return bases[-1]
 
 
 def _draw_units(os_key: str, rng: Any, exclude: Set[str],
@@ -391,7 +394,8 @@ def _generate_random_font_subset(
 
     # One machine runs one OS version, and has that version's default font set
     # in full -- so the base is drawn whole, by weight, and never subsetted.
-    base = _pick_base(os_key, rng)
+    release = _pick_release(os_key, rng)
+    base = list(release['fonts']) if release else []
     if not base:
         # No generated base data: fall back to the always-present core so a
         # draw is still coherent rather than empty.
@@ -430,6 +434,7 @@ def _generate_random_font_subset(
 #   macOS NSSpeechSynthesizer -> "urn:moz-tts:osx:<dotted-slug>"
 #   Windows SAPI              -> "urn:moz-tts:sapi:<dotted-slug>"
 #   Linux speech-dispatcher   -> "urn:moz-tts:speechd:<escaped-name>?<lang>"
+#   (the browser builds the Linux URIs itself from `voices:speechd`)
 _VOICE_URI_PREFIX = {
     'mac': 'urn:moz-tts:osx:',
     'win': 'urn:moz-tts:sapi:',
@@ -558,6 +563,36 @@ def _resolve_display_pack(packs: Dict[str, Any], fallback: str, locale: Optional
     return fallback if fallback in packs else next(iter(packs))
 
 
+def _speechd_grid(seed: Optional[int]) -> Dict[str, Any]:
+    """The speech-dispatcher voice grid of the Ubuntu release the identity runs
+    (voice-manifests.json, measured per release): its espeak-ng languages and
+    the variants each comes in."""
+    release = _pick_release('lin', _rng(seed))
+    releases = _load_voice_manifests()['lin']['releases']
+    return releases[release['id']]['speechd'] if release else next(iter(releases.values()))['speechd']
+
+
+def _speechd_voices(grid: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """(name, lang) per voice in speech-dispatcher's order: each language alone,
+    then with every variant ("Afrikaans", "Afrikaans+Adam", ...). The browser
+    expands `voices:speechd` the same way (MaskConfig::MSpeechdVoices)."""
+    return [
+        (name if variant is None else f'{name}+{variant}', lang)
+        for name, lang in grid['languages']
+        for variant in [None, *grid['variants']]
+    ]
+
+
+def draw_voice_config(
+    target_os: str, locale: Optional[str] = None, seed: Optional[int] = None) -> Dict[str, Any]:
+    """The identity's voices as the config keys the browser reads: `voices`
+    on macOS and Windows, `voices:speechd` on Linux, whose ~15000 voices only
+    fit in the environment as their language x variant grid."""
+    if OS_KEYS.get(target_os) == 'lin':
+        return {'voices:speechd': _speechd_grid(seed)}
+    return {'voices': _generate_random_voice_subset(target_os, locale, seed)}
+
+
 def _generate_random_voice_subset(
     target_os: str, locale: Optional[str] = None, seed: Optional[int] = None) -> List[Dict[str, Any]]:
     """Generate the speech voice list for the given OS as MaskConfig objects.
@@ -572,12 +607,27 @@ def _generate_random_voice_subset(
     machine exposes (voice-manifests.json):
       Windows: the display language's OneCore pack (en-US: David/Mark/Zira),
                its legacy "Desktop" tokens, and occasionally extra packs;
-      macOS:   the compact + Eloquence base (~184 voices) plus rare downloads;
-      Linux:   speech-dispatcher's fixed espeak-ng list (131 voices).
+      macOS:   the compact + Eloquence base (184 voices) plus rare downloads;
+      Linux:   speech-dispatcher's espeak-ng grid for the identity's Ubuntu
+               release (13362 or 14805 voices), the same release its fonts
+               are drawn for.
     Seeded by the identity so the same identity always reports the same list.
     """
     rng = _rng(seed)
     os_key = OS_KEYS.get(target_os, 'mac')
+    if os_key == 'lin':
+        return [
+            {
+                'name': name,
+                'lang': lang,
+                'voiceUri': _voice_uri('lin', name, lang),
+                'isDefault': False,
+                # SpeechDispatcherService registers voices as local only when
+                # one is named "default"; espeak-ng has none.
+                'isLocalService': False,
+            }
+            for name, lang in _speechd_voices(_speechd_grid(seed))
+        ]
     manifest = _load_voice_manifests().get(os_key) or _load_voice_manifests()['mac']
 
     out: List[str] = []
@@ -650,9 +700,14 @@ def _generate_random_voice_subset(
         for (name, lang, vtype) in selected
     ]
 
-    # No voice carries default=true: stock Firefox 152 marks none on Windows
-    # (SAPI), macOS or Linux (measured 2026-09-14 on all three), so a spoofed
-    # default would be the odd one out.
+    # macOS marks its system voice default (Samantha on an English system:
+    # stock Firefox 152 on macOS 14, 15, 26 and 27, measured 2026-10-26).
+    # Windows (SAPI) and Linux mark none.
+    system_voice = (manifest.get('systemVoice') or {}).get('default')
+    for voice in voices:
+        if voice['name'] == system_voice:
+            voice['isDefault'] = True
+            break
     return voices
 
 
@@ -954,6 +1009,100 @@ def set_host_ipv6_default(config: Dict[str, Any], salt: int = 0) -> None:
         draw = Random(identity_seed(config, salt) ^ 0x1CE6).random()
         config['webrtc:hostipv6'] = draw < HOST_IPV6_SHARE
 
+
+# Windows' location setting for desktop apps, as Firefox reads it
+# (GeolocationSystemWin.cpp): "allowed" lets a granted page have positions;
+# "prompt" (apps still to be allowed, the OS asks) and "denied" (location off
+# for apps) make the page's permission read "prompt" and a position request
+# wait on a dialog. No recorded corpus has this setting (fpgen's
+# permissions.geolocation is the page's own state, not the OS's); these shares
+# are an estimate (Windows 11 setup offers location on by default; win-i9
+# answers "prompt"). A real-device measurement replaces them.
+WINDOWS_LOCATION_SETTING_SHARES = (('allowed', 0.55), ('prompt', 0.30), ('denied', 0.15))
+
+
+def set_location_setting_default(
+    config: Dict[str, Any], salt: int, target_os: str, host_os: Optional[str]
+) -> None:
+    """Draw the identity's OS location setting (geolocation:systemPermission,
+    geolocation-spoofing.patch) for a Windows identity on another host. An
+    identity given coordinates (geoip: the exit's) has location on; one
+    without has it off, never on with no position at the exit. It belongs to the machine, so it follows the identity seed.
+    Nothing is set when the caller set it."""
+    if 'geolocation:systemPermission' in config or target_os != 'win' or host_os == 'win':
+        return
+    if 'geolocation:latitude' in config and 'geolocation:longitude' in config:
+        config['geolocation:systemPermission'] = 'allowed'
+        return
+    # No coordinates: nothing at the exit to report, so location is never on.
+    # A page allowed location would get an error, or this host's position.
+    shares = [(state, share) for state, share in WINDOWS_LOCATION_SETTING_SHARES if state != 'allowed']
+    draw = Random(identity_seed(config, salt) ^ 0x10CA).random() * sum(share for _, share in shares)
+    for state, share in shares:
+        draw -= share
+        if draw < 0:
+            break
+    config['geolocation:systemPermission'] = state
+
+
+_AUDIO_OUTPUT_LATENCY_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_audio_output_latency() -> Dict[str, Any]:
+    """Measured AudioContext.outputLatency per OS (audio-output-latency.json)."""
+    global _AUDIO_OUTPUT_LATENCY_CACHE
+    if _AUDIO_OUTPUT_LATENCY_CACHE is None:
+        path = os.path.join(os.path.dirname(__file__), 'audio-output-latency.json')
+        with open(path, 'rb') as f:
+            _AUDIO_OUTPUT_LATENCY_CACHE = json.loads(f.read())
+    return _AUDIO_OUTPUT_LATENCY_CACHE
+
+
+def set_output_latency_default(
+    config: Dict[str, Any], salt: int, target_os: str, host_os: Optional[str]
+) -> None:
+    """Draw the identity's audio output device latency.
+
+    AudioContext.outputLatency is the output stream's latency: 0 until the
+    stream opens, then a device-specific figure (the host's own on a host of
+    the claimed OS). An identity of another OS would otherwise show the
+    host's figure, or 0 for good on a host with no sound device. The device
+    latency belongs to the machine, so it follows the identity seed; the
+    stream's opening delay is timing, so each launch draws its own.
+    Nothing is set when the caller set the key or the OS has no measured
+    devices.
+    """
+    if 'AudioContext:outputLatency' in config or target_os == host_os:
+        return
+    table = _load_audio_output_latency().get(target_os) or {}
+    devices = table.get('device_latency_s') or []
+    if not devices:
+        return
+    device = _weighted_choice(Random(identity_seed(config, salt) ^ 0xA0D1), devices)
+    config['AudioContext:outputLatency'] = float(device['v'])
+    low, high = table.get('open_delay_ms') or (20, 60)
+    config.setdefault('AudioContext:outputLatencyDelayMs', float(Random().uniform(low, high)))
+
+# How long stock Windows Firefox's deferred font-info loader takes to land the
+# legacy styled-family aliases once a legacy name is first asked for (stock
+# 158.0.1 on win-i9, 2026-10-31: first seen at 1727, 1826, 1832 ms on a 100 ms
+# poll, so the true times lie up to 100 ms earlier).
+WINDOWS_ALIAS_LOAD_MS = (1630, 1832)
+
+
+def set_windows_alias_load_default(
+    config: Dict[str, Any], target_os: str, host_os: Optional[str]
+) -> None:
+    """Draw this launch's Windows legacy-alias load time
+    (fonts:windowsAliasLoadMs, windows-legacy-family-names.patch) for a
+    Windows identity on another OS. It is timing, so each launch draws its
+    own; a caller's value is kept."""
+    if target_os != 'win' or target_os == host_os:
+        return
+    low, high = WINDOWS_ALIAS_LOAD_MS
+    config.setdefault('fonts:windowsAliasLoadMs', Random().randint(low, high))
+
+
 _MEDIA_DEVICES_CACHE: Optional[Dict[str, Any]] = None
 
 
@@ -983,6 +1132,9 @@ def _weighted_choice(rng: Random, items: List[Dict[str, Any]]) -> Dict[str, Any]
 # machine line itself (Mac mini / Mac Studio have neither).
 _MEDIA_P_NO_MIC = {'win': 0.08, 'mac': 0.0, 'lin': 0.20}
 _MEDIA_P_BUILTIN_CAM = {'win': 0.78, 'mac': 0.0, 'lin': 0.45}
+# A camera media-devices.json has no camera_modes entry for: a 720p laptop
+# camera, as most are (width, height, frame rate of its largest mode).
+_DEFAULT_CAMERA_MODE = [1280, 720, 30]
 
 
 def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
@@ -1046,6 +1198,12 @@ def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
         for label, grp in list(outs):
             mics.append((f'Monitor of {label}', grp))
 
+    # What each device reports once captured (media-device-spoofing.patch):
+    # a camera's largest mode, a microphone's channel count.
+    modes = cat.get('camera_modes') or {}
+    mono = set(cat.get('mono_mics') or [])
+    cam_modes = [modes.get(c, _DEFAULT_CAMERA_MODE) for c, _ in cams]
+
     return {
         'mediaDevices:enabled': True,
         'mediaDevices:micros': len(mics),
@@ -1057,6 +1215,10 @@ def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
         'mediaDevices:webcamGroups': [g for _, g in cams],
         'mediaDevices:speakerLabels': [o for o, _ in outs],
         'mediaDevices:speakerGroups': [g for _, g in outs],
+        'mediaDevices:webcamMaxWidths': [m[0] for m in cam_modes],
+        'mediaDevices:webcamMaxHeights': [m[1] for m in cam_modes],
+        'mediaDevices:webcamMaxFrameRates': [m[2] for m in cam_modes],
+        'mediaDevices:microphoneChannels': [1 if m in mono else 2 for m, _ in mics],
     }
 
 
@@ -1367,7 +1529,7 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None, salt: Optional[i
         "the preset's recorded voices" if preset.get('speechVoices') else "the browser's own voices", preset_key,
     )
     if voices is not None:
-        config['voices'] = voices
+        config.update(voices)
     elif preset.get('speechVoices'):
         config['voices'] = _normalize_preset_voices(preset['speechVoices'], target_os)
 
@@ -1383,10 +1545,11 @@ def _draw_fonts(target_os: str, seed: int, instead: str, identity: Optional[str]
         return None
 
 
-def _draw_voices(target_os: str, seed: int, instead: str, identity: Optional[str]) -> Optional[List[Dict[str, Any]]]:
-    """The identity's voice draw, or None after a FallbackWarning naming `instead`."""
+def _draw_voices(target_os: str, seed: int, instead: str, identity: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The identity's voice config (draw_voice_config), or None after a
+    FallbackWarning naming `instead`."""
     try:
-        return _generate_random_voice_subset(target_os, seed=seed)
+        return draw_voice_config(target_os, seed=seed)
     except (OSError, ValueError, KeyError) as e:
         FallbackWarning.warn('Drawing the speech voices', instead, e, identity)
         return None
@@ -1419,12 +1582,17 @@ def _build_init_script(values: Dict[str, Any]) -> str:
                 f'  if (typeof w.{fn_name} === "function") w.{fn_name}({js_val});'
             )
 
-    # Screen dimensions (requires width + height together)
+    # Screen dimensions (requires width + height together). The available rect
+    # rides along when the identity has one; a build that keeps only the full
+    # size ignores the extra arguments.
     sw = values.get('screenWidth')
     sh = values.get('screenHeight')
     if sw and sh:
+        aw = values.get('screenAvailWidth')
+        ah = values.get('screenAvailHeight')
+        dims = f'{sw}, {sh}, {aw}, {ah}' if aw and ah else f'{sw}, {sh}'
         lines.append(
-            f'  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions({sw}, {sh});'
+            f'  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions({dims});'
         )
         scd = values.get('screenColorDepth')
         if scd:
@@ -1465,11 +1633,16 @@ def _build_init_script(values: Dict[str, Any]) -> str:
             f'  if (typeof w.setFontList === "function") w.setFontList({_json.dumps(joined)});'
         )
 
-    # Speech voices (comma-separated names). config['voices'] holds MaskConfig
-    # voice objects; extract the display name from each (tolerating a legacy
-    # list of plain name strings).
+    # Speech voices: comma-separated names, or a Linux identity's
+    # speech-dispatcher grid as JSON. config['voices'] holds MaskConfig voice
+    # objects; extract the display name from each (tolerating a legacy list of
+    # plain name strings).
     voices = values.get('speechVoices')
-    if voices and len(voices) > 0:
+    if isinstance(voices, dict):
+        lines.append(
+            f'  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices({_json.dumps(_json.dumps(voices, separators=(',', ':')))});'
+        )
+    elif voices and len(voices) > 0:
         names = [v['name'] if isinstance(v, dict) else v for v in voices]
         joined = ','.join(names)
         lines.append(
@@ -1489,6 +1662,7 @@ def generate_context_fingerprint(
     locale: Optional[str] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
     webgl_config: Optional[Tuple[str, str]] = None,
+    webgl: bool = True,
 ) -> Dict[str, Any]:
     """
     Generate fingerprint values for a single per-context identity.
@@ -1508,6 +1682,8 @@ def generate_context_fingerprint(
             is built but before init_script is rendered (e.g. {'timezone': 'UTC'}).
         webgl_config: The (vendor, renderer) a drawn identity claims, instead of
             drawing one.
+        webgl: False claims no WebGL values, for a browser whose render node
+            reports its own (camoufox.render_node).
     """
     if preset is not None:
         # Use real fingerprint preset
@@ -1539,13 +1715,13 @@ def generate_context_fingerprint(
             )
             if fonts is not None:
                 config['fonts'] = fonts
-        if 'voices' not in config:
+        if 'voices' not in config and 'voices:speechd' not in config:
             voices = _draw_voices(
                 os_name, identity_seed(config, _salt), "the browser's launch-time voices",
                 config.get('navigator.userAgent'),
             )
             if voices is not None:
-                config['voices'] = voices
+                config.update(voices)
 
         if 'navigator.oscpu' not in config:
             oscpu = oscpu_for_platform(config.get('navigator.platform', ''))
@@ -1553,7 +1729,10 @@ def generate_context_fingerprint(
                 config['navigator.oscpu'] = oscpu
 
         # Draw the GPU and its WebGL data (fpgen.yml does not map these)
-        if not config.get('webGl:vendor') or not config.get('webGl:renderer'):
+        if not webgl:
+            for key in [k for k in config if k.startswith(('webGl:', 'webGl2:'))]:
+                del config[key]
+        elif not config.get('webGl:vendor') or not config.get('webGl:renderer'):
             # Not at the top: camoufox.webgl imports this module.
             from .webgl import sample_webgl_for_screen, webgl_for_gpu
 
@@ -1619,10 +1798,14 @@ def generate_context_fingerprint(
         'webglRenderer': webgl.get('unmaskedRenderer'),
         'screenWidth': screen.get('width'),
         'screenHeight': screen.get('height'),
+        'screenAvailWidth': config.get('screen.availWidth'),
+        'screenAvailHeight': config.get('screen.availHeight'),
         'screenColorDepth': screen.get('colorDepth'),
         'timezone': preset.get('timezone') if isinstance(preset.get('timezone'), str) else config.get('timezone'),
         'fontList': config.get('fonts'),
-        'speechVoices': config.get('voices'),
+        'speechVoices': (
+            {'speechd': config['voices:speechd']} if 'voices:speechd' in config else config.get('voices')
+        ),
         'webrtcIP': webrtc_ip or '',
     }
 

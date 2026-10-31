@@ -18,17 +18,24 @@ this against chrome://juggler (daijro/camoufox#847):
     try { new Worker('chrome://juggler/content/content/WorkerMain.js'); BUILD_IS_NOT_STOCK; }
     catch (e) { /* SecurityError, as in stock Firefox */ }
 
-Three checks, against scripts/data/contentaccessible-manifest.json (recorded from
-a stock release by scripts/gen-contentaccessible-manifest.py): the files of
-every contentaccessible package and their SHA-256, and the names every manifest
-registers. Then a page actually loads a sample and constructs the Workers, so
-the static diff cannot pass while the surface is really different.
+The set differs by OS, and an identity may claim an OS its build was not made
+for: Camoufox then serves pages the claimed OS's stock bytes
+(chrome-overlay-claimed-os.patch, toolkit/camoufox-overlay). So the checks run
+once per claimed OS, against scripts/data/contentaccessible-manifest-<os>.json
+(recorded from that OS's stock release by scripts/gen-contentaccessible-manifest.py):
+the bytes a page gets for every page-loadable URL, after the manifests' flags
+and overrides as the chrome registry applies them for that claim
+(scripts/_chrome_view.py), and the names every manifest registers. Then a page
+actually loads a sample and constructs the Workers, so the static diff cannot
+pass while the surface is really different (chrome-overlay-claimed-os.py
+loads the OS-keyed files under each claim).
 
     python browser/tests/playwright/patches/contentaccessible-parity.py
 """
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -43,32 +50,26 @@ from helpers import resolve_binary  # noqa: E402
 
 BROWSER_ROOT = Path(__file__).resolve().parents[3]
 
-# The jar listing is the generator's, so the guard reads a build exactly the way
-# the manifest was recorded.
+# The view is the recorder's, so the guard reads a build exactly the way the
+# records were made.
+sys.path.insert(0, str(BROWSER_ROOT / "scripts"))
+import _chrome_view as chrome_view  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location(
     "gen_contentaccessible_manifest", BROWSER_ROOT / "scripts" / "gen-contentaccessible-manifest.py"
 )
 _generator = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_generator)
-jar_hashes = _generator.jar_hashes
-tree_hashes = _generator.tree_hashes
-registrations = _generator.registrations
-MANIFEST = _generator.OUT
+record_path = _generator.record_path
+CLAIMED_OSES = _generator.OSES
 
-# A page reads a file's bytes only through what the file does when loaded: an
-# image's pixels, a stylesheet's rules, a script's side effects. Markup loads as
-# none of those, so only its presence has to match stock.
-PRESENCE_ONLY = (".html", ".xhtml")
-
-# Differences no page can reach, with the reason. The guard fails when one
-# matches stock again, so the list cannot outlive the difference.
-UNREACHABLE_DIFFERENCES = {
-    "chrome/browser/content/browser/parent/ext-browser.js":
-        "disable-extension-newtab.patch; loaded from a page it throws on ChromeUtils "
-        "at line 11, before the patched arrow function",
-    "chrome/browser/content/browser/parent/ext-tabs.js":
-        "disable-extension-newtab.patch; loaded from a page it throws on ChromeUtils "
-        "at line 7, before the patched class",
+# Differences a page can reach but that are not fixed here, with the reason.
+# The guard fails when one matches stock again, so the list cannot outlive
+# the difference.
+KNOWN_DIFFERENCES = {
+    "chrome://browser/content/aboutDialog.xhtml":
+        "MOZ_UPDATER is off in Camoufox (the update deck); a build flag with a wide blast "
+        "radius, left as is. The same on every OS, so the claimed-OS overlay does not cover it",
 }
 
 # Loaded from a page and asserted against stock Firefox 152.0.4. Each entry is
@@ -117,69 +118,55 @@ async ([urls]) => {
 """
 
 
-def package_hashes(root: Path, jar: str, prefixes: list) -> dict:
-    """Member -> SHA-256 for one package, from the jar if packaged, else from the
-    tree. `mach build` leaves dist/bin without omni.ja: the same resources sit
-    as loose files at their jar paths, under dist/bin/browser/ for
-    browser/omni.ja and dist/bin/ for omni.ja. CI tests that unpackaged tree.
-
-    Returns None when neither is present, so the caller can say which.
-    """
-    path = root / jar
-    if path.exists():
-        return jar_hashes(path, prefixes)
-    base = root / 'browser' if jar == 'browser/omni.ja' else root
-    if (base / 'chrome').is_dir():
-        return tree_hashes(base, prefixes)
-    return None
-
-
-def static_check(binary: Path, manifest: dict, failures: list) -> None:
-    root = binary.parent
+def built_version(root: Path) -> str:
     ini = root / "application.ini"
-    if ini.exists():
-        match = re.search(r"^Version=(.+)$", ini.read_text(errors="replace"), re.M)
-        # Camoufox appends its own release to the Firefox version ("152.0.4-beta.30");
-        # only the Firefox part decides whether the recorded file set still applies.
-        built = match.group(1).strip().split("-")[0] if match else "unknown"
-        if built != manifest["firefox_version"]:
-            failures.append(
-                f"manifest records Firefox {manifest['firefox_version']} but this build is "
-                f"{built} -- re-run scripts/gen-contentaccessible-manifest.py against a "
-                f"stock {built} release"
-            )
-            return
+    if not ini.exists():
+        return "unknown"
+    match = re.search(r"^Version=(.+)$", ini.read_text(errors="replace"), re.M)
+    # Camoufox appends its own release to the Firefox version ("152.0.4-beta.30");
+    # only the Firefox part decides whether the recorded file set still applies.
+    return match.group(1).strip().split("-")[0] if match else "unknown"
 
-    for key, spec in sorted(manifest["packages"].items()):
-        jar = key.split("|", 1)[0]
-        built = package_hashes(root, jar, spec["prefixes"])
-        if built is None:
-            failures.append(
-                f"{jar} not found next to the binary, and no loose chrome/ tree "
-                f"to read instead -- nothing to compare against stock"
-            )
-            return
-        stock = spec["files"]
-        problems = [f"MISSING vs stock -- {n}" for n in sorted(stock.keys() - built.keys())]
-        problems += [f"EXTRA vs stock -- {n}" for n in sorted(built.keys() - stock.keys())]
-        for name in sorted(stock.keys() & built.keys()):
-            differs = built[name] != stock[name] and not name.endswith(PRESENCE_ONLY)
-            if differs and name not in UNREACHABLE_DIFFERENCES:
-                problems.append(f"CHANGED vs stock -- {name}")
-            elif not differs and name in UNREACHABLE_DIFFERENCES:
-                problems.append(f"matches stock again, drop it from UNREACHABLE_DIFFERENCES -- {name}")
-        failures += [f"{key}: {p}" for p in problems]
-        if not problems:
-            print(f"  ok  {key.split('|', 2)[2]:32} {len(built):>5} files")
 
-    built = registrations(root)
-    for kind, stock_names in sorted(manifest["registered"].items()):
-        extra = sorted(set(built[kind]) - set(stock_names))
-        missing = sorted(set(stock_names) - set(built[kind]))
-        failures += [f"registered {kind}: EXTRA vs stock -- {n} (pages can detect it)" for n in extra]
-        failures += [f"registered {kind}: MISSING vs stock -- {n}" for n in missing]
+def static_check(binary: Path, os_name: str, record: dict, failures: list) -> None:
+    """The build's page-loadable files and registered names under a claim of
+    `os_name`, against that OS's stock record. A packaged build is read from
+    its omni.ja pair; `mach build` leaves dist/bin without them, with the same
+    files loose at their jar paths (CI tests that unpackaged tree)."""
+    root = binary.parent
+    built = built_version(root)
+    if built != record["firefox_version"]:
+        failures.append(
+            f"{os_name}: the record is of Firefox {record['firefox_version']} but this build is "
+            f"{built} -- re-run scripts/gen-contentaccessible-manifest.py against the stock "
+            f"{os_name} {built} release"
+        )
+        return
+    if not (root / "omni.ja").exists() and not (root / "chrome").is_dir():
+        failures.append(f"no omni.ja next to {binary}, and no loose chrome/ tree to read instead")
+        return
+
+    files, names = chrome_view.page_view(root, claimed_os=os_name)
+    stock = record["files"]
+    problems = [f"MISSING vs stock -- {u}" for u in sorted(stock.keys() - files.keys())]
+    problems += [f"EXTRA vs stock -- {u}" for u in sorted(files.keys() - stock.keys())]
+    for url in sorted(stock.keys() & files.keys()):
+        differs = files[url] != stock[url]
+        if differs and url not in KNOWN_DIFFERENCES:
+            problems.append(f"CHANGED vs stock -- {url}")
+        elif not differs and url in KNOWN_DIFFERENCES:
+            problems.append(f"matches stock again, drop it from KNOWN_DIFFERENCES -- {url}")
+    failures += [f"{os_name}: {p}" for p in problems]
+    if not problems:
+        print(f"  ok  {os_name:8} {len(files):>5} page-loadable files")
+
+    for kind, stock_names in sorted(record["registered"].items()):
+        extra = sorted(set(names.get(kind, [])) - set(stock_names))
+        missing = sorted(set(stock_names) - set(names.get(kind, [])))
+        failures += [f"{os_name}: registered {kind}: EXTRA vs stock -- {n} (pages can detect it)" for n in extra]
+        failures += [f"{os_name}: registered {kind}: MISSING vs stock -- {n}" for n in missing]
         if not extra and not missing:
-            print(f"  ok  registered {kind:23} {len(built[kind]):>5} names")
+            print(f"  ok  {os_name:8} registered {kind:14} {len(names.get(kind, [])):>5} names")
 
 
 PROBE_MARK = "PROBE-RESULT "
@@ -193,8 +180,11 @@ def run_probe(binary: Path) -> dict:
     # i_know_what_im_doing is what makes executable_path stick; without it the
     # launcher falls back to the downloaded official build and this guard would
     # silently measure a different browser.
+    # The caller's environment: an env= replaces it whole, and a Pro build
+    # needs the caller's lease (CAMOU_LEASE_FILE) or the launcher asks the Pro
+    # API for one.
     with Camoufox(
-        headless=True, executable_path=str(binary), env={}, i_know_what_im_doing=True
+        headless=True, executable_path=str(binary), env=dict(os.environ), i_know_what_im_doing=True
     ) as browser:
         page = browser.new_page()
         page.goto("about:blank")
@@ -247,19 +237,23 @@ def live_check(binary: Path, failures: list) -> None:
 
 
 def main() -> int:
-    if not MANIFEST.exists():
-        print(f"FAIL: {MANIFEST.relative_to(BROWSER_ROOT)} is missing; generate it first")
-        return 1
-    manifest = json.loads(MANIFEST.read_text())
+    records = {}
+    for os_name in CLAIMED_OSES:
+        path = record_path(os_name)
+        if not path.exists():
+            print(f"FAIL: {path.relative_to(BROWSER_ROOT)} is missing; generate it first")
+            return 1
+        records[os_name] = json.loads(path.read_text())
     binary = resolve_binary()
     failures = []
 
-    print(f"Stock baseline: Firefox {manifest['firefox_version']}, "
-          f"{sum(len(p['files']) for p in manifest['packages'].values())} files "
-          f"in {len(manifest['packages'])} packages\n")
+    for os_name, record in records.items():
+        print(f"Stock baseline ({os_name}): Firefox {record['firefox_version']}, "
+              f"{len(record['files'])} page-loadable files")
 
-    print("Package file sets:")
-    static_check(binary, manifest, failures)
+    print("\nPage-loadable files, per claimed OS:")
+    for os_name, record in records.items():
+        static_check(binary, os_name, record, failures)
     print("\nLoaded from a page:")
     try:
         live_check(binary, failures)
@@ -273,7 +267,7 @@ def main() -> int:
         for failure in failures:
             print(f"FAIL: {failure}")
         return 1
-    print("PASS: the content-reachable surface matches a stock Firefox release.")
+    print("PASS: the content-reachable surface matches a stock Firefox release under every claimed OS.")
     return 0
 
 
