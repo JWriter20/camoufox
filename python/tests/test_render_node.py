@@ -7,6 +7,7 @@ import json
 import re
 import tempfile
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -180,6 +181,20 @@ def test_a_pro_launch_holds_an_assignment_and_hands_the_build_its_session(
     assert not utils.has_canvas_placeholder(prefs)
     # This node serves no WebGPU, so WebGPU stays as a launch without one has it.
     assert "dom.webgpu.renderfarm.node" not in prefs
+
+
+def test_the_farm_is_reached_directly_whatever_proxy_the_browser_uses(
+    api, coordinator, pro_build, signed_in, monkeypatch
+):
+    # The browser's proxy is for its pages. Pairing with the farm through it (or through one
+    # in the environment) would hand the farm's token to the proxy, or fail and draw nothing.
+    dead = "http://127.0.0.1:9"
+    monkeypatch.setattr(urllib.request, "getproxies", lambda: {"http": dead, "https": dead, "all": dead})
+    opts, _ = node_launch(
+        pro_build, monkeypatch, render_node=coordinator.config, proxy={"server": dead}
+    )
+    assert len(coordinator.calls("POST", "/assignments")) == 1
+    assert render_node.RELAY_ENV in opts["env"]
 
 
 @pytest.fixture

@@ -9,6 +9,7 @@ Run:
     python3 scripts/patch.py <version> <release>
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -59,6 +60,7 @@ class Patcher:
             # Re-copy additions and settings after reset
             print("Re-copying additions and settings...")
             run(f'bash ../scripts/copy-additions.sh {version} {release}')
+            check_os_overlay(version)
 
             # Create the base mozconfig file
             run('cp -v ../assets/base.mozconfig mozconfig')
@@ -164,6 +166,26 @@ class Patcher:
         print(f"-> Updating mozconfig, target is {self.moz_target}")
         with open(mozconfig, 'w', encoding='utf-8') as f:
             f.write(content)
+
+
+def check_os_overlay(version):
+    """Stop unless toolkit/camoufox-overlay holds this Firefox version's stock bytes.
+
+    The overlay serves pages the files stock Firefox ships on the OS an
+    identity claims (the gen-os-overlay script). Bytes from another version
+    would be a tell of their own, so a missing or stale set fails here, before
+    the build, as the overlay's moz.build would fail it during one.
+    """
+    path = os.path.join('toolkit', 'camoufox-overlay', 'overlay.json')
+    fix = (f'run the gen-os-overlay script with the stock Windows and Linux Firefox {version} '
+           f'(the autoupdate pipeline does this on an uplift)')
+    if not os.path.exists(path):
+        sys.exit(f'ERROR: {path} is missing: no claimed-OS overlay for Firefox {version}; {fix}')
+    with open(path, encoding='utf-8') as f:
+        got = json.load(f).get('firefox_version')
+    if got != version:
+        sys.exit(f'ERROR: the claimed-OS overlay is for Firefox {got}, not {version}; {fix}')
+    print(f'Claimed-OS overlay: stock Firefox {got}')
 
 
 def add_rustup(*targets):

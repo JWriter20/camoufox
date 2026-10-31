@@ -1,0 +1,388 @@
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -3,6 +3,9 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "nsWindow.h"
++#include "MaskConfig.hpp"
++#include "nsIAppWindow.h"
++#include "nsIWebBrowserChrome.h"
+ #ifdef MOZ_X11
+ #  include "nsWindowX11.h"
+ #endif
+@@ -753,8 +756,8 @@ void nsWindow::RegisterTouchWindow() {
+ 
+ LayoutDeviceIntPoint nsWindow::GetScreenEdgeSlop() {
+   if (DrawsToCSDTitlebar()) {
+-    return {std::max(mClientMargin.left, mClientMargin.right),
+-            std::max(mClientMargin.top, mClientMargin.bottom)};
++    return {std::max(mNativeClientMargin.left, mNativeClientMargin.right),
++            std::max(mNativeClientMargin.top, mNativeClientMargin.bottom)};
+   }
+   return {};
+ }
+@@ -806,6 +809,11 @@ bool nsWindow::ConstrainSizeWithScale(int* aWidth, int* aHeight,
+   if (*aWidth <= mClientMargin.LeftRight()) {
+     *aWidth = mClientMargin.LeftRight() + 1;
+   }
++  bool constrained = false;
++  if (const int32_t minWidth = ClaimedMinWidth(); *aWidth < minWidth) {
++    *aWidth = minWidth;
++    constrained = true;
++  }
+   if (*aHeight <= mClientMargin.TopBottom()) {
+     *aHeight = mClientMargin.TopBottom() + 1;
+   }
+@@ -821,7 +829,7 @@ bool nsWindow::ConstrainSizeWithScale(int* aWidth, int* aHeight,
+     *aHeight = int(round(tmpHeight / aScale)) + mClientMargin.TopBottom();
+     return true;
+   }
+-  return false;
++  return constrained;
+ }
+ 
+ // Constraints are in desktop pixels. GDK coords are also desktop pixels on
+@@ -877,6 +885,114 @@ bool nsWindow::ToplevelUsesCSD() const {
+   return GetGtkCSDEnv() == GtkCsd::One;
+ }
+ 
++// Camoufox: the frame a Windows identity's window has. Windows Firefox draws
++// its tabs in the titlebar, so a normal window's client area runs to the top
++// edge, and the window rect carries the invisible resize border on the other
++// three sides; a maximized window overhangs the work area by that border on
++// all four; fullscreen has none. Without this, outerWidth/outerHeight,
++// screenX/screenY and mozInnerScreenX/Y answered with this host's window
++// manager decorations (openbox: a 1px border and an 8 CSS px titlebar).
++//
++// The border is SM_CXFRAME + SM_CXPADDEDBORDER at the display's DPI, in device
++// pixels, and the identity's devicePixelRatio is that DPI. Measured with
++// stock Firefox: 8 at 96 DPI (dpr 1) and 16 at 240 DPI (dpr 2.5, win-i9,
++// outerWidth - innerWidth = 12.8). Between those it follows 3 +
++// round(dpr) + round(4 * dpr), which reproduces both and the recorded
++// population's 7 CSS px at dpr 1.25, 1.5 and 2.
++static int32_t WindowsResizeBorderDevicePixels(double aDpr) {
++  auto roundHalfUp = [](double v) { return int32_t(std::floor(v + 0.5)); };
++  return 3 + roundHalfUp(aDpr) + roundHalfUp(4 * aDpr);
++}
++
++// A window that does not draw in its titlebar (a pop-up) has Windows's
++// caption above the client area: SM_CYCAPTION,
++// the NONCLIENTMETRICS caption height (22 at 96 DPI) scaled to the DPI plus
++// one, so the client area starts this far below the resize border. With the
++// border, it reproduces within a device pixel what stock Firefox 158 on win-i9
++// put above a window.open pop-up's toolbar at 100, 125, 150, 175, 200, 225
++// and 250 % (31, 38, 45, 52, 58, 64 and 72 device px).
++static int32_t WindowsCaptionDevicePixels(double aDpr) {
++  return int32_t(std::floor(22 * aDpr + 0.5)) + 1;
++}
++
++// Whether Windows Firefox would draw this window's tabs in its titlebar. It
++// does for every window with a toolbar, and not for a pop-up opened without
++// one (TabBarVisibility: CustomTitlebar.allowedBy("non-popup")), which keeps
++// the system caption. On this host the answer cannot come from
++// mDrawInTitlebar: GTK only draws in the titlebar where client-side
++// decorations are available, and a window manager without them (openbox)
++// leaves every window with a system titlebar.
++bool nsWindow::ClaimsCustomTitlebar() const {
++  if (mDrawInTitlebar) {
++    return true;
++  }
++  nsIAppWindow* appWindow =
++      mWidgetListener ? mWidgetListener->GetAppWindow() : nullptr;
++  uint32_t flags = 0;
++  return appWindow && NS_SUCCEEDED(appWindow->GetChromeFlags(&flags)) &&
++         (flags & nsIWebBrowserChrome::CHROME_TOOLBAR);
++}
++
++// Windows keeps a window at least SM_CXMINTRACK wide: the caption's buttons,
++// icon and borders. Stock Firefox 158 on win-i9, a window.open pop-up asked
++// for 100 CSS px: 136, 166, 198, 231, 258, 291 and 325 device px wide at 100,
++// 125, 150, 175, 200, 225 and 250 %. It does not follow one rounding of the
++// DPI, so it is the measured values, linear between them.
++static int32_t WindowsMinTrackWidthDevicePixels(double aDpr) {
++  static constexpr double kDpr[] = {1, 1.25, 1.5, 1.75, 2, 2.25, 2.5};
++  static constexpr double kWidth[] = {136, 166, 198, 231, 258, 291, 325};
++  constexpr size_t kLast = std::size(kDpr) - 1;
++  if (aDpr <= kDpr[0]) {
++    return int32_t(std::round(kWidth[0] * aDpr / kDpr[0]));
++  }
++  if (aDpr >= kDpr[kLast]) {
++    return int32_t(std::round(kWidth[kLast] * aDpr / kDpr[kLast]));
++  }
++  size_t i = 1;
++  while (kDpr[i] < aDpr) {
++    i++;
++  }
++  const double t = (aDpr - kDpr[i - 1]) / (kDpr[i] - kDpr[i - 1]);
++  return int32_t(std::round(kWidth[i - 1] + t * (kWidth[i] - kWidth[i - 1])));
++}
++
++int32_t nsWindow::ClaimedMinWidth() const {
++  if (!IsTopLevelWidget() || IsPopup() || mSizeMode != nsSizeMode_Normal ||
++      MaskConfig::GetSpoofedOS() != MaskConfig::SpoofedOS::Windows ||
++      MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows) {
++    return 0;
++  }
++  const double dpr =
++      MaskConfig::GetDouble("window.devicePixelRatio").value_or(1.0);
++  return int32_t(std::round(WindowsMinTrackWidthDevicePixels(dpr) /
++                            FractionalScaleFactor()));
++}
++
++DesktopIntMargin nsWindow::ClaimedClientMargin(
++    const DesktopIntMargin& aNative) const {
++  if (!IsTopLevelWidget() || IsPopup() ||
++      MaskConfig::GetSpoofedOS() != MaskConfig::SpoofedOS::Windows ||
++      MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows) {
++    return aNative;
++  }
++  if (mSizeMode == nsSizeMode_Fullscreen) {
++    return {};
++  }
++  const double dpr =
++      MaskConfig::GetDouble("window.devicePixelRatio").value_or(1.0);
++  const int32_t border = int32_t(std::round(
++      WindowsResizeBorderDevicePixels(dpr) / FractionalScaleFactor()));
++  if (mSizeMode == nsSizeMode_Maximized) {
++    return DesktopIntMargin(border, border, border, border);
++  }
++  if (!ClaimsCustomTitlebar()) {
++    const int32_t caption = int32_t(std::round(
++        WindowsCaptionDevicePixels(dpr) / FractionalScaleFactor()));
++    return DesktopIntMargin(border + caption, border, border, border);
++  }
++  return DesktopIntMargin(0, border, border, border);
++}
++
+ bool nsWindow::DrawsToCSDTitlebar() const {
+   return mGtkWindowDecoration == GTK_DECORATION_CLIENT && mDrawInTitlebar;
+ }
+@@ -893,7 +1009,7 @@ void nsWindow::ApplySizeConstraints() {
+                                 constraints.mMinSize.width,
+                                 constraints.mMinSize.height);
+     if (ToplevelUsesCSD()) {
+-      const auto& margin = mClientMargin;
++      const auto& margin = mNativeClientMargin;
+       constraints.mMinSize.height += margin.TopBottom();
+       constraints.mMinSize.width += margin.LeftRight();
+     }
+@@ -901,7 +1017,7 @@ void nsWindow::ApplySizeConstraints() {
+   }
+   if (mSizeConstraints.mMaxSize != DesktopIntSize(NS_MAXSIZE, NS_MAXSIZE)) {
+     if (ToplevelUsesCSD()) {
+-      const auto& margin = mClientMargin;
++      const auto& margin = mNativeClientMargin;
+       constraints.mMaxSize.height += margin.TopBottom();
+       constraints.mMaxSize.width += margin.LeftRight();
+     }
+@@ -1106,6 +1222,8 @@ void nsWindow::Move(const DesktopPoint& aTopLeft) {
+ 
+   // XXX Should we do some AreBoundsSane check here?
+   mLastMoveRequest = request;
++  mClaimedPlacementPending = true;
++  mClaimedPlacementMoves = 0;
+ 
+   if (!mCreated) {
+     LOG("  is not created, return.\n");
+@@ -1669,10 +1787,12 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
+   }
+ 
+   const auto oldMargin = mClientMargin;
++  const auto oldNativeMargin = mNativeClientMargin;
+   const auto oldClientArea = mClientArea;
+   const auto newBounds = Bounds::Compute(this);
+   mClientArea = newBounds.mClientArea;
+-  mClientMargin = newBounds.mClientMargin;
++  mNativeClientMargin = newBounds.mClientMargin;
++  mClientMargin = ClaimedClientMargin(mNativeClientMargin);
+ 
+   if (IsPopup()) {
+     // Popup windows is not moved by the window manager, and so any change in
+@@ -1709,6 +1829,38 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
+     mLastSizeRequest.height +=
+         mClientMargin.TopBottom() - oldMargin.TopBottom();
+   }
++  // Camoufox: a claimed OS's frame is not the one the window manager places
++  // the window by, so the window rect lands where Gecko asked only once the
++  // native frame is known: the move that window.open's left/top or the
++  // stagger made went out before the window manager reported its frame
++  // (_NET_FRAME_EXTENTS), and left the window rect off by the difference
++  // (x - 6, y + 8 CSS px at 250 % under openbox). So while a requested
++  // position is pending, each configure compares the window rect with it and
++  // moves again, a few times at most so as not to fight a window manager that
++  // will not have it there. Windows also keeps the window rect where it is
++  // when the frame changes (a titlebar drawn or dropped).
++  if (mClientMargin != mNativeClientMargin && mSizeMode == nsSizeMode_Normal) {
++    if (clientMarginsChanged && !mClaimedPlacementPending) {
++      mLastMoveRequest = oldClientArea.TopLeft() -
++                         DesktopIntPoint(oldMargin.left, oldMargin.top);
++      mClaimedPlacementPending = true;
++      mClaimedPlacementMoves = 0;
++    }
++    if (oldNativeMargin != mNativeClientMargin) {
++      mClaimedPlacementPending = true;
++    }
++    const DesktopIntPoint windowRect =
++        mClientArea.TopLeft() -
++        DesktopIntPoint(mClientMargin.left, mClientMargin.top);
++    if (mClaimedPlacementPending) {
++      if (windowRect == mLastMoveRequest || mClaimedPlacementMoves >= 4) {
++        mClaimedPlacementPending = false;
++      } else {
++        mClaimedPlacementMoves++;
++        NativeMoveResize(/* move */ true, /* resize */ false);
++      }
++    }
++  }
+ 
+   // We need to send WindowMoved even if only the client margins changed
+   // so that BrowserParent picks up the new offsets.
+@@ -3730,6 +3882,9 @@ void nsWindow::OnWindowStateEvent(GtkWidget* aWidget,
+       // fullscreen mode if the relevant configure hasn't happened yet or what
+       // not.
+       RecomputeBounds();
++    } else if (ClaimedClientMargin(mNativeClientMargin) != mClientMargin) {
++      // Camoufox: a claimed OS's frame depends on the size mode.
++      SchedulePendingBounds();
+     }
+     if (mWidgetListener) {
+       mWidgetListener->SizeModeChanged(mSizeMode);
+@@ -4651,6 +4806,20 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+     mGtkWindowAppName = gAppData->name;
+   }
+ 
++  // Camoufox: a claimed OS's frame is there from the start, as a Windows
++  // window's is, not only once the window manager reports its own: Gecko
++  // sizes a new window by it before it is shown (window.open's chrome size,
++  // the work-area clamp), and stock Windows clamped a pop-up's window rect
++  // to the work area where this one, sized with no frame yet, ran 35 CSS px
++  // past it at 250 %. The rect Gecko created the window with is the window
++  // rect, the client area inside it: a client area at the rect's origin put
++  // the window rect off screen, the opener's clamp moved it back, and a
++  // window moved there is never staggered (stock: +22 CSS px from its opener).
++  if (IsTopLevelWidget()) {
++    mClientMargin = ClaimedClientMargin(mNativeClientMargin);
++    mClientArea.Deflate(mClientMargin);
++  }
++
+   mCreated = true;
+   return NS_OK;
+ }
+@@ -4782,7 +4951,7 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
+     // SSD mode expects coordinates with decorations (outer frame)
+     // so put the margin offset back.
+     if (!ToplevelUsesCSD()) {
+-      cr -= DesktopIntPoint(mClientMargin.left, mClientMargin.top);
++      cr -= DesktopIntPoint(mNativeClientMargin.left, mNativeClientMargin.top);
+     }
+     return GdkRectangle{cr.x, cr.y, cr.width, cr.height};
+   }();
+@@ -4870,11 +5039,16 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
+   // the request is granted.
+   bool isOrWillBeVisible = mHasReceivedSizeAllocate || mNeedsShow || mIsShown;
+   if (!isOrWillBeVisible || IsPopup()) {
++    // Camoufox: the request is the window rect; a claimed frame (there from
++    // Create(), see there) puts the client area inside it. Without one the
++    // margin is empty and this is the request itself.
++    DesktopIntRect clientRequest(mLastMoveRequest, mLastSizeRequest);
++    clientRequest.Deflate(mClientMargin);
+     if (aResized) {
+-      mClientArea.SizeTo(mLastSizeRequest);
++      mClientArea.SizeTo(clientRequest.Size());
+     }
+     if (aMoved) {
+-      mClientArea.MoveTo(mLastMoveRequest);
++      mClientArea.MoveTo(clientRequest.TopLeft());
+       NotifyWindowMoved(mClientArea.TopLeft());
+     }
+     if (aResized) {
+@@ -7623,8 +7797,9 @@ void nsWindow::InsertEmoji(RefPtr<nsWindow> aToplevelWindow) {
+   auto offset = IsTopLevelWidget()
+                     ? DesktopIntPoint()
+                     : WidgetToScreenOffsetUnscaled() -
+-                          DesktopIntPoint(aToplevelWindow->mClientMargin.left,
+-                                          aToplevelWindow->mClientMargin.top);
++                          DesktopIntPoint(
++                              aToplevelWindow->mNativeClientMargin.left,
++                              aToplevelWindow->mNativeClientMargin.top);
+ 
+   LOG("nsWindow::InsertEmoji() carret [%d, %d] offset [%d, %d] height %d",
+       int(input.x), int(input.y), int(offset.x), int(offset.y), input.height);
+diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
+--- a/widget/gtk/nsWindow.h
++++ b/widget/gtk/nsWindow.h
+@@ -609,6 +609,9 @@ class nsWindow : public nsIWidget {
+   GtkTextDirection GetTextDirection();
+ 
+   bool DrawsToCSDTitlebar() const;
++  DesktopIntMargin ClaimedClientMargin(const DesktopIntMargin& aNative) const;
++  bool ClaimsCustomTitlebar() const;
++  int32_t ClaimedMinWidth() const;
+   bool ToplevelUsesCSD() const;
+ 
+   void CreateAndPutGdkScrollEvent(mozilla::LayoutDeviceIntPoint aPoint,
+@@ -660,7 +663,16 @@ class nsWindow : public nsIWidget {
+ 
+   // See Bounds for these members.
+   DesktopIntRect mClientArea;
++  // The margin Gecko sees: the window manager's (or CSD) decorations, or for a
++  // Camoufox identity claiming another OS, that OS's frame
++  // (ClaimedClientMargin). mNativeClientMargin is always the real one, which
++  // is what GTK positions and constrains the shell by.
+   DesktopIntMargin mClientMargin;
++  DesktopIntMargin mNativeClientMargin;
++  // A requested position the claimed frame's window rect has not reached yet,
++  // and how often it was moved there since (RecomputeBounds).
++  bool mClaimedPlacementPending = true;
++  int mClaimedPlacementMoves = 0;
+ 
+   // This field omits duplicate scroll events caused by GNOME bug 726878.
+   guint32 mLastScrollEventTime = GDK_CURRENT_TIME;
+diff --git a/widget/gtk/ScreenHelperGTK.cpp b/widget/gtk/ScreenHelperGTK.cpp
+--- a/widget/gtk/ScreenHelperGTK.cpp
++++ b/widget/gtk/ScreenHelperGTK.cpp
+@@ -3,6 +3,7 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "ScreenHelperGTK.h"
++#include "MaskConfig.hpp"
+ 
+ #ifdef MOZ_X11
+ #  include <X11/Xlib.h>
+@@ -149,6 +150,35 @@ static already_AddRefed<Screen> MakeScreenGtk(unsigned int aMonitor,
+     rect = availRect;
+   }
+ 
++  // Camoufox: a Windows identity's work area is the one its screen.avail*
++  // claims (the taskbar's 48 CSS px off the bottom on win-i9), not this X
++  // screen's. Windows Firefox sizes and places new windows inside the work
++  // area -- window.open's default size, a pop-up taller than the screen, the
++  // clamp that keeps a window on screen -- so with the X work area a pop-up
++  // was 864 CSS px tall where stock's is 816, and one opened without a size
++  // sat 48 px lower. The claim is in CSS pixels; the monitor is this
++  // identity's screen at its devicePixelRatio, so the ratio of the two
++  // heights scales it.
++  if (GdkIsX11Display() &&
++      MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
++      MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows) {
++    auto width = MaskConfig::GetUint32("screen.width");
++    auto height = MaskConfig::GetUint32("screen.height");
++    auto avail = MaskConfig::GetRect("screen.availLeft", "screen.availTop",
++                                     "screen.availWidth", "screen.availHeight");
++    if (width && *width && height && *height && avail) {
++      const double sx = double(rect.width) / *width;
++      const double sy = double(rect.height) / *height;
++      const auto& a = *avail;
++      availRect = LayoutDeviceIntRect(
++          rect.x + NSToIntRound(a[0] * sx), rect.y + NSToIntRound(a[1] * sy),
++          NSToIntRound(a[2] * sx), NSToIntRound(a[3] * sy))
++                      .Intersect(rect);
++      LOG_SCREEN("  claimed workarea [%d, %d] -> [%d x %d]", availRect.x,
++                 availRect.y, availRect.width, availRect.height);
++    }
++  }
++
+   if (!rect.width || !rect.height) {
+     NS_WARNING("Reporting screen with zero size!");
+   }

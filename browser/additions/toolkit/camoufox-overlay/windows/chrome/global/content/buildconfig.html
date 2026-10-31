@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src chrome:; object-src 'none'" />
+    <meta charset="UTF-8">
+    <meta name="color-scheme" content="light dark">
+    <meta name="viewport" content="width=device-width; user-scalable=false;">
+    <title>Build Configuration</title>
+    <link rel="stylesheet" href="chrome://global/skin/in-content/info-pages.css" type="text/css">
+    <link rel="stylesheet" href="chrome://global/content/buildconfig.css" type="text/css">
+  </head>
+  <body>
+    <div class="container">
+      <h1>Build Configuration</h1>
+      <p>Please be aware that this page doesn't reflect all the options used to build Firefox.</p>
+      <h2>Source</h2>
+      <p>Built from <a href="https://hg.mozilla.org/releases/mozilla-release/rev/48a735cc74a7e6d730f9bf59c3de58f750287a23">https://hg.mozilla.org/releases/mozilla-release/rev/48a735cc74a7e6d730f9bf59c3de58f750287a23</a></p>
+      <h2>Build platform</h2>
+      <table class="build-platform-table">
+        <tbody>
+          <tr>
+            <th>target</th>
+          </tr>
+          <tr>
+            <td>x86_64-pc-mingw32</td>
+          </tr>
+        </tbody>
+      </table>
+      <h2>Build tools</h2>
+      <table>
+        <tbody>
+          <tr>
+            <th>Compiler</th>
+            <th>Version</th>
+            <th>Compiler flags</th>
+          </tr>
+          <tr>
+            <td>['/builds/worker/fetches/clang/bin/clang-cl', '-fms-compatibility-version=19.51', '-Xclang', '-ivfsoverlay', '-Xclang', '/builds/worker/fetches/vs/overlay.yaml']</td>
+            <td>22.1.8</td>
+            <td>-Gy -Zc:inline -Gw -D_HAS_EXCEPTIONS=0 -ffile-reproducible -fdiagnostics-absolute-paths -fcrash-diagnostics-dir=/builds/worker/artifacts</td>
+          </tr>
+          <tr>
+            <td>['/builds/worker/fetches/clang/bin/clang-cl', '-fms-compatibility-version=19.51', '-std:c++20', '-Xclang', '-ivfsoverlay', '-Xclang', '/builds/worker/fetches/vs/overlay.yaml']</td>
+            <td>22.1.8</td>
+            <td>-Zc:sizedDealloc- -Gy -Zc:inline -Gw -D_SILENCE_TR1_NAMESPACE_DEPRECATION_WARNING -TP -GR- -D_HAS_EXCEPTIONS=0 -ffile-reproducible -fdiagnostics-absolute-paths -fcrash-diagnostics-dir=/builds/worker/artifacts -Z7 -O2 -Oy</td>
+          </tr>
+          <tr>
+            <td>/builds/worker/fetches/rustc/bin/rustc</td>
+            <td>1.95.0</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+      <h2>Configure options</h2>
+      <p>MOZ_AUTOMATION=1 --target=x86_64-pc-windows-msvc MOZILLA_OFFICIAL=1 --enable-update-channel=release MOZBUILD_STATE_PATH=/builds/worker/.mozbuild MOZ_GENERATE_SBOM=1 MOZ_FETCHES_DIR=/builds/worker/fetches 'CFLAGS= -fcrash-diagnostics-dir=/builds/worker/artifacts' 'CXXFLAGS= -fcrash-diagnostics-dir=/builds/worker/artifacts' ENABLE_CLANG_PLUGIN=1 --enable-profile-use=cross --with-pgo-profile-path=/builds/worker/fetches/merged.profdata --with-pgo-jarlog=/builds/worker/fetches/en-US.log MOZ_LTO=cross MOZ_SOURCE_REPO=https://hg.mozilla.org/releases/mozilla-release MOZ_SOURCE_CHANGESET=48a735cc74a7e6d730f9bf59c3de58f750287a23 --enable-js-shell --enable-rust-simd --with-mozilla-api-keyfile=/builds/mozilla-desktop-geoloc-api.key --with-google-safebrowsing-api-keyfile=/builds/sb-gapi.data --enable-official-branding MOZ_SIMPLE_PACKAGE_NAME=target MAR_CHANNEL_ID=firefox-mozilla-release ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-release MOZ_PACKAGE_JSSHELL=1</p>
+    </div>
+  </body>
+</html>

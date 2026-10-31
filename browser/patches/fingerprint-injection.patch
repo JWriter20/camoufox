@@ -67,11 +67,10 @@ index 49a25262ca..3489102917 100644
  double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
                                                  ErrorResult& aError) {
    ENSURE_ACTIVE_DOCUMENT(aError, 0.0);
-@@ -3798,6 +3818,7 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
+@@ -3798,6 +3818,6 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
    RefPtr<nsPresContext> presContext = GetPresContextForRatio(mDoc);
    if (NS_WARN_IF(!presContext)) {
      // Still nothing, oh well.
-+    if (const auto& value = SpoofedDevicePixelRatio()) return *value;
      return 1.0;
    }
  

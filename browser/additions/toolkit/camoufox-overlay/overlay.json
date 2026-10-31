@@ -1,0 +1,181 @@
+{
+ "entries": {
+  "chrome://browser/content/aboutSessionRestore.xhtml": {
+   "linux": "linux/chrome/browser/content/aboutSessionRestore.xhtml",
+   "windows": "windows/chrome/browser/content/aboutSessionRestore.xhtml"
+  },
+  "chrome://browser/content/browser.xhtml": {
+   "linux": "linux/chrome/browser/content/browser.xhtml",
+   "windows": "windows/chrome/browser/content/browser.xhtml"
+  },
+  "chrome://browser/content/downloads/contentAreaDownloadsView.xhtml": {
+   "linux": "linux/chrome/browser/content/downloads/contentAreaDownloadsView.xhtml",
+   "windows": "windows/chrome/browser/content/downloads/contentAreaDownloadsView.xhtml"
+  },
+  "chrome://browser/content/license.html": {
+   "linux": "linux/chrome/browser/content/license.html",
+   "windows": "windows/chrome/browser/content/license.html"
+  },
+  "chrome://browser/content/migration/brands/360.png": {
+   "linux": null,
+   "windows": "windows/chrome/browser/content/migration/brands/360.png"
+  },
+  "chrome://browser/content/migration/brands/canary.png": {
+   "linux": null,
+   "windows": "windows/chrome/browser/content/migration/brands/canary.png"
+  },
+  "chrome://browser/content/migration/brands/edge.png": {
+   "linux": null,
+   "windows": "windows/chrome/browser/content/migration/brands/edge.png"
+  },
+  "chrome://browser/content/migration/brands/edgebeta.png": {
+   "linux": null,
+   "windows": "windows/chrome/browser/content/migration/brands/edgebeta.png"
+  },
+  "chrome://browser/content/places/historySidebar.xhtml": {
+   "linux": "linux/chrome/browser/content/places/historySidebar.xhtml",
+   "windows": "windows/chrome/browser/content/places/historySidebar.xhtml"
+  },
+  "chrome://browser/content/places/places.xhtml": {
+   "linux": "linux/chrome/browser/content/places/places.xhtml",
+   "windows": "windows/chrome/browser/content/places/places.xhtml"
+  },
+  "chrome://browser/content/preferences/preferences.xhtml": {
+   "linux": "linux/chrome/browser/content/preferences/preferences.xhtml",
+   "windows": "windows/chrome/browser/content/preferences/preferences.xhtml"
+  },
+  "chrome://global/content/aboutSupport.xhtml": {
+   "linux": "linux/chrome/global/content/aboutSupport.xhtml",
+   "windows": "windows/chrome/global/content/aboutSupport.xhtml"
+  },
+  "chrome://global/content/aboutThirdParty.css": {
+   "linux": null,
+   "windows": "windows/chrome/global/content/aboutThirdParty.css"
+  },
+  "chrome://global/content/aboutThirdParty.html": {
+   "linux": null,
+   "windows": "windows/chrome/global/content/aboutThirdParty.html"
+  },
+  "chrome://global/content/aboutThirdParty.js": {
+   "linux": null,
+   "windows": "windows/chrome/global/content/aboutThirdParty.js"
+  },
+  "chrome://global/content/aboutWebauthn.css": {
+   "linux": "linux/chrome/global/content/aboutWebauthn.css",
+   "windows": null
+  },
+  "chrome://global/content/aboutWebauthn.html": {
+   "linux": "linux/chrome/global/content/aboutWebauthn.html",
+   "windows": null
+  },
+  "chrome://global/content/aboutWebauthn.js": {
+   "linux": "linux/chrome/global/content/aboutWebauthn.js",
+   "windows": null
+  },
+  "chrome://global/content/aboutWindowsMessages.css": {
+   "linux": null,
+   "windows": "windows/chrome/global/content/aboutWindowsMessages.css"
+  },
+  "chrome://global/content/aboutWindowsMessages.html": {
+   "linux": null,
+   "windows": "windows/chrome/global/content/aboutWindowsMessages.html"
+  },
+  "chrome://global/content/aboutWindowsMessages.js": {
+   "linux": null,
+   "windows": "windows/chrome/global/content/aboutWindowsMessages.js"
+  },
+  "chrome://global/content/buildconfig.html": {
+   "linux": "linux/chrome/global/content/buildconfig.html",
+   "windows": "windows/chrome/global/content/buildconfig.html"
+  },
+  "chrome://global/content/defaultagent/default-browser-notification-privacy-image.svg": {
+   "linux": null,
+   "windows": "windows/chrome/global/content/defaultagent/default-browser-notification-privacy-image.svg"
+  },
+  "chrome://global/content/license.html": {
+   "linux": "linux/chrome/browser/content/license.html",
+   "windows": "windows/chrome/browser/content/license.html"
+  },
+  "chrome://global/content/printPageSetup.js": {
+   "linux": null,
+   "windows": "windows/chrome/global/content/printPageSetup.js"
+  },
+  "chrome://global/content/printPageSetup.xhtml": {
+   "linux": null,
+   "windows": "windows/chrome/global/content/printPageSetup.xhtml"
+  }
+ },
+ "files": {
+  "linux/chrome/browser/content/aboutSessionRestore.xhtml": "e8a51693d01255c7aec9499a5da20f0d1b341542f08d952b20cb89cc8616c5a0",
+  "linux/chrome/browser/content/browser.xhtml": "09eb2ee951581ac2c4fa15314d2ddba997f6938fe51981ae49f9520e7c6b3d23",
+  "linux/chrome/browser/content/downloads/contentAreaDownloadsView.xhtml": "f05cae3da5c6d0b9770e5da0cc579f705a3b05a63083af771f49558cef4ac4b4",
+  "linux/chrome/browser/content/license.html": "50272c458a6c3a06743e2693263789b5011c98852c964057ad620266d8278495",
+  "linux/chrome/browser/content/places/historySidebar.xhtml": "bddf31cb2289bd6172c25de0e98397ba2107c68fc5fb811946b7002abae808bb",
+  "linux/chrome/browser/content/places/places.xhtml": "f42d2fd2bd053a1fa90a0e520aed810d342235adb2543c47e38075f63d0ce8a6",
+  "linux/chrome/browser/content/preferences/preferences.xhtml": "2004d9911f6e489a470e46ea2bd48b65a86bae17c1bba887c5d1f03d6e1224de",
+  "linux/chrome/global/content/aboutSupport.xhtml": "f77b8e27a270d5b10e7df07b3f878ef7e5a251832aac531835733bce92cba434",
+  "linux/chrome/global/content/aboutWebauthn.css": "a7965fbe9711f528eba4a52354e6c7e1338ef6f99c175bcf73293797c8e32f91",
+  "linux/chrome/global/content/aboutWebauthn.html": "34d1388087660998713ecbcdceaae3c62934cf48324dd6474795ff5bdf53768c",
+  "linux/chrome/global/content/aboutWebauthn.js": "de21d2cd9a11f45e60a97a51407b43c62af1292e785d92798ab19d3c5f70e90b",
+  "linux/chrome/global/content/buildconfig.html": "83892284d803e45f0166bd17d3aff0d3a2f981c1f2536b2e63cf975253549864",
+  "stock/chrome/browser/content/parent/ext-browser.js": "633cc4d531e1d017662b007bb24bfc999df94e76de6b0d34c93f58ba90dd555e",
+  "stock/chrome/browser/content/parent/ext-tabs.js": "5358daa858c1ef8746948e90a0db5241d5e05773702e9378e0fd6425371f6786",
+  "windows/chrome/browser/content/aboutSessionRestore.xhtml": "473a1c92400b4100b20d4e0f6370e08c36c7e1791c02e46dcea9cd5a8c20e3ad",
+  "windows/chrome/browser/content/browser.xhtml": "1783b734914e1b808c76207f165c2bd401f10142620f39e56fe9ecefc277e5e0",
+  "windows/chrome/browser/content/downloads/contentAreaDownloadsView.xhtml": "1c6aeac8ee039596f0db1667a8e5c3890757956629bc90df6a609fcefd435219",
+  "windows/chrome/browser/content/license.html": "e8c73b96a1e00434bfa78f98e5eb650ebe7748e73d6b4050a2209d689debd8bc",
+  "windows/chrome/browser/content/migration/brands/360.png": "9c005ec92089021e7ddeb8180ad9909198869e2052b859539ee4b65e4bd39ab6",
+  "windows/chrome/browser/content/migration/brands/canary.png": "a6b95476853c531dd23940eab4df4d741d7bf309132bfb738275bf4dc691eab7",
+  "windows/chrome/browser/content/migration/brands/edge.png": "296c6942899fb4fb9c04860a95a26686c75e353e03b6f893e0073f397955eab3",
+  "windows/chrome/browser/content/migration/brands/edgebeta.png": "d3427036e2b811bc8d89cbcd530558a0e0026cb9627a44581f0a387795158177",
+  "windows/chrome/browser/content/places/historySidebar.xhtml": "2dc7420f77fb76ed3dde5e90b1cdd1afe41a296f39025d3ef5f7c2dbe2e09b60",
+  "windows/chrome/browser/content/places/places.xhtml": "4c92e303052b515d4759c17fea2e450e37e09efd0a19595a55dbc872610a7bae",
+  "windows/chrome/browser/content/preferences/preferences.xhtml": "c8e92c95334d7d4118bdf939e69a3c62309a8e7a7d3aa79e6ad363f2b40343df",
+  "windows/chrome/global/content/aboutSupport.xhtml": "ad5a683ea0d3aa0770bdf6c23fa07a328cfc9fe69a5f177beecd0f8f66d17a8a",
+  "windows/chrome/global/content/aboutThirdParty.css": "a9404a7bd9dd9e542a7fedcf72553cafb4136f7aa19cdaa5279d195b71805a27",
+  "windows/chrome/global/content/aboutThirdParty.html": "8159ee6b0700885aa6147c7e8110193fc4820ba2b1bfb0f9dcaae49198812243",
+  "windows/chrome/global/content/aboutThirdParty.js": "778049dbe53410bf56c67c1e105e488d5a45c975f6cfbc82cbeba7e3df1b1be1",
+  "windows/chrome/global/content/aboutWindowsMessages.css": "38f571e478bdf6d65d739088262f856043be23c21d409fc687f1a86429e5351d",
+  "windows/chrome/global/content/aboutWindowsMessages.html": "a23217a89c8d44ee172884ee2df00b27f75acb030fa37efe7ce8d67ad4d7511b",
+  "windows/chrome/global/content/aboutWindowsMessages.js": "817da50fd41d867d0691141679d5cbe163727bfcca89b77a7ce17d4f477628bd",
+  "windows/chrome/global/content/buildconfig.html": "cc4054c58bb3cc4ade120d43cb670a9d2ed0fc1d6d4b6a7947f3f15ff6a64a3e",
+  "windows/chrome/global/content/defaultagent/default-browser-notification-privacy-image.svg": "049284011a35af8bfead24032f90d214f13db34d371abcf66ad37c9451421c47",
+  "windows/chrome/global/content/printPageSetup.js": "71edbdd1f74aeee209ae52fa958b3aca5fbfb7700146f9eeb13ae004e0ae2f5c",
+  "windows/chrome/global/content/printPageSetup.xhtml": "cd1bb8623686e5085e87714c23235b9a6917519d04c0663f49b33e85845171fa",
+  "windows/register/content/gfxsanity/sanityparent.html": "a1b82a06a62e12c0dca31670c92e80dfb5cf569c47100d220d6bf808e2acdcdb",
+  "windows/register/resource/gfxsanity/gfxFrameScript.js": "b7d5a2f478fb3172a7a099ca723476624e50890a4da20a0b76717d39da5b78e9",
+  "windows/register/resource/gfxsanity/sanitytest.html": "0464015319112b28a6a900b12d04c7ed02792baff836f2789153a32fc6771ca3",
+  "windows/register/resource/gfxsanity/videotest.mp4": "874de486e768818497cd96c2f29216daa51c30eb8b32e04b7e55088de9e1746d"
+ },
+ "firefox_version": "158.0.1",
+ "registrations": [
+  {
+   "dir": "windows/register/content/gfxsanity",
+   "flags": [],
+   "kind": "content",
+   "name": "gfxsanity",
+   "os": "windows"
+  },
+  {
+   "dir": "windows/register/resource/gfxsanity",
+   "flags": [],
+   "kind": "resource",
+   "name": "gfxsanity",
+   "os": "windows"
+  }
+ ],
+ "stock": {
+  "linux": {
+   "browser/omni.ja": "1722474e43ceaf1a5836439647e15c4f2793b163dcbe42adceaf4dedacb1f4b2",
+   "omni.ja": "ffd806b9d7c20421b2495b58a2a95e855caa3aec06819ba140a578ffa97dd199"
+  },
+  "windows": {
+   "browser/omni.ja": "a1738407d3a09c68becffd48496c9f6b5369f77f05f93507340f15cf3cc84b29",
+   "omni.ja": "42f976ac57103698320728a9c134ec8e710ab9a3c48d127ea3e115e1b3b211c3"
+  }
+ },
+ "stock_for_pages": {
+  "chrome://browser/content/parent/ext-browser.js": "stock/chrome/browser/content/parent/ext-browser.js",
+  "chrome://browser/content/parent/ext-tabs.js": "stock/chrome/browser/content/parent/ext-tabs.js"
+ }
+}

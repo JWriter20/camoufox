@@ -1,3 +1,4 @@
+import ctypes.util
 import json
 import os
 from urllib.parse import urlsplit
@@ -25,9 +26,9 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence, pro, render_node as render_nodes
-from .geolocation import geoip_allowed, get_geolocation
+from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
 from .ip import Proxy, proxy_auth_env, proxy_auth_init_script, public_ip, public_ipv6, socks5_auth, valid_ipv4, valid_ipv6
 from .locales import handle_locales
@@ -80,9 +81,12 @@ WINDOWS_UI_COLORS: Dict[str, str] = LAUNCHER_CONSTANTS['windowsUiColors']
 #     click pages rather than jumps (GTK otherwise reads the desktop setting),
 #     a thumb dragged far off snaps back, and holding on the track stops at
 #     the pointer.
+#   - media.eme.enabled: Linux builds default EME off, so Widevine said "EME has
+#     been preffed off" where stock Windows grants it (the Widevine CDM a Linux
+#     build downloads answers the same configuration). PlayReady, which Windows
+#     has through Media Foundation, is the eme-playready-claimed-os patch.
 # Windows-only machinery (DirectComposition, ClearType, WMF) does nothing in a
-# Linux build and is left out, as is media.eme.enabled: Windows has PlayReady
-# behind EME, which a Linux build cannot supply.
+# Linux build and is left out.
 WINDOWS_BEHAVIOUR_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['windowsBehaviourPrefs']
 
 
@@ -1785,6 +1789,13 @@ def launch_options(
     if not _user_set_media_devices:
         set_media_devices_defaults(config, _identity_salt)
 
+    # The output device's AudioContext.outputLatency, for an identity of
+    # another OS (audio-output-latency.json).
+    set_output_latency_default(config, _identity_salt, target_os, _host_os_key())
+
+    # When the Windows legacy styled-family aliases land (fonts.detect timing).
+    set_windows_alias_load_default(config, target_os, _host_os_key())
+
     # Scrollbars: a stock Firefox on a GNOME/KDE desktop and on macOS draws
     # overlay scrollbars (no layout gutter, scrollbar-width "auto"). On Windows it
     # follows the OS: Windows 11's default ("Always show scrollbars" off) is
@@ -1823,6 +1834,15 @@ def launch_options(
 
         for pref, value in WINDOWS_BEHAVIOUR_PREFS.items():
             firefox_user_prefs.setdefault(pref, value)
+
+        # WebCodecs H.264 encoding: Windows Firefox always has Media
+        # Foundation's encoder; Linux Firefox only the system FFmpeg's
+        # (libavcodec with libx264), so on a host without it
+        # VideoEncoder.isConfigSupported('avc1...') is false, which no
+        # Windows machine answers. It is not faked: an encoder that says yes
+        # and cannot encode is worse.
+        if _host_os_key() == 'lin' and not ctypes.util.find_library('avcodec'):
+            LeakWarning.warn('no_h264_encoder', i_know_what_im_doing)
 
         # The scrollbars pinned above are drawn by the host build's theme: on
         # a Linux host a Windows 10 identity's classic scrollbars measured
@@ -1946,6 +1966,20 @@ def launch_options(
     if not _user_set_accept_encoding:
         config.pop('headers.Accept-Encoding', None)
 
+    # A proxied identity is a machine at the exit: its position, timezone and
+    # locale are the exit's. Without geoip a page that is allowed location gets
+    # no position there (or, where Firefox can locate, this host's), so a real
+    # proxy resolves the exit through itself whenever the geoip extra is
+    # installed; the caller's geoip=False or own coordinates win.
+    if (
+        geoip is None
+        and ALLOW_GEOIP
+        and proxy
+        and 'localhost' not in proxy.get('server', '')
+        and not is_domain_set(config, 'geolocation')
+    ):
+        geoip = True
+
     # Set geolocation
     if geoip:
         geoip_allowed()  # Assert that geoip is allowed
@@ -1981,24 +2015,25 @@ def launch_options(
         ):
             config['network:ipv4Only'] = True
 
-    # A page that receives a position without a prompt must also see
-    # permissions.query({name: 'geolocation'}) report "granted" -- that is
-    # what a real Firefox with a stored site grant does. The C++ auto-grant
-    # alone delivers the fix while the Permissions API still says "prompt",
-    # which is an incoherence a page can test (daijro/camoufox#769). The
-    # allow-by-default pref is the same state a user creates by choosing
-    # "Always allow", so both APIs agree without any per-site permission.
-    if 'geolocation:latitude' in config and 'geolocation:longitude' in config:
-        firefox_user_prefs.setdefault('permissions.default.geo', 1)
+    # Geolocation asks as stock Firefox does: a site never granted reads
+    # permissions.query 'prompt' and getCurrentPosition shows the prompt; the
+    # identity's coordinates are what a granted site receives. (No
+    # allow-by-default pref: a first visit reading 'granted' is the tell.)
 
     # Raise a warning when a proxy is being used without spoofing geolocation.
     # This is a very bad idea; the warning cannot be ignored with i_know_what_im_doing.
-    elif (
+    if (
         proxy
         and 'localhost' not in proxy.get('server', '')
         and not is_domain_set(config, 'geolocation')
     ):
         LeakWarning.warn('proxy_without_geoip')
+
+    # After geoip, which decides whether the machine has IPv6 at all.
+    set_host_ipv6_default(config, _identity_salt)
+
+    # After geoip too: an identity given coordinates has location on.
+    set_location_setting_default(config, _identity_salt, target_os, _host_os_key())
 
     # Set locale
     if locale:

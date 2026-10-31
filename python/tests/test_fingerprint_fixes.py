@@ -15,6 +15,7 @@ from camoufox.fingerprints import (
     clamp_window_position,
     fix_navigator_arch,
     follow_baseline_protection,
+    set_host_ipv6_default,
     set_media_devices_defaults,
 )
 
@@ -269,6 +270,33 @@ class TestSetMediaDevicesDefaults:
                 assert len(set(mics)) == len(mics)
                 assert len(set(cams)) == len(cams)
 
+    def test_capture_capabilities_align_with_devices(self):
+        from camoufox.fingerprints import _load_media_devices, draw_media_devices
+
+        cat = _load_media_devices()
+        for os_key in ("win", "mac", "lin"):
+            # every catalogued mode names a real catalogue camera
+            labels = {c["cam"] for c in cat[os_key]["cameras"]}
+            labels |= {c.get("cam") for c in cat[os_key]["cards"] if c.get("cam")}
+            assert set(cat[os_key].get("camera_modes", {})) <= labels
+            for seed in range(50):
+                d = draw_media_devices(os_key, seed)
+                n_cam, n_mic = d["mediaDevices:webcams"], d["mediaDevices:micros"]
+                for k in ("webcamMaxWidths", "webcamMaxHeights", "webcamMaxFrameRates"):
+                    assert len(d[f"mediaDevices:{k}"]) == n_cam
+                assert len(d["mediaDevices:microphoneChannels"]) == n_mic
+                assert set(d["mediaDevices:microphoneChannels"]) <= {1, 2}
+                for w, h, f in zip(d["mediaDevices:webcamMaxWidths"], d["mediaDevices:webcamMaxHeights"],
+                                   d["mediaDevices:webcamMaxFrameRates"]):
+                    assert w >= 1280 and h >= 720 and f >= 30
+        # a Bluetooth hands-free microphone is mono; a microphone array is not
+        mics = {}
+        for seed in range(200):
+            d = draw_media_devices("win", seed)
+            mics.update(zip(d["mediaDevices:microphoneLabels"], d["mediaDevices:microphoneChannels"]))
+        assert mics.get("Headset (WH-1000XM4 Hands-Free AG Audio)") == 1
+        assert mics.get("Microphone Array (Realtek(R) Audio)") == 2
+
     def test_respects_user_set_media_devices(self):
         c = {"mediaDevices:webcams": 5}
         set_media_devices_defaults(c)
@@ -347,3 +375,41 @@ class TestFixHardwareConcurrency:
         c = {"navigator.hardwareConcurrency": 8}
         fp.fix_hardware_concurrency(c)
         assert c["navigator.hardwareConcurrency"] == 8
+
+
+class TestHostIpv6Default:
+    """One adapter, IPv4 only or IPv4 + IPv6: the two network shapes an identity draws."""
+
+    def _config(self, i=0, **extra):
+        return {"navigator.userAgent": f"ua{i}", "navigator.platform": "Win32", **extra}
+
+    def test_draw_is_seeded_by_the_identity(self):
+        a, b = self._config(), self._config()
+        set_host_ipv6_default(a, 7)
+        set_host_ipv6_default(b, 7)
+        assert a["webrtc:hostipv6"] is b["webrtc:hostipv6"]
+
+    def test_share_follows_the_population(self):
+        on = 0
+        for i in range(2000):
+            c = self._config(i)
+            set_host_ipv6_default(c, i)
+            on += c["webrtc:hostipv6"]
+        assert 0.40 < on / 2000 < 0.50
+
+    def test_ipv4_only_network_has_no_ipv6(self):
+        for i in range(50):
+            c = self._config(i, **{"network:ipv4Only": True})
+            set_host_ipv6_default(c, i)
+            assert c["webrtc:hostipv6"] is False
+
+    def test_ipv6_exit_has_ipv6(self):
+        for i in range(50):
+            c = self._config(i, **{"webrtc:ipv6": "2001:db8::1"})
+            set_host_ipv6_default(c, i)
+            assert c["webrtc:hostipv6"] is True
+
+    def test_caller_value_wins(self):
+        c = self._config(**{"webrtc:hostipv6": False, "webrtc:ipv6": "2001:db8::1"})
+        set_host_ipv6_default(c)
+        assert c["webrtc:hostipv6"] is False

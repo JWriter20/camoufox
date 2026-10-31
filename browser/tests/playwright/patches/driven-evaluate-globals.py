@@ -105,8 +105,14 @@ def globals_of(binary, server, url, driven):
 
     server.arrived = threading.Event()
     # uBlock's content script runs when it likes, and wraps what it touches.
+    # Reader mode's parse-on-load check does too: stock Firefox (158.0.1) reads
+    # the page's location and node geometry after the load's first paint
+    # (AboutReaderChild -> Readerable.isProbablyReaderable), which defines
+    # Location and DOMRectList on the page's window at whatever point the
+    # input has reached by then. Off in both runs, so neither races the input.
     with Camoufox(executable_path=str(binary), headless=True, os="linux",
-                  exclude_addons=[DefaultAddons.UBO]) as browser:
+                  exclude_addons=[DefaultAddons.UBO],
+                  firefox_user_prefs={"reader.parse-on-load.enabled": False}) as browser:
         page = browser.new_page()
         page.goto(url)
         if driven:

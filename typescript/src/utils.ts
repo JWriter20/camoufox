@@ -3,6 +3,7 @@
  * launch_options() does (tests/launch-golden.test.ts). `utilsDeps` holds what the
  * Python tests monkeypatch.
  */
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -40,11 +41,15 @@ import {
 	loadOsFonts,
 	raiseScreenToModernFloor,
 	Screen,
+	setHostIpv6Default,
+	setLocationSettingDefault,
 	setMediaDevicesDefaults,
+	setOutputLatencyDefault,
+	setWindowsAliasLoadDefault,
 	targetOsFromPlatform,
 	WINDOWS_11_MARKER_FONTS,
 } from "./fingerprints.js";
-import { geoipAllowed, getGeolocation } from "./geolocation.js";
+import { allowGeoip, geoipAllowed, getGeolocation } from "./geolocation.js";
 import { GPU_PREFS, GpuDisplay, proveGpu, selectGpu } from "./gpudisplay.js";
 import {
 	addCanvasPlaceholder,
@@ -120,6 +125,23 @@ const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
+
+/**
+ * Whether the dynamic linker can find a system libavcodec, which Linux
+ * Firefox loads for H.264 (as Python's ctypes.util.find_library('avcodec')).
+ */
+function hasSystemAvcodec(): boolean {
+	for (const ldconfig of ["/sbin/ldconfig", "/usr/sbin/ldconfig", "ldconfig"]) {
+		try {
+			const out = execFileSync(ldconfig, ["-p"], {
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+			return /\blibavcodec\.so/.test(out);
+		} catch {}
+	}
+	return true; // cannot tell: do not warn
+}
 
 // System colours stock Firefox reports on Windows 10/11 in the light theme,
 // where they differ from a Linux host's GTK theme.
@@ -2339,6 +2361,13 @@ async function buildLaunchOptions(
 		await utilsDeps.setMediaDevicesDefaults(config, salt);
 	}
 
+	// The output device's AudioContext.outputLatency, for an identity of
+	// another OS (audio-output-latency.json).
+	setOutputLatencyDefault(config, salt, targetOs, utilsDeps.hostOsKey());
+
+	// When the Windows legacy styled-family aliases land (fonts.detect timing).
+	setWindowsAliasLoadDefault(config, targetOs, utilsDeps.hostOsKey());
+
 	// Scrollbars: pin the look-and-feel to the claimed OS so headless == headed
 	// == stock, and for Windows to the version the identity's font draw
 	// presents (Win11 fonts with classic scrollbars is a pair no real machine
@@ -2366,6 +2395,13 @@ async function buildLaunchOptions(
 
 		for (const [pref, value] of Object.entries(WINDOWS_BEHAVIOUR_PREFS)) {
 			setInto(firefox_user_prefs, pref, value);
+		}
+
+		// WebCodecs H.264 encoding: Windows always has Media Foundation's
+		// encoder, Linux Firefox only the system FFmpeg's. Not faked; see
+		// launch_options in the Python launcher.
+		if (utilsDeps.hostOsKey() === "lin" && !hasSystemAvcodec()) {
+			LeakWarning.warn("no_h264_encoder", i_know_what_im_doing);
 		}
 
 		// The scrollbars pinned above are drawn by the host build's theme (GTK's
@@ -2451,6 +2487,18 @@ async function buildLaunchOptions(
 		delete config["headers.Accept-Encoding"];
 	}
 
+	// A proxied identity is a machine at the exit: a real proxy resolves the
+	// exit through itself whenever geoip is available (Python's launch_options).
+	if (
+		geoip == null &&
+		allowGeoip() &&
+		pyTruthy(proxy) &&
+		!(proxy?.server ?? "").includes("localhost") &&
+		!isDomainSet(config, "geolocation")
+	) {
+		geoip = true;
+	}
+
 	// Set geolocation
 	if (pyTruthy(geoip)) {
 		geoipAllowed(); // Assert that geoip is allowed
@@ -2504,11 +2552,10 @@ async function buildLaunchOptions(
 		}
 	}
 
-	// A page that receives a position without a prompt must also see
-	// permissions.query({name: 'geolocation'}) report "granted" (#769).
-	if ("geolocation:latitude" in config && "geolocation:longitude" in config) {
-		setInto(firefox_user_prefs, "permissions.default.geo", 1);
-	} else if (
+	// Geolocation asks as stock Firefox does: a site never granted reads
+	// permissions.query 'prompt' and getCurrentPosition shows the prompt; the
+	// identity's coordinates are what a granted site receives.
+	if (
 		// Raise a warning when a proxy is being used without spoofing
 		// geolocation. This warning cannot be ignored with i_know_what_im_doing.
 		pyTruthy(proxy) &&
@@ -2517,6 +2564,12 @@ async function buildLaunchOptions(
 	) {
 		LeakWarning.warn("proxy_without_geoip");
 	}
+
+	// After geoip, which decides whether the machine has IPv6 at all.
+	setHostIpv6Default(config, salt);
+
+	// After geoip too: an identity given coordinates has location on.
+	setLocationSettingDefault(config, salt, targetOs, utilsDeps.hostOsKey());
 
 	// Set locale
 	if (pyTruthy(locale)) {

@@ -1132,6 +1132,9 @@ const MEDIA_P_BUILTIN_CAM: Readonly<Record<string, number>> = {
 	mac: 0.0,
 	lin: 0.45,
 };
+// A camera media-devices.json has no camera_modes entry for: a 720p laptop
+// camera, as most are (width, height, frame rate of its largest mode).
+const DEFAULT_CAMERA_MODE: readonly number[] = [1280, 720, 30];
 
 /**
  * Draw one machine's media devices for `osKey` ('win'|'mac'|'lin'): the
@@ -1190,6 +1193,14 @@ export function drawMediaDevices(
 			mics.push([`Monitor of ${label}`, grp]);
 	}
 
+	// What each device reports once captured (media-device-spoofing.patch):
+	// a camera's largest mode, a microphone's channel count.
+	const modes: Record<string, number[]> = cat.camera_modes ?? {};
+	const mono = new Set<string>(cat.mono_mics ?? []);
+	const camModes = cams.map(([c]) =>
+		Object.hasOwn(modes, c) ? modes[c] : DEFAULT_CAMERA_MODE,
+	);
+
 	return {
 		"mediaDevices:enabled": true,
 		"mediaDevices:micros": mics.length,
@@ -1201,6 +1212,10 @@ export function drawMediaDevices(
 		"mediaDevices:webcamGroups": cams.map(([, g]) => g),
 		"mediaDevices:speakerLabels": outs.map(([o]) => o),
 		"mediaDevices:speakerGroups": outs.map(([, g]) => g),
+		"mediaDevices:webcamMaxWidths": camModes.map((m) => m[0]),
+		"mediaDevices:webcamMaxHeights": camModes.map((m) => m[1]),
+		"mediaDevices:webcamMaxFrameRates": camModes.map((m) => m[2]),
+		"mediaDevices:microphoneChannels": mics.map(([m]) => (mono.has(m) ? 1 : 2)),
 	};
 }
 
@@ -1221,6 +1236,141 @@ export function setMediaDevicesDefaults(
 			? "mac"
 			: "lin";
 	Object.assign(config, drawMediaDevices(osKey, identitySeed(config, salt)));
+}
+
+/**
+ * Share of machines whose one adapter carries IPv6 next to IPv4. No recorded
+ * corpus has the ICE shape; this is Google's IPv6 adoption figure (~45% of its
+ * users in 2025, google.com/ipv6/statistics), which counts global IPv6 only,
+ * so it is a lower bound. A real-device measurement replaces it.
+ */
+export const HOST_IPV6_SHARE = 0.45;
+
+/**
+ * Draw the identity's network shape: one adapter, IPv4 only or IPv4 + IPv6
+ * (webrtc:hostipv6, webrtc-topology-host-ipv6.patch). Mirrors Python's
+ * set_host_ipv6_default; nothing is drawn when the caller set it.
+ */
+export function setHostIpv6Default(
+	config: Config,
+	salt: number | bigint = 0,
+): void {
+	if ("webrtc:hostipv6" in config) return;
+	if (config["network:ipv4Only"]) {
+		// The host's own IPv6 is turned off: a machine on an IPv4-only network.
+		config["webrtc:hostipv6"] = false;
+	} else if ("webrtc:ipv6" in config) {
+		// The exit address is IPv6, so the machine has IPv6.
+		config["webrtc:hostipv6"] = true;
+	} else {
+		const draw = rng((identitySeed(config, salt) ^ 0x1ce6) >>> 0).random();
+		config["webrtc:hostipv6"] = draw < HOST_IPV6_SHARE;
+	}
+}
+
+/**
+ * Windows' location setting for desktop apps, as Firefox reads it
+ * (GeolocationSystemWin.cpp). No recorded corpus has it; an estimate a
+ * real-device measurement replaces. Mirrors Python's
+ * WINDOWS_LOCATION_SETTING_SHARES.
+ */
+export const WINDOWS_LOCATION_SETTING_SHARES: ReadonlyArray<[string, number]> = [
+	["allowed", 0.55],
+	["prompt", 0.3],
+	["denied", 0.15],
+];
+
+/**
+ * Draw the identity's OS location setting (geolocation:systemPermission,
+ * geolocation-spoofing.patch) for a Windows identity on another host. Mirrors
+ * Python's set_location_setting_default.
+ */
+export function setLocationSettingDefault(
+	config: Config,
+	salt: number | bigint,
+	targetOs: string,
+	hostOs: string | null,
+): void {
+	if (
+		"geolocation:systemPermission" in config ||
+		targetOs !== "win" ||
+		hostOs === "win"
+	)
+		return;
+	if ("geolocation:latitude" in config && "geolocation:longitude" in config) {
+		config["geolocation:systemPermission"] = "allowed";
+		return;
+	}
+	// No coordinates: nothing at the exit to report, so location is never on.
+	const shares = WINDOWS_LOCATION_SETTING_SHARES.filter(([name]) => name !== "allowed");
+	let draw =
+		rng((identitySeed(config, salt) ^ 0x10ca) >>> 0).random() *
+		shares.reduce((sum, [, share]) => sum + share, 0);
+	let state = shares[0][0];
+	for (const [name, share] of shares) {
+		state = name;
+		draw -= share;
+		if (draw < 0) break;
+	}
+	config["geolocation:systemPermission"] = state;
+}
+
+let audioOutputLatencyCache: Record<string, any> | undefined;
+
+/** Measured AudioContext.outputLatency per OS (audio-output-latency.json). */
+function loadAudioOutputLatency(): Record<string, any> {
+	audioOutputLatencyCache ??= loadDataFile<Record<string, any>>(
+		"audio-output-latency.json",
+	);
+	return audioOutputLatencyCache;
+}
+
+/**
+ * When stock Windows Firefox's deferred font-info loader lands the legacy
+ * styled-family aliases after the first legacy lookup (stock 158.0.1 on win-i9:
+ * 1727, 1826, 1832 ms on a 100 ms poll). Mirrors Python's
+ * WINDOWS_ALIAS_LOAD_MS / set_windows_alias_load_default: drawn per launch for a
+ * Windows identity on another OS; a caller's value is kept.
+ */
+export const WINDOWS_ALIAS_LOAD_MS: readonly [number, number] = [1630, 1832];
+
+export function setWindowsAliasLoadDefault(
+	config: Config,
+	targetOs: string,
+	hostOs: string | null,
+): void {
+	if (targetOs !== "win" || targetOs === hostOs) return;
+	if ("fonts:windowsAliasLoadMs" in config) return;
+	const [low, high] = WINDOWS_ALIAS_LOAD_MS;
+	config["fonts:windowsAliasLoadMs"] = low + Math.floor(Math.random() * (high - low + 1));
+}
+
+/**
+ * Draw the identity's audio output device latency (AudioContext:outputLatency,
+ * audio-context-spoofing.patch). The device latency follows the identity seed;
+ * the stream's opening delay is drawn per launch. Mirrors Python's
+ * set_output_latency_default; nothing is set when the caller set the key, the
+ * identity claims the host's OS, or the OS has no measured devices.
+ */
+export function setOutputLatencyDefault(
+	config: Config,
+	salt: number | bigint,
+	targetOs: string,
+	hostOs: string | null,
+): void {
+	if ("AudioContext:outputLatency" in config || targetOs === hostOs) return;
+	const table = loadAudioOutputLatency()[targetOs] ?? {};
+	const devices: Array<{ w?: number; v: number }> = table.device_latency_s ?? [];
+	if (!devices.length) return;
+	const device = weightedChoice(
+		rng((identitySeed(config, salt) ^ 0xa0d1) >>> 0),
+		devices,
+	);
+	config["AudioContext:outputLatency"] = Number(device.v);
+	const [low, high] = table.open_delay_ms ?? [20, 60];
+	if (!("AudioContext:outputLatencyDelayMs" in config)) {
+		config["AudioContext:outputLatencyDelayMs"] = low + (high - low) * Math.random();
+	}
 }
 
 // ---------------------------------------------------------------------------

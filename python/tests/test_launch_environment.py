@@ -280,6 +280,7 @@ class TestGeoipIPv6:
     def test_no_ipv6_route_is_an_ipv4_only_network(self, monkeypatch, isolated_launch_dependencies):
         sent = self._launch(monkeypatch, None, geoip=self.IPV4)
         assert sent["network:ipv4Only"] is True
+        assert sent["webrtc:hostipv6"] is False
 
     @pytest.mark.parametrize("host_ipv6", ["2001:db8::2", "2001:db8::3"], ids=["elsewhere", "unknown"])
     def test_ipv6_that_disagrees_is_dropped_with_a_warning(
@@ -288,6 +289,21 @@ class TestGeoipIPv6:
         with pytest.warns(utils.LeakWarning, match="IPv6 address geolocates somewhere other"):
             sent = self._launch(monkeypatch, host_ipv6, geoip=self.IPV4)
         assert sent["network:ipv4Only"] is True
+
+    def test_a_real_proxy_places_the_identity_at_its_exit(self, monkeypatch, isolated_launch_dependencies):
+        asked = []
+        monkeypatch.setattr(utils, "ALLOW_GEOIP", True)
+        monkeypatch.setattr(utils, "public_ip", lambda proxy=None: asked.append(proxy) or self.IPV4)
+        sent = self._launch(monkeypatch, None, proxy={"server": "http://proxy.example.com:3128"})
+        assert asked and asked[0] and "proxy.example.com" in asked[0]  # looked up through the proxy
+        assert sent["timezone"] == "America/Chicago" and sent["webrtc:ipv4"] == self.IPV4
+
+    def test_geoip_false_keeps_a_proxied_launch_unlocated(self, monkeypatch, isolated_launch_dependencies):
+        monkeypatch.setattr(utils, "ALLOW_GEOIP", True)
+        monkeypatch.setattr(utils, "public_ip", lambda proxy=None: pytest.fail("geoip=False must not look up"))
+        with pytest.warns(utils.LeakWarning):
+            sent = self._launch(monkeypatch, None, geoip=False, proxy={"server": "http://proxy.example.com:3128"})
+        assert "timezone" not in sent
 
     def test_proxy_leaves_ipv6_alone(self, monkeypatch, isolated_launch_dependencies):
         def no_lookup():
@@ -302,6 +318,7 @@ class TestGeoipIPv6:
         sent = self._launch(monkeypatch, None, geoip="2001:db8::1")
         assert "network:ipv4Only" not in sent
         assert sent["webrtc:ipv6"] == "2001:db8::1"
+        assert sent["webrtc:hostipv6"] is True
 
 
 class TestPrefsReachStartup:

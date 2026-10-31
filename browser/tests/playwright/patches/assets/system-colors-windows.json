@@ -6,7 +6,9 @@
   "machine": "DESKTOP-51J77AN",
   "theme": "default (light)",
   "started": "2026-10-19T13:40:27-0600",
-  "probe": "cfparity/web/probes/css.js css.system colors"
+  "probe": "cfparity/web/probes/css.js css.system colors",
+  "accent": "Highlight and SelectedItem are the user's Windows accent colour. Re-recorded 2026-10-30 (cfparity cross-os headed stock, runs 0-2, user render): rgb(0, 120, 212), with AccentColorMenu ffd47800 (#0078d4, Windows 11's default blue) for both win-i9 users; the 10-19 recording said rgb(0, 120, 215). The other 90 colours are unchanged.",
+  "dark": "Under color-scheme: dark, from cfparity cross-os run 6b (win-i9 Intel, headed stock, runs 0-2 identical; realms.cssmq schemes 'dark' and 'only dark'). Firefox's own dark selection colours, not the accent."
  },
  "colors": {
   "-moz-activehyperlinktext": "rgb(238, 0, 0)",
@@ -77,7 +79,7 @@
   "Field": "rgb(255, 255, 255)",
   "FieldText": "rgb(0, 0, 0)",
   "GrayText": "rgb(109, 109, 109)",
-  "Highlight": "rgb(0, 120, 215)",
+  "Highlight": "rgb(0, 120, 212)",
   "HighlightText": "rgb(255, 255, 255)",
   "InactiveBorder": "rgb(129, 127, 132)",
   "InactiveCaption": "rgb(255, 255, 255)",
@@ -90,7 +92,7 @@
   "Menu": "rgb(255, 255, 255)",
   "MenuText": "rgb(0, 0, 0)",
   "Scrollbar": "rgb(255, 255, 255)",
-  "SelectedItem": "rgb(0, 120, 215)",
+  "SelectedItem": "rgb(0, 120, 212)",
   "SelectedItemText": "rgb(255, 255, 255)",
   "ThreeDDarkShadow": "rgb(129, 127, 132)",
   "ThreeDFace": "rgb(233, 233, 237)",
@@ -101,5 +103,11 @@
   "Window": "rgb(255, 255, 255)",
   "WindowFrame": "rgb(129, 127, 132)",
   "WindowText": "rgb(0, 0, 0)"
+ },
+ "dark": {
+  "Highlight": "rgba(0, 221, 255, 0.306)",
+  "HighlightText": "rgb(0, 0, 0)",
+  "SelectedItem": "rgb(0, 221, 255)",
+  "SelectedItemText": "rgb(43, 42, 51)"
  }
 }

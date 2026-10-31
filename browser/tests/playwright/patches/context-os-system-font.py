@@ -18,11 +18,34 @@ computes to, and whether `system-ui` measures as that OS's interface family.
 """
 
 import asyncio
+import http.server
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import resolve_binary  # noqa: E402
+
+
+class _Page(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"<!doctype html><body><p>x</p></body>")
+
+
+def page_server() -> str:
+    """A loaded page for the probe. A new page's initial about:blank never ran
+    the context's init scripts (Juggler injects them into documents it sees
+    created), so set_content() there showed the launch identity, not the
+    context's; a page a site serves always gets them."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Page)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_address[1]}/"
 
 # navigator.platform -> (the family `font: caption` computes to, the family
 # system-ui resolves to), as the patches spoof them.
@@ -52,15 +75,16 @@ async def run(binary):
     from camoufox.async_api import AsyncCamoufox, AsyncNewContext
 
     results = []
+    url = page_server()
     async with AsyncCamoufox(headless=True, os="windows", canvas_noise=True,
                              executable_path=str(binary), i_know_what_im_doing=True) as browser:
         launch_page = await browser.new_page()
-        await launch_page.set_content("<body></body>")
+        await launch_page.goto(url)
         results.append(await launch_page.evaluate(PROBE, EXPECTED["Win32"][1]))
 
         context = await AsyncNewContext(browser, os="macos")
         page = await context.new_page()
-        await page.set_content("<body></body>")
+        await page.goto(url)
         results.append(await page.evaluate(PROBE, EXPECTED["MacIntel"][1]))
     return results
 

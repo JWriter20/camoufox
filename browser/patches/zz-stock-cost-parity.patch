@@ -63,12 +63,13 @@ index 040e7af8de..23e3e242e0 100644
  }
  
  namespace {
-@@ -974,6 +982,39 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
+@@ -974,6 +982,48 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
    // primary pointer. See force-default-pointer.patch for the matching
    // `any-pointer: coarse` half. Stock Firefox's baseline fingerprinting
    // protection collapses the spoofed count as it would the real one.
 +  // Camoufox: stock's work first, then the spoof (timing parity; see
 +  // nsScreen::PixelDepth).
++  bool detached = false;
 +  const uint32_t stock = [&]() -> uint32_t {
 +    nsIDocShell* docshell = GetDocShell();
 +    BrowsingContext* bc = docshell ? docshell->GetBrowsingContext() : nullptr;
@@ -90,7 +91,10 @@ index 040e7af8de..23e3e242e0 100644
 +    nsCOMPtr<nsIWidget> widget =
 +        widget::WidgetUtils::DOMWindowToWidget(mWindow->GetOuterWindow());
 +
-+    NS_ENSURE_TRUE(widget, 0);
++    if (!widget) {
++      detached = true;
++      return 0;
++    }
 +    uint32_t maxTouchPoints = widget->GetMaxTouchPoints();
 +
 +    if (aCallerType != CallerType::System &&
@@ -100,6 +104,11 @@ index 040e7af8de..23e3e242e0 100644
 +    }
 +    return maxTouchPoints;
 +  }();
++  // A window with no widget (a removed iframe's) answers stock's 0, not the
++  // identity's count.
++  if (detached) {
++    return stock;
++  }
    if (auto value = MaskConfig::GetUint32("navigator.maxTouchPoints")) {
      if (aCallerType != CallerType::System &&
          nsContentUtils::ShouldResistFingerprinting(

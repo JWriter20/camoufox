@@ -110,7 +110,7 @@ index 3dac2943b3..8f6b3f363d 100644
    const dom::MediaTrackConstraints& Constraints() const;
  
 diff --git a/dom/media/webrtc/MediaEngineFake.cpp b/dom/media/webrtc/MediaEngineFake.cpp
-index b87d8c5659..a1a73bfa62 100644
+index dd825ff699..f05b922106 100644
 --- a/dom/media/webrtc/MediaEngineFake.cpp
 +++ b/dom/media/webrtc/MediaEngineFake.cpp
 @@ -4,6 +4,9 @@
@@ -123,7 +123,408 @@ index b87d8c5659..a1a73bfa62 100644
  #include "AudioSegment.h"
  #include "FakeVideoSource.h"
  #include "ImageContainer.h"
-@@ -577,7 +580,12 @@ void AudioSourcePullListener::NotifyPull(MediaTrackGraph* aGraph,
+@@ -79,12 +82,87 @@ static nsString FakeVideoName() {
+   return u"Default Video Device"_ns;
+ }
+ 
++// Camoufox: what an identity camera reports. A real camera's capabilities are
++// the largest width, height and frame rate among its capture modes, with a
++// floor of 2 (MediaEngineRemoteVideoSource::ChooseCapability), and it has a
++// facing mode only where the OS names it (GetFacingMode: Windows reads
++// "Front"/"Rear" from the label; macOS and Linux never report one).
++struct IdentityCamera {
++  int32_t mMaxWidth;
++  int32_t mMaxHeight;
++  int32_t mMaxFrameRate;
++  Maybe<nsString> mFacingMode;
++};
++
++// Index i of an identity device's raw id "camou-<kind>-<i>".
++static Maybe<uint32_t> IdentityDeviceIndex(const nsString& aRawId,
++                                           const char* aKind) {
++  nsAutoString prefix;
++  prefix.AppendPrintf("camou-%s-", aKind);
++  if (!StringBeginsWith(aRawId, prefix)) {
++    return Nothing();
++  }
++  nsAutoString rest(Substring(aRawId, prefix.Length()));
++  nsresult rv;
++  const int32_t index = rest.ToInteger(&rv);
++  if (NS_FAILED(rv) || index < 0) {
++    return Nothing();
++  }
++  return Some(static_cast<uint32_t>(index));
++}
++
++// Entry aIndex of the numeric list at aKey, when it is an integer in
++// [aMin, aMax]; aFallback otherwise.
++static int32_t IdentityListValue(std::string_view aKey, uint32_t aIndex,
++                                 int32_t aFallback, int32_t aMin,
++                                 int32_t aMax) {
++  const auto* list = MaskConfig::Find(aKey);
++  if (list && list->is_array() && aIndex < list->size()) {
++    const auto& value = (*list)[aIndex];
++    if (value.is_number_integer() || value.is_number_unsigned()) {
++      const int64_t n = value.get<int64_t>();
++      if (n >= aMin && n <= aMax) {
++        return static_cast<int32_t>(n);
++      }
++    }
++  }
++  return aFallback;
++}
++
++static IdentityCamera IdentityCameraFor(uint32_t aIndex,
++                                        const nsString& aLabel) {
++  // Without per-camera values: a 720p laptop camera, which is what most
++  // Windows machines carry.
++  IdentityCamera camera{
++      IdentityListValue("mediaDevices:webcamMaxWidths", aIndex, 1280, 2, 8192),
++      IdentityListValue("mediaDevices:webcamMaxHeights", aIndex, 720, 2, 8192),
++      IdentityListValue("mediaDevices:webcamMaxFrameRates", aIndex, 30, 1,
++                        240),
++      Nothing()};
++  MaskConfig::SpoofedOS os = MaskConfig::GetSpoofedOS();
++  if (os == MaskConfig::SpoofedOS::None) {
++    os = MaskConfig::HostOS();
++  }
++  if (os == MaskConfig::SpoofedOS::Windows) {
++    if (aLabel.Find(u"Front"_ns) != kNotFound) {
++      camera.mFacingMode.emplace(
++          NS_ConvertASCIItoUTF16(GetEnumString(VideoFacingModeEnum::User)));
++    } else if (aLabel.Find(u"Rear"_ns) != kNotFound) {
++      camera.mFacingMode.emplace(NS_ConvertASCIItoUTF16(
++          GetEnumString(VideoFacingModeEnum::Environment)));
++    }
++  }
++  return camera;
++}
++
+ /**
+  * Fake video source.
+  */
+ class MediaEngineFakeVideoSource : public MediaEngineSource {
+  public:
+-  MediaEngineFakeVideoSource();
++  // Camoufox: aIdentity -- this source captures an identity camera.
++  explicit MediaEngineFakeVideoSource(
++      Maybe<IdentityCamera> aIdentity = Nothing());
+ 
+   static already_AddRefed<MediaEngineFakeVideoSource> CreateFrom(
+       const MediaEngineFakeVideoSource* aSource);
+@@ -132,17 +210,25 @@ class MediaEngineFakeVideoSource : public MediaEngineSource {
+ 
+   MediaEnginePrefs mOpts;
+ 
++  const Maybe<IdentityCamera> mIdentity;
++
+   // Main thread only.
+   const RefPtr<media::Refcountable<dom::MediaTrackSettings>> mSettings;
+ };
+ 
+-MediaEngineFakeVideoSource::MediaEngineFakeVideoSource()
+-    : mSettings(MakeAndAddRef<media::Refcountable<MediaTrackSettings>>()) {
++MediaEngineFakeVideoSource::MediaEngineFakeVideoSource(
++    Maybe<IdentityCamera> aIdentity)
++    : mIdentity(std::move(aIdentity)),
++      mSettings(MakeAndAddRef<media::Refcountable<MediaTrackSettings>>()) {
+   mSettings->mWidth.Construct(int32_t(VIDEO_WIDTH_DEFAULT));
+   mSettings->mHeight.Construct(int32_t(VIDEO_HEIGHT_DEFAULT));
+   mSettings->mFrameRate.Construct(double(MediaEnginePrefs::DEFAULT_VIDEO_FPS));
+-  mSettings->mFacingMode.Construct(NS_ConvertASCIItoUTF16(
+-      dom::GetEnumString(VideoFacingModeEnum::Environment)));
++  if (!mIdentity) {
++    mSettings->mFacingMode.Construct(NS_ConvertASCIItoUTF16(
++        dom::GetEnumString(VideoFacingModeEnum::Environment)));
++  } else if (mIdentity->mFacingMode) {
++    mSettings->mFacingMode.Construct(*mIdentity->mFacingMode);
++  }
+   mSettings->mResizeMode.Construct(NS_ConvertASCIItoUTF16(
+       dom::GetEnumString(dom::VideoResizeModeEnum::None)));
+ }
+@@ -150,7 +236,7 @@ MediaEngineFakeVideoSource::MediaEngineFakeVideoSource()
+ /*static*/ already_AddRefed<MediaEngineFakeVideoSource>
+ MediaEngineFakeVideoSource::CreateFrom(
+     const MediaEngineFakeVideoSource* aSource) {
+-  auto src = MakeRefPtr<MediaEngineFakeVideoSource>();
++  auto src = MakeRefPtr<MediaEngineFakeVideoSource>(aSource->mIdentity);
+   *static_cast<MediaTrackSettings*>(src->mSettings) = *aSource->mSettings;
+   return src.forget();
+ }
+@@ -172,8 +258,16 @@ uint32_t MediaEngineFakeVideoSource::GetBestFitnessDistance(
+     const auto* cs = aConstraintSets.ElementAt(0);
+     const auto resizeMode = MediaConstraintsHelper::GetResizeMode(*cs, aPrefs);
+     using H = MediaConstraintsHelper;
+-    Maybe<nsString> facingMode = Nothing();
++    Maybe<nsString> facingMode =
++        mIdentity ? mIdentity->mFacingMode : Nothing();
+     distance += H::FitnessDistance(facingMode, cs->mFacingMode);
++    // Camoufox: a real camera has no mode above its largest one, so a
++    // required minimum beyond it overconstrains it.
++    if (mIdentity && (cs->mWidth.mMin > mIdentity->mMaxWidth ||
++                      cs->mHeight.mMin > mIdentity->mMaxHeight ||
++                      cs->mFrameRate.mMin > mIdentity->mMaxFrameRate)) {
++      return UINT32_MAX;
++    }
+ 
+     if (resizeMode.valueOr(dom::VideoResizeModeEnum::None) ==
+         dom::VideoResizeModeEnum::None) {
+@@ -203,11 +297,16 @@ void MediaEngineFakeVideoSource::GetCapabilities(
+     MediaTrackCapabilities& aOutCapabilities) const {
+   MOZ_ASSERT(NS_IsMainThread());
+ 
+-  NS_ConvertASCIItoUTF16 facingString(
+-      GetEnumString(VideoFacingModeEnum::Environment));
+-  nsTArray<nsString> facing;
+-  facing.AppendElement(facingString);
+-  aOutCapabilities.mFacingMode.Construct(std::move(facing));
++  if (!mIdentity) {
++    NS_ConvertASCIItoUTF16 facingString(
++        GetEnumString(VideoFacingModeEnum::Environment));
++    nsTArray<nsString> facing;
++    facing.AppendElement(facingString);
++    aOutCapabilities.mFacingMode.Construct(std::move(facing));
++  } else if (mIdentity->mFacingMode) {
++    aOutCapabilities.mFacingMode.Construct(
++        nsTArray<nsString>{*mIdentity->mFacingMode});
++  }
+ 
+   if (mOpts.mResizeModeEnabled) {
+     nsTArray<nsString> resizeModes{
+@@ -218,17 +317,20 @@ void MediaEngineFakeVideoSource::GetCapabilities(
+   }
+ 
+   dom::ULongRange widthRange;
+-  widthRange.mMax.Construct(VIDEO_WIDTH_MAX);
+-  widthRange.mMin.Construct(1);
++  widthRange.mMax.Construct(mIdentity ? mIdentity->mMaxWidth : VIDEO_WIDTH_MAX);
++  widthRange.mMin.Construct(mIdentity ? 2 : 1);
+   aOutCapabilities.mWidth.Construct(widthRange);
+ 
+   dom::ULongRange heightRange;
+-  heightRange.mMax.Construct(VIDEO_HEIGHT_MAX);
+-  heightRange.mMin.Construct(1);
++  heightRange.mMax.Construct(mIdentity ? mIdentity->mMaxHeight
++                                       : VIDEO_HEIGHT_MAX);
++  heightRange.mMin.Construct(mIdentity ? 2 : 1);
+   aOutCapabilities.mHeight.Construct(heightRange);
+ 
+   dom::DoubleRange frameRateRange;
+-  frameRateRange.mMax.Construct(double(MediaEnginePrefs::DEFAULT_VIDEO_FPS));
++  frameRateRange.mMax.Construct(
++      mIdentity ? double(mIdentity->mMaxFrameRate)
++                : double(MediaEnginePrefs::DEFAULT_VIDEO_FPS));
+   frameRateRange.mMin.Construct(0);
+   aOutCapabilities.mFrameRate.Construct(frameRateRange);
+ }
+@@ -259,9 +361,18 @@ nsresult MediaEngineFakeVideoSource::Allocate(
+                                           AssertedCast<double>(mOpts.mFPS))));
+   }
+ 
+-  mOpts.mWidth = std::clamp(mOpts.mWidth, 1, VIDEO_WIDTH_MAX);
+-  mOpts.mHeight = std::clamp(mOpts.mHeight, 1, VIDEO_HEIGHT_MAX);
+-  mOpts.mFPS = std::clamp(mOpts.mFPS, 0, MediaEnginePrefs::DEFAULT_VIDEO_FPS);
++  if (mIdentity) {
++    mOpts.mWidth = std::clamp(mOpts.mWidth, 2, mIdentity->mMaxWidth);
++    mOpts.mHeight = std::clamp(mOpts.mHeight, 2, mIdentity->mMaxHeight);
++    mOpts.mFPS = std::clamp(
++        mOpts.mFPS, 0,
++        std::min(mIdentity->mMaxFrameRate, MediaEnginePrefs::DEFAULT_VIDEO_FPS));
++  } else {
++    mOpts.mWidth = std::clamp(mOpts.mWidth, 1, VIDEO_WIDTH_MAX);
++    mOpts.mHeight = std::clamp(mOpts.mHeight, 1, VIDEO_HEIGHT_MAX);
++    mOpts.mFPS =
++        std::clamp(mOpts.mFPS, 0, MediaEnginePrefs::DEFAULT_VIDEO_FPS);
++  }
+ 
+   nsCOMPtr<nsISerialEventTarget> target = GetCurrentSerialEventTarget();
+   mCapturer = MakeRefPtr<FakeVideoSource>(target);
+@@ -372,9 +483,10 @@ class AudioSourcePullListener : public MediaTrackListener {
+  public:
+   AudioSourcePullListener(RefPtr<SourceMediaTrack> aTrack,
+                           const PrincipalHandle& aPrincipalHandle,
+-                          uint32_t aFrequency)
++                          uint32_t aFrequency, uint32_t aChannels = 1)
+       : mTrack(std::move(aTrack)),
+         mPrincipalHandle(aPrincipalHandle),
++        mChannels(aChannels),
+         mSineGenerator(MakeUnique<SineWaveGenerator<int16_t>>(
+             mTrack->mSampleRate, aFrequency)) {
+     MOZ_COUNT_CTOR(AudioSourcePullListener);
+@@ -387,6 +499,7 @@ class AudioSourcePullListener : public MediaTrackListener {
+ 
+   const RefPtr<SourceMediaTrack> mTrack;
+   const PrincipalHandle mPrincipalHandle;
++  const uint32_t mChannels;
+   const UniquePtr<SineWaveGenerator<int16_t>> mSineGenerator;
+ };
+ 
+@@ -395,7 +508,15 @@ class AudioSourcePullListener : public MediaTrackListener {
+  */
+ class MediaEngineFakeAudioSource : public MediaEngineSource {
+  public:
+-  MediaEngineFakeAudioSource() = default;
++  // Camoufox: aIdentityChannels -- this source captures an identity
++  // microphone with that many channels, and reports what a real microphone
++  // does (MediaEngineWebRTCMicrophoneSource) instead of the test device's
++  // processing-less mono.
++  explicit MediaEngineFakeAudioSource(
++      Maybe<int32_t> aIdentityChannels = Nothing());
++
++  static already_AddRefed<MediaEngineFakeAudioSource> CreateFrom(
++      const MediaEngineFakeAudioSource* aSource);
+ 
+   static nsString GetUUID();
+   static nsString GetGroupId();
+@@ -428,8 +549,69 @@ class MediaEngineFakeAudioSource : public MediaEngineSource {
+   PrincipalHandle mPrincipalHandle = PRINCIPAL_HANDLE_NONE;
+   uint32_t mFrequency = 1000;
+   RefPtr<AudioSourcePullListener> mPullListener;
++
++  nsresult EvaluateIdentitySettings(const dom::MediaTrackConstraints& aConstraints,
++                                    const MediaEnginePrefs& aPrefs,
++                                    const char** aOutBadConstraint);
++
++  const Maybe<int32_t> mIdentityChannels;
++  // Owning thread: the channels the track carries.
++  uint32_t mChannels = 1;
++  // Main thread only; identity microphones.
++  const RefPtr<media::Refcountable<dom::MediaTrackSettings>> mSettings;
+ };
+ 
++MediaEngineFakeAudioSource::MediaEngineFakeAudioSource(
++    Maybe<int32_t> aIdentityChannels)
++    : mIdentityChannels(aIdentityChannels),
++      mSettings(MakeAndAddRef<media::Refcountable<MediaTrackSettings>>()) {
++  mSettings->mEchoCancellation.Construct(false);
++  mSettings->mAutoGainControl.Construct(false);
++  mSettings->mNoiseSuppression.Construct(false);
++  mSettings->mChannelCount.Construct(0);
++}
++
++// As MediaEngineWebRTCMicrophoneSource::EvaluateSettings: the processing a
++// page asks for, else the prefs' (on by default), AGC and NS only with AEC;
++// the channel count asked for, else the device's, within [1, device max].
++nsresult MediaEngineFakeAudioSource::EvaluateIdentitySettings(
++    const dom::MediaTrackConstraints& aConstraints,
++    const MediaEnginePrefs& aPrefs, const char** aOutBadConstraint) {
++  NormalizedConstraints normalized(aConstraints);
++  FlattenedConstraints c(normalized);
++  const bool aec = c.mEchoCancellation.Get(aPrefs.mAecOn);
++  const bool agc = c.mAutoGainControl.Get(aPrefs.mAgcOn && aec);
++  const bool noise = c.mNoiseSuppression.Get(aPrefs.mNoiseOn && aec);
++  const int32_t maxChannels = *mIdentityChannels;
++  if (c.mChannelCount.mMin > maxChannels) {
++    if (aOutBadConstraint) {
++      *aOutBadConstraint = "channelCount";
++    }
++    return NS_ERROR_FAILURE;
++  }
++  int32_t channels = aPrefs.mChannels <= 0 ? maxChannels : aPrefs.mChannels;
++  channels = c.mChannelCount.Get(std::min(channels, maxChannels));
++  channels = std::clamp(channels, 1, maxChannels);
++  mChannels = static_cast<uint32_t>(channels);
++  NS_DispatchToMainThread(NS_NewRunnableFunction(
++      __func__, [settings = mSettings, aec, agc, noise, channels] {
++        settings->mEchoCancellation.Value() = aec;
++        settings->mAutoGainControl.Value() = agc;
++        settings->mNoiseSuppression.Value() = noise;
++        settings->mChannelCount.Value() = channels;
++      }));
++  return NS_OK;
++}
++
++/*static*/ already_AddRefed<MediaEngineFakeAudioSource>
++MediaEngineFakeAudioSource::CreateFrom(
++    const MediaEngineFakeAudioSource* aSource) {
++  auto src = MakeRefPtr<MediaEngineFakeAudioSource>(aSource->mIdentityChannels);
++  src->mChannels = aSource->mChannels;
++  *static_cast<MediaTrackSettings*>(src->mSettings) = *aSource->mSettings;
++  return src.forget();
++}
++
+ nsString MediaEngineFakeAudioSource::GetUUID() {
+   return u"B7CBD7C1-53EF-42F9-8353-73F61C70C092"_ns;
+ }
+@@ -441,6 +623,10 @@ nsString MediaEngineFakeAudioSource::GetGroupId() {
+ void MediaEngineFakeAudioSource::GetSettings(
+     MediaTrackSettings& aOutSettings) const {
+   MOZ_ASSERT(NS_IsMainThread());
++  if (mIdentityChannels) {
++    aOutSettings = *mSettings;
++    return;
++  }
+   aOutSettings.mAutoGainControl.Construct(false);
+   aOutSettings.mEchoCancellation.Construct(false);
+   aOutSettings.mNoiseSuppression.Construct(false);
+@@ -450,6 +636,16 @@ void MediaEngineFakeAudioSource::GetSettings(
+ void MediaEngineFakeAudioSource::GetCapabilities(
+     MediaTrackCapabilities& aOutCapabilities) const {
+   MOZ_ASSERT(NS_IsMainThread());
++  if (mIdentityChannels) {
++    aOutCapabilities.mEchoCancellation.Construct(nsTArray<bool>{true, false});
++    aOutCapabilities.mAutoGainControl.Construct(nsTArray<bool>{true, false});
++    aOutCapabilities.mNoiseSuppression.Construct(nsTArray<bool>{true, false});
++    dom::ULongRange channelCountRange;
++    channelCountRange.mMax.Construct(*mIdentityChannels);
++    channelCountRange.mMin.Construct(1);
++    aOutCapabilities.mChannelCount.Construct(channelCountRange);
++    return;
++  }
+   nsTArray<bool> echoCancellation;
+   echoCancellation.AppendElement(false);
+   aOutCapabilities.mEchoCancellation.Construct(std::move(echoCancellation));
+@@ -477,6 +673,14 @@ nsresult MediaEngineFakeAudioSource::Allocate(
+ 
+   mFrequency = aPrefs.mFreq ? aPrefs.mFreq : 1000;
+ 
++  if (mIdentityChannels) {
++    nsresult rv =
++        EvaluateIdentitySettings(aConstraints, aPrefs, aOutBadConstraint);
++    if (NS_FAILED(rv)) {
++      return rv;
++    }
++  }
++
+   mState = kAllocated;
+   return NS_OK;
+ }
+@@ -519,7 +723,7 @@ nsresult MediaEngineFakeAudioSource::Start() {
+ 
+   if (!mPullListener) {
+     mPullListener = MakeAndAddRef<AudioSourcePullListener>(
+-        mTrack, mPrincipalHandle, mFrequency);
++        mTrack, mPrincipalHandle, mFrequency, mChannels);
+   }
+ 
+   mState = kStarted;
+@@ -559,6 +763,15 @@ nsresult MediaEngineFakeAudioSource::Stop() {
+ nsresult MediaEngineFakeAudioSource::Reconfigure(
+     const MediaTrackConstraints& aConstraints, const MediaEnginePrefs& aPrefs,
+     const char** aOutBadConstraint) {
++  if (mIdentityChannels) {
++    // A started track keeps its channel layout, as the settings update first.
++    nsresult rv =
++        EvaluateIdentitySettings(aConstraints, aPrefs, aOutBadConstraint);
++    if (NS_FAILED(rv)) {
++      return aOutBadConstraint && *aOutBadConstraint ? NS_ERROR_INVALID_ARG
++                                                     : rv;
++    }
++  }
+   return NS_OK;
+ }
+ 
+@@ -574,13 +787,20 @@ void AudioSourcePullListener::NotifyPull(MediaTrackGraph* aGraph,
+   RefPtr<SharedBuffer> buffer = SharedBuffer::Create(bufferSize);
+   int16_t* dest = static_cast<int16_t*>(buffer->Data());
+   mSineGenerator->generate(dest, delta);
+-  AutoTArray<const int16_t*, 1> channels;
+-  channels.AppendElement(dest);
++  AutoTArray<const int16_t*, 2> channels;
++  for (uint32_t i = 0; i < mChannels; ++i) {
++    channels.AppendElement(dest);
++  }
+   segment.AppendFrames(buffer.forget(), channels, delta, mPrincipalHandle);
    mTrack->AppendData(&segment);
  }
  
@@ -137,7 +538,7 @@ index b87d8c5659..a1a73bfa62 100644
  MediaEngineFake::~MediaEngineFake() = default;
  
  void MediaEngineFake::EnumerateDevices(
-@@ -587,6 +595,70 @@ void MediaEngineFake::EnumerateDevices(
+@@ -590,6 +810,70 @@ void MediaEngineFake::EnumerateDevices(
    using IsScary = MediaDevice::IsScary;
    using OsPromptable = MediaDevice::OsPromptable;
  
@@ -208,6 +609,46 @@ index b87d8c5659..a1a73bfa62 100644
    if (aMediaSink == MediaSinkEnum::Speaker) {
      NS_WARNING("No default implementation for MediaSinkEnum::Speaker");
    }
+@@ -619,6 +903,26 @@ void MediaEngineFake::EnumerateDevices(
+ RefPtr<MediaEngineSource> MediaEngineFake::CreateSource(
+     const MediaDevice* aMediaDevice) {
+   MOZ_ASSERT(aMediaDevice->mEngine == this);
++  if (ServesIdentityDevices()) {
++    switch (aMediaDevice->mMediaSource) {
++      case MediaSourceEnum::Camera:
++        if (auto index = IdentityDeviceIndex(aMediaDevice->mRawID, "cam")) {
++          return MakeRefPtr<MediaEngineFakeVideoSource>(
++              Some(IdentityCameraFor(*index, aMediaDevice->mRawName)));
++        }
++        break;
++      case MediaSourceEnum::Microphone:
++        if (auto index = IdentityDeviceIndex(aMediaDevice->mRawID, "mic")) {
++          // Without per-microphone values: stereo, as a Windows microphone
++          // array's shared-mode format is.
++          return MakeRefPtr<MediaEngineFakeAudioSource>(Some(IdentityListValue(
++              "mediaDevices:microphoneChannels", *index, 2, 1, 8)));
++        }
++        break;
++      default:
++        break;
++    }
++  }
+   switch (aMediaDevice->mMediaSource) {
+     case MediaSourceEnum::Camera:
+       return MakeRefPtr<MediaEngineFakeVideoSource>();
+@@ -638,8 +942,10 @@ RefPtr<MediaEngineSource> MediaEngineFake::CreateSourceFrom(
+       return MediaEngineFakeVideoSource::CreateFrom(
+           static_cast<const MediaEngineFakeVideoSource*>(aSource));
+     case MediaSourceEnum::Microphone:
+-      // No main thread members that need to be deep cloned.
+-      return MakeRefPtr<MediaEngineFakeAudioSource>();
++      // Camoufox: an identity microphone's clone keeps its device and the
++      // settings it was allocated with.
++      return MediaEngineFakeAudioSource::CreateFrom(
++          static_cast<const MediaEngineFakeAudioSource*>(aSource));
+     default:
+       MOZ_ASSERT_UNREACHABLE("Unsupported source type");
+       return nullptr;
 diff --git a/dom/media/webrtc/MediaEngineFake.h b/dom/media/webrtc/MediaEngineFake.h
 index cd9c407af5..0bcfe65c0c 100644
 --- a/dom/media/webrtc/MediaEngineFake.h

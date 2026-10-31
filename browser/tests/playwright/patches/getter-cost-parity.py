@@ -43,7 +43,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from helpers import resolve_binary  # noqa: E402
+from helpers import hidden_display, resolve_binary  # noqa: E402
 
 REPO_ROOT = HERE.parents[3]
 sys.path.insert(0, str(REPO_ROOT))
@@ -129,7 +129,13 @@ function bench(exprs, setup) {
   const res = {window: win, worker, first};
   document.body.dataset.result = JSON.stringify(res);
   fetch('/result', {method: 'POST', body: JSON.stringify(res)});
-})();
+})().catch(e => {
+  // Reported, not left to the timeout: without a WebGL context (a browser on
+  // no display has none) the GL setup throws and nothing would be sent.
+  const res = {error: String(e)};
+  document.body.dataset.result = JSON.stringify(res);
+  fetch('/result', {method: 'POST', body: JSON.stringify(res)});
+});
 </script></body>"""
 
 
@@ -226,7 +232,10 @@ def run_camoufox(binary, url, identity):
             page = browser.new_page()
         page.goto(url)
         page.wait_for_function("document.body.dataset.result", timeout=PAGE_TIMEOUT_S * 1000)
-        return json.loads(page.evaluate("document.body.dataset.result"))
+        result = json.loads(page.evaluate("document.body.dataset.result"))
+        if "error" in result:
+            raise SystemExit(f"FAIL: Camoufox's page failed ({identity} identity): {result['error']}")
+        return result
 
 
 def fastest(runs):
@@ -240,6 +249,14 @@ def fastest(runs):
 
 
 def main() -> int:
+    # Both browsers on a private X display: WebGL is part of the bench, and a
+    # browser started with no display at all (the guard runner unsets DISPLAY)
+    # gets no GL context, so stock's page threw before it reported.
+    with hidden_display():
+        return measure()
+
+
+def measure() -> int:
     camoufox_bin = resolve_binary()
     stock_bin = stock_firefox()
 
@@ -261,6 +278,9 @@ def main() -> int:
             stop_stock(profile, proc)
             if not server.results:
                 print("FAIL: stock Firefox never reported -- check is vacuous")
+                return 1
+            if "error" in server.results[0]:
+                print(f"FAIL: stock Firefox's page failed: {server.results[0]['error']}")
                 return 1
             stock_runs.append(server.results[0])
             for identity, runs in camou_runs.items():

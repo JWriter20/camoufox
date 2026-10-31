@@ -58,6 +58,10 @@ TIMEOUT_S = 10.0
 RenderNodeOption = Union[None, bool, str, Path, Dict[str, Any]]
 
 
+# The farm is reached directly, never through a proxy from the environment: the
+# browser's proxy is for its pages, and one in between would see the token.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 class RenderNodeError(RuntimeError):
     """The render node could not be reached or gave no session."""
 
@@ -190,7 +194,7 @@ class Session:
             data=None if body is None else json.dumps(body).encode(),
             headers={"Authorization": "Bearer " + self.config["token"], "Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:  # nosec: operator-configured origin
+        with _DIRECT.open(request, timeout=TIMEOUT_S) as response:  # nosec: operator-configured origin
             raw = response.read()
         return json.loads(raw) if raw else None
 

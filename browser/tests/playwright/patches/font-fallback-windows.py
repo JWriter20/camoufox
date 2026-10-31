@@ -38,7 +38,10 @@ descender + lineGap - (winAscent + winDescent)), scale = float(size /
 unitsPerEm), ascent and descent rounded to pixels, emAscent = size * ascent /
 (ascent + descent), external leading ceil(gap * scale), and the line height
 emHeight + internal + external leading in app units, as GetNormalLineHeight
-adds them. Arial Black has its own (16px: 18/5, line 23), not Arial Bold's.
+adds them. Arial Black has its own (16px: 18/5, line 23), not Arial Bold's -- once
+Windows' legacy names have loaded: the record was taken after them, so the
+guard looks up the names once, waits out the loader
+(windows-legacy-family-names.patch) and measures then.
 FreeType's own hhea values (font-metrics-windows.patch or fonts:metrics
 missing) give other numbers on every font.
 
@@ -98,6 +101,9 @@ LINE_BOXES = """(spec) => {
   }
   return out;
 }"""
+# Longer than the legacy-name loader's run (WINDOWS_ALIAS_LOAD_MS in the
+# launcher, at most 1832 ms), as the 4 s the Windows record waited.
+ALIAS_LOAD_WAIT_MS = 4000
 # Matching widths out of 168; raise it as parity improves, never lower it.
 MIN_MATCHING = 162
 
@@ -144,6 +150,14 @@ def main() -> int:
             page.goto(url)
             page.wait_for_function("document.body.dataset.r", timeout=60000)
             got = json.loads(page.evaluate("document.body.dataset.r"))
+            # Windows' line boxes were recorded once its deferred font-info
+            # loader had read the legacy names (source: fonts.ready + 4 s;
+            # before then "Arial Black" is Arial's base or the serif default).
+            # The first legacy lookup starts that loader, on Windows as in
+            # windows-legacy-family-names.patch (1630-1832 ms drawn, stock
+            # win-i9 1727-1832 ms), so look once, wait it out, then measure.
+            page.evaluate(LINE_BOXES, line_boxes)
+            page.wait_for_timeout(ALIAS_LOAD_WAIT_MS)
             boxes = page.evaluate(LINE_BOXES, line_boxes)
     finally:
         srv.shutdown()

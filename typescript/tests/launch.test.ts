@@ -610,7 +610,7 @@ describe("test_launch_environment: prefs", () => {
 			)) {
 				expect(prefs[pref]).toEqual(value);
 			}
-			expect("media.eme.enabled" in prefs).toBe(false);
+			expect(prefs["media.eme.enabled"]).toBe(true);
 			expect(prefs["middlemouse.paste"]).toBe(false);
 		});
 		it("draws Windows' scrollbars at Windows' size", async () => {

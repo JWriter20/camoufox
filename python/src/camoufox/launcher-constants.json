@@ -39,8 +39,8 @@
   "baselineTaskbarHeight": {"win": 48, "mac": 76, "lin": 0},
   "baselineMultiTouchPoints": 5,
   "windowsUiColors": {
-    "ui.highlight": "#0078d7",
-    "ui.selecteditem": "#0078d7",
+    "ui.highlight": "#0078d4",
+    "ui.selecteditem": "#0078d4",
     "ui.accentcolor": "#0060df",
     "ui.-moz-dialog": "#ffffff",
     "ui.-moz-dialogtext": "#000000",
@@ -48,7 +48,11 @@
     "ui.-moz_menuhover": "#0000001e",
     "ui.-moz_menuhovertext": "#15141a",
     "ui.-moz_menubarhovertext": "#15141a",
-    "ui.-moz_oddtreerow": "#ffffff"
+    "ui.-moz_oddtreerow": "#ffffff",
+    "ui.highlight.dark": "#00ddff4e",
+    "ui.highlighttext.dark": "#000000",
+    "ui.selecteditem.dark": "#00ddff",
+    "ui.selecteditemtext.dark": "#2b2a33"
   },
   "cachePrefs": {
     "browser.sessionhistory.max_total_viewers": -1,
@@ -65,6 +69,10 @@
     "full-screen-api.transition-duration.leave": "200 200",
     "ui.scrollToClick": 0,
     "slider.snapMultiplier": 6,
-    "layout.scrollbars.click_and_hold_track.continue_to_end": false
+    "layout.scrollbars.click_and_hold_track.continue_to_end": false,
+    "ui.scrollArrowStyle": 4097,
+    "ui.context_menus.after_mouseup": true,
+    "media.eme.enabled": true,
+    "dom.geolocation.require_system_permission.enabled": true
   }
 }

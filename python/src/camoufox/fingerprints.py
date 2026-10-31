@@ -978,6 +978,131 @@ def set_media_devices_defaults(config: Dict[str, Any], salt: int = 0) -> None:
     config.update(draw_media_devices(os_key, identity_seed(config, salt)))
 
 
+
+# Share of machines whose one adapter carries IPv6 next to IPv4. No recorded
+# corpus has the ICE shape; this is Google's IPv6 adoption figure (~45% of its
+# users in 2025, google.com/ipv6/statistics), which counts global IPv6 only,
+# so it is a lower bound. A real-device measurement replaces it.
+HOST_IPV6_SHARE = 0.45
+
+
+def set_host_ipv6_default(config: Dict[str, Any], salt: int = 0) -> None:
+    """Draw the identity's network shape: one adapter, IPv4 only or IPv4 + IPv6.
+
+    Without a capture permission stock Firefox gathers the default adapter's
+    IPv4 address and the IPv6 address on that same adapter, so a page sees
+    one or two host candidates per transport; webrtc:hostipv6 makes the
+    browser gather the second (webrtc-topology-host-ipv6.patch). Wi-Fi and
+    Ethernet look alike with one adapter, and a second adapter only shows
+    after a capture grant, so every identity has one. Nothing is drawn when
+    the caller set it.
+    """
+    if 'webrtc:hostipv6' in config:
+        return
+    if config.get('network:ipv4Only'):
+        # The host's own IPv6 is turned off: a machine on an IPv4-only network.
+        config['webrtc:hostipv6'] = False
+    elif 'webrtc:ipv6' in config:
+        # The exit address is IPv6, so the machine has IPv6.
+        config['webrtc:hostipv6'] = True
+    else:
+        draw = Random(identity_seed(config, salt) ^ 0x1CE6).random()
+        config['webrtc:hostipv6'] = draw < HOST_IPV6_SHARE
+
+
+# Windows' location setting for desktop apps, as Firefox reads it
+# (GeolocationSystemWin.cpp): "allowed" lets a granted page have positions;
+# "prompt" (apps still to be allowed, the OS asks) and "denied" (location off
+# for apps) make the page's permission read "prompt" and a position request
+# wait on a dialog. No recorded corpus has this setting (fpgen's
+# permissions.geolocation is the page's own state, not the OS's); these shares
+# are an estimate (Windows 11 setup offers location on by default; win-i9
+# answers "prompt"). A real-device measurement replaces them.
+WINDOWS_LOCATION_SETTING_SHARES = (('allowed', 0.55), ('prompt', 0.30), ('denied', 0.15))
+
+
+def set_location_setting_default(
+    config: Dict[str, Any], salt: int, target_os: str, host_os: Optional[str]
+) -> None:
+    """Draw the identity's OS location setting (geolocation:systemPermission,
+    geolocation-spoofing.patch) for a Windows identity on another host. An
+    identity given coordinates (geoip: the exit's) has location on; one
+    without has it off, never on with no position at the exit. It belongs to the machine, so it follows the identity seed.
+    Nothing is set when the caller set it."""
+    if 'geolocation:systemPermission' in config or target_os != 'win' or host_os == 'win':
+        return
+    if 'geolocation:latitude' in config and 'geolocation:longitude' in config:
+        config['geolocation:systemPermission'] = 'allowed'
+        return
+    # No coordinates: nothing at the exit to report, so location is never on.
+    # A page allowed location would get an error, or this host's position.
+    shares = [(state, share) for state, share in WINDOWS_LOCATION_SETTING_SHARES if state != 'allowed']
+    draw = Random(identity_seed(config, salt) ^ 0x10CA).random() * sum(share for _, share in shares)
+    for state, share in shares:
+        draw -= share
+        if draw < 0:
+            break
+    config['geolocation:systemPermission'] = state
+
+
+_AUDIO_OUTPUT_LATENCY_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_audio_output_latency() -> Dict[str, Any]:
+    """Measured AudioContext.outputLatency per OS (audio-output-latency.json)."""
+    global _AUDIO_OUTPUT_LATENCY_CACHE
+    if _AUDIO_OUTPUT_LATENCY_CACHE is None:
+        path = os.path.join(os.path.dirname(__file__), 'audio-output-latency.json')
+        with open(path, 'rb') as f:
+            _AUDIO_OUTPUT_LATENCY_CACHE = json.loads(f.read())
+    return _AUDIO_OUTPUT_LATENCY_CACHE
+
+
+def set_output_latency_default(
+    config: Dict[str, Any], salt: int, target_os: str, host_os: Optional[str]
+) -> None:
+    """Draw the identity's audio output device latency.
+
+    AudioContext.outputLatency is the output stream's latency: 0 until the
+    stream opens, then a device-specific figure (the host's own on a host of
+    the claimed OS). An identity of another OS would otherwise show the
+    host's figure, or 0 for good on a host with no sound device. The device
+    latency belongs to the machine, so it follows the identity seed; the
+    stream's opening delay is timing, so each launch draws its own.
+    Nothing is set when the caller set the key or the OS has no measured
+    devices.
+    """
+    if 'AudioContext:outputLatency' in config or target_os == host_os:
+        return
+    table = _load_audio_output_latency().get(target_os) or {}
+    devices = table.get('device_latency_s') or []
+    if not devices:
+        return
+    device = _weighted_choice(Random(identity_seed(config, salt) ^ 0xA0D1), devices)
+    config['AudioContext:outputLatency'] = float(device['v'])
+    low, high = table.get('open_delay_ms') or (20, 60)
+    config.setdefault('AudioContext:outputLatencyDelayMs', float(Random().uniform(low, high)))
+
+# How long stock Windows Firefox's deferred font-info loader takes to land the
+# legacy styled-family aliases once a legacy name is first asked for (stock
+# 158.0.1 on win-i9, 2026-10-31: first seen at 1727, 1826, 1832 ms on a 100 ms
+# poll, so the true times lie up to 100 ms earlier).
+WINDOWS_ALIAS_LOAD_MS = (1630, 1832)
+
+
+def set_windows_alias_load_default(
+    config: Dict[str, Any], target_os: str, host_os: Optional[str]
+) -> None:
+    """Draw this launch's Windows legacy-alias load time
+    (fonts:windowsAliasLoadMs, windows-legacy-family-names.patch) for a
+    Windows identity on another OS. It is timing, so each launch draws its
+    own; a caller's value is kept."""
+    if target_os != 'win' or target_os == host_os:
+        return
+    low, high = WINDOWS_ALIAS_LOAD_MS
+    config.setdefault('fonts:windowsAliasLoadMs', Random().randint(low, high))
+
+
 _MEDIA_DEVICES_CACHE: Optional[Dict[str, Any]] = None
 
 
@@ -1007,6 +1132,9 @@ def _weighted_choice(rng: Random, items: List[Dict[str, Any]]) -> Dict[str, Any]
 # machine line itself (Mac mini / Mac Studio have neither).
 _MEDIA_P_NO_MIC = {'win': 0.08, 'mac': 0.0, 'lin': 0.20}
 _MEDIA_P_BUILTIN_CAM = {'win': 0.78, 'mac': 0.0, 'lin': 0.45}
+# A camera media-devices.json has no camera_modes entry for: a 720p laptop
+# camera, as most are (width, height, frame rate of its largest mode).
+_DEFAULT_CAMERA_MODE = [1280, 720, 30]
 
 
 def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
@@ -1070,6 +1198,12 @@ def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
         for label, grp in list(outs):
             mics.append((f'Monitor of {label}', grp))
 
+    # What each device reports once captured (media-device-spoofing.patch):
+    # a camera's largest mode, a microphone's channel count.
+    modes = cat.get('camera_modes') or {}
+    mono = set(cat.get('mono_mics') or [])
+    cam_modes = [modes.get(c, _DEFAULT_CAMERA_MODE) for c, _ in cams]
+
     return {
         'mediaDevices:enabled': True,
         'mediaDevices:micros': len(mics),
@@ -1081,6 +1215,10 @@ def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
         'mediaDevices:webcamGroups': [g for _, g in cams],
         'mediaDevices:speakerLabels': [o for o, _ in outs],
         'mediaDevices:speakerGroups': [g for _, g in outs],
+        'mediaDevices:webcamMaxWidths': [m[0] for m in cam_modes],
+        'mediaDevices:webcamMaxHeights': [m[1] for m in cam_modes],
+        'mediaDevices:webcamMaxFrameRates': [m[2] for m in cam_modes],
+        'mediaDevices:microphoneChannels': [1 if m in mono else 2 for m, _ in mics],
     }
 
 
