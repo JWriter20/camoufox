@@ -130,6 +130,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "webauthn-capabilities-claimed-os",
         "webcodecs-h264-encode-windows",
         "webrtc-proxy-local-network",
+        "webrtc-proxy-no-udp-around",
         "webrtc-socks5-udp",
         "webrtc-topology-host-ipv6",
         "wheel-horizontal-claimed-os",

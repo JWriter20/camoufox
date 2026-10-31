@@ -1,0 +1,332 @@
+Camoufox: WebRTC host candidates follow the identity's interfaces, not the host's.
+
+Firefox gathers one host address per family on the machine's primary interface
+(without a capture: the default IPv4 address and the IPv6 address on the same
+interface), so the number of host candidates, their local preferences (the
+interface prioritizer puts IPv6 first: 0x7F, then IPv4 0x7E) and which one the
+srflx belongs to describe the machine's network. A dual-stack home machine shows
+two addresses with the srflx on the IPv4 one; Camoufox on a host without IPv6
+(a server, a container) showed one, at 0x7F, whatever machine the identity is.
+Measured on a Windows 11 machine with IPv4 and router-advertised ULAs on one
+adapter: 2 UDP + 2 TCP host candidates, srflx 0x7e1f, in-browser loopback
+connected; on a host without IPv6: 1 + 1, srflx 0x7f1f.
+
+With webrtc:hostipv6, content appends ::1 under the primary IPv4 interface's
+name to the STUN addresses (NrIceStunAddr::ClaimedHostIPv6) unless the host has
+a global IPv6 address of its own. nICEr keeps a loopback address on an interface
+that also has a real one (nr_stun_is_claimed_host_addr), which no host reports,
+and uses it as the default IPv6 address when the host has no IPv6 route. ::1
+pairs only with loopback candidates, so a connection inside the browser
+succeeds over it, as a real machine's does over its own IPv6, and nothing
+leaves the machine. Host candidates carry mDNS names, so a page never sees the
+address.
+
+A srflx Camoufox makes up when none formed (behind a proxy that carries no
+UDP) takes the priority nICEr would give it: its IPv4 base's interface
+preference (0x7E next to an IPv6 address, 0x7F alone), and that host's port.
+It had 0x7F1F fixed, and the first UDP host's port, which with an IPv6 address
+on the interface is the IPv6 one's.
+
+diff --git a/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp b/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
+index d99ae64..2811ae9 100644
+--- a/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
++++ b/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
+@@ -1820,6 +1820,8 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+   // The port of the fabricated srflx (if any), so the synthetic getStats
+   // entry below matches the candidate/SDP exactly. 0 = nothing fabricated.
+   uint16_t fabricatedSrflxPort = mFabricatedSrflxPort;
++  uint32_t fabricatedSrflxPriority =
++      mFabricatedSrflxPriority ? mFabricatedSrflxPriority : kSrflxPriority;
+   nsString fabricatedSrflxStatsId = mFabricatedSrflxStatsId;
+   nsString fabricatedSrflxUfrag = mFabricatedSrflxUfrag;
+ 
+@@ -1827,8 +1829,8 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+       ->Then(
+           GetMainThreadSerialEventTarget(), __func__,
+           [promise, window = mWindow, shouldSanitizeStats, ipv4Opt, ipv6Opt,
+-           proxiedAddresses, fabricatedSrflxPort, fabricatedSrflxStatsId,
+-           fabricatedSrflxUfrag](
++           proxiedAddresses, fabricatedSrflxPort, fabricatedSrflxPriority,
++           fabricatedSrflxStatsId, fabricatedSrflxUfrag](
+               UniquePtr<dom::RTCStatsReportInternal>&& aReport) {
+             // Camoufox: Sanitize IP addresses in stats before exposing to JS
+             if (shouldSanitizeStats && aReport) {
+@@ -1877,7 +1879,7 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+                 cand.mType.Construct(dom::RTCStatsType::Local_candidate);
+                 cand.mTimestamp.Construct(aReport->mTimestamp);
+                 cand.mCandidateType.Construct(dom::RTCIceCandidateType::Srflx);
+-                cand.mPriority.Construct(kSrflxPriority);
++                cand.mPriority.Construct(fabricatedSrflxPriority);
+                 cand.mAddress.Construct(NS_ConvertUTF8toUTF16(spoofIp.c_str()));
+                 cand.mPort.Construct(fabricatedSrflxPort);
+                 cand.mProtocol.Construct(NS_ConvertASCIItoUTF16("udp"));
+@@ -3536,12 +3538,20 @@ void PeerConnectionImpl::SendLocalIceCandidateToContent(
+     //  <port> typ host ..."
+     std::istringstream fields(candidate);
+     std::string foundation, component, transport, priority, address, port;
+-    if (!mSurfacedHostUdpPort &&
+-        (fields >> foundation >> component >> transport >> priority >>
++    if ((fields >> foundation >> component >> transport >> priority >>
+          address >> port) &&
+         (transport == "UDP" || transport == "udp")) {
+-      mSurfacedHostUdpPort =
+-          static_cast<uint16_t>(std::strtoul(port.c_str(), nullptr, 10));
++      // A srflx's base is the IPv4 host, which nICEr ranks below the same
++      // interface's IPv6 one (ice_candidate.cpp): keep the UDP host with the
++      // lowest priority, whose port and interface preference a fabricated
++      // srflx shares.
++      const uint32_t hostPriority =
++          static_cast<uint32_t>(std::strtoul(priority.c_str(), nullptr, 10));
++      if (!mSurfacedHostUdpPort || hostPriority < mSurfacedHostUdpPriority) {
++        mSurfacedHostUdpPriority = hostPriority;
++        mSurfacedHostUdpPort =
++            static_cast<uint16_t>(std::strtoul(port.c_str(), nullptr, 10));
++      }
+     }
+   }
+ 
+@@ -3839,6 +3849,14 @@ uint32_t PeerConnectionImpl::MaybeFabricateSrflxCandidate() {
+                 dom::RoverfoxStorageManager::UserContextId(mWindow.get()));
+   if (wantSrflx) {
+     mFabricatedSrflxPort = port;
++    // nICEr's srflx priority (ice_candidate.cpp): type preference 100, its
++    // IPv4 base's interface preference (0x7E when the interface has IPv6 too,
++    // webrtc:hostipv6), STUN priority 31 for the first server, component 1.
++    mFabricatedSrflxPriority =
++        mSurfacedHostUdpPriority
++            ? (100u << 24) | (mSurfacedHostUdpPriority & 0x00FF0000u) |
++                  (31u << 8) | 255u
++            : kSrflxPriority;
+     mFabricatedSrflxUfrag = NS_ConvertUTF8toUTF16(ufrag.c_str());
+     if (mFabricatedSrflxStatsId.IsEmpty()) {
+       // Candidate stats ids are 8 lowercase hex digits.
+@@ -3945,8 +3963,8 @@ uint32_t PeerConnectionImpl::MaybeFabricateSrflxCandidate() {
+   // getIPAddress) sees the public IP on this event -> "stun connection" + "ip"
+   // populate. A strong ref keeps the PC alive across the delay; bail if closed.
+   std::ostringstream srflx;
+-  srflx << "candidate:1 1 UDP " << kSrflxPriority << " " << spoofIp << " "
+-        << port << " typ srflx raddr 0.0.0.0 rport 0";
++  srflx << "candidate:1 1 UDP " << mFabricatedSrflxPriority << " " << spoofIp
++        << " " << port << " typ srflx raddr 0.0.0.0 rport 0";
+   std::string srflxCand = srflx.str();
+ 
+   RefPtr<PeerConnectionImpl> self(this);
+@@ -4911,6 +4929,14 @@ void PeerConnectionImpl::StunAddrsHandler::OnStunAddrsAvailable(
+     return;
+   }
+   pcw.impl()->mStunAddrs = addrs.Clone();
++  // Camoufox: the claimed machine's IPv6 host address. Stock gathers one
++  // host address per family on its primary interface; an identity whose
++  // machine has IPv6 there shows two (IPv6 first), on a host without it.
++  if (MaskConfig::GetBool("webrtc:hostipv6")) {
++    if (auto claimed = NrIceStunAddr::ClaimedHostIPv6(pcw.impl()->mStunAddrs)) {
++      pcw.impl()->mStunAddrs.AppendElement(*claimed);
++    }
++  }
+   pcw.impl()->mLocalAddrsRequestState = STUN_ADDR_REQUEST_COMPLETE;
+   pcw.impl()->FlushIceCtxOperationQueueIfReady();
+   // If this fails, ICE cannot succeed, but we need to still go through the
+diff --git a/dom/media/webrtc/jsapi/PeerConnectionImpl.h b/dom/media/webrtc/jsapi/PeerConnectionImpl.h
+index 140b259..9672a5d 100644
+--- a/dom/media/webrtc/jsapi/PeerConnectionImpl.h
++++ b/dom/media/webrtc/jsapi/PeerConnectionImpl.h
+@@ -747,6 +747,8 @@ class PeerConnectionImpl final
+   // Camoufox: the port of the fabricated srflx, so the getStats() synthetic
+   // entry reports the SAME port as the candidate string / SDP line. 0 = none.
+   uint16_t mFabricatedSrflxPort = 0;
++  // Camoufox: the fabricated srflx's priority, its candidate's and getStats()'.
++  uint32_t mFabricatedSrflxPriority = 0;
+   // Camoufox: the fabricated srflx's getStats() id, in the shape real candidate
+   // ids have (8 hex digits), fixed for the life of the connection.
+   nsString mFabricatedSrflxStatsId;
+@@ -758,6 +760,8 @@ class PeerConnectionImpl final
+   // set and shares the host's port as a real gather does.
+   bool mSurfacedHostCandidate = false;
+   uint16_t mSurfacedHostUdpPort = 0;
++  // Camoufox: that host's priority: of the UDP hosts, the lowest (IPv4).
++  uint32_t mSurfacedHostUdpPriority = 0;
+   // Camoufox: srflx and relay addresses outside the local network gathered
+   // behind a proxy. Nothing reaches the internet around the proxy, so each is
+   // the proxy's relay as a page's own STUN server saw it, or a TURN server's
+diff --git a/dom/media/webrtc/transport/nricestunaddr.cpp b/dom/media/webrtc/transport/nricestunaddr.cpp
+index 19fcd03..0cac342 100644
+--- a/dom/media/webrtc/transport/nricestunaddr.cpp
++++ b/dom/media/webrtc/transport/nricestunaddr.cpp
+@@ -109,4 +109,44 @@ void NrIceStunAddr::toNrLocalAddr(nr_local_addr& addr) const {
+   }
+ }
+ 
++/* static */
++Maybe<NrIceStunAddr> NrIceStunAddr::ClaimedHostIPv6(
++    const nsTArray<NrIceStunAddr>& aAddrs) {
++  const NrIceStunAddr* primary = nullptr;
++  for (const auto& a : aAddrs) {
++    nr_local_addr local;
++    a.toNrLocalAddr(local);
++    if (nr_transport_addr_is_loopback(&local.addr) ||
++        nr_transport_addr_is_link_local(&local.addr)) {
++      continue;
++    }
++    if (local.addr.ip_version == NR_IPV6) {
++      // Global unicast (2000::/3): the host's own default route finds it.
++      if ((a.address_.as<IPv6>().address[0] & 0xE0) == 0x20) {
++        return Nothing();
++      }
++      continue;
++    }
++    // A wired or Wi-Fi interface over a VPN or bridge when there is one.
++    const bool physical =
++        (static_cast<int>(a.interface_type_) &
++         (static_cast<int>(InterfaceType::Wired) |
++          static_cast<int>(InterfaceType::Wifi))) != 0;
++    if (!primary || (physical && !(static_cast<int>(primary->interface_type_) &
++                                   (static_cast<int>(InterfaceType::Wired) |
++                                    static_cast<int>(InterfaceType::Wifi))))) {
++      primary = &a;
++    }
++  }
++  if (!primary) {
++    return Nothing();
++  }
++  NrIceStunAddr claimed(*primary);
++  IPv6 loopback{};
++  loopback.address[15] = 1;
++  claimed.address_ = AsVariant(loopback);
++  claimed.temporary_ = true;
++  return Some(claimed);
++}
++
+ }  // namespace mozilla
+diff --git a/dom/media/webrtc/transport/nricestunaddr.h b/dom/media/webrtc/transport/nricestunaddr.h
+index 682d926..70306c3 100644
+--- a/dom/media/webrtc/transport/nricestunaddr.h
++++ b/dom/media/webrtc/transport/nricestunaddr.h
+@@ -8,7 +8,9 @@
+ #include <array>
+ #include <cstdint>
+ 
++#include "mozilla/Maybe.h"
+ #include "mozilla/Variant.h"
++#include "nsTArray.h"
+ #include "nsString.h"
+ 
+ typedef struct nr_local_addr_ nr_local_addr;
+@@ -32,6 +34,15 @@ class NrIceStunAddr {
+ 
+   void toNrLocalAddr(nr_local_addr& addr) const;
+ 
++  // Camoufox: the IPv6 host address of an identity whose machine has one on
++  // its primary interface (webrtc:hostipv6), for a host that has none of its
++  // own: ::1 under the primary IPv4 interface's name, so it pairs only with
++  // another loopback candidate (in-browser loopback connects, as stock's ULA
++  // does) and nr_stun_is_claimed_host_addr keeps it. Nothing when aAddrs has a
++  // global IPv6 address or no IPv4 interface.
++  static Maybe<NrIceStunAddr> ClaimedHostIPv6(
++      const nsTArray<NrIceStunAddr>& aAddrs);
++
+   friend struct IPC::ParamTraits<NrIceStunAddr>;
+ 
+  private:
+diff --git a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp b/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp
+index 6a9d04e..abcab75 100644
+--- a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp
++++ b/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp
+@@ -636,8 +636,22 @@ static int nr_ice_get_default_local_address(nr_ice_ctx *ctx, int ip_version, nr_
+     nr_transport_addr default_addr;
+     int i;
+ 
++    /* Camoufox: an identity whose machine has an IPv6 address on its
++     * primary interface presents the claimed address
++     * (nr_stun_is_claimed_host_addr) as its IPv6 default, whatever this
++     * host's own IPv6 route finds: on a host whose only IPv6 is a VPN's
++     * (tailscale's fd7a::/48 ULA), that route would put the VPN's address in
++     * the page. */
++    for (i=0; ip_version == NR_IPV6 && i < addr_ct; ++i) {
++      if (nr_stun_is_claimed_host_addr(addrs, addr_ct, i)) {
++        if ((r=nr_local_addr_copy(addrp, &addrs[i])))
++          ABORT(r);
++        return 0;
++      }
++    }
++
+     if ((r=nr_ice_get_default_address(ctx, ip_version, &default_addr)))
+-        ABORT(r);
++      ABORT(r);
+ 
+     for (i=0; i < addr_ct; ++i) {
+       // if default addr is found in local addrs, copy the more fully
+@@ -698,6 +712,21 @@ static int nr_ice_get_assoc_interface_address(nr_local_addr* default_local_addr,
+       }
+     }
+ 
++    /* Camoufox: the claimed IPv6 address belongs to the default interface,
++     * whichever interface ClaimedHostIPv6 named it after (it cannot tell the
++     * default route's: on Linux the interface types it ranks by are unknown,
++     * and it took tailscale0's). */
++    for (i=0; _status && ip_version == NR_IPV6 && i<addr_ct; ++i) {
++      if (nr_stun_is_claimed_host_addr(local_addrs, addr_ct, i)) {
++        if (r=nr_local_addr_copy(assoc_addrp, &local_addrs[i])) {
++          ABORT(r);
++        }
++        (void)strlcpy(assoc_addrp->addr.ifname, default_local_addr->addr.ifname,
++                      sizeof(assoc_addrp->addr.ifname));
++        _status = 0;
++      }
++    }
++
+   abort:
+     return(_status);
+   }
+diff --git a/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.cpp b/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.cpp
+index 9449432..cd3f138 100644
+--- a/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.cpp
++++ b/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.cpp
+@@ -72,6 +72,24 @@ nr_stun_filter_find_first_addr_with_ifname(nr_local_addr addrs[], int count, con
+   return count;
+ }
+ 
++int
++nr_stun_is_claimed_host_addr(nr_local_addr addrs[], int count, int i)
++{
++    if (addrs[i].addr.ip_version != NR_IPV6 ||
++        !nr_transport_addr_is_loopback(&addrs[i].addr)) {
++      return 0;
++    }
++    for (int j = 0; j < count; ++j) {
++      if (j != i &&
++          !strncmp(addrs[i].addr.ifname, addrs[j].addr.ifname,
++                   sizeof(addrs[i].addr.ifname)) &&
++          !nr_transport_addr_is_loopback(&addrs[j].addr)) {
++        return 1;
++      }
++    }
++    return 0;
++}
++
+ static int
+ nr_stun_filter_addrs_for_ifname(nr_local_addr src[], const int src_begin, const int src_end, nr_local_addr dest[], int *dest_index, int remove_loopback, int remove_link_local) {
+   int r, _status;
+@@ -122,7 +140,8 @@ nr_stun_filter_addrs_for_ifname(nr_local_addr src[], const int src_begin, const
+         r_log(NR_LOG_STUN, LOG_WARNING, "Ignoring duplicate addr");
+         /* skip src[i], it's a duplicate */
+     }
+-    else if (remove_loopback && nr_transport_addr_is_loopback(&src[i].addr)) {
++    else if (remove_loopback && nr_transport_addr_is_loopback(&src[i].addr) &&
++             !nr_stun_is_claimed_host_addr(src, src_end, i)) {
+         r_log(NR_LOG_STUN, LOG_WARNING, "Ignoring loopback addr");
+         /* skip src[i], it's a loopback */
+     }
+diff --git a/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.h b/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.h
+index 522bd92..98ac7c1 100644
+--- a/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.h
++++ b/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.h
+@@ -39,5 +39,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ int nr_stun_get_addrs(nr_local_addr addrs[], int maxaddrs, int *count);
+ int nr_stun_filter_addrs(nr_local_addr addrs[], int remove_loopback, int remove_link_local, int *count);
++/* Camoufox: whether addrs[i] is the IPv6 host address an identity claims
++ * (WebRTC topology): a loopback address on an interface that also has a real
++ * one, which no host reports for itself. */
++int nr_stun_is_claimed_host_addr(nr_local_addr addrs[], int count, int i);
+ 
+ #endif

@@ -311,7 +311,20 @@ def record_media():
     before = copy.deepcopy(preset_mix)
     fp.set_media_devices_defaults(preset_mix)
     defaults.append({'config': before, 'salt': '0', 'hash': h(preset_mix)})
-    write('media.json', {'cases': cases, 'defaults': defaults})
+    hostipv6 = []
+    for i in range(80):
+        config = {'navigator.userAgent': f'ua{i}', 'navigator.platform': 'Win32', 'screen.width': 1920}
+        if i % 10 == 1:
+            config['network:ipv4Only'] = True
+        elif i % 10 == 2:
+            config['webrtc:ipv6'] = '2001:db8::1'
+        elif i % 10 == 3:
+            config['webrtc:hostipv6'] = False
+        salt = (0, 7, 2**64 - 1)[i % 3]
+        before = copy.deepcopy(config)
+        fp.set_host_ipv6_default(config, salt)
+        hostipv6.append({'config': before, 'salt': str(salt), 'out': config['webrtc:hostipv6']})
+    write('media.json', {'cases': cases, 'defaults': defaults, 'hostipv6': hostipv6})
 
 
 def exact(o) -> str:
