@@ -4,9 +4,9 @@ Verify WebRTC behind a proxy keeps stock's local behaviour without leaking.
 proxy_only_if_behind_proxy made Firefox refuse UDP outright for a page loaded
 through a proxy: no host candidate, and no connection even between two peers on
 this machine, where stock Firefox connects. webrtc-proxy-local-network.patch
-keeps the UDP host sockets but lets them send only to the local network, and
-skips STUN and TURN servers outside it, so nothing goes around the proxy to the
-internet.
+keeps the UDP host sockets; webrtc-socks5-udp.patch lets them send off this
+host only through the proxy's UDP relay, so nothing goes around the proxy, and
+a page's two peer connections still connect over this host's own address.
 
 The page is served by a one-file HTTP proxy, so the browser loads it through a
 proxy. The STUN server is a TEST-NET address that never answers: a browser that

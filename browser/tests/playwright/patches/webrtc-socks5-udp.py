@@ -5,10 +5,11 @@ A real machine at the proxy's exit address sends its STUN Binding requests from
 there, so a page running its own STUN server sees the request arrive and gets
 back the srflx it mapped. Behind a proxy, Camoufox used to send no internet UDP
 at all and fabricate the srflx from the identity's `webrtc:ipv4`: the page's
-server never heard from it. webrtc-socks5-udp.patch sends every datagram for an
-address outside the local network through a UDP ASSOCIATE relay (RFC 1928 §7)
-on the context's own SOCKS5 proxy, and names STUN servers to it by host name,
-so the name is resolved by the proxy.
+server never heard from it. webrtc-socks5-udp.patch sends every datagram that
+would leave this host through a UDP ASSOCIATE relay (RFC 1928 §7) on the
+context's own SOCKS5 proxy, and names STUN servers to it by host name, so the
+name is resolved by the proxy. (webrtc-proxy-no-udp-around.py covers the local
+network: no exception there either.)
 
 The guard runs its own SOCKS5 proxies and the internet behind them. Each relay
 appears on that internet under a TEST-NET address of its own, and the page's
