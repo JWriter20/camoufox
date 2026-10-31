@@ -1,0 +1,194 @@
+Camoufox: WebRTC host candidates follow the identity's interfaces, not the host's.
+
+Firefox gathers one host address per family on the machine's primary interface
+(without a capture: the default IPv4 address and the IPv6 address on the same
+interface), so the number of host candidates, their local preferences (the
+interface prioritizer puts IPv6 first: 0x7F, then IPv4 0x7E) and which one the
+srflx belongs to describe the machine's network. A dual-stack home machine shows
+two addresses with the srflx on the IPv4 one; Camoufox on a host without IPv6
+(a server, a container) showed one, at 0x7F, whatever machine the identity is.
+Measured on a Windows 11 machine with IPv4 and router-advertised ULAs on one
+adapter: 2 UDP + 2 TCP host candidates, srflx 0x7e1f, in-browser loopback
+connected; on a host without IPv6: 1 + 1, srflx 0x7f1f.
+
+With webrtc:hostipv6, content appends ::1 under the primary IPv4 interface's
+name to the STUN addresses (NrIceStunAddr::ClaimedHostIPv6) unless the host has
+a global IPv6 address of its own. nICEr keeps a loopback address on an interface
+that also has a real one (nr_stun_is_claimed_host_addr), which no host reports,
+and uses it as the default IPv6 address when the host has no IPv6 route. ::1
+pairs only with loopback candidates, so a connection inside the browser
+succeeds over it, as a real machine's does over its own IPv6, and nothing
+leaves the machine. Host candidates carry mDNS names, so a page never sees the
+address.
+
+diff --git a/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp b/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
+--- a/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
++++ b/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
+@@ -4893,6 +4893,14 @@
+     return;
+   }
+   pcw.impl()->mStunAddrs = addrs.Clone();
++  // Camoufox: the claimed machine's IPv6 host address. Stock gathers one
++  // host address per family on its primary interface; an identity whose
++  // machine has IPv6 there shows two (IPv6 first), on a host without it.
++  if (MaskConfig::GetBool("webrtc:hostipv6")) {
++    if (auto claimed = NrIceStunAddr::ClaimedHostIPv6(pcw.impl()->mStunAddrs)) {
++      pcw.impl()->mStunAddrs.AppendElement(*claimed);
++    }
++  }
+   pcw.impl()->mLocalAddrsRequestState = STUN_ADDR_REQUEST_COMPLETE;
+   pcw.impl()->FlushIceCtxOperationQueueIfReady();
+   // If this fails, ICE cannot succeed, but we need to still go through the
+diff --git a/dom/media/webrtc/transport/nricestunaddr.cpp b/dom/media/webrtc/transport/nricestunaddr.cpp
+--- a/dom/media/webrtc/transport/nricestunaddr.cpp
++++ b/dom/media/webrtc/transport/nricestunaddr.cpp
+@@ -109,4 +109,44 @@
+   }
+ }
+ 
++/* static */
++Maybe<NrIceStunAddr> NrIceStunAddr::ClaimedHostIPv6(
++    const nsTArray<NrIceStunAddr>& aAddrs) {
++  const NrIceStunAddr* primary = nullptr;
++  for (const auto& a : aAddrs) {
++    nr_local_addr local;
++    a.toNrLocalAddr(local);
++    if (nr_transport_addr_is_loopback(&local.addr) ||
++        nr_transport_addr_is_link_local(&local.addr)) {
++      continue;
++    }
++    if (local.addr.ip_version == NR_IPV6) {
++      // Global unicast (2000::/3): the host's own default route finds it.
++      if ((a.address_.as<IPv6>().address[0] & 0xE0) == 0x20) {
++        return Nothing();
++      }
++      continue;
++    }
++    // A wired or Wi-Fi interface over a VPN or bridge when there is one.
++    const bool physical =
++        (static_cast<int>(a.interface_type_) &
++         (static_cast<int>(InterfaceType::Wired) |
++          static_cast<int>(InterfaceType::Wifi))) != 0;
++    if (!primary || (physical && !(static_cast<int>(primary->interface_type_) &
++                                   (static_cast<int>(InterfaceType::Wired) |
++                                    static_cast<int>(InterfaceType::Wifi))))) {
++      primary = &a;
++    }
++  }
++  if (!primary) {
++    return Nothing();
++  }
++  NrIceStunAddr claimed(*primary);
++  IPv6 loopback{};
++  loopback.address[15] = 1;
++  claimed.address_ = AsVariant(loopback);
++  claimed.temporary_ = true;
++  return Some(claimed);
++}
++
+ }  // namespace mozilla
+diff --git a/dom/media/webrtc/transport/nricestunaddr.h b/dom/media/webrtc/transport/nricestunaddr.h
+--- a/dom/media/webrtc/transport/nricestunaddr.h
++++ b/dom/media/webrtc/transport/nricestunaddr.h
+@@ -8,7 +8,9 @@
+ #include <array>
+ #include <cstdint>
+ 
++#include "mozilla/Maybe.h"
+ #include "mozilla/Variant.h"
++#include "nsTArray.h"
+ #include "nsString.h"
+ 
+ typedef struct nr_local_addr_ nr_local_addr;
+@@ -32,6 +34,15 @@
+ 
+   void toNrLocalAddr(nr_local_addr& addr) const;
+ 
++  // Camoufox: the IPv6 host address of an identity whose machine has one on
++  // its primary interface (webrtc:hostipv6), for a host that has none of its
++  // own: ::1 under the primary IPv4 interface's name, so it pairs only with
++  // another loopback candidate (in-browser loopback connects, as stock's ULA
++  // does) and nr_stun_is_claimed_host_addr keeps it. Nothing when aAddrs has a
++  // global IPv6 address or no IPv4 interface.
++  static Maybe<NrIceStunAddr> ClaimedHostIPv6(
++      const nsTArray<NrIceStunAddr>& aAddrs);
++
+   friend struct IPC::ParamTraits<NrIceStunAddr>;
+ 
+  private:
+diff --git a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp b/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp
+--- a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp
++++ b/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_ctx.cpp
+@@ -636,8 +636,19 @@
+     nr_transport_addr default_addr;
+     int i;
+ 
+-    if ((r=nr_ice_get_default_address(ctx, ip_version, &default_addr)))
+-        ABORT(r);
++    if ((r=nr_ice_get_default_address(ctx, ip_version, &default_addr))) {
++      /* Camoufox: an identity whose machine has an IPv6 address on its
++       * primary interface, on a host without an IPv6 route, presents the
++       * claimed address (nr_stun_is_claimed_host_addr) as its default. */
++      for (i=0; ip_version == NR_IPV6 && i < addr_ct; ++i) {
++        if (nr_stun_is_claimed_host_addr(addrs, addr_ct, i)) {
++          if ((r=nr_local_addr_copy(addrp, &addrs[i])))
++            ABORT(r);
++          return 0;
++        }
++      }
++      ABORT(r);
++    }
+ 
+     for (i=0; i < addr_ct; ++i) {
+       // if default addr is found in local addrs, copy the more fully
+diff --git a/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.cpp b/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.cpp
+--- a/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.cpp
++++ b/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.cpp
+@@ -72,6 +72,24 @@
+   return count;
+ }
+ 
++int
++nr_stun_is_claimed_host_addr(nr_local_addr addrs[], int count, int i)
++{
++    if (addrs[i].addr.ip_version != NR_IPV6 ||
++        !nr_transport_addr_is_loopback(&addrs[i].addr)) {
++      return 0;
++    }
++    for (int j = 0; j < count; ++j) {
++      if (j != i &&
++          !strncmp(addrs[i].addr.ifname, addrs[j].addr.ifname,
++                   sizeof(addrs[i].addr.ifname)) &&
++          !nr_transport_addr_is_loopback(&addrs[j].addr)) {
++        return 1;
++      }
++    }
++    return 0;
++}
++
+ static int
+ nr_stun_filter_addrs_for_ifname(nr_local_addr src[], const int src_begin, const int src_end, nr_local_addr dest[], int *dest_index, int remove_loopback, int remove_link_local) {
+   int r, _status;
+@@ -122,7 +140,8 @@
+         r_log(NR_LOG_STUN, LOG_WARNING, "Ignoring duplicate addr");
+         /* skip src[i], it's a duplicate */
+     }
+-    else if (remove_loopback && nr_transport_addr_is_loopback(&src[i].addr)) {
++    else if (remove_loopback && nr_transport_addr_is_loopback(&src[i].addr) &&
++             !nr_stun_is_claimed_host_addr(src, src_end, i)) {
+         r_log(NR_LOG_STUN, LOG_WARNING, "Ignoring loopback addr");
+         /* skip src[i], it's a loopback */
+     }
+diff --git a/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.h b/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.h
+--- a/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.h
++++ b/dom/media/webrtc/transport/third_party/nICEr/src/stun/addrs.h
+@@ -39,5 +39,9 @@
+ 
+ int nr_stun_get_addrs(nr_local_addr addrs[], int maxaddrs, int *count);
+ int nr_stun_filter_addrs(nr_local_addr addrs[], int remove_loopback, int remove_link_local, int *count);
++/* Camoufox: whether addrs[i] is the IPv6 host address an identity claims
++ * (WebRTC topology): a loopback address on an interface that also has a real
++ * one, which no host reports for itself. */
++int nr_stun_is_claimed_host_addr(nr_local_addr addrs[], int count, int i);
+ 
+ #endif

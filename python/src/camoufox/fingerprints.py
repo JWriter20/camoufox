@@ -923,6 +923,37 @@ def set_media_devices_defaults(config: Dict[str, Any], salt: int = 0) -> None:
     config.update(draw_media_devices(os_key, identity_seed(config, salt)))
 
 
+
+# Share of machines whose one adapter carries IPv6 next to IPv4. No recorded
+# corpus has the ICE shape; this is Google's IPv6 adoption figure (~45% of its
+# users in 2025, google.com/ipv6/statistics), which counts global IPv6 only,
+# so it is a lower bound. A real-device measurement replaces it.
+HOST_IPV6_SHARE = 0.45
+
+
+def set_host_ipv6_default(config: Dict[str, Any], salt: int = 0) -> None:
+    """Draw the identity's network shape: one adapter, IPv4 only or IPv4 + IPv6.
+
+    Without a capture permission stock Firefox gathers the default adapter's
+    IPv4 address and the IPv6 address on that same adapter, so a page sees
+    one or two host candidates per transport; webrtc:hostipv6 makes the
+    browser gather the second (webrtc-topology-host-ipv6.patch). Wi-Fi and
+    Ethernet look alike with one adapter, and a second adapter only shows
+    after a capture grant, so every identity has one. Nothing is drawn when
+    the caller set it.
+    """
+    if 'webrtc:hostipv6' in config:
+        return
+    if config.get('network:ipv4Only'):
+        # The host's own IPv6 is turned off: a machine on an IPv4-only network.
+        config['webrtc:hostipv6'] = False
+    elif 'webrtc:ipv6' in config:
+        # The exit address is IPv6, so the machine has IPv6.
+        config['webrtc:hostipv6'] = True
+    else:
+        draw = Random(identity_seed(config, salt) ^ 0x1CE6).random()
+        config['webrtc:hostipv6'] = draw < HOST_IPV6_SHARE
+
 _MEDIA_DEVICES_CACHE: Optional[Dict[str, Any]] = None
 
 

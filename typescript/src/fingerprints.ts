@@ -1158,6 +1158,36 @@ export function setMediaDevicesDefaults(
 	Object.assign(config, drawMediaDevices(osKey, identitySeed(config, salt)));
 }
 
+/**
+ * Share of machines whose one adapter carries IPv6 next to IPv4. No recorded
+ * corpus has the ICE shape; this is Google's IPv6 adoption figure (~45% of its
+ * users in 2025, google.com/ipv6/statistics), which counts global IPv6 only,
+ * so it is a lower bound. A real-device measurement replaces it.
+ */
+export const HOST_IPV6_SHARE = 0.45;
+
+/**
+ * Draw the identity's network shape: one adapter, IPv4 only or IPv4 + IPv6
+ * (webrtc:hostipv6, webrtc-topology-host-ipv6.patch). Mirrors Python's
+ * set_host_ipv6_default; nothing is drawn when the caller set it.
+ */
+export function setHostIpv6Default(
+	config: Config,
+	salt: number | bigint = 0,
+): void {
+	if ("webrtc:hostipv6" in config) return;
+	if (config["network:ipv4Only"]) {
+		// The host's own IPv6 is turned off: a machine on an IPv4-only network.
+		config["webrtc:hostipv6"] = false;
+	} else if ("webrtc:ipv6" in config) {
+		// The exit address is IPv6, so the machine has IPv6.
+		config["webrtc:hostipv6"] = true;
+	} else {
+		const draw = rng((identitySeed(config, salt) ^ 0x1ce6) >>> 0).random();
+		config["webrtc:hostipv6"] = draw < HOST_IPV6_SHARE;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // WebGL <-> screen coherence (#729)
 // ---------------------------------------------------------------------------

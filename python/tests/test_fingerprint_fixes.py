@@ -15,6 +15,7 @@ from camoufox.fingerprints import (
     clamp_window_position,
     fix_navigator_arch,
     follow_baseline_protection,
+    set_host_ipv6_default,
     set_media_devices_defaults,
 )
 
@@ -347,3 +348,41 @@ class TestFixHardwareConcurrency:
         c = {"navigator.hardwareConcurrency": 8}
         fp.fix_hardware_concurrency(c)
         assert c["navigator.hardwareConcurrency"] == 8
+
+
+class TestHostIpv6Default:
+    """One adapter, IPv4 only or IPv4 + IPv6: the two network shapes an identity draws."""
+
+    def _config(self, i=0, **extra):
+        return {"navigator.userAgent": f"ua{i}", "navigator.platform": "Win32", **extra}
+
+    def test_draw_is_seeded_by_the_identity(self):
+        a, b = self._config(), self._config()
+        set_host_ipv6_default(a, 7)
+        set_host_ipv6_default(b, 7)
+        assert a["webrtc:hostipv6"] is b["webrtc:hostipv6"]
+
+    def test_share_follows_the_population(self):
+        on = 0
+        for i in range(2000):
+            c = self._config(i)
+            set_host_ipv6_default(c, i)
+            on += c["webrtc:hostipv6"]
+        assert 0.40 < on / 2000 < 0.50
+
+    def test_ipv4_only_network_has_no_ipv6(self):
+        for i in range(50):
+            c = self._config(i, **{"network:ipv4Only": True})
+            set_host_ipv6_default(c, i)
+            assert c["webrtc:hostipv6"] is False
+
+    def test_ipv6_exit_has_ipv6(self):
+        for i in range(50):
+            c = self._config(i, **{"webrtc:ipv6": "2001:db8::1"})
+            set_host_ipv6_default(c, i)
+            assert c["webrtc:hostipv6"] is True
+
+    def test_caller_value_wins(self):
+        c = self._config(**{"webrtc:hostipv6": False, "webrtc:ipv6": "2001:db8::1"})
+        set_host_ipv6_default(c)
+        assert c["webrtc:hostipv6"] is False

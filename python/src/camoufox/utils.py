@@ -22,7 +22,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, public_ipv6, valid_ipv4, valid_ipv6
@@ -1583,6 +1583,9 @@ def launch_options(
         and not is_domain_set(config, 'geolocation')
     ):
         LeakWarning.warn('proxy_without_geoip')
+
+    # After geoip, which decides whether the machine has IPv6 at all.
+    set_host_ipv6_default(config, _identity_salt)
 
     # Set locale
     if locale:
