@@ -280,6 +280,7 @@ class TestGeoipIPv6:
     def test_no_ipv6_route_is_an_ipv4_only_network(self, monkeypatch, isolated_launch_dependencies):
         sent = self._launch(monkeypatch, None, geoip=self.IPV4)
         assert sent["network:ipv4Only"] is True
+        assert sent["webrtc:hostipv6"] is False
 
     @pytest.mark.parametrize("host_ipv6", ["2001:db8::2", "2001:db8::3"], ids=["elsewhere", "unknown"])
     def test_ipv6_that_disagrees_is_dropped_with_a_warning(
@@ -302,6 +303,7 @@ class TestGeoipIPv6:
         sent = self._launch(monkeypatch, None, geoip="2001:db8::1")
         assert "network:ipv4Only" not in sent
         assert sent["webrtc:ipv6"] == "2001:db8::1"
+        assert sent["webrtc:hostipv6"] is True
 
 
 class TestPrefsReachStartup:

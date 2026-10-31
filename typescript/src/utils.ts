@@ -39,6 +39,7 @@ import {
 	loadOsFonts,
 	raiseScreenToModernFloor,
 	Screen,
+	setHostIpv6Default,
 	setMediaDevicesDefaults,
 	targetOsFromPlatform,
 	WINDOWS_11_MARKER_FONTS,
@@ -1914,6 +1915,9 @@ export async function launchOptions({
 	) {
 		LeakWarning.warn("proxy_without_geoip");
 	}
+
+	// After geoip, which decides whether the machine has IPv6 at all.
+	setHostIpv6Default(config, salt);
 
 	// Set locale
 	if (pyTruthy(locale)) {
