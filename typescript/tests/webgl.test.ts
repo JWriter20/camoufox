@@ -1,5 +1,5 @@
 /**
- * WebGL: ports of pythonlib/tests/test_webgl.py and
+ * WebGL: ports of python/tests/test_webgl.py and
  * test_webgl_screen_consistency.py. The seeded draws themselves are pinned
  * against Python in identity-golden.test.ts. (test_no_coherent_gpu_raises is
  * not ported: it needs fpgen's trace replaced, which an ES module cannot do.)
@@ -48,7 +48,11 @@ const SHARED_LIMITS = [
 ];
 const GTX_980_FIXTURE = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
-	"../../pythonlib/tests/data/webgl-gtx980-linux.json",
+	"../../python/tests/data/webgl-gtx980-linux.json",
+);
+const PROPERTIES = path.resolve(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"../../browser/settings/properties.json",
 );
 
 describe.skipIf(!MODEL.ok)("webgl (test_webgl.py)", () => {
@@ -61,7 +65,33 @@ describe.skipIf(!MODEL.ok)("webgl (test_webgl.py)", () => {
 	)("the converter reproduces the recorded device", () => {
 		// What the retired webgl_data.db gave for this GPU. Parameters are
 		// compared where the old row had a value, less the UNMASKED_* strings.
-		const old = JSON.parse(fs.readFileSync(GTX_980_FIXTURE, "utf-8"));
+		// Keys since marked removed (contextAttributes) are no longer sent.
+		const removed = new Set(
+			(
+				JSON.parse(fs.readFileSync(PROPERTIES, "utf-8")) as Array<{
+					property: string;
+					removed?: string;
+				}>
+			)
+				.filter((entry) => entry.removed)
+				.map((entry) => entry.property),
+		);
+		const old = Object.fromEntries(
+			Object.entries(
+				JSON.parse(fs.readFileSync(GTX_980_FIXTURE, "utf-8")),
+			).filter(([key]) => !removed.has(key)),
+		);
+		// WebGL1's line width range is WebGL2's since Firefox 156, and Firefox
+		// 158 adds EXT_polygon_offset_clamp on this desktop GL device.
+		old["webGl:parameters"]["33902"] = old["webGl2:parameters"]["33902"];
+		for (const key of [
+			"webGl:supportedExtensions",
+			"webGl2:supportedExtensions",
+		]) {
+			old[key] = [...old[key], "EXT_polygon_offset_clamp"].sort((a, b) =>
+				a.toLowerCase() < b.toLowerCase() ? -1 : 1,
+			);
+		}
 		const fresh = JSON.parse(
 			orjsonDumps(webglForGpu("lin", ...GTX_980_LINUX, 0), false),
 		);
@@ -219,6 +249,101 @@ describe.skipIf(!MODEL.ok)("webgl (test_webgl.py)", () => {
 			),
 		).toBe(false);
 	});
+
+	it("Windows exposes EXT_depth_clamp on every device", () => {
+		// ANGLE's D3D11 backend reports depth clamp on every GPU from Firefox
+		// 156; fpgen's Windows records come from Firefox 146, which did not.
+		for (const key of [
+			"webGl:supportedExtensions",
+			"webGl2:supportedExtensions",
+		]) {
+			for (const exts of extensions("win", key)) {
+				if (exts.size) expect(exts.has("EXT_depth_clamp"), key).toBe(true);
+			}
+		}
+	});
+
+	it("EXT_polygon_offset_clamp follows the backend", () => {
+		// Firefox 158 exposes it on ANGLE's D3D11 backend from feature level 10_0
+		// (every device with WebGL2) and on Linux desktop GL (the recordings with
+		// EXT_depth_clamp), never on macOS's GL 4.1; fpgen's Firefox 146 records
+		// predate it.
+		for (const os of OSES) {
+			for (let s = 0; s < 100; s++) {
+				const config = sampleWebglForScreen(os, 1920, 1080, s);
+				const desktopGl = (
+					config["webGl:supportedExtensions"] as string[]
+				).includes("EXT_depth_clamp");
+				const want = { win: config.webGl2Enabled, lin: desktopGl, mac: false }[
+					os
+				];
+				for (const key of [
+					"webGl:supportedExtensions",
+					"webGl2:supportedExtensions",
+				]) {
+					if (key in config) {
+						expect(
+							(config[key] as string[]).includes("EXT_polygon_offset_clamp"),
+							`${os} ${s} ${key}`,
+						).toBe(want);
+					}
+				}
+			}
+		}
+	});
+
+	it("extensions are in Firefox's order", () => {
+		// WebGLExtensionID order: alphabetical, ignoring case.
+		const firefoxOrder = (exts: string[]) =>
+			[...exts].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : 1));
+		for (const os of OSES) {
+			for (let s = 0; s < 100; s++) {
+				const config = sampleWebglForScreen(os, 1920, 1080, s);
+				for (const key of [
+					"webGl:supportedExtensions",
+					"webGl2:supportedExtensions",
+				]) {
+					const exts: string[] = config[key] ?? [];
+					expect(exts, `${os} ${s} ${key}`).toEqual(firefoxOrder(exts));
+				}
+			}
+		}
+	});
+
+	it("WebGL1's line width range is WebGL2's", () => {
+		// Firefox 156 creates WebGL1 on the same GL profile as WebGL2. 146
+		// forced a compatibility profile for WebGL1, where fpgen recorded the
+		// driver's wide-line range (Linux: [1, 2048], [1, 7.375], [1, 10] ...).
+		for (const os of OSES) {
+			for (let s = 0; s < 100; s++) {
+				const config = sampleWebglForScreen(os, 1920, 1080, s);
+				if (!config.webGl2Enabled) continue;
+				expect(config["webGl:parameters"]["33902"], `${os} ${s}`).toEqual(
+					config["webGl2:parameters"]["33902"],
+				);
+			}
+		}
+	});
+});
+
+it("an extension the backend adds takes Firefox's position", () => {
+	const recorded = {
+		vendor: "v",
+		renderer: "r",
+		params: {},
+		shaderPrecisionFormats: [],
+		supportedExtensions: [
+			"ANGLE_instanced_arrays",
+			"EXT_color_buffer_half_float",
+			"EXT_disjoint_timer_query",
+		],
+	};
+	expect(toConfig(recorded, [], "win")["webGl:supportedExtensions"]).toEqual([
+		"ANGLE_instanced_arrays",
+		"EXT_color_buffer_half_float",
+		"EXT_depth_clamp",
+		"EXT_disjoint_timer_query",
+	]);
 });
 
 it("draft extensions are filtered on every OS", () => {
@@ -226,7 +351,7 @@ it("draft extensions are filtered on every OS", () => {
 		vendor: "v",
 		renderer: "r",
 		contextAttributes: {},
-		params: {},
+		params: { "33902": { value: [1, 1] } },
 		shaderPrecisionFormats: [],
 		supportedExtensions: [
 			"ANGLE_instanced_arrays",
@@ -244,11 +369,16 @@ it("draft extensions are filtered on every OS", () => {
 	};
 	for (const os of OSES) {
 		const config = toConfig(recorded, webgl2, os);
+		// A device with WebGL2 is D3D11 feature level 10_0 or above, where ANGLE
+		// also clamps polygon offsets; the recording carries no desktop GL mark.
+		const backend =
+			os === "win" ? ["EXT_depth_clamp", "EXT_polygon_offset_clamp"] : [];
 		expect(config["webGl:supportedExtensions"]).toEqual([
 			"ANGLE_instanced_arrays",
+			...backend,
 		]);
 		expect(config["webGl2:supportedExtensions"]).toEqual(
-			os === "win" ? ["OVR_multiview2"] : [],
+			os === "win" ? [...backend, "OVR_multiview2"] : [],
 		);
 	}
 });

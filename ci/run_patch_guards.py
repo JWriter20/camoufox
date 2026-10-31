@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Patch-guard gates: tests/patches/*.py, one standalone guard per shipped behaviour.
+"""Patch-guard gates: browser/tests/playwright/patches/*.py, one standalone guard per shipped behaviour.
 
-Whether the patches *apply* is the build's job (scripts/patch.py fails it).
+Whether the patches *apply* is the build's job (browser/scripts/patch.py fails it).
 These check that what they do still works in the built browser -- the most
 direct evidence that a Firefox bump did not quietly neuter a patch that still
 applies cleanly, which is the failure mode a compile check cannot catch.
@@ -32,23 +32,37 @@ from typing import Dict, List, Optional, Tuple
 from . import results as evidence
 from ._util import EVIDENCE_DIR, REPO_ROOT, log, run
 
-GUARD_DIR = REPO_ROOT / "tests" / "patches"
+GUARD_DIR = REPO_ROOT / "browser" / "tests" / "playwright" / "patches"
 
 
 GROUPS: Dict[str, Tuple[str, ...]] = {
     "spoofing": (
         "animation-timing",
+        "audio-matches-stock",
+        "baseline-protections",
+        "context-app-version",
+        "context-lists-across-processes",
+        "context-os-system-font",
+        "display-scale-resolution",
         "fingerprint-setter-seal",
+        "ipv4-only-network",
         "locale-explicit-names",
         "media-devices-coherence",
         "spoofed-voice-speaks",
         "startup-prefs",
+        "system-font-alias-stall",
         "system-ui-font-spoofing",
+        "timezone-stable",
         "touchscreen-digitizer",
+        "webgl-live-state",
+        "webgl-renderer-pair",
+        "webrtc-context-ip",
+        "webrtc-port-range",
         "worker-config-reads",
     ),
     "automation": (
         "addons-install-once",
+        "debug-logging-off",
         "force-scope-access",
         "humanize-edge-deadlock",
         "humanize-mouse-trajectory",
@@ -60,18 +74,30 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "mouse-boundary-sweep",
         "near-edge-mouse-deadlock",
         "noop-mousemove-deadlock",
+        "occluded-window-active",
+        "pointer-lock-offscreen",
+        "screenshot-canvas-release",
         "trusted-events",
+        "ubo-lists-frozen",
         "visible-automation-cues",
+        "webdriver-bidi-tabs",
     ),
     "parity": (
+        "certificate-revocations",
         "contentaccessible-parity",
+        "firefox-version-pin",
+        "getter-cost-parity",
         "gfx-probes-packaged",
         "hardware-acceleration-policy",
         "popup-blocker-parity",
+        "popup-window-size",
         "search-service-init",
+        "stock-gpu-parity",
         "stock-parity-probes",
         "viewport-no-rdm",
+        "windows-crt-math",
         "windows-exe-manifest",
+        "windows-keyboard",
     ),
 }
 
@@ -84,6 +110,30 @@ def gate_name(group: Optional[str]) -> str:
 def guards() -> List[Path]:
     """Every guard script. helpers.py is a library, not a guard."""
     return sorted(p for p in GUARD_DIR.glob("*.py") if p.name != "helpers.py")
+
+
+def leftover_browsers(binary: Path) -> List[str]:
+    """Processes of the browser still running after a guard, with CPU seconds.
+
+    Guards share one runner. A browser a guard failed to close keeps its
+    content processes -- and any spinning workers -- alive into every later
+    guard, which then sees a slower machine than it was written for. On Linux
+    those content processes run plugin-container, which sits beside the binary.
+    """
+    binary = binary.resolve()
+    exes = {str(binary), str(binary.parent / "plugin-container")}
+    ticks = os.sysconf("SC_CLK_TCK")
+    found = []
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            if os.readlink(proc / "exe") not in exes:
+                continue
+            fields = (proc / "stat").read_text().rsplit(")", 1)[1].split()
+        except OSError:
+            continue
+        cpu = (int(fields[11]) + int(fields[12])) / ticks
+        found.append(f"pid {proc.name} cpu {cpu:.1f}s")
+    return found
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -109,7 +159,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # The guards drive the browser through the Python package, which resolves
         # the binary from this variable rather than a packaged install.
         "PYTHONPATH": os.pathsep.join(
-            filter(None, [str(REPO_ROOT / "pythonlib"), os.environ.get("PYTHONPATH", "")])
+            filter(None, [str(REPO_ROOT / "python" / "src"), os.environ.get("PYTHONPATH", "")])
         ),
     }
 
@@ -119,7 +169,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         and (not args.group or g.stem in GROUPS[args.group])
     ]
     if not selected:
-        result.note("no guards found -- tests/patches/ is empty or the filter matched nothing")
+        result.note("no guards found -- browser/tests/playwright/patches/ is empty or the filter matched nothing")
         result.finish(evidence.ERROR).save(args.evidence_dir)
         return 1
 
@@ -132,8 +182,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             failed.append(guard.name)
             tail = proc.combined().strip().splitlines()[-6:]
             result.note(f"{guard.name} failed ({proc.code}): " + " | ".join(t.strip() for t in tail))
+            # The note keeps six lines; the job log gets all of it.
+            log(f"  ✗ {guard.name} output:\n{proc.combined().strip()}")
         else:
             log(f"  ✓ {guard.name}")
+        leftovers = leftover_browsers(binary)
+        if leftovers:
+            log(f"  {guard.name} left {len(leftovers)} browser processes running: {', '.join(leftovers)}",
+                level="WARN")
 
     passed = len(selected) - len(failed)
     result.note(f"{passed}/{len(selected)} guards passed")

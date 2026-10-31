@@ -1,83 +1,92 @@
 /**
- * Mirrors pythonlib/tests/test_addons.py: regression guard for #308, where a
- * failed first download left an empty addon directory that was trusted
- * forever afterwards.
+ * Mirrors python/tests/test_addons.py: the default addons are the ones the
+ * browser bundles, under addons/<name>/ beside its binary.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-
-type Addons = typeof import("../src/addons.js");
+import { afterEach, beforeEach, expect, it } from "vitest";
+import { addDefaultAddons, getAddonPath } from "../src/addons.js";
+import { recordWarnings } from "../src/warnings.js";
 
 let tmp: string;
-let savedXdg: string | undefined;
-let addons: Addons;
-let ubo: string;
 
-beforeEach(async () => {
+beforeEach(() => {
 	tmp = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-addons-"));
-	savedXdg = process.env.XDG_CACHE_HOME;
-	// Point the addon store at a throwaway dir so no real cache is touched.
-	process.env.XDG_CACHE_HOME = tmp;
-	vi.resetModules();
-	addons = await import("../src/addons.js");
-	ubo = addons.getAddonPath("UBO");
-	expect(ubo.startsWith(tmp)).toBe(true);
 });
 
 afterEach(() => {
-	if (savedXdg === undefined) delete process.env.XDG_CACHE_HOME;
-	else process.env.XDG_CACHE_HOME = savedXdg;
 	fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-function writeManifest(extractPath: string) {
-	fs.mkdirSync(extractPath, { recursive: true });
-	fs.writeFileSync(path.join(extractPath, "manifest.json"), "{}");
+/** A build's executable, with uBO bundled where packaging puts it. */
+function build({ mac = false, bundled = true } = {}): string {
+	const contents = path.join(tmp, "Camoufox.app", "Contents");
+	const binary = mac
+		? path.join(contents, "MacOS", "camoufox")
+		: path.join(tmp, "camoufox-bin");
+	const files = mac ? path.join(contents, "Resources") : tmp;
+	fs.mkdirSync(path.dirname(binary), { recursive: true });
+	fs.writeFileSync(binary, "");
+	if (bundled) {
+		fs.mkdirSync(path.join(files, "addons", "UBO"), { recursive: true });
+		fs.writeFileSync(path.join(files, "addons", "UBO", "manifest.json"), "{}");
+	}
+	return binary;
 }
 
-it("re-downloads a partial (manifest-less) directory", async () => {
-	fs.mkdirSync(ubo, { recursive: true });
-	const calls: string[] = [];
-	addons.addonsDeps.downloadAndExtract = async (_url, extractPath, name) => {
-		calls.push(name);
-		writeManifest(extractPath);
-	};
-
+it("loads the bundled addon beside the binary", async () => {
+	const binary = build();
 	const out: string[] = [];
-	await addons.maybeDownloadAddons({ ...addons.DefaultAddons }, out);
-
-	expect(calls).toEqual(["UBO"]);
-	expect(fs.existsSync(path.join(ubo, "manifest.json"))).toBe(true);
-	expect(out).toEqual([ubo]);
-});
-
-it("does not re-download an extracted addon", async () => {
-	writeManifest(ubo);
-	addons.addonsDeps.downloadAndExtract = async () => {
-		throw new Error("must not re-download an already-extracted addon");
-	};
-
-	const out: string[] = [];
-	await addons.maybeDownloadAddons({ ...addons.DefaultAddons }, out);
-	expect(out).toEqual([ubo]);
-});
-
-it("removes the partial directory when a download fails", async () => {
-	addons.addonsDeps.downloadAndExtract = async (_url, extractPath) => {
-		fs.mkdirSync(extractPath, { recursive: true }); // partial write, then die
-		throw new Error("network died mid-download");
-	};
-	const log = vi.spyOn(console, "log").mockImplementation(() => {});
-
-	const out: string[] = [];
-	await addons.maybeDownloadAddons({ ...addons.DefaultAddons }, out);
-
-	expect(fs.existsSync(ubo)).toBe(false);
-	expect(out).toEqual([]);
-	expect(log).toHaveBeenCalledWith(
-		"Failed to download and extract UBO: Error: network died mid-download",
+	const { warnings } = await recordWarnings(() =>
+		addDefaultAddons(out, undefined, binary),
 	);
-	log.mockRestore();
+	expect(out).toEqual([path.join(tmp, "addons", "UBO")]);
+	expect(warnings).toEqual([]);
+});
+
+it("finds it in Contents/Resources of a macOS app bundle", () => {
+	const binary = build({ mac: true });
+	const expected = path.join(
+		tmp,
+		"Camoufox.app",
+		"Contents",
+		"Resources",
+		"addons",
+		"UBO",
+	);
+	expect(getAddonPath("UBO", binary)).toBe(expected);
+	const out: string[] = [];
+	addDefaultAddons(out, undefined, binary);
+	expect(out).toEqual([expected]);
+});
+
+it("leaves an excluded addon out without a warning", async () => {
+	const binary = build({ bundled: false });
+	const out: string[] = [];
+	const { warnings } = await recordWarnings(() =>
+		addDefaultAddons(out, ["UBO"], binary),
+	);
+	expect(out).toEqual([]);
+	expect(warnings).toEqual([]);
+});
+
+it("launches a build without the addon without it, and says so", async () => {
+	const binary = build({ bundled: false });
+	const out: string[] = [];
+	const { warnings } = await recordWarnings(() =>
+		addDefaultAddons(out, undefined, binary),
+	);
+	expect(out).toEqual([]);
+	expect(warnings).toHaveLength(1);
+	expect(warnings[0].message).toContain(path.join(tmp, "addons", "UBO"));
+	expect(warnings[0].message).toContain("exclude_addons");
+});
+
+it("does not count a partial directory", async () => {
+	const binary = build({ bundled: false });
+	fs.mkdirSync(path.join(tmp, "addons", "UBO"), { recursive: true });
+	const out: string[] = [];
+	await recordWarnings(() => addDefaultAddons(out, undefined, binary));
+	expect(out).toEqual([]);
 });

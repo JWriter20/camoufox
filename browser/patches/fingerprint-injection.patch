@@ -1,0 +1,168 @@
+diff --git a/dom/base/moz.build b/dom/base/moz.build
+index c62b3b0424..f9f88078bd 100644
+--- a/dom/base/moz.build
++++ b/dom/base/moz.build
+@@ -659,3 +659,6 @@ GeneratedFile(
+         "/servo/components/style/properties/counted_unknown_properties.py",
+     ],
+ )
++
++# DOM Mask
++LOCAL_INCLUDES += ["/camoucfg"]
+\ No newline at end of file
+diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
+index 49a25262ca..6e124cdb05 100644
+--- a/dom/base/nsGlobalWindowInner.cpp
++++ b/dom/base/nsGlobalWindowInner.cpp
+@@ -3,6 +3,7 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "nsGlobalWindowInner.h"
++#include "MaskConfig.hpp"
+ 
+ #include <inttypes.h>
+ #include <stdio.h>
+@@ -3736,6 +3737,13 @@ nsresult nsGlobalWindowInner::GetInnerHeight(CallerType aCallerType,
+ 
+ int32_t nsGlobalWindowInner::GetOuterWidth(CallerType aCallerType,
+                                            ErrorResult& aError) {
++  // Camoufox: the inner and outer sizes are deliberately NOT read from
++  // MaskConfig. CamoufoxWindow.sys.mjs sizes the real window and content area
++  // to the drawn ones, so the real values are the identity's. A fixed value
++  // contradicted the real window whenever it ended up a different size (the WM
++  // clamped it, Juggler resized it for a viewport: innerWidth 1853 > outerWidth
++  // 1680 on GNOME), and every iframe and page-opened popup reported the main
++  // window's content size (#963).
+   FORWARD_TO_OUTER_OR_THROW(GetOuterWidthOuter, (aCallerType, aError), aError,
+                             0);
+ }
+@@ -3756,11 +3764,13 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
+ 
+ int32_t nsGlobalWindowInner::GetScreenX(CallerType aCallerType,
+                                         ErrorResult& aError) {
++  if (auto value = MaskConfig::GetInt32("window.screenX")) return value.value();
+   FORWARD_TO_OUTER_OR_THROW(GetScreenXOuter, (aCallerType, aError), aError, 0);
+ }
+ 
+ int32_t nsGlobalWindowInner::GetScreenY(CallerType aCallerType,
+                                         ErrorResult& aError) {
++  if (auto value = MaskConfig::GetInt32("window.screenY")) return value.value();
+   FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError, 0);
+ }
+ 
+@@ -3794,6 +3804,8 @@ static nsPresContext* GetPresContextForRatio(Document* aDoc) {
+ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
+                                                 ErrorResult& aError) {
+   ENSURE_ACTIVE_DOCUMENT(aError, 0.0);
++  if (auto value = MaskConfig::GetDouble("window.devicePixelRatio"))
++    return value.value();
+ 
+   RefPtr<nsPresContext> presContext = GetPresContextForRatio(mDoc);
+   if (NS_WARN_IF(!presContext)) {
+diff --git a/dom/base/nsScreen.cpp b/dom/base/nsScreen.cpp
+index 3b48a7f1e2..4b989dd48a 100644
+--- a/dom/base/nsScreen.cpp
++++ b/dom/base/nsScreen.cpp
+@@ -4,6 +4,8 @@
+ 
+ #include "nsScreen.h"
+ 
++#include "MaskConfig.hpp"
++
+ #include "mozilla/GeckoBindings.h"
+ #include "mozilla/dom/BrowsingContextBinding.h"
+ #include "mozilla/dom/Document.h"
+@@ -45,6 +47,10 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(nsScreen, DOMEventTargetHelper,
+                                    mScreenOrientation)
+ 
+ int32_t nsScreen::PixelDepth() {
++  if (auto value = MaskConfig::GetUint32("screen.colorDepth"))
++    return value.value();
++  if (auto value = MaskConfig::GetUint32("screen.pixelDepth"))
++    return value.value();
+   // Return 24 to prevent fingerprinting.
+   if (ShouldResistFingerprinting(RFPTarget::ScreenPixelDepth)) {
+     return 24;
+@@ -100,6 +106,12 @@ CSSIntRect nsScreen::GetRect() {
+ }
+ 
+ CSSIntRect nsScreen::GetAvailRect() {
++  auto rect = MaskConfig::GetRect("screen.availLeft", "screen.availTop",
++                                  "screen.availWidth", "screen.availHeight");
++  if (rect.has_value()) {
++    auto values = rect.value();
++    return {values[0], values[1], values[2], values[3]};
++  }
+   // Return window inner rect to prevent fingerprinting.
+   if (ShouldResistFingerprinting(RFPTarget::ScreenAvailRect)) {
+     return GetTopWindowInnerRectForRFP();
+diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
+index 50dbb0847d..567e832a35 100644
+--- a/dom/workers/WorkerNavigator.cpp
++++ b/dom/workers/WorkerNavigator.cpp
+@@ -3,6 +3,7 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "mozilla/dom/WorkerNavigator.h"
++#include "MaskConfig.hpp"
+ 
+ #include "ErrorList.h"
+ #include "MainThreadUtils.h"
+@@ -111,6 +112,9 @@ JSObject* WorkerNavigator::WrapObject(JSContext* aCx,
+ }
+ 
+ bool WorkerNavigator::GlobalPrivacyControl() const {
++  if (auto value = MaskConfig::GetOptionalBool("navigator.globalPrivacyControl");
++      value.has_value())
++    return value.value();
+   bool gpcStatus = StaticPrefs::privacy_globalprivacycontrol_enabled();
+   if (!gpcStatus) {
+     JSObject* jso = GetWrapper();
+@@ -133,6 +137,8 @@ void WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages) {
+ void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
+                                     CallerType aCallerType,
+                                     ErrorResult& aRv) const {
++  if (auto value = MaskConfig::GetString("navigator.appVersion"))
++    return aAppVersion.Assign(NS_ConvertUTF8toUTF16(value.value()));
+   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+   MOZ_ASSERT(workerPrivate);
+ 
+@@ -155,6 +161,8 @@ void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
+ 
+ void WorkerNavigator::GetPlatform(nsString& aPlatform, CallerType aCallerType,
+                                   ErrorResult& aRv) const {
++  if (auto value = MaskConfig::GetString("navigator.platform"))
++    return aPlatform.Assign(NS_ConvertUTF8toUTF16(value.value()));
+   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+   MOZ_ASSERT(workerPrivate);
+ 
+@@ -216,6 +224,8 @@ class GetUserAgentRunnable final : public WorkerMainThreadRunnable {
+ void WorkerNavigator::GetUserAgent(nsCString& aUserAgent,
+                                    CallerType aCallerType,
+                                    ErrorResult& aRv) const {
++  if (auto value = MaskConfig::GetString("navigator.userAgent"))
++    return aUserAgent.Assign(value.value().c_str());
+   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+   MOZ_ASSERT(workerPrivate);
+ 
+@@ -227,6 +237,8 @@ void WorkerNavigator::GetUserAgent(nsCString& aUserAgent,
+ }
+ 
+ uint64_t WorkerNavigator::HardwareConcurrency() const {
++  if (auto value = MaskConfig::GetUint64("navigator.hardwareConcurrency"))
++    return value.value();
+   RuntimeService* rts = RuntimeService::GetService();
+   MOZ_ASSERT(rts);
+ 
+diff --git a/dom/workers/moz.build b/dom/workers/moz.build
+index f5ec1301a7..294a1c7a03 100644
+--- a/dom/workers/moz.build
++++ b/dom/workers/moz.build
+@@ -110,3 +110,6 @@ MARIONETTE_MANIFESTS += ["test/marionette/manifest.toml"]
+ XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell/xpcshell.toml"]
+ 
+ BROWSER_CHROME_MANIFESTS += ["test/browser.toml"]
++
++# DOM Mask
++LOCAL_INCLUDES += ["/camoucfg"]
+\ No newline at end of file

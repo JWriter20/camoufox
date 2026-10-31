@@ -10,7 +10,15 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import {
 	BUNDLE,
 	BUNDLE_EXE,
@@ -25,20 +33,16 @@ import {
 	utils,
 	warnings,
 } from "./launch-host.js";
-import { prerequisite } from "./prereq.js";
 
-const { ensureModel } = await import("../src/fpgen/index.js");
 const { OSError, PyFloat } = await import("../src/pycompat.js");
 const { Version } = await import("../src/pkgman.js");
-const { InvalidPropertyType } = await import("../src/exceptions.js");
+const { InvalidPropertyType, UnknownIPLocation } = await import(
+	"../src/exceptions.js"
+);
 const cpuAffinity = await import("../src/cpu_affinity.js");
 
-let modelReady = true;
-try {
-	await ensureModel();
-} catch (e) {
-	modelReady = prerequisite("fpgen-model", false, String(e));
-}
+// Imported after launch-host, which has to set the cache directory first.
+const { MODEL } = await import("./fpgen-setup.js");
 
 const deps = utils.utilsDeps;
 // The real disk probe, captured before any test stubs it.
@@ -146,6 +150,35 @@ describe("test_launch_environment: virtual display", () => {
 	});
 });
 
+describe("test_launch_environment: caller inputs", () => {
+	beforeEach(() => isolateLaunch());
+
+	// A caller's objects, reused for a second launch, must not carry the first
+	// launch's identity in. The first launch's webGl:vendor left in a reused
+	// config read as a GPU the caller named, so the second launch covered its
+	// canvas.
+	it("does not mutate the caller's inputs", async () => {
+		deps.addDefaultAddons = async (addons: string[]) => {
+			addons.push("/default-addon");
+		};
+		deps.confirmPaths = () => undefined;
+		const inputs = {
+			config: { "navigator.userAgent": WIN_UA },
+			firefox_user_prefs: { "caller.pref": 1 },
+			args: ["-caller-arg"],
+			addons: ["/caller-addon"],
+		};
+		const before = structuredClone(inputs);
+		const options = await launch({
+			block_webgl: true,
+			i_know_what_im_doing: true,
+			...inputs,
+		});
+		expect(inputs).toEqual(before);
+		expect(options.firefoxUserPrefs["caller.pref"]).toBe(1);
+	});
+});
+
 describe("test_launch_environment: prefs", () => {
 	beforeEach(() => isolateLaunch());
 
@@ -205,6 +238,97 @@ describe("test_launch_environment: prefs", () => {
 				expect(prefs[pref]).toBe(toggled);
 			});
 		}
+	});
+
+	describe("geoip and IPv6 (test_launch_environment.py)", () => {
+		// network.dns.disableIPv6 broke IPv6-only sites (daijro/camoufox#849)
+		// while IPv6 literals still connected. IPv6 is kept when the host's
+		// address geolocates where the identity does; otherwise
+		// network:ipv4Only makes the browser behave as on an IPv4-only network.
+		const IPV4 = "203.0.113.7";
+		const HERE = { timezone: "America/Chicago", "locale:region": "US" };
+		const PLACES: Record<string, Record<string, string>> = {
+			[IPV4]: HERE,
+			"2001:db8::1": HERE,
+			"2001:db8::2": { timezone: "Europe/Berlin", "locale:region": "DE" },
+		};
+
+		async function launchWith(
+			hostIPv6: string | null | (() => Promise<string | null>),
+			opts: Record<string, any>,
+		) {
+			let sent: Record<string, any> = {};
+			deps.getGeolocation = async (ip: string) => {
+				if (!(ip in PLACES)) {
+					throw new UnknownIPLocation(ip);
+				}
+				return { asConfig: () => ({ ...PLACES[ip] }) } as any;
+			};
+			deps.publicIpv6 =
+				typeof hostIPv6 === "function" ? hostIPv6 : async () => hostIPv6;
+			deps.getEnvVars = (config) => {
+				sent = config;
+				return {};
+			};
+			const {
+				result,
+				error,
+				warnings: caught,
+			} = await warnings.recordWarnings(() =>
+				utils.launchOptions({ env: { HOME }, ...ua(WIN_UA), ...opts }),
+			);
+			if (error) throw error;
+			const prefs = (result as Record<string, any>).firefoxUserPrefs;
+			expect("network.dns.disableIPv6" in prefs).toBe(false);
+			const warned = caught.some(
+				(w) =>
+					w.category === "LeakWarning" &&
+					w.message.includes("IPv6 address geolocates somewhere other"),
+			);
+			return { sent, warned };
+		}
+
+		it("keeps IPv6 in the same place", async () => {
+			const { sent, warned } = await launchWith("2001:db8::1", { geoip: IPV4 });
+			expect("network:ipv4Only" in sent).toBe(false);
+			expect(sent["webrtc:ipv4"]).toBe(IPV4);
+			expect(warned).toBe(false);
+		});
+
+		it("is an IPv4-only network with no IPv6 route", async () => {
+			const { sent, warned } = await launchWith(null, { geoip: IPV4 });
+			expect(sent["network:ipv4Only"]).toBe(true);
+			expect(warned).toBe(false);
+		});
+
+		for (const [name, hostIPv6] of [
+			["elsewhere", "2001:db8::2"],
+			["unknown", "2001:db8::3"],
+		]) {
+			it(`drops IPv6 that disagrees (${name}) with a warning`, async () => {
+				const { sent, warned } = await launchWith(hostIPv6, { geoip: IPV4 });
+				expect(sent["network:ipv4Only"]).toBe(true);
+				expect(warned).toBe(true);
+			});
+		}
+
+		it("leaves IPv6 alone behind a proxy", async () => {
+			const { sent } = await launchWith(
+				async () => {
+					throw new Error(
+						"the host's IPv6 address is not what a proxied site sees",
+					);
+				},
+				{ geoip: IPV4, proxy: { server: "http://127.0.0.1:3128" } },
+			);
+			expect("network:ipv4Only" in sent).toBe(false);
+		});
+
+		it("leaves IPv6 alone for an IPv6 identity", async () => {
+			const { sent } = await launchWith(null, { geoip: "2001:db8::1" });
+			expect("network:ipv4Only" in sent).toBe(false);
+			expect(sent["webrtc:ipv6"]).toBe("2001:db8::1");
+		});
 	});
 
 	describe("UI locale follows the Intl locale", () => {
@@ -306,6 +430,38 @@ describe("test_launch_environment: prefs", () => {
 		});
 	});
 
+	describe("renders at the claimed devicePixelRatio (test_display_scale.py)", () => {
+		const PREF = "layout.css.devPixelsPerPx";
+		const win = (dpr: number, opts: Record<string, any> = {}) =>
+			prefsFor({
+				...ua(WIN_UA, {
+					"screen.width": 1382,
+					"screen.height": 864,
+					"window.outerWidth": 1280,
+					"window.outerHeight": 900,
+					"window.devicePixelRatio": dpr,
+				}),
+				headless: true,
+				...opts,
+			});
+		it("sets the scale, and a caller's pref wins", async () => {
+			expect((await win(2.5))[PREF]).toBe("2.5");
+			expect((await win(1))[PREF]).toBe("1");
+			expect(
+				(await win(2.5, { firefox_user_prefs: { [PREF]: "1.0" } }))[PREF],
+			).toBe("1.0");
+		});
+		it("refuses a window too large for the monitor", async () => {
+			deps.osName = () => "lin";
+			await expect(
+				win(2.5, {
+					headless: false,
+					screen: new fingerprints.Screen({ maxWidth: 1920, maxHeight: 1080 }),
+				}),
+			).rejects.toThrow("needs 3200 pixels, but this monitor has 1920");
+		});
+	});
+
 	describe("Windows scrollbars follow the version the fonts present", () => {
 		const PREF = "ui.useOverlayScrollbars";
 		const prefs = (fonts: string[], u = WIN_UA) => prefsFor(ua(u, { fonts }));
@@ -317,6 +473,74 @@ describe("test_launch_environment: prefs", () => {
 		});
 		it("other OSes get overlay", async () => {
 			expect((await prefs(["DejaVu Sans"], LINUX_UA))[PREF]).toBe(1);
+		});
+	});
+
+	// test_windows_identity.py
+	describe("a Windows identity on another host behaves as Windows", () => {
+		const STYLE = "widget.non-native-theme.scrollbar.style";
+		const onHost = async (host: "lin" | "win", u: string, extra = {}) => {
+			deps.hostOsKey = () => host;
+			let config: Record<string, any> = {};
+			deps.getEnvVars = ((c: Record<string, any>) => {
+				config = { ...c };
+				return {};
+			}) as any;
+			const prefs = await prefsFor({ ...ua(u), ...extra });
+			return { config, prefs };
+		};
+
+		it("gets the CRT's math, Windows' keyboard and behaviour", async () => {
+			const { config, prefs } = await onHost("lin", WIN_UA);
+			expect(prefs["javascript.options.use_ucrt_math"]).toBe(true);
+			expect(config["input:windowsKeyboard"]).toBe(true);
+			for (const [pref, value] of Object.entries(
+				utils.WINDOWS_BEHAVIOUR_PREFS,
+			)) {
+				expect(prefs[pref]).toEqual(value);
+			}
+			expect("media.eme.enabled" in prefs).toBe(false);
+			expect(prefs["middlemouse.paste"]).toBe(false);
+		});
+		it("draws Windows' scrollbars at Windows' size", async () => {
+			const classic = await onHost("lin", WIN_UA, {
+				firefox_user_prefs: { "ui.useOverlayScrollbars": 0 },
+			});
+			expect(classic.prefs[STYLE]).toBe(4);
+			const overlay = await onHost("lin", WIN_UA, {
+				firefox_user_prefs: { "ui.useOverlayScrollbars": 1 },
+			});
+			expect(overlay.prefs[STYLE]).toBe(5);
+		});
+		it("leaves other identities and a Windows host alone", async () => {
+			for (const [host, u] of [
+				["lin", LINUX_UA],
+				["lin", MAC_UA],
+				["win", WIN_UA],
+			] as const) {
+				const { config, prefs } = await onHost(host, u);
+				expect("javascript.options.use_ucrt_math" in prefs).toBe(false);
+				expect("input:windowsKeyboard" in config).toBe(false);
+				expect("middlemouse.paste" in prefs).toBe(false);
+				expect(STYLE in prefs).toBe(false);
+			}
+		});
+		it("caller values win", async () => {
+			const { config, prefs } = await onHost("lin", WIN_UA, {
+				config: {
+					"navigator.userAgent": WIN_UA,
+					"input:windowsKeyboard": false,
+				},
+				firefox_user_prefs: {
+					"javascript.options.use_ucrt_math": false,
+					"middlemouse.paste": true,
+					[STYLE]: 2,
+				},
+			});
+			expect(config["input:windowsKeyboard"]).toBe(false);
+			expect(prefs["javascript.options.use_ucrt_math"]).toBe(false);
+			expect(prefs["middlemouse.paste"]).toBe(true);
+			expect(prefs[STYLE]).toBe(2);
 		});
 	});
 
@@ -573,6 +797,89 @@ describe("test_executable_path_bundle", () => {
 	});
 });
 
+describe("the browser option", () => {
+	beforeEach(() => vi.stubEnv("CAMOUFOX_EXECUTABLE_PATH", ""));
+	afterEach(() => vi.unstubAllEnvs());
+
+	// Where a build keeps its executable and application.ini on each OS.
+	const LAYOUTS: Record<string, [string, string]> = {
+		lin: ["camoufox-bin", "application.ini"],
+		mac: [
+			"Camoufox.app/Contents/MacOS/camoufox",
+			"Camoufox.app/Contents/Resources/application.ini",
+		],
+	};
+
+	it.each(
+		Object.keys(LAYOUTS),
+	)("launches the selected build and never the paired one (#843, %s)", async (layout) => {
+		isolateLaunch();
+		const dir = path.join(SCRATCH, `selected-${layout}`);
+		const [exe, ini] = LAYOUTS[layout].map((part) => path.join(dir, part));
+		for (const file of [exe, ini]) {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+		}
+		fs.writeFileSync(exe, "");
+		fs.writeFileSync(ini, "[App]\nVersion=152.0.4\n");
+		const paired = () => {
+			throw new Error("resolved the paired build despite `browser`");
+		};
+		deps.ensureCamoufoxInstalled = paired as any;
+		deps.launchPath = paired as any;
+		deps.installedVerStr = paired;
+		deps.selectedLaunchPath = (spec: string) => {
+			expect(spec).toBe("152.0.4-beta.31");
+			return exe;
+		};
+		const read: (string | null | undefined)[] = [];
+		deps.validateConfig = (_config, p) => {
+			read.push(p);
+		};
+		deps.getEnvVars = (_config, _os, p) => {
+			read.push(p);
+			return {};
+		};
+		let ffVersion: string | undefined;
+		deps.fromFpgen = ((_fp: unknown, version: string) => {
+			ffVersion = version;
+			return {};
+		}) as any;
+		const options = await launch({
+			browser: "152.0.4-beta.31",
+			os: "linux",
+			block_webgl: true,
+			canvas_noise: false,
+			headless: true,
+			i_know_what_im_doing: true,
+		});
+		expect(options.executablePath).toBe(exe);
+		expect(read).toEqual([exe, exe]);
+		expect(ffVersion).toBe("152");
+	});
+
+	it("refuses an executable_path too", async () => {
+		isolateLaunch();
+		await expect(
+			launch({ browser: "beta.31", executable_path: BUNDLE_EXE, os: "linux" }),
+		).rejects.toThrow("executable_path");
+	});
+
+	it("refuses CAMOUFOX_EXECUTABLE_PATH too", async () => {
+		isolateLaunch();
+		vi.stubEnv("CAMOUFOX_EXECUTABLE_PATH", BUNDLE_EXE);
+		await expect(launch({ browser: "beta.31", os: "linux" })).rejects.toThrow(
+			"CAMOUFOX_EXECUTABLE_PATH",
+		);
+	});
+
+	it("never borrows the installed version for a named executable without application.ini", () => {
+		deps.installedVerStr = () => "156.0.1-beta.33";
+		expect(() =>
+			utils.resolveVerstr(path.join(SCRATCH, "no-ini", "camoufox-bin")),
+		).toThrow("application.ini");
+	});
+});
+
 describe("test_executable_path_version_warning", () => {
 	const bundle = (build: string) => {
 		const dir = path.join(SCRATCH, `bundle-${build}`);
@@ -686,7 +993,7 @@ describe("test_voices (launch half)", () => {
 	});
 });
 
-describe.skipIf(!modelReady)(
+describe.skipIf(!MODEL.ok)(
 	"test_launch_geometry / test_identity_salt (fpgen draws)",
 	() => {
 		beforeEach(() => stubHost());
@@ -771,33 +1078,75 @@ describe.skipIf(!modelReady)(
 			}
 		});
 
-		it("unpinned launches never share noise seeds", async () => {
-			const seeds = new Set<number>();
-			for (let i = 0; i < 40; i++) {
-				seeds.add(
-					(await launchConfig({ os: "linux", headless: true }))["audio:seed"],
-				);
-			}
-			expect(seeds.size).toBe(40);
-		});
-
 		it("a fixed fingerprint reproduces every draw", async () => {
 			const fp = fingerprints.generateFingerprint({ os: "linux" });
 			const drawn = (c: Record<string, any>) =>
-				JSON.stringify(
-					["audio:seed", "fonts", "voices", "webGl:renderer"].map((k) => c[k]),
-				);
+				JSON.stringify(["fonts", "voices", "webGl:renderer"].map((k) => c[k]));
 			const first = await launchConfig({ os: "linux", fingerprint: fp });
 			const second = await launchConfig({ os: "linux", fingerprint: fp });
 			expect(drawn(first)).toBe(drawn(second));
 		});
 
-		it("a fixed preset reproduces the noise seeds and fonts", async () => {
+		it("a fixed preset reproduces its fonts", async () => {
 			const preset = fingerprints.getRandomPreset("windows", "150");
 			const first = await launchConfig({ fingerprint_preset: preset });
 			const second = await launchConfig({ fingerprint_preset: preset });
-			expect(first["audio:seed"]).toBe(second["audio:seed"]);
 			expect(first.fonts).toEqual(second.fonts);
+		});
+
+		it("generates no audio seed", async () => {
+			// Audio renders as stock: one value per CPU architecture
+			// (ci/tribal-rules.yml: audio-is-not-noised).
+			expect("audio:seed" in (await launchConfig({}))).toBe(false);
+			const preset = fingerprints.getRandomPreset("windows", "150");
+			for (const p of [undefined, preset]) {
+				const context = fingerprints.generateContextFingerprint({
+					os: "windows",
+					preset: p,
+				});
+				expect("audio:seed" in context.config).toBe(false);
+				expect(context.init_script).not.toContain("setAudioFingerprintSeed");
+			}
+		});
+
+		it("warns once and drops an audio seed", async () => {
+			const removed = (ws: { category: string; message: string }[]) =>
+				ws.filter(
+					(w) =>
+						w.category === "FutureWarning" && w.message.includes("audio:seed"),
+				);
+			const launched = await warnings.recordWarnings(() =>
+				utils.launchOptions({
+					env: { HOME },
+					os: "linux",
+					i_know_what_im_doing: true,
+					executable_path: BUNDLE_EXE,
+					config: { "audio:seed": 9 },
+				}),
+			);
+			expect(launched.error).toBeUndefined();
+			const config = configOf(launched.result as Record<string, any>);
+			expect("audio:seed" in config).toBe(false);
+			expect(config.fonts.length).toBeGreaterThan(0);
+			expect(removed(launched.warnings)).toHaveLength(1);
+			expect(removed(launched.warnings)[0].message).toContain(
+				"rendered exactly as stock Firefox",
+			);
+
+			const overrides = { "audio:seed": 7, timezone: "Pacific/Chatham" };
+			const context = await warnings.recordWarnings(() =>
+				fingerprints.generateContextFingerprint({
+					os: "linux",
+					config_overrides: overrides,
+				}),
+			);
+			expect(removed(context.warnings)).toHaveLength(1);
+			expect("audio:seed" in (context.result?.config ?? {})).toBe(false);
+			expect(context.result?.config.timezone).toBe("Pacific/Chatham");
+			expect(overrides).toEqual({
+				"audio:seed": 7,
+				timezone: "Pacific/Chatham",
+			});
 		});
 
 		it.each([
@@ -822,10 +1171,10 @@ describe.skipIf(!modelReady)(
 		it("config_overrides reach the config and the init script", () => {
 			const context = fingerprints.generateContextFingerprint({
 				os: "linux",
-				config_overrides: { "audio:seed": 7 },
+				config_overrides: { timezone: "Pacific/Chatham" },
 			});
-			expect(context.config["audio:seed"]).toBe(7);
-			expect(context.init_script).toContain("setAudioFingerprintSeed(7)");
+			expect(context.config.timezone).toBe("Pacific/Chatham");
+			expect(context.init_script).toContain("Pacific/Chatham");
 		});
 
 		it("a failed font draw warns and uses the OS's font list", async () => {
@@ -950,14 +1299,6 @@ describe.skipIf(!modelReady)(
 				"built for desktops",
 			);
 			expect(warned).toBe(true);
-		});
-
-		it("keeps the caller's seeds", async () => {
-			const config = await launchConfig({
-				os: "linux",
-				config: { "audio:seed": 9 },
-			});
-			expect(config["audio:seed"]).toBe(9);
 		});
 
 		it("a Windows fr-FR identity has French voices", async () => {

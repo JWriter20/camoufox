@@ -1,16 +1,16 @@
 /**
- * The identity layer's behaviour: ports of pythonlib/tests/
+ * The identity layer's behaviour: ports of python/tests/
  * test_fingerprint_fixes.py, test_preset_appversion.py, test_voices.py,
  * test_font_distribution.py and the unit half of test_identity_salt.py.
  * Exact parity with Python is pinned separately in identity-golden.test.ts.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Generator } from "fpgen-js";
 import { describe, expect, it, vi } from "vitest";
 import { InvalidIP } from "../src/exceptions.js";
 import {
 	appVersionFromUserAgent,
-	audioSeedFromIdentity,
 	buildInitScript,
 	clampScreenToDisplay,
 	clampWindowDimensions,
@@ -18,7 +18,7 @@ import {
 	drawMediaDevices,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
-	fixScreenNoTaskbar,
+	followBaselineProtection,
 	fromFpgen,
 	fromPreset,
 	generateContextFingerprint,
@@ -33,10 +33,10 @@ import {
 	type Preset,
 	Screen,
 	setMediaDevicesDefaults,
+	versionlessUa,
 	WINDOWS_11_MARKER_FONTS,
 } from "../src/fingerprints.js";
-import { Generator } from "../src/fpgen/index.js";
-import { LOCAL_DATA } from "../src/pkgman.js";
+import { LOCAL_DATA } from "../src/paths.js";
 import { MODEL } from "./fpgen-setup.js";
 
 function data(name: string): any {
@@ -68,48 +68,53 @@ describe("fixNavigatorArch", () => {
 	});
 });
 
-describe("fixScreenNoTaskbar", () => {
-	it("subtracts the taskbar when avail equals the screen", () => {
-		const c: Record<string, number> = {
-			"screen.width": 1920,
-			"screen.height": 1080,
-			"screen.availWidth": 1920,
-			"screen.availHeight": 1080,
-			"window.outerHeight": 1080,
-			"window.innerHeight": 1040,
-		};
-		fixScreenNoTaskbar(c, "lin");
-		expect(c["screen.availHeight"]).toBe(1080 - 27);
-		expect(c["window.outerHeight"]).toBe(1053);
-		expect(c["window.innerHeight"]).toBe(1053 - 40);
-	});
-
-	it("uses each OS's taskbar height", () => {
+// The browser reports these through Firefox's baseline fingerprinting
+// protection whatever the config says, so the config must claim the same. A
+// Linux identity claiming availHeight 1053 on a 1080 screen read 1080.
+describe("followBaselineProtection", () => {
+	it("makes avail the screen less the baseline taskbar", () => {
 		for (const [os, px] of [
-			["win", 40],
-			["mac", 25],
-			["lin", 27],
+			["win", 48],
+			["mac", 76],
+			["lin", 0],
 		] as const) {
 			const c: Record<string, number> = {
 				"screen.width": 1920,
 				"screen.height": 1080,
-				"screen.availWidth": 1920,
-				"screen.availHeight": 1080,
+				"screen.availWidth": 1900,
+				"screen.availHeight": 1053,
 			};
-			fixScreenNoTaskbar(c, os);
+			followBaselineProtection(c, os);
+			expect(c["screen.availWidth"]).toBe(1920);
 			expect(c["screen.availHeight"]).toBe(1080 - px);
 		}
 	});
 
-	it("is a no-op when avail is already below the screen", () => {
-		const c = {
+	it("collapses multi-touch to five", () => {
+		for (const [touch, seen] of [
+			[0, 0],
+			[1, 1],
+			[2, 5],
+			[10, 5],
+		]) {
+			const c = { "navigator.maxTouchPoints": touch };
+			followBaselineProtection(c, "win");
+			expect(c["navigator.maxTouchPoints"]).toBe(seen);
+		}
+	});
+
+	it("fits the window inside the available screen", () => {
+		const c: Record<string, number> = {
 			"screen.width": 1920,
 			"screen.height": 1080,
-			"screen.availWidth": 1920,
 			"screen.availHeight": 1040,
+			"window.outerHeight": 1040,
+			"window.innerHeight": 1000,
 		};
-		fixScreenNoTaskbar(c, "lin");
-		expect(c["screen.availHeight"]).toBe(1040);
+		followBaselineProtection(c, "win");
+		clampWindowDimensions(c);
+		expect(c["window.outerHeight"]).toBe(1032);
+		expect(c["window.innerHeight"]).toBe(1032 - 40);
 	});
 });
 
@@ -422,14 +427,14 @@ describe("preset appVersion (test_preset_appversion.py)", () => {
 		}
 	});
 
-	it("keeps a captured appVersion, follows an unknown platform's UA", () => {
+	it("replaces a captured appVersion with the UA's, follows an unknown platform's UA", () => {
 		const p: any = preset(
 			"Win32",
 			"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Firefox/152.0",
 		);
 		p.navigator.appVersion = "5.0 (Windows NT 10.0; Win64; x64)";
 		expect(fromPreset(p, null, 0)["navigator.appVersion"]).toBe(
-			"5.0 (Windows NT 10.0; Win64; x64)",
+			"5.0 (Windows)",
 		);
 		expect(
 			fromPreset(
@@ -722,18 +727,38 @@ describe("identity salt and seed (test_identity_salt.py)", () => {
 		expect(seeds.size).toBe(200);
 	});
 
+	it("a browser upgrade does not move the seed", () => {
+		// A saved identity on a newer browser claims the new engine version and
+		// nothing else; the seed hashes the UA without it (Python: versionless_ua).
+		const at = (version: string) => ({
+			"navigator.userAgent": `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:${version}) Gecko/20100101 Firefox/${version}`,
+			"navigator.platform": "Win32",
+			"screen.width": 1920,
+			"screen.height": 1080,
+			"navigator.hardwareConcurrency": 8,
+		});
+		const salt = identitySalt({ pinned: "identity" });
+		expect(versionlessUa(at("150.0.2")["navigator.userAgent"])).toBe(
+			"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:) Gecko/20100101 Firefox/",
+		);
+		expect(identitySeed(at("158.0"), salt)).toBe(
+			identitySeed(at("150.0.2"), salt),
+		);
+		// The OS tokens still tell identities apart.
+		const mac = {
+			...at("158.0"),
+			"navigator.userAgent":
+				"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:158.0) Gecko/20100101 Firefox/158.0",
+		};
+		expect(identitySeed(mac, salt)).not.toBe(identitySeed(at("158.0"), salt));
+	});
+
 	it("the salt of equal objects is equal", () => {
 		expect(identitySalt({ a: 1, b: 2 })).toBe(identitySalt({ b: 2, a: 1 }));
 		const s = new Screen({ maxWidth: 1920, maxHeight: 1080 });
 		expect(identitySalt(s)).toBe(
 			identitySalt(new Screen({ maxWidth: 1920, maxHeight: 1080 })),
 		);
-	});
-
-	it("derives the audio seed without losing precision", () => {
-		// (ident * 2654435761 + 97) & 0xFFFFFFFF, checked with Python ints
-		expect(audioSeedFromIdentity(4294967295)).toBe(1640531632);
-		expect(audioSeedFromIdentity(0)).toBe(97);
 	});
 
 	it("a pinned preset reproduces its draws", () => {
@@ -778,8 +803,15 @@ describe("buildInitScript", () => {
 		expect(script.split("setWebRTCIPv6")[0]).not.toContain("2001:db8::7");
 	});
 
-	it("refuses an invalid WebRTC address", () => {
-		expect(() => buildInitScript({ webrtcIP: "not-an-ip" })).toThrow(InvalidIP);
+	it.each([
+		"not-an-ip",
+		"999.999.999.999",
+		"256.1.1.1",
+		":",
+		":::",
+		"1::2::3",
+	])("refuses an invalid WebRTC address (%s)", (invalidIP) => {
+		expect(() => buildInitScript({ webrtcIP: invalidIP })).toThrow(InvalidIP);
 	});
 });
 
@@ -805,6 +837,7 @@ describe("fromFpgen", () => {
 				"Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0",
 			"navigator.platform": "Linux x86_64",
 			"navigator.hardwareConcurrency": 8,
+			"navigator.appVersion": "5.0 (X11)",
 			"screen.width": 1920,
 			"screen.height": 1080,
 			"screen.availLeft": 0,
@@ -897,11 +930,14 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		expect(gen.config.fonts.length).toBeGreaterThan(0);
 		expect(gen.context_options.locale).toBe("de-DE");
 		expect(gen.init_script).toContain("setNavigatorUserAgent");
+		expect(gen.init_script).toContain(
+			'setNavigatorAppVersion("5.0 (Windows)")',
+		);
 		const preset = getRandomPreset("macos", "150");
 		const fromP = generateContextFingerprint({
 			preset,
 			timezone: "Europe/Paris",
-			config_overrides: { "audio:seed": 7 },
+			config_overrides: { "screen.colorDepth": 30 },
 		});
 		expect(fromP.context_options.timezoneId).toBe("Europe/Paris");
 		expect(fromP.config["navigator.platform"]).toBe("MacIntel");
@@ -929,5 +965,22 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		} finally {
 			spy.mockRestore();
 		}
+	});
+});
+
+describe("fromFpgen appVersion", () => {
+	it("follows the drawn user agent, not a separately drawn value", () => {
+		// fpgen's data pairs some Linux user agents with "5.0 (Windows)", which
+		// Firefox never reports: it computes appVersion from the user agent.
+		const fingerprint = generateFingerprint({ os: "linux" });
+		fingerprint.navigator = {
+			...fingerprint.navigator,
+			userAgent:
+				"Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0",
+			appVersion: "5.0 (Windows)",
+		};
+		expect(fromFpgen(fingerprint, "156")["navigator.appVersion"]).toBe(
+			"5.0 (X11)",
+		);
 	});
 });

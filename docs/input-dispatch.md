@@ -1,9 +1,10 @@
 # Synthesized input dispatch
 
 Every synthesized mouse and wheel event in the parent process goes through
-`additions/juggler/input/MouseDispatch.js`. `scripts/check-input-dispatch.py`
-fails the build if anything else dispatches input or does browser-relative
-coordinate arithmetic, and it runs on every pull request.
+`browser/additions/juggler/input/MouseDispatch.js`.
+`browser/scripts/check-input-dispatch.py` fails the build if anything else
+dispatches input or does browser-relative coordinate arithmetic, and it runs on
+every pull request.
 
 ## The invariant
 
@@ -70,19 +71,25 @@ to dispatch a point on the pixel the previous dispatch left the cursor on: a
 zero-displacement move produces no `eMouseMove`, so it is never acked, and
 that is the same deadlock reached from inside a curve rather than from
 `Page.dispatchMouseEvent`.
-`activateAndRun()` carries a 30s backstop for the other unbounded waits
-reachable from the same slot (`apz-repaints-flushed`, `TabSwitchDone`, the drag
-path's waits), none of which has failed yet.
+`apz-repaints-flushed` waits at most `kAckDeadlineMs` too: a flush sent to a
+GPU process that dies never comes back, and stalled every such dispatch until
+the backstop. So does the drag path's `juggler-drag-finalized`, per input
+event: an answer a busy page gives later still decides the next event, so the
+drag drops, and mouseup ends the wait. `activateAndRun()` carries a 30s
+backstop for the waits still unbounded in the same slot (`TabSwitchDone`, the
+drag path's `dragover` and cross-process sends), none of which has failed yet.
 
-**The static check.** `scripts/check-input-dispatch.py`, wired into
-the `static` job of `.github/workflows/tests.yml`. Two exemptions, both content-process:
-`PageAgent.js` (drag events, already content-relative, no ack) and
-`FrameTree.js` (the ack *producer*).
+**The static check.** `browser/scripts/check-input-dispatch.py`, wired into the
+`static` job of `.github/workflows/tests.yml`. Two exemptions, both
+content-process: `PageAgent.js` (drag events, already content-relative, no ack)
+and `FrameTree.js` (the ack *producer*).
 
-**Boundary coverage.** `tests/patches/mouse-boundary-sweep.py` sweeps the whole
+**Boundary coverage.**
+`browser/tests/playwright/patches/mouse-boundary-sweep.py` sweeps the whole
 viewport ring across every spoofed OS with humanize on and off, asserting each
 point is acked *and observed by the page*. Hand-picked coordinate lists are what
 let each of the four bugs through: `humanize-edge-deadlock.py` probed only the
 far edges, and `humanize-mouse-trajectory.py` pins `os="linux"` — the one
-fingerprint immune to `#751`. `tests/patches/input-ack-backstop.py` covers the
-bounded wait itself.
+fingerprint immune to `#751`.
+`browser/tests/playwright/patches/input-ack-backstop.py` covers the bounded waits
+themselves: a late renderer ack, and a drag whose page answers late.

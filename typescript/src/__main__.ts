@@ -2,20 +2,23 @@
 /**
  * The `camoufox` CLI.
  *
- * TypeScript twin of pythonlib/camoufox/__main__.py. Every command is present,
- * with the same arguments, output and config/cache files. `gui` drives a
- * PySide6 desktop app with no Node equivalent, so here it only says so. The
- * interactive pickers (`set`, `set --geoip`, `remove --select`) use a numbered
+ * TypeScript twin of python/src/camoufox/__main__.py. Every command is present,
+ * with the same arguments, output and config/cache files. The interactive
+ * pickers (`set`, `set --geoip`, `remove --select`) use a numbered
  * prompt in place of inquirer's arrow-key list.
  */
 import * as fs from "node:fs";
-import { createRequire } from "node:module";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { Argument, Command, Option } from "commander";
+import { ensureModel } from "fpgen-js";
 import { LIBRARY_VERSION } from "./__version__.js";
-import { DefaultAddons, maybeDownloadAddons } from "./addons.js";
-import { effectivePin, loadPin, pinSpec } from "./browser-pin.js";
+import {
+	type BrowserPin,
+	effectivePin,
+	loadPin,
+	pinSpec,
+} from "./browser-pin.js";
 import { FileNotFoundError } from "./exceptions.js";
 import {
 	allowGeoip,
@@ -24,6 +27,7 @@ import {
 	type GeoIPRepo,
 	getMmdbPath,
 	loadGeoipConfig,
+	loadGeoipRepos,
 	saveGeoipConfig,
 	warnIfDeprecated,
 } from "./geolocation.js";
@@ -47,19 +51,20 @@ import {
 	saveConfig,
 	saveRepoCache,
 } from "./multiversion.js";
+import { INSTALL_DIR, rprint, style } from "./paths.js";
 import {
 	AvailableVersion,
 	CamoufoxFetcher,
 	formatAssetDate,
-	INSTALL_DIR,
 	type IncompatibleBuild,
 	incompatibleMessage,
+	installedPackageVersion,
 	installedVerStr,
 	interfaceSupported,
 	listAvailableVersions,
-	loadYaml,
 	RepoConfig,
-	rprint,
+	resolvedPlaywrightVersionRaw,
+	taggedVersions,
 	upgradeMessage,
 	Version,
 } from "./pkgman.js";
@@ -67,32 +72,6 @@ import {
 // --------------------------------------------------------------------------
 // click-style output + prompts
 // --------------------------------------------------------------------------
-
-const ANSI: Record<string, string> = {
-	red: "31",
-	green: "32",
-	yellow: "33",
-	blue: "34",
-	cyan: "36",
-	bright_black: "90",
-};
-
-function useColor(): boolean {
-	return Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
-}
-
-/** click.style */
-function style(
-	text: string,
-	{ fg, bold, dim }: { fg?: string | null; bold?: boolean; dim?: boolean } = {},
-): string {
-	if (!useColor()) return text;
-	const codes: string[] = [];
-	if (bold) codes.push("1");
-	if (dim) codes.push("2");
-	if (fg && ANSI[fg]) codes.push(ANSI[fg]);
-	return codes.length ? `\x1b[${codes.join(";")}m${text}\x1b[0m` : text;
-}
 
 /** click.secho */
 function secho(
@@ -453,6 +432,112 @@ function setPinned(
 	}
 }
 
+/** A command's failure, printed as its message, with exit code 1. */
+class CommandFailed extends Error {}
+
+/** Stop the command with an error, so a script or CI step stops here. */
+function fail(message: string): never {
+	throw new CommandFailed(message);
+}
+
+/**
+ * The build `spec` names, read from its own release with one API call. Null
+ * when the source has no such tag: early builds were published under others.
+ */
+async function taggedBuild(
+	repoName: string,
+	tag: string,
+	spec: string,
+): Promise<[RepoConfig, AvailableVersion] | null> {
+	const repoConfig = RepoConfig.findByName(repoName);
+	if (!repoConfig) return null;
+	const match = (await taggedVersions(repoConfig, tag)).find(
+		(v) => v.version.fullString === spec,
+	);
+	return match ? [repoConfig, match] : null;
+}
+
+/**
+ * Sync every source, then resolve against the cache the build fetch was asked
+ * for: `spec`, the release's pin, or the user's pin or channel.
+ */
+async function syncedBuild(
+	config: ReturnType<typeof loadConfig>,
+	repoName: string | null,
+	spec: string | null,
+	pin: BrowserPin | null,
+): Promise<[RepoConfig | undefined, AvailableVersion]> {
+	await doSync();
+	const cache = loadRepoCache();
+
+	let repo: RepoBlock | null = null;
+	let verData: CachedVersion | null = null;
+	if (pin && repoName && spec) {
+		repo = repoData(cache, repoName);
+		if (repo) verData = pinTarget(repo, spec, undefined);
+		if (!verData) {
+			fail(
+				`${pin.tag}, the browser this camoufox release pairs with, is not in ` +
+					`${repoName}'s releases. Run 'camoufox sync' and try again.`,
+			);
+		}
+	} else if (repoName && spec) {
+		repo = repoData(cache, repoName);
+		if (repo) [verData] = resolveSpec(repo, spec);
+	} else if (config.pinned) {
+		const channel = config.channel ?? "";
+		repoName = channel.includes("/") ? channel.split("/")[0] : channel;
+		repo = repoData(cache, repoName);
+		if (repo) verData = pinTarget(repo, config.pinned, config.pinned_sha);
+	} else {
+		const channel = config.channel || getDefaultChannel();
+		const slash = channel.indexOf("/");
+		const name = slash === -1 ? channel : channel.slice(0, slash);
+		const ctype = slash === -1 ? "stable" : channel.slice(slash + 1);
+		repoName = name;
+		repo = repoData(cache, repoName);
+		if (repo) {
+			const isPre = ctype === "prerelease";
+			const latest = latestPerBuild(repo.versions ?? []).filter(
+				(v) => (v.is_prerelease ?? false) === isPre,
+			);
+			verData = latest[0] ?? null;
+		}
+	}
+
+	if (!verData || !repo) {
+		const incompatible = (
+			(cache.incompatible ?? []) as IncompatibleBuild[]
+		).find(
+			(v) =>
+				spec &&
+				v.repo.toLowerCase() === (repoName ?? "").toLowerCase() &&
+				`${v.version}-${v.build}` === spec,
+		);
+		if (incompatible) {
+			fail(
+				incompatibleMessage(
+					new Version(incompatible.build, incompatible.version),
+					incompatible.interface,
+				),
+			);
+		}
+		fail(
+			`Version '${spec || repoName}' not found in cache. Run 'camoufox sync'.`,
+		);
+	}
+
+	const selected = new AvailableVersion({
+		version: new Version(verData.build, verData.version),
+		url: verData.url,
+		isPrerelease: verData.is_prerelease ?? false,
+		sha256: verData.sha256 ?? undefined,
+		assetCreatedAt: verData.created_at ?? undefined,
+		interface: verData.interface ?? 1,
+	});
+	return [RepoConfig.findByName(repo.name), selected];
+}
+
 /**
  * Checks & updates Camoufox.
  */
@@ -484,8 +569,7 @@ class CamoufoxUpdate extends CamoufoxFetcher {
 		if (this.isPrerelease && !iKnowWhatImDoing) {
 			rprint(`Warning: v${this.verstr} is a prerelease version!`, "yellow");
 			if (!(await confirm("Continue with prerelease installation?"))) {
-				rprint("Installation cancelled.", "red");
-				return;
+				fail("Installation cancelled.");
 			}
 		}
 
@@ -541,18 +625,12 @@ program
 			fs.rmSync(INSTALL_DIR, { recursive: true, force: true });
 		}
 
-		await doSync();
-
-		const cache = loadRepoCache();
 		const config = loadConfig();
+		const pin = version ? null : effectivePin(config);
 
 		let repoName: string | null = null;
-		let repo: RepoBlock | null = null;
-		let verData: CachedVersion | null = null;
-		let paired = false;
-		const pin = effectivePin(config);
-
-		let spec = "";
+		let spec: string | null = null;
+		let tag: string | null = null;
 		if (version) {
 			const parts = version.toLowerCase().split("/");
 			if (parts.length === 1) {
@@ -562,108 +640,40 @@ program
 				repoName = parts[0];
 				spec = parts[parts.length - 1];
 			} else {
-				rprint(
+				fail(
 					"Format: version-build, repo/version-build, or repo/channel/version-build",
-					"red",
 				);
-				return;
 			}
-			repo = repoData(cache, repoName);
-			if (repo) [verData] = resolveSpec(repo, spec.replace(/^v+/, ""));
-		} else if (config.pinned) {
-			const channel = config.channel ?? "";
-			repoName = channel.includes("/") ? channel.split("/")[0] : channel;
-			repo = repoData(cache, repoName);
-			if (repo) verData = pinTarget(repo, config.pinned, config.pinned_sha);
+			spec = spec.replace(/^v+/, "");
+			tag = `v${spec}`;
 		} else if (pin) {
 			// This library release pairs with exactly one browser build.
 			repoName = pin.repoName;
-			repo = repoData(cache, repoName);
-			if (repo) verData = pinTarget(repo, pinSpec(pin), undefined);
-			if (!verData) {
-				rprint(
-					`${pin.tag}, the browser this camoufox release pairs with, is not in ` +
-						`${repoName}'s releases. Run 'camoufox sync' and try again.`,
-					"red",
-				);
-				return;
-			}
-			paired = true;
-		} else {
-			const channel = config.channel || getDefaultChannel();
-			const slash = channel.indexOf("/");
-			const name = slash === -1 ? channel : channel.slice(0, slash);
-			const ctype = slash === -1 ? "stable" : channel.slice(slash + 1);
-			repoName = name;
-			repo = repoData(cache, repoName);
-			if (repo) {
-				const isPre = ctype === "prerelease";
-				const latest = latestPerBuild(repo.versions ?? []).filter(
-					(v) => (v.is_prerelease ?? false) === isPre,
-				);
-				verData = latest[0] ?? null;
-			}
+			spec = pinSpec(pin);
+			tag = pin.tag;
 		}
 
-		if (!verData || !repo) {
-			const wanted = spec.replace(/^v+/, "");
-			const incompatible = (
-				(cache.incompatible ?? []) as IncompatibleBuild[]
-			).find(
-				(v) =>
-					version &&
-					v.repo.toLowerCase() === (repoName ?? "").toLowerCase() &&
-					`${v.version}-${v.build}` === wanted,
-			);
-			if (incompatible) {
-				rprint(
-					incompatibleMessage(
-						new Version(incompatible.build, incompatible.version),
-						incompatible.interface,
-					),
-					"red",
-				);
-				return;
-			}
-			rprint(
-				`Version '${version || repoName}' not found in cache. Run 'camoufox sync'.`,
-				"red",
-			);
-			return;
-		}
-
-		const selected = new AvailableVersion({
-			version: new Version(verData.build, verData.version),
-			url: verData.url,
-			isPrerelease: verData.is_prerelease ?? false,
-			sha256: verData.sha256 ?? undefined,
-			assetCreatedAt: verData.created_at ?? undefined,
-			interface: verData.interface ?? 1,
-		});
-		const repoConfig = RepoConfig.findByName(repo.name);
+		const [repoConfig, selected] =
+			(repoName && spec && tag && (await taggedBuild(repoName, tag, spec))) ||
+			(await syncedBuild(config, repoName, spec, pin));
 		try {
 			const updater = await new CamoufoxUpdate(repoConfig, selected).init();
 			// The paired build is what this release was tested with; installing
 			// it needs no "this is a prerelease" confirmation even when it is one.
-			await updater.update(false, paired);
+			await updater.update(false, pin !== null);
 		} catch (e) {
+			if (e instanceof CommandFailed) throw e;
 			const msg = errorMessage(e);
 			if (msg.includes("404") || msg.includes("Not Found")) {
 				rprint("Release not found (404). Asset may have been removed.", "red");
-				rprint("Run 'camoufox sync' to refresh available versions.", "yellow");
-			} else {
-				rprint(`Error: ${msg}`, "red");
+				fail("Run 'camoufox sync' to refresh available versions.");
 			}
-			return;
+			fail(`Error: ${msg}`);
 		}
 		if (allowGeoip()) {
 			await downloadMmdb();
 		}
-		await maybeDownloadAddons({ ...DefaultAddons });
-		// TS addition: Python's fpgen package ships its model with the wheel;
-		// the TS port fetches the pinned model into the cache, so do it here
-		// rather than on the first launch.
-		const { ensureModel } = await import("./fpgen/index.js");
+		// Fetch the pinned fpgen model now rather than on the first launch.
 		await ensureModel();
 	});
 
@@ -919,7 +929,7 @@ async function interactiveSet(): Promise<void> {
 
 /** Interactive selection of the GeoIP source. */
 async function selectGeoIPSource(): Promise<void> {
-	const repos: GeoIPRepo[] = loadYaml("repos.yml").geoip ?? [];
+	const [repos] = loadGeoipRepos();
 	if (!repos.length) {
 		rprint("No GeoIP sources configured.", "red");
 		return;
@@ -1163,47 +1173,9 @@ program
 		await server.close();
 	});
 
-program
-	.command("gui")
-	.description("Launch the Camoufox Manager GUI (requires PySide6)")
-	.option("--debug", "Enable debug options in the GUI.")
-	.action(() => {
-		rprint(
-			"The GUI is a PySide6 app and is only available from the Python package: pip install 'camoufox[gui]'",
-			"red",
-		);
-	});
-
 // --------------------------------------------------------------------------
 // version
 // --------------------------------------------------------------------------
-
-/** Version of an installed npm package, or null. */
-function pkgVersion(name: string): string | null {
-	try {
-		const require = createRequire(import.meta.url);
-		const pkg = JSON.parse(
-			fs.readFileSync(require.resolve(`${name}/package.json`), "utf-8"),
-		);
-		return typeof pkg.version === "string" ? pkg.version : null;
-	} catch {
-		return null;
-	}
-}
-
-/** The TypeScript fpgen port's version, when it exposes one. */
-async function fpgenVersion(): Promise<string | null> {
-	const specifier = "./fpgen/index.js";
-	try {
-		const mod: Record<string, unknown> = await import(specifier);
-		for (const key of ["VERSION", "version", "__version__", "FPGEN_VERSION"]) {
-			if (typeof mod[key] === "string") return mod[key] as string;
-		}
-		return null;
-	} catch {
-		return null;
-	}
-}
 
 class VersionInfo {
 	rows: Array<
@@ -1227,11 +1199,11 @@ class VersionInfo {
 		else this.row(label, "?", "dim");
 	}
 
-	async packages(): Promise<void> {
+	packages(): void {
 		this.header("Packages");
 		this.pkg("Camoufox", LIBRARY_VERSION);
-		this.pkg("fpgen", await fpgenVersion());
-		this.pkg("Playwright", pkgVersion("playwright-core"));
+		this.pkg("fpgen", installedPackageVersion("fpgen-js"));
+		this.pkg("Playwright", resolvedPlaywrightVersionRaw());
 	}
 
 	browser(): void {
@@ -1336,7 +1308,7 @@ class VersionInfo {
 	}
 
 	async printAll(): Promise<void> {
-		await this.packages();
+		this.packages();
 		this.browser();
 		this.geoip();
 		this.storage();
@@ -1378,6 +1350,26 @@ function dirSize(dir: string): string {
 	}
 	return `${size.toFixed(1)} GB`;
 }
+
+program
+	.command("gpu-xorg-config")
+	.description('Print the Xorg config headless="virtual-gpu" needs for GPU')
+	.argument("[gpu]")
+	.action(async (gpu: string | undefined) => {
+		const { selectGpu, xorgConfig } = await import("./gpudisplay.js");
+		process.stdout.write(xorgConfig(selectGpu(gpu)));
+	});
+
+program
+	.command("gpu-setup")
+	.description(
+		'Print a root script that sets this machine up for headless="virtual-gpu" on GPU',
+	)
+	.argument("[gpu]")
+	.action(async (gpu: string | undefined) => {
+		const { selectGpu, setupScript } = await import("./gpudisplay.js");
+		process.stdout.write(setupScript(selectGpu(gpu)));
+	});
 
 program
 	.command("version")
@@ -1449,7 +1441,12 @@ program
 program
 	.parseAsync(process.argv)
 	.catch((error) => {
-		rprint(`Error: ${errorMessage(error)}`, "red");
+		rprint(
+			error instanceof CommandFailed
+				? error.message
+				: `Error: ${errorMessage(error)}`,
+			"red",
+		);
 		process.exitCode = 1;
 	})
 	.finally(closePrompts);

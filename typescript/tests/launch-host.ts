@@ -32,10 +32,6 @@ export const CACHE = path.join(SCRATCH, "xdg-cache", "camoufox");
 export const HOME = path.join(SCRATCH, "home");
 fs.mkdirSync(HOME, { recursive: true });
 
-// The default addon, already "downloaded", so nothing is fetched.
-fs.mkdirSync(path.join(CACHE, "addons", "UBO"), { recursive: true });
-fs.writeFileSync(path.join(CACHE, "addons", "UBO", "manifest.json"), "{}");
-
 export const utils = await import("../src/utils.js");
 export const fingerprints = await import("../src/fingerprints.js");
 export const warnings = await import("../src/warnings.js");
@@ -54,8 +50,10 @@ export function restoreDeps(): void {
 	Object.assign(deps, ORIGINAL);
 }
 
-/** The host every launch test runs against: no display, a fixed disk. */
+/** The host every launch test runs against: no display, a fixed disk, and no
+ * WebGL, so launchOptions never launches the browser to read the host's GPU. */
 export function stubHost(): void {
+	deps.hostGpu = async () => null;
 	deps.hasDisplay = () => false;
 	deps.getScreenCons = () => null;
 	deps.stockProfileDiskCapacityKb = () => 250_000_000;
@@ -66,7 +64,7 @@ export function stubHost(): void {
 }
 
 /**
- * pythonlib/tests' `isolated_launch_dependencies`: launchOptions() reduced to
+ * python/tests' `isolated_launch_dependencies`: launchOptions() reduced to
  * environment assembly -- no fingerprint, fonts, voices, geometry fixes,
  * validation or env generation.
  */
@@ -79,7 +77,7 @@ export function isolateLaunch(): void {
 	deps.generateRandomFontSubset = () => [];
 	deps.generateRandomVoiceSubset = () => [];
 	deps.fixNavigatorArch = () => undefined;
-	deps.fixScreenNoTaskbar = () => undefined;
+	deps.followBaselineProtection = () => undefined;
 	deps.clampWindowDimensions = () => undefined;
 	deps.setMediaDevicesDefaults = () => undefined;
 	deps.validateConfig = () => undefined;

@@ -1,25 +1,21 @@
 /**
- * WebGL identities, drawn from the Firefox devices fpgen has recorded.
- *
- * TypeScript twin of pythonlib/camoufox/webgl.py. Everything a page can read
- * from WebGL -- vendor, renderer, context attributes, extensions, parameters
- * and shader precisions, for WebGL1 and WebGL2 -- comes from one recorded
- * device. fpgen's `webgl` node is conditioned on the GPU, and `webgl2` on the
- * GPU and the `webgl` chosen for it, so a WebGL2 limit never contradicts its
- * WebGL1 counterpart.
- *
- * Every draw takes one seeded PyRandom, in a fixed order (GPU, then webgl,
- * then webgl2), so a seeded identity presents the same device in both
- * launchers.
+ * WebGL identities from the Firefox devices fpgen recorded, the twin of webgl.py.
+ * One device supplies every WebGL1 and WebGL2 value, so the two never disagree,
+ * and the draws run in a fixed order so a seed gives the same device in both.
  */
+
+import {
+	lookupPossibilities,
+	type TraceResult,
+	traceWithEvidence,
+} from "fpgen-js";
+import { Random, type Seed } from "python-random";
 import { gpuFitsMachine, gpuFitsOs } from "./coherence.js";
 import {
 	FPGEN_OS,
 	gpuScreenIsPlausible,
 	isSoftwareRenderer,
 } from "./fingerprints.js";
-import { type TraceResult, traceWithEvidence } from "./fpgen/trace.js";
-import { lookupPossibilities } from "./fpgen/utils.js";
 import {
 	comparePyStr,
 	KeyError,
@@ -29,7 +25,6 @@ import {
 	pyStrRepr,
 	ValueError,
 } from "./pycompat.js";
-import { PyRandom, type PySeed } from "./pyrandom.js";
 
 export type TargetOS = "win" | "mac" | "lin";
 
@@ -57,6 +52,22 @@ const NEVER_EXPOSED_EXTENSIONS: ReadonlySet<string> = new Set([
 const HOST_DEPENDENT_EXTENSIONS: ReadonlySet<string> = new Set([
 	"OVR_multiview2",
 ]);
+
+// Extensions the claimed OS's backend exposes on every GPU in Firefox 156,
+// which fpgen's Firefox 146 records lack. ANGLE sets depthClampEXT
+// unconditionally on D3D11 (renderer11_utils.cpp); 146's ANGLE did not.
+const BACKEND_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
+	win: ["EXT_depth_clamp"],
+};
+
+// Firefox 158 (bug 1854003) exposes EXT_polygon_offset_clamp wherever the GL
+// backend clamps polygon offsets: ANGLE's D3D11 backend from feature level 10_0,
+// which WebGL2 needs, and Linux desktop GL drivers (ARB_polygon_offset_clamp,
+// core in GL 4.6), whose recordings have EXT_depth_clamp. macOS release builds
+// run WebGL on CGL's GL 4.1, which lacks it.
+const POLYGON_OFFSET_CLAMP = "EXT_polygon_offset_clamp";
+
+const ALIASED_LINE_WIDTH_RANGE = "33902";
 
 // What Firefox reports under privacy.resistFingerprinting, which a Camoufox
 // identity otherwise does not present.
@@ -110,7 +121,7 @@ function trace(
 	return results;
 }
 
-function choose(rng: PyRandom, results: readonly TraceResult[]): TraceResult {
+function choose(rng: Random, results: readonly TraceResult[]): TraceResult {
 	return rng.choices(results, {
 		weights: results.map((result) => result.probability),
 	})[0];
@@ -129,17 +140,43 @@ export function firefoxGpus(targetOs: string): Array<[string, string]> {
 	]);
 }
 
+/** The extensions the shipped Firefox adds on this device's backend. */
+function backendExtensions(
+	targetOs: string,
+	webgl: Record<string, any>,
+	hasWebgl2: boolean,
+): readonly string[] {
+	const extensions = BACKEND_EXTENSIONS[targetOs] ?? [];
+	if (
+		(targetOs === "win" && hasWebgl2) ||
+		(targetOs === "lin" &&
+			(webgl.supportedExtensions as string[]).includes("EXT_depth_clamp"))
+	) {
+		return [...extensions, POLYGON_OFFSET_CLAMP];
+	}
+	return extensions;
+}
+
 function contextConfig(
 	prefix: string,
 	webgl: Record<string, any>,
 	targetOs: string,
+	backend: readonly string[],
 ): Record<string, any> {
 	const blocked = filteredExtensions(targetOs);
+	const extensions = (webgl.supportedExtensions as string[]).filter(
+		(extension) => !blocked.has(extension),
+	);
+	for (const extension of backend) {
+		if (extensions.includes(extension)) continue;
+		// Firefox lists them in WebGLExtensionID order: alphabetical, ignoring case.
+		const at = extensions.findIndex(
+			(other) => other.toLowerCase() > extension.toLowerCase(),
+		);
+		extensions.splice(at === -1 ? extensions.length : at, 0, extension);
+	}
 	return {
-		[`${prefix}:contextAttributes`]: webgl.contextAttributes,
-		[`${prefix}:supportedExtensions`]: (
-			webgl.supportedExtensions as string[]
-		).filter((extension) => !blocked.has(extension)),
+		[`${prefix}:supportedExtensions`]: extensions,
 		[`${prefix}:parameters`]: Object.fromEntries(
 			Object.entries(webgl.params as Record<string, any>).map(
 				([pname, param]) => [pname, param.value],
@@ -171,14 +208,21 @@ export function toConfig(
 	const hasWebgl2 = Array.isArray(webgl2)
 		? webgl2.length > 0
 		: Object.keys(webgl2 ?? {}).length > 0;
+	const backend = backendExtensions(targetOs, webgl, hasWebgl2);
 	const config: Record<string, any> = {
 		"webGl:vendor": webgl.vendor,
 		"webGl:renderer": webgl.renderer,
-		...contextConfig("webGl", webgl, targetOs),
+		...contextConfig("webGl", webgl, targetOs, backend),
 		webGl2Enabled: hasWebgl2,
 	};
-	if (hasWebgl2)
-		Object.assign(config, contextConfig("webGl2", webgl2, targetOs));
+	if (hasWebgl2) {
+		Object.assign(config, contextConfig("webGl2", webgl2, targetOs, backend));
+		// Firefox 156 creates WebGL1 on the same GL profile as WebGL2, so both
+		// report one line width range. 146 forced WebGL1 onto a compatibility
+		// profile, and fpgen recorded that profile's driver range.
+		config["webGl:parameters"][ALIASED_LINE_WIDTH_RANGE] =
+			config["webGl2:parameters"][ALIASED_LINE_WIDTH_RANGE];
+	}
 	// The values are the trace's cached objects; the caller gets its own copy.
 	return parsePyJson(orjsonDumps(config, false));
 }
@@ -186,7 +230,7 @@ export function toConfig(
 function webglConfig(
 	targetOs: string,
 	gpuText: string,
-	rng: PyRandom,
+	rng: Random,
 ): WebGLData {
 	const gpuPin = pin("gpu", gpuText);
 	const webgl = choose(rng, trace("webgl", targetOs, [gpuPin]));
@@ -208,7 +252,7 @@ export function webglForGpu(
 	targetOs: string,
 	vendor: string,
 	renderer: string,
-	seed?: PySeed,
+	seed?: Seed,
 ): WebGLData {
 	const gpus = firefoxGpus(targetOs);
 	if (!gpus.some(([v, r]) => v === vendor && r === renderer)) {
@@ -223,7 +267,7 @@ export function webglForGpu(
 	return webglConfig(
 		targetOs,
 		orjsonDumps({ vendor, renderer }, false),
-		new PyRandom(seed),
+		new Random(seed),
 	);
 }
 
@@ -243,7 +287,7 @@ export function sampleWebglForScreen(
 	targetOs: string,
 	width?: number | null,
 	height?: number | null,
-	seed?: PySeed,
+	seed?: Seed,
 	cores?: number | null,
 ): WebGLData {
 	const candidates = trace("gpu", targetOs).filter(
@@ -259,6 +303,6 @@ export function sampleWebglForScreen(
 			`No recorded ${targetOs} GPU fits a ${pyStr(width)}x${pyStr(height)} screen`,
 		);
 	}
-	const rng = new PyRandom(seed);
+	const rng = new Random(seed);
 	return webglConfig(targetOs, choose(rng, candidates).text, rng);
 }

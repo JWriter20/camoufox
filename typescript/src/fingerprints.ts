@@ -3,27 +3,29 @@
  * Camoufox config, the per-identity draws (fonts, voices, media devices, GPU)
  * and the geometry / arch corrections applied on top of both.
  *
- * TypeScript twin of pythonlib/camoufox/fingerprints.py. Every seeded draw is
- * bit-for-bit the Python one -- `random.Random(seed)` is ./pyrandom.ts, and
+ * TypeScript twin of python/src/camoufox/fingerprints.py. Every seeded draw is
+ * bit-for-bit the Python one -- `random.Random(seed)` is the python-random package, and
  * identitySalt() hashes the same orjson bytes -- so one config and salt
  * present one identity whichever launcher built it. Unseeded Python draws
- * (`random.randint`, `random.choice`) go through the shared `pyRandom`
- * instance, the twin of Python's module-level generator.
+ * (`random.randint`, `random.choice`) go through python-random's
+ * module-level functions, the twin of Python's module-level generator.
  */
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { generate, InvalidConstraints } from "fpgen-js";
+import * as random from "python-random";
 import {
 	supported as cpuAffinitySupported,
 	hostCoreCount,
 } from "./cpu_affinity.js";
-import { Generator, InvalidConstraints } from "./fpgen/index.js";
 import { validateIP, validIPv4 } from "./ip.js";
-import { normalizeLocale } from "./locale.js";
-import { LOCAL_DATA } from "./pkgman.js";
+import { normalizeLocale } from "./locales.js";
+import { LAUNCHER_CONSTANTS, LOCAL_DATA, loadDataFile } from "./paths.js";
 import {
 	comparePyStr,
 	crc32,
+	isPlainObject,
 	isPyError,
 	KeyError,
 	num,
@@ -34,9 +36,8 @@ import {
 	pyTruthy,
 	ValueError,
 } from "./pycompat.js";
-import { PyRandom, pyRandom } from "./pyrandom.js";
-import { FallbackWarning } from "./warnings.js";
-import { sampleWebglForScreen, type TargetOS } from "./webgl.js";
+import { FallbackWarning, loadWarnings, warn } from "./warnings.js";
+import { sampleWebglForScreen, type TargetOS, webglForGpu } from "./webgl.js";
 
 export type { TargetOS } from "./webgl.js";
 
@@ -45,40 +46,9 @@ type Config = Record<string, any>;
 export const SUPPORTED_OS = ["linux", "macos", "windows"] as const;
 export type SupportedOS = (typeof SUPPORTED_OS)[number];
 
-/**
- * The fpgen -> Camoufox config mapping (pythonlib/camoufox/fpgen.yml; the
- * golden fixtures assert the two stay equal).
- */
-export const FPGEN_DATA: Readonly<Record<string, Record<string, string>>> = {
-	navigator: {
-		userAgent: "navigator.userAgent",
-		appVersion: "navigator.appVersion",
-		oscpu: "navigator.oscpu",
-		platform: "navigator.platform",
-		hardwareConcurrency: "navigator.hardwareConcurrency",
-		maxTouchPoints: "navigator.maxTouchPoints",
-	},
-	screen: {
-		availLeft: "screen.availLeft",
-		availTop: "screen.availTop",
-		availWidth: "screen.availWidth",
-		availHeight: "screen.availHeight",
-		height: "screen.height",
-		width: "screen.width",
-		colorDepth: "screen.colorDepth",
-		pixelDepth: "screen.pixelDepth",
-	},
-	window: {
-		outerHeight: "window.outerHeight",
-		outerWidth: "window.outerWidth",
-		screenX: "window.screenX",
-		screenY: "window.screenY",
-	},
-	headers: {
-		"accept-encoding": "headers.Accept-Encoding",
-	},
-};
-
+/** The fpgen -> Camoufox config mapping. */
+export const FPGEN_DATA: Readonly<Record<string, Record<string, string>>> =
+	loadDataFile("fpgen.yml");
 // fpgen's OS names, from Camoufox's.
 export const FPGEN_OS: Readonly<Record<string, string>> = {
 	lin: "Linux",
@@ -88,14 +58,6 @@ export const FPGEN_OS: Readonly<Record<string, string>> = {
 	win: "Windows",
 	windows: "Windows",
 };
-
-// fpgen unpacks its model on first use, so the generator is built on demand.
-let FP_GENERATOR: Generator | null = null;
-
-function generator(): Generator {
-	FP_GENERATOR ??= new Generator();
-	return FP_GENERATOR;
-}
 
 /** Python dict.get(key, default): the default only when the key is absent. */
 function get(config: Config, key: string, dflt: any = undefined): any {
@@ -204,22 +166,12 @@ const PRESETS_CACHE = new Map<string, PresetBundle>();
 // ---------------------------------------------------------------------------
 
 // CreepJS OS marker fonts used for OS detection (see fingerprints.py).
-export const MACOS_MARKER_FONTS: readonly string[] = ["Helvetica Neue"];
-export const LINUX_MARKER_FONTS: readonly string[] = [
-	"Noto Sans",
-	"Noto Serif",
-	"DejaVu Sans Mono",
-	"Arimo",
-	"Cousine",
-	"Tinos",
-	"Twemoji Mozilla",
-];
-export const WINDOWS_MARKER_FONTS: readonly string[] = [
-	"Segoe UI",
-	"Tahoma",
-	"Cambria Math",
-	"Nirmala UI",
-];
+export const MACOS_MARKER_FONTS: readonly string[] =
+	LAUNCHER_CONSTANTS.markerFonts.mac;
+export const LINUX_MARKER_FONTS: readonly string[] =
+	LAUNCHER_CONSTANTS.markerFonts.lin;
+export const WINDOWS_MARKER_FONTS: readonly string[] =
+	LAUNCHER_CONSTANTS.markerFonts.win;
 
 /** Add any missing marker fonts to the font list (in place). */
 function ensureMarkerFonts(fonts: string[], markers: readonly string[]): void {
@@ -229,15 +181,11 @@ function ensureMarkerFonts(fonts: string[], markers: readonly string[]): void {
 	}
 }
 
-function readJson<T>(file: string): T {
-	return JSON.parse(fs.readFileSync(path.join(LOCAL_DATA, file), "utf-8")) as T;
-}
-
 let osFontsCache: Record<string, string[]> | null = null;
 
 /** The full OS font lists (fonts.json). */
-function loadOsFonts(): Record<string, string[]> {
-	osFontsCache ??= readJson<Record<string, string[]>>("fonts.json");
+export function loadOsFonts(): Record<string, string[]> {
+	osFontsCache ??= loadDataFile<Record<string, string[]>>("fonts.json");
 	return osFontsCache;
 }
 
@@ -245,7 +193,7 @@ function loadOsFonts(): Record<string, string[]> {
 // machine of that OS ships by default, intersected with fonts.json (see
 // fingerprints.py for the sources). essential-fonts.json is the file
 // pythonlib reads, so the two launchers cannot disagree on them.
-const ESSENTIAL_FONTS = readJson<Record<"win" | "mac" | "lin", string[]>>(
+const ESSENTIAL_FONTS = loadDataFile<Record<"win" | "mac" | "lin", string[]>>(
 	"essential-fonts.json",
 );
 export const ESSENTIAL_FONTS_MACOS: readonly string[] = ESSENTIAL_FONTS.mac;
@@ -253,35 +201,11 @@ export const ESSENTIAL_FONTS_WINDOWS: readonly string[] = ESSENTIAL_FONTS.win;
 export const ESSENTIAL_FONTS_LINUX: readonly string[] = ESSENTIAL_FONTS.lin;
 
 /**
- * OS-version variant of the Windows base: drawn with probability 1 since
- * Windows 10 was dropped as a target (2026-09-22). Format: [probability, fonts].
- */
-const BASE_VARIANT_FONTS_MACOS: readonly [number, readonly string[]] = [
-	0.0,
-	[],
-];
-const BASE_VARIANT_FONTS_WINDOWS: readonly [number, readonly string[]] = [
-	1.0,
-	[
-		"Sans Serif Collection",
-		"Segoe Fluent Icons",
-		"Segoe UI Variable",
-		"Segoe UI Variable Display",
-		"Segoe UI Variable Small",
-		"Segoe UI Variable Text",
-	],
-];
-const BASE_VARIANT_FONTS_LINUX: readonly [number, readonly string[]] = [
-	0.0,
-	[],
-];
-
-/**
  * Fonts only a Windows 11 base has: a Windows identity whose font list
  * contains them presents Windows 11, and the rest of the identity must agree.
  */
 export const WINDOWS_11_MARKER_FONTS: ReadonlySet<string> = new Set(
-	BASE_VARIANT_FONTS_WINDOWS[1],
+	LAUNCHER_CONSTANTS.windows11MarkerFonts,
 );
 
 /**
@@ -304,17 +228,29 @@ export function identitySalt(pinned?: unknown): bigint {
 	return createHash("sha256").update(blob).digest().readBigUInt64BE(0);
 }
 
+/** The browser's version in a UA: "rv:158.0" and "Firefox/158.0". */
+const UA_VERSION = /(rv:|Firefox\/)[0-9][0-9.]*/g;
+
+/**
+ * The UA with the browser's version taken out, for identitySeed(). A saved
+ * identity on a newer browser claims the new engine version and nothing else
+ * changes, so the seed must not move with it (Python: versionless_ua).
+ */
+export function versionlessUa(userAgent: string): string {
+	return userAgent.replace(UA_VERSION, "$1");
+}
+
 /**
  * A seed for the per-identity draws: a pure function of the presented
- * identity (UA, platform, screen, cores) and its salt -- zlib.crc32 of the
- * values' Python str() joined by "|".
+ * identity (UA without its version, platform, screen, cores) and its salt --
+ * zlib.crc32 of the values' Python str() joined by "|".
  */
 export function identitySeed(
 	config: Config,
 	salt: number | bigint = 0,
 ): number {
 	const parts = [
-		pyStr(get(config, "navigator.userAgent", "")),
+		versionlessUa(pyStr(get(config, "navigator.userAgent", ""))),
 		pyStr(get(config, "navigator.platform", "")),
 		pyStr(get(config, "screen.width", "")),
 		pyStr(get(config, "screen.height", "")),
@@ -326,20 +262,23 @@ export function identitySeed(
 }
 
 /**
- * The audio noise seed launchOptions derives from identitySeed() (utils.py:
- * `(ident * 2654435761 + 97) & 0xFFFFFFFF or 1`), computed without losing
- * precision past 2**53.
+ * audio:seed is gone: the browser renders audio as stock Firefox does. A
+ * caller's seed is dropped with a warning rather than sent to a browser that
+ * would noise with it (a released one) or ignore it (this one).
  */
-export function audioSeedFromIdentity(ident: number): number {
-	return Number((BigInt(ident) * 2654435761n + 97n) & 0xffffffffn) || 1;
+export function dropAudioSeed(config: Record<string, unknown>): void {
+	if ("audio:seed" in config) {
+		delete config["audio:seed"];
+		warn(loadWarnings().audio_seed_removed, "FutureWarning");
+	}
 }
 
 /** A seeded generator for a draw, or a fresh OS-seeded one when unseeded. */
-function rng(seed: number | bigint | null | undefined): PyRandom {
-	return new PyRandom(seed ?? null);
+function rng(seed: number | bigint | null | undefined): random.Random {
+	return new random.Random(seed ?? null);
 }
 
-export interface FontUnit {
+interface FontUnit {
 	id: string;
 	kind: "bundle" | "alacarte" | string;
 	prob?: number;
@@ -348,7 +287,7 @@ export interface FontUnit {
 	sizes?: Array<{ n: number; w: number }>;
 }
 
-export interface FontBase {
+interface FontBase {
 	id: string;
 	weight?: number;
 	fonts: string[];
@@ -361,7 +300,7 @@ function loadFontGroups(): Record<string, FontUnit[]> {
 	if (!fontGroupsCache) {
 		try {
 			fontGroupsCache =
-				readJson<Record<string, FontUnit[]>>("font-groups.json");
+				loadDataFile<Record<string, FontUnit[]>>("font-groups.json");
 		} catch (e) {
 			if (!isPyError(e, "OSError", "ValueError")) throw e;
 			FallbackWarning.warn(
@@ -381,7 +320,8 @@ let fontBasesCache: Record<string, FontBase[]> | null = null;
 function loadFontBases(): Record<string, FontBase[]> {
 	if (!fontBasesCache) {
 		try {
-			fontBasesCache = readJson<Record<string, FontBase[]>>("font-bases.json");
+			fontBasesCache =
+				loadDataFile<Record<string, FontBase[]>>("font-bases.json");
 		} catch (e) {
 			if (!isPyError(e, "OSError", "ValueError")) throw e;
 			FallbackWarning.warn(
@@ -396,7 +336,7 @@ function loadFontBases(): Record<string, FontBase[]> {
 }
 
 /** Draw one OS-version base by its real-world weight. */
-function pickBase(osKey: string, r: PyRandom): string[] {
+function pickBase(osKey: string, r: random.Random): string[] {
 	const bases = loadFontBases()[osKey] ?? [];
 	if (!bases.length) return [];
 	const roll = r.random();
@@ -418,7 +358,7 @@ function localeMatches(
 /** The additions this machine has, each unit judged on its own probability. */
 function drawUnits(
 	osKey: string,
-	r: PyRandom,
+	r: random.Random,
 	exclude: Set<string>,
 	locale?: string | null,
 ): string[] {
@@ -492,19 +432,15 @@ export function generateRandomFontSubset(
 
 	let essential: Set<string>;
 	let markers: readonly string[];
-	let variantFonts: readonly string[];
 	if (targetOs === "windows") {
 		essential = new Set(ESSENTIAL_FONTS_WINDOWS);
 		markers = WINDOWS_MARKER_FONTS;
-		variantFonts = BASE_VARIANT_FONTS_WINDOWS[1];
 	} else if (targetOs === "linux") {
 		essential = new Set(ESSENTIAL_FONTS_LINUX);
 		markers = LINUX_MARKER_FONTS;
-		variantFonts = BASE_VARIANT_FONTS_LINUX[1];
 	} else {
 		essential = new Set(ESSENTIAL_FONTS_MACOS);
 		markers = MACOS_MARKER_FONTS;
-		variantFonts = BASE_VARIANT_FONTS_MACOS[1];
 	}
 
 	if (native) {
@@ -513,9 +449,10 @@ export function generateRandomFontSubset(
 		result.push(
 			...[...essential].filter((f) => !full.has(f)).sort(comparePyStr),
 		);
-		if (variantFonts.length && !hostHasVariantFonts(targetOs)) {
-			const absent = new Set(variantFonts);
-			result = result.filter((f) => !absent.has(f));
+		// A native identity may run on a Windows 10 host, which cannot render
+		// the Windows 11 families the base carries.
+		if (targetOs === "windows" && !hostHasVariantFonts(targetOs)) {
+			result = result.filter((f) => !WINDOWS_11_MARKER_FONTS.has(f));
 		}
 		return result;
 	}
@@ -564,47 +501,12 @@ const VOICE_URI_PREFIX: Readonly<Record<string, string>> = {
 	lin: "urn:moz-tts:speechd:",
 };
 
-export const MAC_NOVELTY_VOICES: ReadonlySet<string> = new Set([
-	"Albert",
-	"Bad News",
-	"Bahh",
-	"Bells",
-	"Boing",
-	"Bubbles",
-	"Cellos",
-	"Wobble",
-	"Good News",
-	"Jester",
-	"Organ",
-	"Superstar",
-	"Trinoids",
-	"Whisper",
-	"Zarvox",
-	"Fred",
-	"Junior",
-	"Kathy",
-	"Ralph",
-	"Bruce",
-	"Vicki",
-	"Victoria",
-	"Agnes",
-	"Princess",
-	"Hysterical",
-	"Pipe Organ",
-	"Deranged",
-	// not a novelty voice, but the same MacinTalk identifier family
-	"Alex",
-]);
-export const MAC_ELOQUENCE_VOICES: ReadonlySet<string> = new Set([
-	"Eddy",
-	"Flo",
-	"Grandma",
-	"Grandpa",
-	"Reed",
-	"Rocko",
-	"Sandy",
-	"Shelley",
-]);
+export const MAC_NOVELTY_VOICES: ReadonlySet<string> = new Set(
+	LAUNCHER_CONSTANTS.macNoveltyVoices,
+);
+export const MAC_ELOQUENCE_VOICES: ReadonlySet<string> = new Set(
+	LAUNCHER_CONSTANTS.macEloquenceVoices,
+);
 
 let voiceUrisCache: Record<string, Record<string, string>> | null = null;
 
@@ -613,7 +515,7 @@ function loadVoiceUris(): Record<string, Record<string, string>> {
 	if (!voiceUrisCache) {
 		try {
 			voiceUrisCache =
-				readJson<Record<string, Record<string, string>>>("voice-uris.json");
+				loadDataFile<Record<string, Record<string, string>>>("voice-uris.json");
 		} catch {
 			voiceUrisCache = {};
 		}
@@ -625,7 +527,9 @@ let voiceManifestsCache: Record<string, any> | null = null;
 
 /** The per-OS installed-voice model (voice-manifests.json). */
 function loadVoiceManifests(): Record<string, any> {
-	voiceManifestsCache ??= readJson<Record<string, any>>("voice-manifests.json");
+	voiceManifestsCache ??= loadDataFile<Record<string, any>>(
+		"voice-manifests.json",
+	);
 	return voiceManifestsCache;
 }
 
@@ -689,7 +593,7 @@ function splitVoiceEntry(entry: string): [string, string, string] {
 }
 
 function weightedPick<T extends Record<string, any>>(
-	r: PyRandom,
+	r: random.Random,
 	items: T[],
 	wkey = "w",
 ): T {
@@ -703,7 +607,7 @@ function weightedPick<T extends Record<string, any>>(
 }
 
 function weightedSample<T>(
-	r: PyRandom,
+	r: random.Random,
 	items: T[],
 	k: number,
 	weight: (x: T) => number,
@@ -917,9 +821,8 @@ export function hostCpuCount(): number | null {
  * corpus. 2 is excluded: no Apple Silicon part has 2 cores, and 85% of macOS
  * identities draw an Apple GPU (see fingerprints.py).
  */
-export const PLAUSIBLE_CORE_COUNTS: readonly number[] = [
-	4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32,
-];
+export const PLAUSIBLE_CORE_COUNTS: readonly number[] =
+	LAUNCHER_CONSTANTS.plausibleCoreCounts;
 
 export interface HostCpu {
 	/** Logical CPUs of the host (default: hostCpuCount()). */
@@ -989,25 +892,33 @@ export function fixNavigatorArch(config: Config, targetOs: string): void {
 // Screen / window geometry
 // ---------------------------------------------------------------------------
 
+// What Firefox's baseline fingerprinting protection, on by default, reports in
+// place of the device's values (RFPTargetsDefaultBaseline.inc), and the browser
+// applies it to the spoofed ones for the claimed OS: the available screen is
+// the whole screen less a fixed taskbar (nsRFPService::GetSpoofedScreenAvailSize),
+// and more than one touch point reads as 5 (CollapseMaxTouchPoints).
+export const BASELINE_TASKBAR_HEIGHT: Record<string, number> =
+	LAUNCHER_CONSTANTS.baselineTaskbarHeight;
+export const BASELINE_MULTI_TOUCH_POINTS: number =
+	LAUNCHER_CONSTANTS.baselineMultiTouchPoints;
+
 /**
- * Ensure screen.availHeight < screen.height (CreepJS's noTaskbar flag), and
- * clamp the window's outer/inner height to the new avail.
+ * Claim the available screen and touch points the browser will report.
+ * clampWindowDimensions then fits the window inside that screen.
  */
-export function fixScreenNoTaskbar(config: Config, targetOs: string): void {
-	const sw = config["screen.width"];
-	const sh = config["screen.height"];
-	const ah = config["screen.availHeight"];
-	if (!(pyTruthy(sw) && pyTruthy(sh) && num(ah) === num(sh) && !isNone(ah)))
-		return;
-	const taskbar = targetOs === "win" ? 40 : targetOs === "mac" ? 25 : 27;
-	const newAvail = num(sh) - taskbar;
-	config["screen.availHeight"] = newAvail;
-	const oh = config["window.outerHeight"];
-	if (pyTruthy(oh) && num(oh) > newAvail) {
-		const ih = config["window.innerHeight"];
-		const chrome = pyTruthy(ih) ? num(oh) - num(ih) : 0;
-		config["window.outerHeight"] = newAvail;
-		if (pyTruthy(ih)) config["window.innerHeight"] = newAvail - chrome;
+export function followBaselineProtection(
+	config: Config,
+	targetOs: string,
+): void {
+	const width = config["screen.width"];
+	const height = config["screen.height"];
+	if (pyTruthy(width) && pyTruthy(height)) {
+		config["screen.availWidth"] = width;
+		config["screen.availHeight"] =
+			num(height) - BASELINE_TASKBAR_HEIGHT[targetOs];
+	}
+	if (num(config["navigator.maxTouchPoints"] ?? 0) > 1) {
+		config["navigator.maxTouchPoints"] = BASELINE_MULTI_TOUCH_POINTS;
 	}
 }
 
@@ -1127,12 +1038,12 @@ let mediaDevicesCache: Record<string, any> | null = null;
 
 /** Per-OS catalogue of common sound cards / headsets / displays / cameras. */
 function loadMediaDevices(): Record<string, any> {
-	mediaDevicesCache ??= readJson<Record<string, any>>("media-devices.json");
+	mediaDevicesCache ??= loadDataFile<Record<string, any>>("media-devices.json");
 	return mediaDevicesCache;
 }
 
 function weightedChoice<T extends Record<string, any>>(
-	r: PyRandom,
+	r: random.Random,
 	items: T[],
 ): T {
 	const w = (item: T) => (Object.hasOwn(item, "w") ? item.w : 1);
@@ -1352,7 +1263,7 @@ const OS_TO_PRESET_KEY: Readonly<Record<string, string>> = {
 
 /**
  * A random preset for the given OS (or OSes), or null when none is bundled.
- * Draws from the shared `pyRandom` (Python's module-level random.choice).
+ * Draws from python-random's module-level `choice` (Python's random.choice).
  */
 export function getRandomPreset(
 	os?: string | readonly string[] | null,
@@ -1375,7 +1286,7 @@ export function getRandomPreset(
 		);
 	}
 	if (!candidates.length) return null;
-	return pyRandom.choice(candidates);
+	return random.choice(candidates);
 }
 
 // Tokens that name the machine rather than the platform.
@@ -1409,6 +1320,16 @@ export function appVersionFromUserAgent(
 		kept.push(token.startsWith("Windows") ? "Windows" : token);
 	}
 	return kept.length ? `5.0 (${kept.join("; ")})` : null;
+}
+
+/**
+ * Sets navigator.appVersion the way Firefox computes it: from the userAgent.
+ * Left unset it falls through to the HOST's value; taken from fpgen it is a
+ * draw of its own, and fpgen pairs some Linux user agents with "5.0 (Windows)".
+ */
+function setAppVersion(config: Config): void {
+	const derived = appVersionFromUserAgent(config["navigator.userAgent"] ?? "");
+	if (derived) config["navigator.appVersion"] = derived;
 }
 
 function oscpuFromPlatform(plat: string): string | null {
@@ -1450,14 +1371,7 @@ export function fromPreset(
 		const oscpu = oscpuFromPlatform(nav.platform);
 		if (oscpu) config["navigator.oscpu"] = oscpu;
 	}
-	if (pyTruthy(nav.appVersion)) {
-		config["navigator.appVersion"] = nav.appVersion;
-	} else if (pyTruthy(config["navigator.userAgent"])) {
-		// Left unset, appVersion falls through to the HOST's value and
-		// contradicts the userAgent and platform set above.
-		const derived = appVersionFromUserAgent(config["navigator.userAgent"]);
-		if (derived) config["navigator.appVersion"] = derived;
-	}
+	setAppVersion(config);
 	if (Object.hasOwn(nav, "maxTouchPoints"))
 		config["navigator.maxTouchPoints"] = nav.maxTouchPoints;
 
@@ -1478,9 +1392,6 @@ export function fromPreset(
 		config["webGl:vendor"] = webgl.unmaskedVendor;
 	if (pyTruthy(webgl.unmaskedRenderer))
 		config["webGl:renderer"] = webgl.unmaskedRenderer;
-
-	// A unique audio seed per launch.
-	config["audio:seed"] = pyRandom.randint(1, 4_294_967_295);
 
 	if (pyTruthy(preset.timezone)) config.timezone = preset.timezone;
 
@@ -1548,10 +1459,10 @@ export function fromPreset(
 // ---------------------------------------------------------------------------
 
 export interface InitValues {
-	audioFingerprintSeed?: number;
 	navigatorPlatform?: string;
 	navigatorOscpu?: string;
 	navigatorUserAgent?: string;
+	navigatorAppVersion?: string;
 	hardwareConcurrency?: number;
 	webglVendor?: string;
 	webglRenderer?: string;
@@ -1573,10 +1484,10 @@ export function buildInitScript(values: InitValues): string {
 	const lines = ["(function(v) {", "  var w = window;"];
 
 	const setters: Array<[keyof InitValues, string]> = [
-		["audioFingerprintSeed", "setAudioFingerprintSeed"],
 		["navigatorPlatform", "setNavigatorPlatform"],
 		["navigatorOscpu", "setNavigatorOscpu"],
 		["navigatorUserAgent", "setNavigatorUserAgent"],
+		["navigatorAppVersion", "setNavigatorAppVersion"],
 		["hardwareConcurrency", "setNavigatorHardwareConcurrency"],
 		["webglVendor", "setWebGLVendor"],
 		["webglRenderer", "setWebGLRenderer"],
@@ -1675,7 +1586,8 @@ export interface ContextFingerprint {
 	preset: Preset;
 }
 
-function targetOsFromPlatform(plat: string): SupportedOS {
+/** The OS a navigator.platform value presents, as a Camoufox OS name. */
+export function targetOsFromPlatform(plat: string): SupportedOS {
 	if (plat === "Win32") return "windows";
 	if (plat.includes("Linux") || plat.includes("linux")) return "linux";
 	return "macos";
@@ -1692,6 +1604,8 @@ function targetOsFromPlatform(plat: string): SupportedOS {
  * @param locale BCP-47 locale; also sets context_options.locale.
  * @param config_overrides CAMOU_CONFIG keys applied after the config is built
  *   and before the init script is rendered.
+ * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
+ *   of drawing one.
  */
 export function generateContextFingerprint({
 	preset,
@@ -1701,6 +1615,7 @@ export function generateContextFingerprint({
 	timezone,
 	locale,
 	config_overrides,
+	webgl_config,
 }: {
 	preset?: Preset | null;
 	os?: string | null;
@@ -1709,6 +1624,7 @@ export function generateContextFingerprint({
 	timezone?: string | null;
 	locale?: string | null;
 	config_overrides?: Config | null;
+	webgl_config?: [string, string] | null;
 } = {}): ContextFingerprint {
 	let config: Config;
 	let nav: Record<string, any>;
@@ -1735,9 +1651,6 @@ export function generateContextFingerprint({
 
 		// A fresh identity: every seeded draw below gets its own salt.
 		const salt = identitySalt();
-
-		if (!("audio:seed" in config))
-			config["audio:seed"] = pyRandom.randint(1, 4_294_967_295);
 
 		const osName = targetOsFromPlatform(
 			pyStr(get(config, "navigator.platform", "")),
@@ -1805,13 +1718,15 @@ export function generateContextFingerprint({
 			// Same coherence treatment launchOptions applies (#729): lift netbook
 			// geometry, then keep the GPU consistent with the resulting screen.
 			raiseScreenToModernFloor(config);
-			const webglFp = sampleWebglForScreen(
-				targetOs,
-				config["screen.width"],
-				config["screen.height"],
-				undefined,
-				config["navigator.hardwareConcurrency"],
-			);
+			const webglFp = webgl_config
+				? webglForGpu(targetOs, ...webgl_config)
+				: sampleWebglForScreen(
+						targetOs,
+						config["screen.width"],
+						config["screen.height"],
+						undefined,
+						config["navigator.hardwareConcurrency"],
+					);
 			delete webglFp.webGl2Enabled;
 			Object.assign(config, webglFp);
 		}
@@ -1842,13 +1757,17 @@ export function generateContextFingerprint({
 		if (parsed.script) config["locale:script"] = parsed.script;
 	}
 
-	if (config_overrides) Object.assign(config, config_overrides);
+	if (config_overrides) {
+		const overrides = { ...config_overrides };
+		dropAudioSeed(overrides);
+		Object.assign(config, overrides);
+	}
 
 	const initValues: InitValues = {
-		audioFingerprintSeed: config["audio:seed"],
 		navigatorPlatform: nav.platform,
 		navigatorOscpu: config["navigator.oscpu"],
 		navigatorUserAgent: config["navigator.userAgent"],
+		navigatorAppVersion: config["navigator.appVersion"],
 		hardwareConcurrency: pyTruthy(nav.hardwareConcurrency)
 			? nav.hardwareConcurrency
 			: config["navigator.hardwareConcurrency"],
@@ -1894,18 +1813,8 @@ export function generateContextFingerprint({
 // fpgen fingerprints
 // ---------------------------------------------------------------------------
 
-function isPlainObject(value: unknown): value is Record<string, any> {
-	return (
-		value !== null &&
-		typeof value === "object" &&
-		!Array.isArray(value) &&
-		(Object.getPrototypeOf(value) === Object.prototype ||
-			Object.getPrototypeOf(value) === null)
-	);
-}
-
 /** Casts an fpgen fingerprint node onto Camoufox config properties. */
-export function castToProperties(
+function castToProperties(
 	camoufoxData: Config,
 	castEnum: Record<string, any>,
 	fpDict: Record<string, any>,
@@ -1946,7 +1855,7 @@ export function castToProperties(
 }
 
 /** Sets window.screenY from the generated screenX value. */
-export function handleScreenXY(
+function handleScreenXY(
 	camoufoxData: Config,
 	fingerprint: Record<string, any>,
 ): void {
@@ -1967,8 +1876,8 @@ export function handleScreenXY(
 	const screenY = num(screen.availHeight || 0) - num(window.outerHeight || 0);
 	if (screenY === 0) camoufoxData["window.screenY"] = 0;
 	else if (screenY > 0)
-		camoufoxData["window.screenY"] = pyRandom.randrange(0, screenY);
-	else camoufoxData["window.screenY"] = pyRandom.randrange(screenY, 0);
+		camoufoxData["window.screenY"] = random.randrange(0, screenY);
+	else camoufoxData["window.screenY"] = random.randrange(screenY, 0);
 }
 
 /** Converts an fpgen fingerprint to a Camoufox config. */
@@ -1979,6 +1888,7 @@ export function fromFpgen(
 	const camoufoxData: Config = {};
 	castToProperties(camoufoxData, FPGEN_DATA, fingerprint, ffVersion);
 	handleScreenXY(camoufoxData, fingerprint);
+	setAppVersion(camoufoxData);
 	return camoufoxData;
 }
 
@@ -2029,7 +1939,7 @@ export interface GenerateFingerprintOptions {
 
 /**
  * Generates a Firefox fingerprint with fpgen (the model must be installed:
- * `await ensureModel()` from ./fpgen/index.js).
+ * `await ensureModel()` from fpgen).
  *
  * `screen` bounds the generated screen; `window` overrides the outer window
  * size afterwards; `os` is Camoufox's name for the platform; anything else is
@@ -2063,7 +1973,7 @@ export function generateFingerprint({
 	const screenConditions = screen ? screen.asConditions() : {};
 	let fingerprint: Record<string, any>;
 	try {
-		fingerprint = generator().generate({
+		fingerprint = generate({
 			browser: "Firefox",
 			...conditions,
 			...screenConditions,
@@ -2077,7 +1987,7 @@ export function generateFingerprint({
 		// The screen bound is best-effort: a display the pool has nothing to fit
 		// must not stop a fingerprint being generated. clampScreenToDisplay()
 		// still bounds the result afterwards.
-		fingerprint = generator().generate({ browser: "Firefox", ...conditions });
+		fingerprint = generate({ browser: "Firefox", ...conditions });
 	}
 	if (window) handleWindowSize(fingerprint, window[0], window[1]);
 	return fingerprint;
