@@ -3,6 +3,9 @@
  * NewContext, their Async* twins, DefaultAddons, launch_options), plus the
  * package-management and server helpers the TS port has always exported.
  */
+// First: fail with the Node.js floor before any module needs it.
+import "./node-floor.js";
+
 export type { DefaultAddon } from "./addons.js";
 export { DefaultAddons } from "./addons.js";
 export {

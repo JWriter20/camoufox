@@ -119,6 +119,14 @@ await browser.close();
 | `geolocation` | `{ latitude, longitude }`; also grants the `geolocation` permission. |
 | anything else | Passed to Playwright's `browser.newContext()` (camelCase, e.g. `timezoneId`), overriding the generated value. |
 
+A context's pages are the browser's window unless you pass `viewport`, and its
+screen is drawn to hold that window. A `viewport` here, in `newContext()` or
+`newPage()`, or in a persistent launch, is kept as given, and the context
+claims a recorded screen that holds it with a real Firefox window's toolbars
+around it. Only the browser's window cannot follow a context: a viewport larger
+than it, or a `page.setViewportSize()` the screen cannot hold, emits a
+`LeakWarning`.
+
 Canvas noise belongs to the browser, not the context (see
 [The canvas on another OS](#the-canvas-on-another-os)). On a browser without it,
 every context claims the host's OS and GPU too, since its canvas renders there.

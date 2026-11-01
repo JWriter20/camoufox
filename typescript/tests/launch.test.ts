@@ -9,6 +9,7 @@
  * behaviours the Python suite names, with the same stubs.
  */
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -21,6 +22,7 @@ import {
 	vi,
 } from "vitest";
 import type { HumanizeManifest, HumanizeSetting } from "../src/humanize.js";
+import { setTogglePref } from "../src/utils.js";
 import {
 	BUNDLE,
 	BUNDLE_EXE,
@@ -300,8 +302,23 @@ describe("test_launch_environment: prefs", () => {
 			],
 		];
 		for (const [flag, pref, stock, toggled] of TOGGLES) {
-			it(`${flag} off writes the stock ${pref}`, async () => {
-				expect((await prefsFor(ua(LINUX_UA)))[pref]).toBe(stock);
+			it(`${flag} off writes no ${pref}, as stock writes none`, async () => {
+				expect(await prefsFor(ua(LINUX_UA))).not.toHaveProperty([pref]);
+			});
+			it(`${flag} off clears a ${pref} an earlier launch left in prefs.js`, () => {
+				const dir = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-toggle-"));
+				try {
+					fs.writeFileSync(path.join(dir, "prefs.js"), `user_pref("${pref}", ${JSON.stringify(toggled)});\n`);
+					const prefs: Record<string, unknown> = {};
+					setTogglePref(prefs, pref, false, stock, toggled, dir);
+					expect(prefs).toEqual({ [pref]: stock });
+					fs.writeFileSync(path.join(dir, "prefs.js"), `user_pref("${pref}", ${JSON.stringify(stock)});\n`);
+					const clean: Record<string, unknown> = {};
+					setTogglePref(clean, pref, false, stock, toggled, dir);
+					expect(clean).toEqual({});
+				} finally {
+					fs.rmSync(dir, { recursive: true, force: true });
+				}
 			});
 			it(`${flag} on writes the toggled ${pref}`, async () => {
 				expect((await prefsFor({ ...ua(LINUX_UA), [flag]: true }))[pref]).toBe(

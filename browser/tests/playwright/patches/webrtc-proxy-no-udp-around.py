@@ -89,8 +89,9 @@ GATHER = """mw:async (stun) => {
 
 LOOPBACK = """mw:async () => {
   const a = new RTCPeerConnection(), b = new RTCPeerConnection();
-  a.onicecandidate = e => e.candidate && b.addIceCandidate(e.candidate).catch(() => {});
-  b.onicecandidate = e => e.candidate && a.addIceCandidate(e.candidate).catch(() => {});
+  const cands = [];
+  a.onicecandidate = e => { if (e.candidate) { cands.push(e.candidate.candidate); b.addIceCandidate(e.candidate).catch(() => {}); } };
+  b.onicecandidate = e => { if (e.candidate) { cands.push(e.candidate.candidate); a.addIceCandidate(e.candidate).catch(() => {}); } };
   const channel = a.createDataChannel('probe');
   const received = new Promise(resolve => {
     b.ondatachannel = e => { e.channel.onmessage = m => resolve(m.data); };
@@ -103,7 +104,7 @@ LOOPBACK = """mw:async () => {
   await a.setRemoteDescription(b.localDescription);
   const message = await received;
   a.close(); b.close();
-  return message;
+  return {message, cands};
 }"""
 
 
@@ -402,8 +403,13 @@ async def judge(lan: str, stun: "StunServer") -> int:
             sources = stun.sources[before_stun:]
             loopback = await page.evaluate(LOOPBACK)
             await asyncio.sleep(1.0)
-            results[label] = {"gather": gather, "sources": sources, "loopback": loopback,
-                              "mdns": mdns.seen[before_mdns:]}
+            # Only this page's names: other browsers on this host (a parallel cfparity run) multicast
+            # their own <uuid>.local names from the same address, and were counted as this one's.
+            names = {m.group().decode() for c in gather["cands"] + loopback["cands"]
+                     for m in UUID_LOCAL.finditer(c.encode())}
+            results[label] = {"gather": gather, "sources": sources, "loopback": loopback["message"],
+                              "names": len(names),
+                              "mdns": [(ip, n) for ip, n in mdns.seen[before_mdns:] if n in names]}
             await context.close()
     for p in (relaying, refusing):
         p.close()
@@ -454,7 +460,8 @@ async def judge(lan: str, stun: "StunServer") -> int:
             print(f"  NOT JUDGED {label}: cannot watch mDNS ({mdns.error})")
         else:
             checks.append((f"{label}: no mDNS query or answer for a host candidate's name leaves",
-                           not r["mdns"], sorted(set(r["mdns"]))[:4]))
+                           r["names"] > 0 and not r["mdns"],
+                           sorted(set(r["mdns"]))[:4] if r["names"] else "the page gathered no .local name: vacuous"))
     passed = True
     for label, ok, got in checks:
         print(f"  {'PASS' if ok else 'FAIL'} {label}: {got}")

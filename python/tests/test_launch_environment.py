@@ -1,6 +1,7 @@
 """Regression tests for per-launch environment isolation."""
 
 import copy
+import json
 import os
 
 import pytest
@@ -217,8 +218,22 @@ class TestToggleSettingsAreWrittenBothWays:
         )["firefox_user_prefs"]
 
     @pytest.mark.parametrize("flag, pref, stock, toggled", TOGGLES)
-    def test_off_writes_the_stock_value(self, isolated_launch_dependencies, flag, pref, stock, toggled):
-        assert self._prefs()[pref] == stock
+    def test_off_writes_nothing_as_stock_does(self, isolated_launch_dependencies, flag, pref, stock, toggled):
+        # The permissions check compares the prefs a launch sets with stock's, which sets none.
+        assert pref not in self._prefs()
+
+    @pytest.mark.parametrize("flag, pref, stock, toggled", TOGGLES)
+    def test_off_clears_a_value_an_earlier_launch_left(self, isolated_launch_dependencies, tmp_path,
+                                                       flag, pref, stock, toggled):
+        (tmp_path / "prefs.js").write_text(f'user_pref("{pref}", {json.dumps(toggled)});\n')
+        assert utils.saved_pref(str(tmp_path), pref) == toggled
+        prefs = {}
+        utils.set_toggle_pref(prefs, pref, False, stock, toggled, str(tmp_path))
+        assert prefs == {pref: stock}
+        (tmp_path / "prefs.js").write_text(f'user_pref("{pref}", {json.dumps(stock)});\n')
+        prefs = {}
+        utils.set_toggle_pref(prefs, pref, False, stock, toggled, str(tmp_path))
+        assert prefs == {}
 
     @pytest.mark.parametrize("flag, pref, stock, toggled", TOGGLES)
     def test_on_writes_the_toggled_value(self, isolated_launch_dependencies, flag, pref, stock, toggled):

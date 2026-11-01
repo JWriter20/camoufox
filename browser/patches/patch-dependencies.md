@@ -51,10 +51,12 @@ be listed there.
 | `screen-spoofing.patch` | `screen.*` |
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
+| `timer-lateness-claimed-os.patch` | `navigator.platform` (the timer's own context's, through `NavigatorManager::GetSpoofedOS()`) |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints` |
 | `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:blockIfNotDefined` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
+| `windows-lazy-cmaps.patch` | `fonts:windowsCmapLoadMs`, `navigator.platform` (the font group's context's, through `NavigatorManager::GetSpoofedOS()`) |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
 | `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*` (re-orders the getters above so stock's work runs first) |
 
@@ -78,6 +80,8 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId` |
 | `timezone-spoofing.patch`, `webrtc-ip-spoofing.patch` | `audio-fingerprint-manager.patch` for `RoverfoxStorageManager.h` in `dom/base/nsGlobalWindowInner.cpp` |
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch`, `zz-stock-cost-parity.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
+| `timer-lateness-claimed-os.patch` | `fingerprint-injection.patch` for `/camoucfg` in `dom/base/moz.build`; `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()`; `cross-process-storage.patch` for `RoverfoxStorageManager::UserContextId()` |
+| `windows-lazy-cmaps.patch` | `claimed-os-emoji-pref.patch` for `MaskConfig.hpp` in `gfx/thebes/gfxTextRun.cpp`; `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build`; `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId`; `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
 | `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
 

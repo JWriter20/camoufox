@@ -47,6 +47,9 @@
  */
 export const kAckDeadlineMs = 5000;
 
+const {Helper} = ChromeUtils.importESModule('resource://gre/modules/juggler/Helper.js');
+const helper = new Helper();
+
 function warnUndelivered(eventType, x, y, box, deadlineMs) {
   dump(
     `[juggler] WARN ${eventType} at (${x}, ${y}) was not delivered to the ` +
@@ -59,12 +62,20 @@ export class MouseDispatch {
   /**
    * @param {Window} win chrome window owning the browser element.
    * @param {DOMRect} boundingBox the browser element's rect, already measured.
-   * @param {object} eventArgs button / clickCount / modifiers / buttons.
+   * @param {object} eventArgs button / clickCount / modifiers / buttons, and
+   *     ageMs: how long ago the input was made (its events keep that time).
+   * @param {Element} [browser] the browser element, when the rect is to be
+   *     measured again before each dispatch (forBrowser).
    */
-  constructor(win, boundingBox, {button = 0, clickCount = 0, modifiers = 0, buttons = 0} = {}) {
+  constructor(win, boundingBox, {button = 0, clickCount = 0, modifiers = 0, buttons = 0, ageMs = 0} = {}, browser = null) {
     this._win = win;
+    this._args = {button, clickCount, modifiers, buttons, ageMs};
+    this._browser = browser;
+    this._measured(boundingBox);
+  }
+
+  _measured(boundingBox) {
     this._box = boundingBox;
-    this._args = {button, clickCount, modifiers, buttons};
 
     // The first whole pixel inside the browser element on each axis.
     //
@@ -101,7 +112,60 @@ export class MouseDispatch {
   }
 
   static forBrowser(win, linkedBrowser, eventArgs) {
-    return new MouseDispatch(win, linkedBrowser.getBoundingClientRect(), eventArgs);
+    return new MouseDispatch(win, linkedBrowser.getBoundingClientRect(), eventArgs, linkedBrowser);
+  }
+
+  /**
+   * Measure the browser rect again. Every dispatch does this synchronously
+   * before converting its point (docs/input-dispatch.md, "A fresh rect"): one
+   * MouseDispatch serves a whole humanized move, whose steps are dispatched
+   * over hundreds of ms, and the browser can move in the window meanwhile.
+   *
+   * Measured 2026-10-31 (humanize-seam.py, ~1 in 4 runs): a window smaller
+   * than the chrome plus the viewport, as a 1366x768 screen draw gives a
+   * 1000x700 viewport, leaves Juggler's .browserStack scrolling the browser,
+   * and while it was overflow: auto a wheel turn scrolled it by the overflow
+   * over ~130ms (TargetRegistry.updateViewportSize). A move that started
+   * meanwhile kept the rect from its start, so every later point, the
+   * destination included, reached the page shifted by the scroll (13-84 px):
+   * moves the engine never planned, a move that missed its target, and the
+   * next click's mousedown away from the last mousemove, which a real mouse
+   * never does. The chrome can still move the browser mid-move (a toolbar
+   * changing height, the fullscreen toolbox sliding away).
+   */
+  _remeasure() {
+    if (this._browser)
+      this._measured(this._browser.getBoundingClientRect());
+  }
+
+  /**
+   * Is this relative point in the part of the browser the window shows? The
+   * browser is clipped by its .browserStack, which scrolls when the window is
+   * too small for the viewport (TargetRegistry.updateViewportSize); a point
+   * in the clipped band lands on chrome and is never acked.
+   */
+  _isShown(x, y) {
+    const stack = this._browser?.closest('.browserStack');
+    if (!stack)
+      return true;
+    const clip = stack.getBoundingClientRect();
+    const {x: absX, y: absY} = this.toAbsolute(x, y);
+    return absX >= Math.ceil(clip.left) && absX <= Math.ceil(clip.left + clip.width) - 1 &&
+           absY >= Math.ceil(clip.top) && absY <= Math.ceil(clip.top + clip.height) - 1;
+  }
+
+  /**
+   * Bring a relative point into the shown part of the browser, as
+   * Page.dispatchMouseEvent does before it measures, when it has scrolled out
+   * since: a move's destination is always dispatched.
+   */
+  async _reveal(x, y) {
+    this._remeasure();
+    if (!this._browser || this._isShown(x, y))
+      return;
+    this._browser.scrollRectIntoViewIfNeeded(x, y, 0, 0);
+    if (this._win.windowUtils.flushApzRepaints())
+      await helper.awaitTopicWithin('apz-repaints-flushed', kAckDeadlineMs);
   }
 
   get boundingBox() {
@@ -130,6 +194,8 @@ export class MouseDispatch {
   }
 
   _sendAbsolute(eventType, absX, absY) {
+    if (this._args.ageMs > 0)
+      this._win.windowUtils.jugglerSetNextMouseEventAge(this._args.ageMs);
     return this._win.windowUtils.jugglerSendMouseEvent(
       eventType,
       absX,
@@ -161,6 +227,7 @@ export class MouseDispatch {
    * event in the process, in every tab, for the life of the browser.
    */
   async sendAcked(watcher, eventType, x, y, deadlineMs = kAckDeadlineMs) {
+    this._remeasure();
     const {x: absX, y: absY} = this.toAbsolute(x, y);
     // This dispatches to the renderer synchronously.
     const jugglerEventId = this._sendAbsolute(eventType, absX, absY);
@@ -213,9 +280,11 @@ export class MouseDispatch {
    * start of the move, not a gap after the previous ack, so a late ack delays
    * only its own point; a skipped point shifts nothing that follows it.
    *
-   * Points outside the viewport are skipped, and a curve leaves the viewport
-   * more often than it sounds: measured over 400 random moves, 69% of Cursory
-   * paths stray outside the box spanned by their own endpoints, by up to 184px.
+   * Each step measures the browser rect afresh (_remeasure). Points outside
+   * the viewport, or in a band of it the window does not show, are skipped,
+   * and a curve leaves the viewport more often than it sounds: measured over
+   * 400 random moves, 69% of Cursory paths stray outside the box spanned by
+   * their own endpoints, by up to 184px.
    *
    * Bounding each ack individually is not enough to bound the work: a curve is
    * dispatched inside a SINGLE activation-chain slot, and holds up to ~90
@@ -248,10 +317,12 @@ export class MouseDispatch {
     const destination = plan.steps.length - 1;
     await play(plan, async ({x, y}, i) => {
       if (i === destination) {
+        await this._reveal(x, y);
         await sendDestination(x, y);
         return true;
       }
-      if (!this.isInViewport(x, y))
+      this._remeasure();
+      if (!this.isInViewport(x, y) || !this._isShown(x, y))
         return true;
       if (Math.round(x) === lastX && Math.round(y) === lastY)
         return true;

@@ -15,15 +15,21 @@ from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
     attach_context_defaults,
+    attach_persistent_geometry,
     attach_socks5_auth,
+    attach_viewport_fit,
+    context_screen_bound,
     context_identity,
+    hand_over_context_geometry,
     host_identity,
+    launch_geometry,
     launch_options,
     new_context_options,
     persistent_context_options,
     spoofs_window_dimensions,
     start_virtual_display,
     sync_attach_vd,
+    take_back_context_geometry,
 )
 
 
@@ -172,6 +178,7 @@ def _launch(
                 **persistent_context_options(from_options, no_viewport_default)
             )
             driver_defaults.mark(context)
+            attach_persistent_geometry(context, from_options)
             if lease:
                 pro.attach_lease(lease, context, 'close')
             return sync_attach_vd(context, virtual_display)
@@ -180,7 +187,7 @@ def _launch(
         browser = playwright.firefox.launch(**from_options)
         if lease:
             pro.attach_lease(lease, browser, 'disconnected')
-        attach_context_defaults(browser, no_viewport_default)
+        attach_context_defaults(browser, no_viewport_default, launch_geometry(from_options))
         browser._camoufox_host_identity = identity
         browser._camoufox_render_node = render_node.RELAY_ENV in from_options.get('env', {})
         return sync_attach_vd(browser, virtual_display)
@@ -243,10 +250,17 @@ def NewContext(
     fp = generate_context_fingerprint(
         preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config,
         webgl=not vars(browser).get('_camoufox_render_node'),
+        screen_bound=context_screen_bound(browser, os, context_kwargs),
     )
 
-    # A browser launched elsewhere takes SOCKS5 credentials too.
+    # A browser launched elsewhere takes SOCKS5 credentials too, and its
+    # contexts are fitted to their screens as well.
     attach_socks5_auth(browser)
-    context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
+    attach_viewport_fit(browser)
+    hand_over_context_geometry(browser, fp)
+    try:
+        context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
+    finally:
+        take_back_context_geometry(browser)
     context.add_init_script(fp['init_script'])
     return context

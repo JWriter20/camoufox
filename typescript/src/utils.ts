@@ -22,9 +22,12 @@ import {
 	UnknownIPLocation,
 } from "./exceptions.js";
 import {
+	BASELINE_TASKBAR_HEIGHT,
+	type Box,
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
+	drawScreen,
 	drawVoiceConfig,
 	dropAudioSeed,
 	fixHardwareConcurrency,
@@ -36,11 +39,14 @@ import {
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
 	getRandomPreset,
+	handleWindowSize,
 	identitySalt,
 	identitySeed,
 	loadOsFonts,
+	RECORDED_WINDOW_CHROME,
 	raiseScreenToModernFloor,
 	Screen,
+	screenFloor,
 	setHostIpv6Default,
 	setLocationSettingDefault,
 	setMediaDevicesDefaults,
@@ -117,6 +123,50 @@ import { FallbackWarning, LeakWarning, warn } from "./warnings.js";
 import { firefoxGpus, sampleWebglForScreen, webglForGpu } from "./webgl.js";
 
 type ListOrString = string | string[];
+
+/** The value a persistent profile's prefs.js holds for `pref` (undefined when none). Mirrors Python's saved_pref. */
+export function savedPref(
+	profileDir: string | undefined,
+	pref: string,
+): unknown {
+	if (!profileDir) return undefined;
+	let text: string;
+	try {
+		text = fs.readFileSync(path.join(profileDir, "prefs.js"), "utf-8");
+	} catch {
+		return undefined;
+	}
+	const escaped = pref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const m = new RegExp(`user_pref\\("${escaped}",\\s*(.+?)\\);`).exec(text);
+	if (!m) return undefined;
+	try {
+		return JSON.parse(m[1]);
+	} catch {
+		return m[1];
+	}
+}
+
+/**
+ * Write a launch toggle's pref the way stock's profile has it: on, the toggled
+ * value; off, nothing (stock writes nothing), unless a persistent profile kept a
+ * non-stock value in prefs.js from an earlier launch. Mirrors Python's set_toggle_pref.
+ */
+export function setTogglePref(
+	prefs: Record<string, unknown>,
+	pref: string,
+	on: boolean,
+	stock: unknown,
+	toggled: unknown,
+	profileDir: string | undefined,
+): void {
+	if (on) {
+		prefs[pref] ??= toggled;
+		return;
+	}
+	const saved = savedPref(profileDir, pref);
+	if (saved !== undefined && saved !== stock) prefs[pref] ??= stock;
+}
+
 export type TargetOS = "mac" | "win" | "lin";
 type EnvVars = Record<string, string | number | boolean>;
 
@@ -1296,6 +1346,358 @@ export function attachSocks5Auth<T>(target: T): T {
 	return target;
 }
 
+// Where a browser or context keeps the geometry its pages claim
+// (launchGeometry), where NewContext() leaves its identity's for the
+// newContext() it is about to make, and the mark of a fitted browser
+// (python/src/camoufox/utils.py _GEOMETRY, _NEXT_CONTEXT).
+const CAMOUFOX_GEOMETRY = Symbol.for("camoufox.geometry");
+const CAMOUFOX_NEXT_CONTEXT = Symbol.for("camoufox.nextContext");
+const CAMOUFOX_VIEWPORT_FIT = Symbol.for("camoufox.viewportFit");
+
+/** The viewport Playwright gives a context that asks for neither a viewport nor none. */
+export const PLAYWRIGHT_DEFAULT_VIEWPORT = { width: 1280, height: 720 };
+
+/** What an identity claims around its pages (launchGeometry). */
+export interface Geometry {
+	os: TargetOS;
+	screen: [number, number];
+	window: Box | null;
+}
+
+/**
+ * What a launch's identity claims around its pages, from the CAMOU_CONFIG in
+ * the launch options; null when the identity claims no screen
+ * (python/src/camoufox/utils.py launch_geometry).
+ *
+ * The window is where CamoufoxWindow.sys.mjs puts the browser's real window,
+ * which every page reports in outerWidth/outerHeight: the identity's outer
+ * size, or, where the identity sets the content area instead, that with the
+ * recorded chrome around it.
+ */
+export function launchGeometry(
+	fromOptions: Record<string, any>,
+): Geometry | null {
+	const blob = camouConfigBlob(fromOptions);
+	let config: any;
+	try {
+		config = blob ? JSON.parse(blob) : {};
+	} catch {
+		return null;
+	}
+	if (!isPlainObject(config)) return null;
+	const width = config["screen.width"];
+	const height = config["screen.height"];
+	if (!(width && height)) return null;
+	const osKey = getTargetOs(config);
+	const size = (["Width", "Height"] as const).map((axis, i) => {
+		const inner = config[`window.inner${axis}`];
+		return inner
+			? inner + RECORDED_WINDOW_CHROME[osKey][i]
+			: config[`window.outer${axis}`];
+	});
+	const window: Box | null = size.every(Boolean)
+		? {
+				x: config["window.screenX"] || 0,
+				y: config["window.screenY"] || 0,
+				width: size[0],
+				height: size[1],
+			}
+		: null;
+	return { os: osKey, screen: [width, height], window };
+}
+
+function boxSize(value: any): [number, number] | null {
+	if (isPlainObject(value) && value.width && value.height)
+		return [Math.trunc(value.width), Math.trunc(value.height)];
+	return null;
+}
+
+function fmtSize(size: readonly number[]): string {
+	return `${size[0]}x${size[1]}`;
+}
+
+function warnViewportScreen(
+	geometry: Geometry,
+	viewport: readonly number[],
+	claimed: readonly number[],
+	reason: string,
+): void {
+	LeakWarning.warn("viewport_screen", undefined, {
+		viewport: fmtSize(viewport),
+		screen: fmtSize(claimed),
+		os: OS_NAMES[geometry.os],
+		chrome: fmtSize(RECORDED_WINDOW_CHROME[geometry.os]),
+		taskbar: BASELINE_TASKBAR_HEIGHT[geometry.os],
+		reason,
+	});
+}
+
+function warnViewportWindow(
+	viewport: readonly number[],
+	window: Box | null,
+): void {
+	if (window && (viewport[0] > window.width || viewport[1] > window.height))
+		LeakWarning.warn("viewport_window", undefined, {
+			viewport: fmtSize(viewport),
+			window: fmtSize([window.width, window.height]),
+		});
+}
+
+/**
+ * The screen a new context must claim so that its pages fit on it, or null
+ * when the identity's own already holds them
+ * (python/src/camoufox/utils.py fit_context_screen).
+ *
+ * A viewport sits in a window the recorded chrome larger (screenFloor), and
+ * the pages report the browser's window as theirs, so the screen holds both;
+ * one that does not is replaced with a recorded screen that does
+ * (drawScreen). Playwright's own `screen` option, which Juggler does not
+ * apply, is the screen the caller chose: it is claimed as given. The caller's
+ * viewport is never changed, so where no screen or no window can hold it,
+ * this warns.
+ */
+export function fitContextScreen(
+	geometry: Geometry,
+	options: Record<string, any>,
+): [number, number] | null {
+	const { os: osKey, screen, window } = geometry;
+	// `viewport: null` is the JS API's no viewport; left out, Playwright's default.
+	const viewport =
+		options.viewport === null
+			? null
+			: (boxSize(options.viewport) ?? boxSize(PLAYWRIGHT_DEFAULT_VIEWPORT));
+	const floor = screenFloor(
+		osKey,
+		viewport && { width: viewport[0], height: viewport[1] },
+		window,
+	);
+	const holds = (size: readonly number[]) =>
+		size[0] >= floor[0] && size[1] >= floor[1];
+	const shown = viewport ?? (window ? [window.width, window.height] : [0, 0]);
+
+	let claimed: [number, number] | null = null;
+	const requested = boxSize(options.screen);
+	if (requested) {
+		claimed =
+			requested[0] !== screen[0] || requested[1] !== screen[1]
+				? requested
+				: null;
+		if (!holds(requested))
+			warnViewportScreen(
+				geometry,
+				shown,
+				requested,
+				"this one is the screen= the context was given, so it is kept",
+			);
+	} else if (!holds(screen)) {
+		claimed = drawScreen(osKey, floor);
+		if (claimed === null)
+			warnViewportScreen(
+				geometry,
+				shown,
+				screen,
+				`no recorded ${OS_NAMES[osKey]} screen is ${fmtSize(floor)} or larger`,
+			);
+	}
+	if (viewport) warnViewportWindow(viewport, window);
+	return claimed;
+}
+
+/**
+ * The init script that makes a context claim a `width` x `height` screen
+ * (screen-spoofing.patch; the available rect follows it).
+ */
+export function screenInitScript(width: number, height: number): string {
+	return `if (typeof window.setScreenDimensions === "function") window.setScreenDimensions(${Math.trunc(width)}, ${Math.trunc(height)});`;
+}
+
+/**
+ * Make every newContext()/newPage() of `target` claim a screen its pages fit
+ * on (python/src/camoufox/utils.py attach_viewport_fit).
+ *
+ * `geometry` is what the launch's identity claims (launchGeometry). A context
+ * claims that, or the identity NewContext() hands over, with the screen
+ * fitContextScreen() decides set through the per-context screen setter. The
+ * context keeps what it claims, for setViewportSize().
+ */
+export function attachViewportFit<T>(target: T, geometry?: Geometry | null): T {
+	const owner = target as any;
+	if (geometry) owner[CAMOUFOX_GEOMETRY] = geometry;
+	const original = owner?.newContext;
+	// Marked on the browser, not the method: one check per context, however
+	// many other wrappers sit around it.
+	if (typeof original !== "function" || owner[CAMOUFOX_VIEWPORT_FIT])
+		return target;
+	owner[CAMOUFOX_VIEWPORT_FIT] = true;
+	owner.newContext = async (options?: Record<string, any>, ...rest: any[]) => {
+		// Read before the first await: NewContext() set it just before this call.
+		const claimed: Geometry | null =
+			owner[CAMOUFOX_NEXT_CONTEXT] ?? owner[CAMOUFOX_GEOMETRY] ?? null;
+		delete owner[CAMOUFOX_NEXT_CONTEXT];
+		const screen = claimed ? fitContextScreen(claimed, options ?? {}) : null;
+		const context = await original.call(target, options, ...rest);
+		if (screen) await context.addInitScript(screenInitScript(...screen));
+		if (claimed)
+			context[CAMOUFOX_GEOMETRY] = {
+				...claimed,
+				screen: screen ?? claimed.screen,
+			};
+		return context;
+	};
+	return target;
+}
+
+/**
+ * Warn when page.setViewportSize() asks for a page its context's screen or
+ * window cannot hold. The screen setter is sealed once a page has loaded, so
+ * a context keeps the screen it started with.
+ */
+export function checkViewportSize(
+	geometry: Geometry | null | undefined,
+	size: any,
+	reason = "set_viewport_size() comes after the context's pages have loaded, so the screen stays",
+): void {
+	const viewport = boxSize(size);
+	if (!(geometry && viewport)) return;
+	const floor = screenFloor(geometry.os, {
+		width: viewport[0],
+		height: viewport[1],
+	});
+	if (geometry.screen[0] < floor[0] || geometry.screen[1] < floor[1])
+		warnViewportScreen(geometry, viewport, geometry.screen, reason);
+	warnViewportWindow(viewport, geometry.window);
+}
+
+/**
+ * A persistent context's pages claim the launch's identity: keep it for
+ * setViewportSize(), and warn when the launch's own viewport does not fit it.
+ * launchOptions() draws the identity around a viewport it is given, so this
+ * only catches one the options were built without.
+ */
+export function attachPersistentGeometry<T>(
+	context: T,
+	fromOptions: Record<string, any>,
+): T {
+	const geometry = launchGeometry(fromOptions);
+	if (geometry) {
+		(context as any)[CAMOUFOX_GEOMETRY] = geometry;
+		checkViewportSize(
+			geometry,
+			fromOptions.viewport,
+			"this persistent launch was given an identity drawn without the viewport",
+		);
+	}
+	return context;
+}
+
+/** The OS keys an `os` launch option may draw: all of them when it names none. */
+function osKeys(os: string | readonly string[] | null | undefined): TargetOS[] {
+	const names = typeof os === "string" ? [os] : [...(os ?? [])];
+	const keys = names
+		.filter((name) => name in OS_CODE)
+		.map((name) => OS_CODE[name] as TargetOS);
+	return keys.length ? keys : (Object.keys(OS_NAMES) as TargetOS[]);
+}
+
+/**
+ * The bound on a launch identity's screen that holds a `viewport` page in its
+ * window (the caller's `window`, or one the recorded chrome larger), for
+ * whichever OS the draw picks, within the caller's or the display's `screen`
+ * bound (python/src/camoufox/utils.py viewport_screen_bound).
+ */
+export function viewportScreenBound(
+	viewport: [number, number],
+	os: string | readonly string[] | null | undefined,
+	screen: Screen | null,
+	window: readonly [number, number] | null | undefined,
+): Screen {
+	const floors = osKeys(os).map((key) => {
+		const [chromeW, chromeH] = RECORDED_WINDOW_CHROME[key];
+		const outer = window ?? [viewport[0] + chromeW, viewport[1] + chromeH];
+		return screenFloor(
+			key,
+			{ width: viewport[0], height: viewport[1] },
+			{ width: outer[0], height: outer[1] },
+		);
+	});
+	return new Screen({
+		minWidth: Math.max(...floors.map((f) => f[0]), screen?.minWidth ?? 0),
+		maxWidth: screen?.maxWidth ?? null,
+		minHeight: Math.max(...floors.map((f) => f[1]), screen?.minHeight ?? 0),
+		maxHeight: screen?.maxHeight ?? null,
+	});
+}
+
+function fingerprintUserAgent(fingerprint: Record<string, any>): string {
+	const ua = fingerprint.navigator?.userAgent ?? "";
+	return Array.isArray(ua) ? String(ua[0] ?? "") : String(ua);
+}
+
+/**
+ * A bound on the screen a NewContext() identity draws, so that it holds the
+ * context's pages: the viewport the caller asks for, with the recorded chrome
+ * around it, and the browser's window, which the pages report as theirs
+ * (screenFloor). Without a known OS, the bound holds them for any.
+ */
+export function contextScreenBound(
+	browser: any,
+	os: string | null | undefined,
+	contextOptions: Record<string, any>,
+): Screen | null {
+	const geometry: Geometry | undefined = browser?.[CAMOUFOX_GEOMETRY];
+	const window = geometry?.window ?? null;
+	const viewport = boxSize(contextOptions.viewport);
+	if (!(viewport || window)) return null;
+	const osKeys: TargetOS[] =
+		os && os in OS_CODE
+			? [OS_CODE[os] as TargetOS]
+			: os && os in OS_NAMES
+				? [os as TargetOS]
+				: (Object.keys(OS_NAMES) as TargetOS[]);
+	const floors = osKeys.map((key) =>
+		screenFloor(
+			key,
+			viewport && { width: viewport[0], height: viewport[1] },
+			window,
+		),
+	);
+	return new Screen({
+		minWidth: Math.max(...floors.map((f) => f[0])),
+		minHeight: Math.max(...floors.map((f) => f[1])),
+	});
+}
+
+/**
+ * Tell attachViewportFit() what the next context of `browser` claims: the
+ * NewContext() identity in `fingerprint`, in the browser's window.
+ */
+export function handOverContextGeometry(
+	browser: any,
+	fingerprint: { config: Record<string, any>; preset: Record<string, any> },
+): void {
+	const config = fingerprint.config;
+	const screen = fingerprint.preset?.screen ?? {};
+	const width = screen.width || config["screen.width"];
+	const height = screen.height || config["screen.height"];
+	if (!(width && height)) {
+		delete browser[CAMOUFOX_NEXT_CONTEXT];
+		return;
+	}
+	const geometry: Geometry | undefined = browser[CAMOUFOX_GEOMETRY];
+	browser[CAMOUFOX_NEXT_CONTEXT] = {
+		os: OS_CODE[
+			targetOsFromPlatform(String(config["navigator.platform"] ?? ""))
+		] as TargetOS,
+		screen: [width, height],
+		window: geometry?.window ?? null,
+	} satisfies Geometry;
+}
+
+/** Drop a handOverContextGeometry() that no newContext() took. */
+export function takeBackContextGeometry(browser: any): void {
+	delete browser[CAMOUFOX_NEXT_CONTEXT];
+}
+
 const CAMOUFOX_DRIVER_DEFAULTS = Symbol.for("camoufox.driverDefaults");
 
 /**
@@ -1357,6 +1759,11 @@ export function attachDriverDefaults<T>(target: T): T {
 		...rest: any[]
 	) {
 		if (launchedByCamoufox(object)) {
+			if (method === "setViewportSize")
+				checkViewportSize(
+					object._browserContext?.[CAMOUFOX_GEOMETRY],
+					params?.viewportSize,
+				);
 			if (method === "screenshot" && params?.caret === undefined)
 				params = { ...params, caret: "initial" };
 			if (method === "fill") await clickToFocus(object, params);
@@ -2090,6 +2497,9 @@ async function buildLaunchOptions(
 	// values, never override what the user passed.
 	const userSetNavigator = isDomainSet(config, "navigator.");
 	const userSetScreenWindow = isDomainSet(config, "screen.", "window.");
+	const userWindowPosition = new Set(
+		["window.screenX", "window.screenY"].filter((k) => k in config),
+	);
 	const userSetMediaDevices = isDomainSet(config, "mediaDevices:");
 	const userSetFonts = Boolean(fonts?.length) || isDomainSet(config, "fonts");
 	const userSetVoices = isDomainSet(config, "voices", "voices:speechd");
@@ -2174,11 +2584,29 @@ async function buildLaunchOptions(
 	// Bound the geometry to the real display. The generator only honours this
 	// when its pool has a match, so it is re-applied after generation as well.
 	// `headless` and "is there a display to probe" are separate questions.
-	const screenCons: Screen | null = screen
+	let screenCons: Screen | null = screen
 		? toScreen(screen)
 		: utilsDeps.hasDisplay(env)
 			? utilsDeps.getScreenCons(headless)
 			: null;
+
+	// launchPersistentContext({viewport}) shows its pages at that size from the
+	// first one, so a drawn identity is drawn around it: a window the recorded
+	// chrome larger than the viewport, on a screen that holds that window.
+	const launchViewport = boxSize(passthrough.viewport);
+	const fitViewport =
+		launchViewport !== null &&
+		!userSetScreenWindow &&
+		!usedPreset &&
+		fingerprint == null;
+	if (fitViewport) {
+		screenCons = viewportScreenBound(
+			launchViewport,
+			targetOsOption,
+			screenCons,
+			window,
+		);
+	}
 
 	if (!usedPreset && fingerprint == null) {
 		// Default: synthetic generation via fpgen (infinite unique fingerprints)
@@ -2187,6 +2615,17 @@ async function buildLaunchOptions(
 			window,
 			os: targetOsOption,
 		});
+		if (fitViewport && !window && launchViewport) {
+			const [chromeW, chromeH] =
+				RECORDED_WINDOW_CHROME[
+					determineUaOs(fingerprintUserAgent(fingerprint as any))
+				];
+			handleWindowSize(
+				fingerprint as any,
+				launchViewport[0] + chromeW,
+				launchViewport[1] + chromeH,
+			);
+		}
 	}
 
 	if (!usedPreset && fingerprint != null) {
@@ -2290,6 +2729,19 @@ async function buildLaunchOptions(
 		utilsDeps.followBaselineProtection(config, targetOs);
 		utilsDeps.clampWindowDimensions(config);
 		utilsDeps.clampWindowPosition(config);
+	} else {
+		// The caller drove the screen or the window, not always where the window
+		// sits: a position drawn against the generated screen is moved onto the
+		// caller's (window 1280 wide at x=206 on a 1382 screen), or every new
+		// context drew another screen to hold it.
+		utilsDeps.clampWindowPosition(
+			config,
+			new Set(
+				["window.screenX", "window.screenY"].filter(
+					(k) => !userWindowPosition.has(k),
+				),
+			),
+		);
 	}
 
 	// Deliberately NOT setting window.history.length: browser/settings/camoufox.cfg runs
@@ -2665,10 +3117,28 @@ async function buildLaunchOptions(
 	if (disable_coop) {
 		LeakWarning.warn("disable_coop", i_know_what_im_doing);
 	}
-	firefox_user_prefs["permissions.default.image"] ??= block_images ? 2 : 1;
-	firefox_user_prefs["media.peerconnection.enabled"] ??= !block_webrtc;
-	firefox_user_prefs["browser.tabs.remote.useCrossOriginOpenerPolicy"] ??=
-		!disable_coop;
+	const profileDir = (passthrough.user_data_dir ?? passthrough.userDataDir) as
+		| string
+		| undefined;
+	for (const [on, pref, stock, toggled] of [
+		[block_images, "permissions.default.image", 1, 2],
+		[block_webrtc, "media.peerconnection.enabled", true, false],
+		[
+			disable_coop,
+			"browser.tabs.remote.useCrossOriginOpenerPolicy",
+			true,
+			false,
+		],
+	] as [unknown, string, unknown, unknown][]) {
+		setTogglePref(
+			firefox_user_prefs,
+			pref,
+			Boolean(on),
+			stock,
+			toggled,
+			profileDir,
+		);
+	}
 	// A persistent context takes its context options here.
 	if (passthrough.is_mobile || passthrough.isMobile) {
 		LeakWarning.warn("is_mobile", i_know_what_im_doing);

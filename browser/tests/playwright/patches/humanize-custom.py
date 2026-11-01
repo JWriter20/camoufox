@@ -32,6 +32,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -166,9 +167,42 @@ async def custom_session(seed, humanize_extra=None, trace=None, nested=False):
     return log, events, state, planned
 
 
+def _version(text):
+    return tuple(int(x) for x in re.findall(r"\d+", text)[:3])
+
+
+def typescript_node():
+    """A node that meets typescript/package.json's engines floor: $CAMOUFOX_NODE,
+    then the one on PATH, then nvm's installs, newest first. None when there is
+    no node at all; an error naming the floor when none meets it (the package
+    would only refuse to load)."""
+    package = json.loads((TS_DIST.parents[1] / "package.json").read_text())
+    floor = _version(package["engines"]["node"])
+    nvm = Path(os.environ.get("NVM_DIR") or Path.home() / ".nvm") / "versions" / "node"
+    candidates = [os.environ.get("CAMOUFOX_NODE"), shutil.which("node")]
+    candidates += [str(p / "bin" / "node") for p in sorted(nvm.glob("v*"), key=lambda p: _version(p.name), reverse=True)]
+    seen = {}
+    for node in filter(None, candidates):
+        if node in seen or not os.access(node, os.X_OK):
+            continue
+        out = subprocess.run([node, "--version"], capture_output=True, text=True)
+        seen[node] = out.stdout.strip()
+        if out.returncode == 0 and _version(seen[node]) >= floor:
+            return node
+    if not seen:
+        return None
+    raise RuntimeError(
+        f"the TypeScript launcher needs node {package['engines']['node']} and found only "
+        + ", ".join(f"{n} ({v})" for n, v in seen.items())
+        + "; set CAMOUFOX_NODE to one that meets it"
+    )
+
+
 def run_typescript(seed):
-    node = shutil.which("node")
-    if not node or not TS_DIST.exists():
+    if not TS_DIST.exists():
+        return None
+    node = typescript_node()
+    if not node:
         return None
     args = [node, str(HERE / "humanize-custom.mjs"), str(TS_DIST), str(seed)]
     if EXECUTABLE_PATH:
