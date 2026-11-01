@@ -1,0 +1,58 @@
+diff --git a/widget/gtk/nsGtkKeyUtils.cpp b/widget/gtk/nsGtkKeyUtils.cpp
+--- a/widget/gtk/nsGtkKeyUtils.cpp
++++ b/widget/gtk/nsGtkKeyUtils.cpp
+@@ -1448,8 +1448,23 @@
+   return WidgetKeyboardEvent::GetFallbackKeyCodeOfPunctuationKey(code);
+ }
+ 
++// Camoufox: a Windows identity on another OS reads its keyboard as Windows
++// does (cfparity input.keys.numpad / input.keys.modifiers on win-i9, stock
++// Firefox 158.0.1, SendInput, 3 launches alike).
++static bool ClaimsWindowsKeyboardState() {
++  static const bool sClaims =
++      MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
++      MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows;
++  return sClaims;
++}
++
+ KeyNameIndex KeymapWrapper::ComputeDOMKeyNameIndex(
+     const GdkEventKey* aGdkKeyEvent) {
++  // Keypad 5 with Num Lock off is VK_CLEAR on Windows, KeyboardEvent.key
++  // "Clear"; GTK's KP_Begin has no DOM key name ("Unidentified").
++  if (aGdkKeyEvent->keyval == GDK_KP_Begin && ClaimsWindowsKeyboardState()) {
++    return KEY_NAME_INDEX_Clear;
++  }
+   switch (aGdkKeyEvent->keyval) {
+ #define NS_NATIVE_KEY_TO_DOM_KEY_NAME_INDEX(aNativeKey, aKeyNameIndex) \
+   case aNativeKey:                                                     \
+@@ -2052,7 +2067,29 @@
+     aKeyEvent.mKeyCode = 0;
+   }
+ 
+-  const guint modifierState = GetModifierState(aGdkKeyEvent, keymapWrapper);
++  guint modifierState = GetModifierState(aGdkKeyEvent, keymapWrapper);
++  // Windows toggles a lock key's state on its keydown, so the keydown already
++  // reports the new state: Caps Lock pressed to turn it off gives keydown with
++  // getModifierState('CapsLock') false. XKB unlocks a locked modifier only on
++  // the key's release, so GTK's keydown still reports it on.
++  if (aKeyEvent.mMessage == eKeyDown && ClaimsWindowsKeyboardState()) {
++    guint lock = 0;
++    switch (aGdkKeyEvent->keyval) {
++      case GDK_Caps_Lock:
++        lock = keymapWrapper->GetGdkModifierMask(CAPS_LOCK);
++        break;
++      case GDK_Num_Lock:
++        lock = keymapWrapper->GetGdkModifierMask(NUM_LOCK);
++        break;
++      case GDK_Scroll_Lock:
++        lock = keymapWrapper->GetGdkModifierMask(SCROLL_LOCK);
++        break;
++    }
++    if (lock) {
++      // aGdkKeyEvent->state is the state before this key.
++      modifierState = (modifierState & ~lock) | (~aGdkKeyEvent->state & lock);
++    }
++  }
+   InitInputEvent(aKeyEvent, modifierState);
+ 
+   switch (aGdkKeyEvent->keyval) {

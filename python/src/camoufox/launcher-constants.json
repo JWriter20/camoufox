@@ -38,6 +38,7 @@
   "macEloquenceVoices": ["Eddy", "Flo", "Grandma", "Grandpa", "Reed", "Rocko", "Sandy", "Shelley"],
   "baselineTaskbarHeight": {"win": 48, "mac": 76, "lin": 0},
   "baselineMultiTouchPoints": 5,
+  "recordedWindowChrome": {"win": [18, 130], "mac": [0, 86], "lin": [2, 86]},
   "windowsUiColors": {
     "ui.highlight": "#0078d4",
     "ui.selecteditem": "#0078d4",

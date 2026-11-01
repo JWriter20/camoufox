@@ -53,6 +53,20 @@ is_mobile: >-
     than put the page in Responsive Design Mode, which a page can read too.
     Use has_touch, device_scale_factor and viewport for the parts you need.
 
+viewport_screen: >-
+    A {viewport} viewport does not fit the {screen} screen this {os} context claims:
+    a real Firefox window draws {chrome} px of chrome around the page, and the
+    screen keeps {taskbar} px for the taskbar. A page can measure that, and no real
+    device shows it. Camoufox draws a screen that holds the viewport when a new
+    context asks for one; {reason}.
+
+viewport_window: >-
+    A {viewport} viewport is larger than the {window} browser window its page
+    reports in outerWidth/outerHeight: a page larger than its own window exists on
+    no real device. A context cannot resize the browser's window, so give it the
+    window at launch (window=, or the viewport with launch_persistent_context), or
+    leave the context on no_viewport.
+
 block_webgl: >-
     Disabling WebGL is not recommended. Many WAFs will check if WebGL is enabled.
 

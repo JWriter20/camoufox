@@ -131,6 +131,7 @@ export interface LauncherConstants {
 	macEloquenceVoices: string[];
 	baselineTaskbarHeight: Record<"win" | "mac" | "lin", number>;
 	baselineMultiTouchPoints: number;
+	recordedWindowChrome: Record<"win" | "mac" | "lin", [number, number]>;
 	windowsUiColors: Record<string, string>;
 	cachePrefs: Record<string, any>;
 	windowsBehaviourPrefs: Record<string, any>;

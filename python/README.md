@@ -132,6 +132,14 @@ with Camoufox(headless=True, canvas_noise=True) as browser:
 
 `AsyncNewContext()` is the async twin.
 
+A context's pages are the browser's window unless you pass `viewport=`, and its
+screen is drawn to hold that window. A `viewport=` here, in `new_context()` or
+`new_page()`, or in a persistent launch, is kept as given, and the context
+claims a recorded screen that holds it with a real Firefox window's toolbars
+around it. Only the browser's window cannot follow a context: a viewport larger
+than it, or a `page.set_viewport_size()` the screen cannot hold, raises a
+`LeakWarning`.
+
 Canvas noise belongs to the browser, not the context (see
 [The canvas on another OS](#the-canvas-on-another-os)). On a browser without it,
 every context claims the host's OS and GPU too, since its canvas renders there.

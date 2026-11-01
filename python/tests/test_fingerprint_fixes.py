@@ -215,6 +215,22 @@ class TestClampWindowPosition:
         clamp_window_position(c)
         assert c["window.screenX"] == 0
 
+    def test_keeps_the_window_off_the_taskbar(self):
+        # win-i9: 1382x864 at 250 %, available 1382x816, window 1280x816. At y=2 it ran 2 px under
+        # the taskbar, where no page fits (screen_floor), so every context drew a larger screen.
+        c = {
+            "screen.width": 1382, "screen.height": 864, "screen.availWidth": 1382, "screen.availHeight": 816,
+            "window.outerWidth": 1280, "window.outerHeight": 816, "window.screenX": 206, "window.screenY": 2,
+        }
+        clamp_window_position(c)
+        assert (c["window.screenX"], c["window.screenY"]) == (102, 0)
+
+    def test_moves_only_the_keys_it_is_given(self):
+        c = {"screen.width": 1382, "window.outerWidth": 1280, "window.screenX": 206,
+             "screen.height": 864, "window.outerHeight": 816, "window.screenY": 40}
+        clamp_window_position(c, {"window.screenX"})
+        assert (c["window.screenX"], c["window.screenY"]) == (102, 40)
+
 
 class TestSetMediaDevicesDefaults:
     def test_draws_common_desktop_devices(self):
@@ -413,3 +429,55 @@ class TestHostIpv6Default:
         c = self._config(**{"webrtc:hostipv6": False, "webrtc:ipv6": "2001:db8::1"})
         set_host_ipv6_default(c)
         assert c["webrtc:hostipv6"] is False
+
+
+class TestPerLaunchTimingDraws:
+    """The audio output open delay and the Windows alias load time are timing:
+    each launch draws its own (in range), and a caller's value is kept."""
+
+    def test_alias_load_varies_per_launch(self):
+        from camoufox.fingerprints import WINDOWS_ALIAS_LOAD_MS, set_windows_alias_load_default
+
+        seen = set()
+        for _ in range(50):
+            c = {}
+            set_windows_alias_load_default(c, 'win', 'lin')
+            v = c['fonts:windowsAliasLoadMs']
+            assert isinstance(v, int) and WINDOWS_ALIAS_LOAD_MS[0] <= v <= WINDOWS_ALIAS_LOAD_MS[1]
+            seen.add(v)
+        assert len(seen) > 1
+        c = {'fonts:windowsAliasLoadMs': 5}
+        set_windows_alias_load_default(c, 'win', 'lin')
+        assert c['fonts:windowsAliasLoadMs'] == 5
+
+    def test_cmap_load_varies_per_launch(self):
+        from camoufox.fingerprints import WINDOWS_CMAP_LOAD_MS, set_windows_alias_load_default
+
+        seen = set()
+        for _ in range(50):
+            c = {}
+            set_windows_alias_load_default(c, 'win', 'lin')
+            v = c['fonts:windowsCmapLoadMs']
+            assert isinstance(v, int) and WINDOWS_CMAP_LOAD_MS[0] <= v <= WINDOWS_CMAP_LOAD_MS[1]
+            seen.add(v)
+        assert len(seen) > 1
+        c = {'fonts:windowsCmapLoadMs': 7}
+        set_windows_alias_load_default(c, 'win', 'lin')
+        assert c['fonts:windowsCmapLoadMs'] == 7
+        c = {}
+        set_windows_alias_load_default(c, 'win', 'win')
+        set_windows_alias_load_default(c, 'lin', 'lin')
+        assert 'fonts:windowsCmapLoadMs' not in c
+
+    def test_output_latency_delay_varies_per_launch_device_does_not(self):
+        from camoufox.fingerprints import set_output_latency_default
+
+        base = {'navigator.userAgent': 'x', 'screen.width': 1920}
+        devices, delays = set(), set()
+        for _ in range(50):
+            c = dict(base)
+            set_output_latency_default(c, 7, 'win', 'lin')
+            devices.add(c['AudioContext:outputLatency'])
+            delays.add(c['AudioContext:outputLatencyDelayMs'])
+        assert len(devices) == 1
+        assert len(delays) > 1

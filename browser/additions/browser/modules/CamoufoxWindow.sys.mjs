@@ -239,6 +239,23 @@ function applyWindowSize(win) {
   holdStartupSize();
   win.addEventListener("sizemodechange", holdStartupSize);
   win.addEventListener("resize", holdStartupSize);
+  // A viewport the driver sets (Juggler's PageTarget.updateViewportSize) sizes
+  // the window around itself from then on: the identity's size and pin give way
+  // at once, or they undo that resize for the rest of the 5 s and the page
+  // overflows its window.
+  win.addEventListener(
+    "CamoufoxViewportSized",
+    () => {
+      win.removeEventListener("sizemodechange", holdStartupSize);
+      win.removeEventListener("resize", holdStartupSize);
+      if (pin) {
+        pin.remove();
+        pin = null;
+        doc.getElementById("browser")?.style.removeProperty("box-sizing");
+      }
+    },
+    { once: true }
+  );
 }
 
 function addDebugListeners(win) {

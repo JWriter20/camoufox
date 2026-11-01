@@ -207,6 +207,12 @@ def probe_wheel(binary, port, prefs):
                   firefox_user_prefs=prefs, i_know_what_im_doing=True) as b:
         page = b.new_page()
         page.goto(f"http://localhost:{port}/")
+        # The notches come 18-60 ms apart, and a content process still busy with the
+        # load when they arrive gets two in its queue at once and fires them as one
+        # wheel event (BrowserChild::RecvMouseWheelEvent coalescing): stock Linux
+        # 158.0.1 does the same with XTest notches 30 ms apart and a 150 ms busy page
+        # (deltaY [6, 12]). The page is idle first, so the notches are what is compared.
+        page.evaluate("() => new Promise((r) => requestIdleCallback(() => r(), {timeout: 2000}))")
         page.mouse.move(200, 200)
         page.mouse.wheel(0, 300)
         page.wait_for_timeout(1500)

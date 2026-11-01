@@ -148,7 +148,11 @@ describe("NewContext identity", () => {
 		)?.[1];
 		expect(calls.options.userAgent).toBe(userAgent);
 		expect(calls.options.deviceScaleFactor).toBeGreaterThan(0);
-		expect(calls.options.viewport.width).toBeGreaterThan(0);
+		// Playwright takes a device scale factor only with a viewport: a preset
+		// (no recorded window) gets a maximised page that its screen holds.
+		const scr = preset!.screen!;
+		expect(calls.options.viewport.width).toBeLessThanOrEqual(scr.availWidth);
+		expect(calls.options.viewport.height).toBeLessThan(scr.availHeight);
 		expect(calls.options.timezoneId).toBe("Asia/Tokyo");
 		for (const key of Object.keys(calls.options))
 			expect(key, "a key Playwright does not know").not.toMatch(

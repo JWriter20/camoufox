@@ -58,6 +58,16 @@ content: the event reached the renderer as an exit event at client `y == -1`,
 produced no ack, and the page saw no mousemove (~1 in 25 runs of
 `near-edge-mouse-deadlock.py`). Both dispatch sites (`Page.dispatchMouseEvent`,
 `Page.dispatchWheelEvent`) measure synchronously before dispatching.
+`MouseDispatch.sendAcked()` measures again before every event it sends, so each
+step of a humanized move, dispatched over hundreds of ms, goes out against
+where the browser is then; a step in a band of the viewport the window does
+not show is skipped, and a destination there is scrolled into view first.
+Measured 2026-10-31: in a window too small for the chrome plus the viewport
+(a 1366x768 screen draw), Juggler's `.browserStack` scrolled the browser on a
+wheel turn, and a move that kept its starting rect landed every later point,
+the destination included, 13-84 px off (`humanize-seam.py`, run d). The stack
+is `overflow: hidden` since, so only Juggler's own `scrollRectIntoViewIfNeeded`
+scrolls it.
 
 **Bounded waits.** `sendAcked()` waits at most `kAckDeadlineMs` (5s) and then
 drops the event with a warning naming the type, coordinate and browser rect. The

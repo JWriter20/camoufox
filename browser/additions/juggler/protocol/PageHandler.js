@@ -93,10 +93,16 @@ export class PageHandler {
     // taken the pointer from the window yet (_dragMotion).
     this._dragMoves = 0;
     this._dragHasPointer = false;
+    // Windows: the move after the one that started the drag, held until the
+    // drag is over (_deliverDeferredDragMove).
+    this._deferredDragMove = null;
     this._lastMousePosition = { x: 0, y: 0 };
     // Camoufox: last position an actual mousemove landed on. Used as the
     // start point for the humanized cursor trajectory (humanize=True).
     this._lastTrackedPos = { x: 0, y: 0 };
+    // Camoufox: documents whose content process accepts user input (see
+    // _awaitUserInputGate), keyed by WindowGlobalParent.
+    this._userInputGateOpen = new WeakSet();
 
     this._reportedFrameIds = new Set();
     this._networkEventsForUnreportedFrameIds = new Map();
@@ -563,6 +569,7 @@ export class PageHandler {
   // scroll. The engine declines once the target is in view, and a plan that
   // does not end in a `probe` step is the last round.
   async _humanizedScrollIntoView(options) {
+    await this._awaitUserInputGate();
     for (let round = 0; round < kScrollIntoViewRounds; round++) {
       let probe;
       try {
@@ -677,7 +684,30 @@ export class PageHandler {
     return context;
   }
 
+  // Camoufox: Firefox's content process drops user input that reaches a
+  // document before its input gate opens: dom.input_events.security.
+  // minTimeElapsedInMS (100) after readyState became "loading" and
+  // minNumTicks (3) refresh ticks (PresShell::CanHandleUserInputEvents,
+  // nsPresContext::UserInputEventsAllowed). A wheel turned right after goto
+  // lost its first notches there, while mouse and key events, flagged
+  // synthesized-for-tests, got through early: trusted input no person's
+  // Firefox delivers. Input waits for the gate instead, so it lands, and lands
+  // when a person's could.
+  async _awaitUserInputGate() {
+    const windowGlobal = this._pageTarget.linkedBrowser()?.browsingContext?.currentWindowGlobal;
+    if (windowGlobal && this._userInputGateOpen.has(windowGlobal))
+      return;
+    try {
+      await this._contentPage.send('awaitUserInputGate');
+    } catch (e) {
+      return;
+    }
+    if (windowGlobal)
+      this._userInputGateOpen.add(windowGlobal);
+  }
+
   async ['Page.dispatchKeyEvent']({type, keyCode, code, key, repeat, location, text}) {
+    await this._awaitUserInputGate();
     // key events don't fire if we are dragging.
     if (this._isDragging) {
       if (type === 'keydown' && key === 'Escape') {
@@ -700,10 +730,12 @@ export class PageHandler {
   }
 
   async ['Page.dispatchTouchEvent'](options) {
+    await this._awaitUserInputGate();
     return await this._contentPage.send('dispatchTouchEvent', options);
   }
 
   async ['Page.dispatchTapEvent'](options) {
+    await this._awaitUserInputGate();
     return await this._contentPage.send('dispatchTapEvent', options);
   }
 
@@ -748,6 +780,7 @@ export class PageHandler {
   }
 
   async ['Page.dispatchMouseEvent']({type, x, y, button, clickCount, modifiers, buttons}) {
+    await this._awaitUserInputGate();
     const win = this._pageTarget._window;
     const eventArgs = {button, clickCount, modifiers, buttons};
     const sendEvents = async (types) => {
@@ -837,6 +870,14 @@ export class PageHandler {
       if (type === 'mousemove') {
         this._lastMousePosition = { x, y };
         await this._settleDrag(false);
+        if (this._isDragging && this._windowsDrag() && this._dragMoves++ === 0) {
+          // Windows: the move queued behind the one that started the drag
+          // stays in the window's queue while OLE's DoDragDrop loop runs, and
+          // is dispatched once the drag is over (_deliverDeferredDragMove);
+          // the drag's first motion is the move after it.
+          this._deferredDragMove = {x, y, at: ChromeUtils.now()};
+          return;
+        }
         if (this._isDragging && !this._dragSkipsMove()) {
           this._dragMotion(dispatch, x, y);
           const watcher = new EventWatcher(this._pageEventSink, ['dragover'], this._pendingEventWatchers);
@@ -905,6 +946,7 @@ export class PageHandler {
           //   during drag. However, it'll be dispatched synchronously in the renderer.
           await watcher.ensureEventsAndDispose(['dragover']);
           this._isDragging = false;
+          await this._deliverDeferredDragMove(win, modifiers, x, y);
         } else {
           const eventNames = (button === 2 && this._contextMenuOnMouseUp()) ? ['mouseup', 'contextmenu'] : ['mouseup'];
           await sendEvents(eventNames);
@@ -930,6 +972,37 @@ export class PageHandler {
     this._isDragging = !!finalized?.dragSessionStarted;
     this._dragMoves = 0;
     this._dragHasPointer = false;
+    this._deferredDragMove = null;
+  }
+
+  // Windows Firefox after a drag (stock 158.0.1 on win-i9, SendInput, three
+  // runs, cfparity it4 drag): after dragend the page gets the move that waited
+  // out the drag, with the button still held and the timestamp it was made at
+  // (~470 ms before dragend), then a move at the drop point with the button
+  // released; the next move's movement counts from the drop point. No widget
+  // exit or enter happens around the drag.
+  async _deliverDeferredDragMove(win, modifiers, x, y) {
+    const deferred = this._deferredDragMove;
+    this._deferredDragMove = null;
+    if (!deferred)
+      return;
+    const browser = this._pageTarget._linkedBrowser;
+    const watcher = new EventWatcher(this._pageEventSink, ['mousequeued'], this._pendingEventWatchers);
+    try {
+      const held = MouseDispatch.forBrowser(win, browser,
+          {button: 0, clickCount: 0, modifiers, buttons: 1, ageMs: ChromeUtils.now() - deferred.at});
+      await this._sendMove(held, watcher, deferred.x, deferred.y);
+      const released = MouseDispatch.forBrowser(win, browser, {button: 0, clickCount: 0, modifiers, buttons: 0});
+      await this._sendMove(released, watcher, x, y);
+      this._lastTrackedPos = {x, y};
+    } finally {
+      watcher.dispose();
+    }
+  }
+
+  // Whether drags follow Windows' order: the claimed navigator.platform.
+  _windowsDrag() {
+    return this._contextMenuOnMouseUp();
   }
 
   // GTK hands the pointer to a new drag session one move late: the move after
@@ -937,14 +1010,14 @@ export class PageHandler {
   // button held (measured on X11 against stock 158.0.1). Windows and macOS are
   // not measured, so they keep dragging from the first move.
   _dragSkipsMove() {
-    return Services.appinfo.widgetToolkit === 'gtk' && this._dragMoves++ === 0;
+    return Services.appinfo.widgetToolkit === 'gtk' && !this._windowsDrag() && this._dragMoves++ === 0;
   }
 
   // The first drag motion takes the pointer from the window, as a GTK drag
   // session's grab does: a widget exit, so the drag starts with nothing hovered
   // and the next move after the drop reports no movement.
   _dragMotion(dispatch, x, y) {
-    if (this._dragHasPointer || Services.appinfo.widgetToolkit !== 'gtk')
+    if (this._dragHasPointer || Services.appinfo.widgetToolkit !== 'gtk' || this._windowsDrag())
       return;
     this._dragHasPointer = true;
     dispatch.leaveWindow(x, y);
@@ -959,6 +1032,7 @@ export class PageHandler {
   }
 
   async ['Page.dispatchWheelEvent']({x, y, button, deltaX, deltaY, deltaZ, modifiers }) {
+    await this._awaitUserInputGate();
     await this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
 
@@ -993,6 +1067,7 @@ export class PageHandler {
   }
 
   async ['Page.insertText'](options) {
+    await this._awaitUserInputGate();
     const planned = humanizeSeam().plan('keyboard', 'planInsert', await this._keyboardContext(true), options.text);
     if (!planned)
       return await this._contentPage.send('insertText', options);

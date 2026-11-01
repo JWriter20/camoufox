@@ -1,5 +1,6 @@
 import ctypes.util
 import json
+import re
 import os
 from urllib.parse import urlsplit
 import platform
@@ -26,7 +27,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence, pro, render_node as render_nodes
 from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
@@ -779,6 +780,41 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
         LeakWarning.warn('viewport', False)
 
 
+
+def saved_pref(profile_dir: Optional[str], pref: str) -> Any:
+    """The value a persistent profile's prefs.js holds for `pref` (None when it holds none)."""
+    if not profile_dir:
+        return None
+    try:
+        with open(os.path.join(profile_dir, 'prefs.js'), encoding='utf-8') as f:
+            text = f.read()
+    except OSError:
+        return None
+    m = re.search(r'user_pref\("' + re.escape(pref) + r'",\s*(.+?)\);', text)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except ValueError:
+        return m.group(1)
+
+
+def set_toggle_pref(prefs: Dict[str, Any], pref: str, on: bool, stock: Any, toggled: Any,
+                    profile_dir: Optional[str]) -> None:
+    """Write a launch toggle's pref the way stock's profile has it.
+
+    On, the toggled value. Off, nothing, as stock writes nothing (the permissions
+    check reads the prefs a launch sets, and a pref at its default is still one
+    stock lacks) -- unless a persistent profile kept a non-stock value from an
+    earlier launch in its prefs.js, which only the stock value written again clears.
+    """
+    if on:
+        prefs.setdefault(pref, toggled)
+        return
+    saved = saved_pref(profile_dir, pref)
+    if saved is not None and saved != stock:
+        prefs.setdefault(pref, stock)
+
 _WINDOW_DIM_KEYS = (
     'window.outerWidth',
     'window.outerHeight',
@@ -959,9 +995,216 @@ def attach_socks5_auth(target: Any) -> Any:
     return target
 
 
-def attach_context_defaults(browser: Any, no_viewport_default: bool) -> None:
+# Where a browser, context or page keeps the geometry its pages claim
+# (launch_geometry), and where NewContext() leaves its identity's for the
+# new_context() it is about to make.
+_GEOMETRY = '_camoufox_geometry'
+_NEXT_CONTEXT = '_camoufox_next_context'
+
+# The viewport Playwright gives a context that asks for neither a viewport nor
+# none (Playwright's DEFAULT_VIEWPORT).
+PLAYWRIGHT_DEFAULT_VIEWPORT = {'width': 1280, 'height': 720}
+
+
+def launch_geometry(from_options: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """What a launch's identity claims around its pages, from the CAMOU_CONFIG
+    in the launch options: {'os', 'screen': (width, height), 'window': {x, y,
+    width, height} or None}. None when the identity claims no screen.
+
+    The window is where CamoufoxWindow.sys.mjs puts the browser's real window,
+    which every page reports in outerWidth/outerHeight: the identity's outer
+    size, or, where the identity sets the content area instead, that with the
+    recorded chrome around it.
+    """
+    blob = _camou_config_blob(from_options)
+    try:
+        config = json.loads(blob) if blob else {}
+    except ValueError:
+        return None
+    if not isinstance(config, dict):
+        return None
+    width, height = config.get('screen.width'), config.get('screen.height')
+    if not (width and height):
+        return None
+    os_key = get_target_os(config)
+    size = []
+    for axis, chrome in zip(('Width', 'Height'), RECORDED_WINDOW_CHROME[os_key]):
+        inner = config.get(f'window.inner{axis}')
+        size.append(inner + chrome if inner else config.get(f'window.outer{axis}'))
+    window = None
+    if all(size):
+        window = {
+            'x': config.get('window.screenX') or 0,
+            'y': config.get('window.screenY') or 0,
+            'width': size[0],
+            'height': size[1],
+        }
+    return {'os': os_key, 'screen': (width, height), 'window': window}
+
+
+def _geometry_of(owner: Any) -> Optional[Dict[str, Any]]:
+    """The geometry a browser or context keeps (attach_viewport_fit), if any."""
+    return getattr(owner, '__dict__', {}).get(_GEOMETRY)
+
+
+def _size(value: Any) -> Optional[Tuple[int, int]]:
+    if isinstance(value, dict) and value.get('width') and value.get('height'):
+        return int(value['width']), int(value['height'])
+    return None
+
+
+def _fmt(size: Any) -> str:
+    return f'{size[0]}x{size[1]}'
+
+
+def fit_context_screen(geometry: Dict[str, Any], options: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """The screen a new context must claim so that its pages fit on it, or None
+    when the identity's own already holds them.
+
+    `geometry` is what the context's identity claims (launch_geometry, or a
+    NewContext() identity's), `options` Playwright's new_context() options
+    (camelCase, as the client's implementation takes them). A viewport sits in
+    a window the recorded chrome larger (screen_floor), and the pages report
+    the browser's window as theirs, so the screen holds both; one that does not
+    is replaced with a recorded screen that does (draw_screen). Playwright's
+    own `screen` option, which Juggler does not apply, is the screen the caller
+    chose: it is claimed as given. The caller's viewport is never changed, so
+    where no screen or no window can hold it, this warns.
+    """
+    os_key, screen, window = geometry['os'], geometry['screen'], geometry.get('window')
+    viewport = None
+    if not options.get('noViewport'):
+        viewport = _size(options.get('viewport')) or _size(PLAYWRIGHT_DEFAULT_VIEWPORT)
+    floor = screen_floor(os_key, viewport and {'width': viewport[0], 'height': viewport[1]}, window)
+
+    def holds(size: Tuple[int, int]) -> bool:
+        return size[0] >= floor[0] and size[1] >= floor[1]
+
+    def warn_screen(claimed: Tuple[int, int], reason: str) -> None:
+        LeakWarning.warn(
+            'viewport_screen',
+            viewport=_fmt(viewport or (window['width'], window['height'])),
+            screen=_fmt(claimed), os=OS_NAMES[os_key],
+            chrome=_fmt(RECORDED_WINDOW_CHROME[os_key]),
+            taskbar=BASELINE_TASKBAR_HEIGHT[os_key], reason=reason,
+        )
+
+    claimed: Optional[Tuple[int, int]] = None
+    requested = _size(options.get('screen'))
+    if requested:
+        claimed = requested if requested != screen else None
+        if not holds(requested):
+            warn_screen(requested, 'this one is the screen= the context was given, so it is kept')
+    elif not holds(screen):
+        claimed = draw_screen(os_key, floor)
+        if claimed is None:
+            warn_screen(screen, f'no recorded {OS_NAMES[os_key]} screen is {_fmt(floor)} or larger')
+    if viewport and window and (viewport[0] > window['width'] or viewport[1] > window['height']):
+        LeakWarning.warn('viewport_window', viewport=_fmt(viewport), window=_fmt((window['width'], window['height'])))
+    return claimed
+
+
+def screen_init_script(width: int, height: int) -> str:
+    """The init script that makes a context claim a `width` x `height` screen
+    (screen-spoofing.patch; the available rect follows it)."""
+    return f'if (typeof window.setScreenDimensions === "function") window.setScreenDimensions({int(width)}, {int(height)});'
+
+
+def attach_viewport_fit(target: Any, geometry: Optional[Dict[str, Any]] = None) -> Any:
+    """Make every new_context()/new_page() of `target` claim a screen its pages fit on.
+
+    `geometry` is what the launch's identity claims (launch_geometry). A
+    context claims that, or the identity NewContext() hands over, with the
+    screen fit_context_screen() decides set through the per-context screen
+    setter. The context keeps what it claims, for set_viewport_size().
+    """
+    impl = getattr(target, '_impl_obj', target)
+    if geometry is not None:
+        setattr(impl, _GEOMETRY, geometry)
+    original = getattr(impl, 'new_context', None)
+    # Marked on the browser, not the method: one check per context, however
+    # many other wrappers sit around it.
+    if original is None or vars(impl).get('_camoufox_viewport_fit'):
+        return target
+    impl._camoufox_viewport_fit = True
+
+    @wraps(original)
+    async def new_context(*args: Any, **kwargs: Any) -> Any:
+        # Read before the first await: NewContext() set it just before this call.
+        claimed = vars(impl).pop(_NEXT_CONTEXT, None) or _geometry_of(impl)
+        screen = fit_context_screen(claimed, kwargs) if claimed else None
+        context = await original(*args, **kwargs)
+        if screen:
+            await context.add_init_script(script=screen_init_script(*screen))
+        if claimed:
+            setattr(context, _GEOMETRY, {**claimed, 'screen': screen or claimed['screen']})
+        return context
+
+    impl.new_context = new_context
+    _install_viewport_size_check()
+    return target
+
+
+_AFTER_LOAD = "set_viewport_size() comes after the context's pages have loaded, so the screen stays"
+
+
+def check_viewport_size(geometry: Optional[Dict[str, Any]], size: Any, reason: str = _AFTER_LOAD) -> None:
+    """Warn when page.set_viewport_size() asks for a page its context's screen
+    or window cannot hold. The screen setter is sealed once a page has loaded,
+    so a context keeps the screen it started with."""
+    viewport = _size(size)
+    if not (geometry and viewport):
+        return
+    os_key, screen, window = geometry['os'], geometry['screen'], geometry.get('window')
+    floor = screen_floor(os_key, {'width': viewport[0], 'height': viewport[1]})
+    if screen[0] < floor[0] or screen[1] < floor[1]:
+        LeakWarning.warn(
+            'viewport_screen', viewport=_fmt(viewport), screen=_fmt(screen), os=OS_NAMES[os_key],
+            chrome=_fmt(RECORDED_WINDOW_CHROME[os_key]), taskbar=BASELINE_TASKBAR_HEIGHT[os_key],
+            reason=reason,
+        )
+    if window and (viewport[0] > window['width'] or viewport[1] > window['height']):
+        LeakWarning.warn('viewport_window', viewport=_fmt(viewport), window=_fmt((window['width'], window['height'])))
+
+
+def _install_viewport_size_check() -> None:
+    from playwright._impl._page import Page
+
+    original = Page.set_viewport_size
+    if getattr(original, '_camoufox_viewport_fit', False):
+        return
+
+    @wraps(original)
+    async def set_viewport_size(self: Any, viewportSize: Any) -> None:
+        check_viewport_size(_geometry_of(self.context), viewportSize)
+        return await original(self, viewportSize)
+
+    set_viewport_size._camoufox_viewport_fit = True  # type: ignore[attr-defined]
+    Page.set_viewport_size = set_viewport_size
+
+
+def attach_persistent_geometry(context: Any, from_options: Dict[str, Any]) -> Any:
+    """A persistent context's pages claim the launch's identity: keep it for
+    set_viewport_size(), and warn when the launch's own viewport does not fit it.
+    launch_options() draws the identity around a viewport it is given, so this
+    only catches one the options were built without."""
+    geometry = launch_geometry(from_options)
+    impl = getattr(context, '_impl_obj', context)
+    if geometry:
+        setattr(impl, _GEOMETRY, geometry)
+        if not from_options.get('no_viewport'):
+            check_viewport_size(
+                geometry, from_options.get('viewport'),
+                'this persistent launch was given an identity drawn without the viewport',
+            )
+    _install_viewport_size_check()
+    return context
+
+
+def attach_context_defaults(browser: Any, no_viewport_default: bool, geometry: Optional[Dict[str, Any]] = None) -> None:
     """Give every new_page()/new_context() of `browser` Camoufox's defaults."""
     attach_socks5_auth(browser)
+    attach_viewport_fit(browser, geometry)
     if no_viewport_default:
         attach_no_viewport_default(browser)
     attach_stock_media_defaults(browser)
@@ -1048,6 +1291,82 @@ def context_identity(
     return host_name, gpu
 
 
+def _os_keys(os: Optional[ListOrString]) -> List[str]:
+    """The OS keys an `os` launch option may draw: all of them when it names none."""
+    names = [os] if isinstance(os, str) else list(os or [])
+    return [OS_KEYS[name] for name in names if name in OS_KEYS] or list(OS_NAMES)
+
+
+def viewport_screen_bound(
+    viewport: Tuple[int, int],
+    os: Optional[ListOrString],
+    screen: Optional[Screen],
+    window: Optional[Tuple[int, int]],
+) -> Screen:
+    """The bound on a launch identity's screen that holds a `viewport` page in
+    its window (the caller's `window`, or one the recorded chrome larger),
+    for whichever OS the draw picks, within the caller's or the display's
+    `screen` bound."""
+    floors = []
+    for key in _os_keys(os):
+        chrome_w, chrome_h = RECORDED_WINDOW_CHROME[key]
+        outer = window or (viewport[0] + chrome_w, viewport[1] + chrome_h)
+        floors.append(screen_floor(key, {'width': viewport[0], 'height': viewport[1]},
+                                   {'width': outer[0], 'height': outer[1]}))
+    return Screen(
+        min_width=max([f[0] for f in floors] + [screen.min_width or 0 if screen else 0]),
+        max_width=screen.max_width if screen else None,
+        min_height=max([f[1] for f in floors] + [screen.min_height or 0 if screen else 0]),
+        max_height=screen.max_height if screen else None,
+    )
+
+
+def _fingerprint_user_agent(fingerprint: Dict[str, Any]) -> str:
+    ua = (fingerprint.get('navigator') or {}).get('userAgent') or ''
+    return ua[0] if isinstance(ua, list) and ua else str(ua)
+
+
+def context_screen_bound(browser: Any, os: Optional[str], context_kwargs: Dict[str, Any]) -> Optional[Screen]:
+    """A bound on the screen a NewContext() identity draws, so that it holds
+    the context's pages: the viewport the caller asks for, with the recorded
+    chrome around it, and the browser's window, which the pages report as
+    theirs (screen_floor). Without a known OS, the bound holds them for any."""
+    geometry = _geometry_of(getattr(browser, '_impl_obj', browser))
+    window = geometry.get('window') if geometry else None
+    viewport = None if context_kwargs.get('no_viewport') else _size(context_kwargs.get('viewport'))
+    if not (viewport or window):
+        return None
+    os_keys = [OS_KEYS[os]] if os in OS_KEYS else [os] if os in OS_NAMES else list(OS_NAMES)
+    floors = [
+        screen_floor(key, viewport and {'width': viewport[0], 'height': viewport[1]}, window) for key in os_keys
+    ]
+    return Screen(min_width=max(f[0] for f in floors), min_height=max(f[1] for f in floors))
+
+
+def hand_over_context_geometry(browser: Any, fingerprint: Dict[str, Any]) -> None:
+    """Tell attach_viewport_fit() what the next context of `browser` claims: the
+    NewContext() identity in `fingerprint`, in the browser's window."""
+    impl = getattr(browser, '_impl_obj', browser)
+    config = fingerprint['config']
+    screen = fingerprint['preset'].get('screen') or {}
+    width = screen.get('width') or config.get('screen.width')
+    height = screen.get('height') or config.get('screen.height')
+    if not (width and height):
+        vars(impl).pop(_NEXT_CONTEXT, None)
+        return
+    geometry = _geometry_of(impl)
+    vars(impl)[_NEXT_CONTEXT] = {
+        'os': OS_KEYS[platform_to_os(config.get('navigator.platform') or '')],
+        'screen': (width, height),
+        'window': geometry.get('window') if geometry else None,
+    }
+
+
+def take_back_context_geometry(browser: Any) -> None:
+    """Drop a hand_over_context_geometry() that no new_context() took."""
+    vars(getattr(browser, '_impl_obj', browser)).pop(_NEXT_CONTEXT, None)
+
+
 def new_context_options(
     fingerprint: Dict[str, Any],
     context_kwargs: Dict[str, Any],
@@ -1057,6 +1376,9 @@ def new_context_options(
     """new_context() options for a generate_context_fingerprint() identity; the
     caller's own options win."""
     opts: Dict[str, Any] = {**fingerprint['context_options'], **context_kwargs}
+    # The identity's no_viewport is a default: a viewport the caller asks for wins.
+    if context_kwargs.get('viewport') and 'no_viewport' not in context_kwargs:
+        opts.pop('no_viewport', None)
     if proxy:
         opts['proxy'] = proxy
     if geolocation:
@@ -1553,6 +1875,7 @@ def launch_options(
     # only touch generated values, never override what the user passed.
     _user_set_navigator = is_domain_set(config, 'navigator.')
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
+    _user_window_position = {k for k in ('window.screenX', 'window.screenY') if k in config}
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
     _user_set_fonts = bool(fonts) or is_domain_set(config, 'fonts')
     _user_set_voices = is_domain_set(config, 'voices', 'voices:speechd')
@@ -1626,6 +1949,14 @@ def launch_options(
     # headless one to get_screen_cons(), which then skipped the bound entirely.
     screen_cons = screen or (get_screen_cons(headless) if has_display(env) else None)
 
+    # launch_persistent_context(viewport=) shows its pages at that size from the
+    # first one, so a drawn identity is drawn around it: a window the recorded
+    # chrome larger than the viewport, on a screen that holds that window.
+    launch_viewport = None if launch_options.get('no_viewport') else _size(launch_options.get('viewport'))
+    fit_viewport = bool(launch_viewport) and not _user_set_screen_window and not _used_preset and fingerprint is None
+    if fit_viewport:
+        screen_cons = viewport_screen_bound(launch_viewport, os, screen_cons, window)
+
     if not _used_preset and fingerprint is None:
         # Default: synthetic generation via fpgen (infinite unique fingerprints)
         fingerprint = generate_fingerprint(
@@ -1633,6 +1964,9 @@ def launch_options(
             window=window,
             os=os,
         )
+        if fit_viewport and window is None:
+            chrome_w, chrome_h = RECORDED_WINDOW_CHROME[determine_ua_os(_fingerprint_user_agent(fingerprint))]
+            handle_window_size(fingerprint, launch_viewport[0] + chrome_w, launch_viewport[1] + chrome_h)
 
     if not _used_preset and fingerprint is not None:
         # Inject the generated fingerprint into the config
@@ -1724,6 +2058,11 @@ def launch_options(
         follow_baseline_protection(config, target_os)
         clamp_window_dimensions(config)
         clamp_window_position(config)
+    else:
+        # The caller drove the screen or the window, not always where the window sits: a position
+        # drawn against the generated screen is moved onto the caller's (window 1280 wide at
+        # x=206 on a 1382 screen), or every new context drew another screen to hold it.
+        clamp_window_position(config, {'window.screenX', 'window.screenY'} - _user_window_position)
 
     # Deliberately NOT setting window.history.length. It used to be pinned to a
     # random 1-5 because browser.sessionhistory.max_entries=0 left the real
@@ -2122,9 +2461,12 @@ def launch_options(
         LeakWarning.warn('block_images', i_know_what_im_doing)
     if disable_coop:
         LeakWarning.warn('disable_coop', i_know_what_im_doing)
-    firefox_user_prefs.setdefault('permissions.default.image', 2 if block_images else 1)
-    firefox_user_prefs.setdefault('media.peerconnection.enabled', not block_webrtc)
-    firefox_user_prefs.setdefault('browser.tabs.remote.useCrossOriginOpenerPolicy', not disable_coop)
+    for on, pref, stock, toggled in (
+        (block_images, 'permissions.default.image', 1, 2),
+        (block_webrtc, 'media.peerconnection.enabled', True, False),
+        (disable_coop, 'browser.tabs.remote.useCrossOriginOpenerPolicy', True, False),
+    ):
+        set_toggle_pref(firefox_user_prefs, pref, bool(on), stock, toggled, launch_options.get('user_data_dir'))
     # A persistent context takes its context options here.
     if launch_options.get('is_mobile'):
         LeakWarning.warn('is_mobile', i_know_what_im_doing)

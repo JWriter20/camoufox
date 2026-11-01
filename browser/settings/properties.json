@@ -84,6 +84,7 @@
   { "property": "media:hwCodecs", "type": "array", "removed": "158.0, before any release" },
   { "property": "fonts:metrics", "type": "str" },
   { "property": "fonts:windowsAliasLoadMs", "type": "uint" },
+  { "property": "fonts:windowsCmapLoadMs", "type": "uint" },
   { "property": "input:windowsKeyboard", "type": "bool" },
   { "property": "allowMainWorld", "type": "bool" },
   { "property": "disableWorldIsolation", "type": "bool" },

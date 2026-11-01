@@ -27,20 +27,26 @@ import {
 	attachDesktopOnlyWarning,
 	attachDriverDefaults,
 	attachNoViewportDefault,
+	attachPersistentGeometry,
 	attachSocks5Auth,
 	attachStockMediaDefaults,
+	attachViewportFit,
 	attachVirtualDisplay,
 	contextIdentity,
+	contextScreenBound,
 	driverPid,
 	type GpuDisplayOptions,
 	type Headless,
+	handOverContextGeometry,
 	hostIdentity,
 	type LaunchOptions,
+	launchGeometry,
 	launchOptions,
 	pinnedCoreCount,
 	STOCK_MEDIA_DEFAULTS,
 	spoofsWindowDimensions,
 	startVirtualDisplay,
+	takeBackContextGeometry,
 } from "./utils.js";
 import type { VirtualDisplay } from "./virtdisplay.js";
 
@@ -221,6 +227,7 @@ async function launchWith(
 			options,
 		);
 		attachDriverDefaults(context);
+		attachPersistentGeometry(context, fromOptions);
 		if (lease) attachLease(lease, context, "close");
 		return attachVirtualDisplay(context, virtualDisplay);
 	}
@@ -229,6 +236,7 @@ async function launchWith(
 	const identity = await hostIdentity(fromOptions, canvasNoise);
 	const browser = await playwright.launch(fromOptions);
 	attachSocks5Auth(browser);
+	attachViewportFit(browser, launchGeometry(fromOptions));
 	if (lease) attachLease(lease, browser, "disconnected");
 	if (noViewportDefault) {
 		attachNoViewportDefault(browser);
@@ -316,6 +324,7 @@ export async function NewContext(
 		webrtc_ip: webrtcIp,
 		webgl_config: webglConfig,
 		webgl: !(browser as any)._camoufoxRenderNode,
+		screen_bound: contextScreenBound(browser, contextOs, contextOptions),
 	});
 
 	// Merge the generated context options with user overrides (user wins). They
@@ -332,9 +341,18 @@ export async function NewContext(
 		opts.permissions ??= ["geolocation"];
 	}
 
-	// A browser launched elsewhere takes SOCKS5 credentials too.
+	// A browser launched elsewhere takes SOCKS5 credentials too, and its
+	// contexts are fitted to their screens as well. The hand-over is read by
+	// the newContext() call below before it first awaits.
 	attachSocks5Auth(browser);
-	const context = await browser.newContext(opts);
+	attachViewportFit(browser);
+	handOverContextGeometry(browser, fp);
+	let context: BrowserContext;
+	try {
+		context = await browser.newContext(opts);
+	} finally {
+		takeBackContextGeometry(browser);
+	}
 	await context.addInitScript(fp.init_script);
 	return context;
 }

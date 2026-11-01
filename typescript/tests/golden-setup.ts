@@ -45,7 +45,19 @@ export default function setup(): void {
 		const proc = spawnSync(
 			PYTHON,
 			[path.join(REPO, "typescript", "scripts", "golden", script), ...args],
-			{ cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+			{
+				cwd: REPO,
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "pipe"],
+				// This checkout's pythonlib first: an interpreter with another
+				// camoufox installed would otherwise record that one's output.
+				env: {
+					...process.env,
+					PYTHONPATH: [path.join(REPO, "python", "src"), process.env.PYTHONPATH]
+						.filter(Boolean)
+						.join(path.delimiter),
+				},
+			},
 		);
 		if (proc.status !== 0) {
 			throw new Error(

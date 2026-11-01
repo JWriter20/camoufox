@@ -1,0 +1,71 @@
+diff --git a/dom/serializers/nsDocumentEncoder.cpp b/dom/serializers/nsDocumentEncoder.cpp
+--- a/dom/serializers/nsDocumentEncoder.cpp
++++ b/dom/serializers/nsDocumentEncoder.cpp
+@@ -54,6 +54,9 @@
+ #include "nsTArray.h"
+ #include "nsUnicharUtils.h"
+ #include "nscore.h"
++#include "MaskConfig.hpp"
++#include "mozilla/dom/NavigatorManager.h"
++#include "mozilla/dom/RoverfoxStorageManager.h"
+ 
+ using namespace mozilla;
+ using namespace mozilla::dom;
+@@ -722,6 +725,28 @@
+   return rv;
+ }
+ 
++// Camoufox: a content document whose context claims Windows serializes with
++// Windows' line break. With neither OutputCRLineBreak nor OutputLFLineBreak
++// the serializers use the platform's NS_LINEBREAK, "\r\n" on Windows, so stock
++// Windows Firefox's Selection.toString(), copied and dragged text/plain and
++// text/html break lines with CRLF where a Linux build uses LF. cfparity's
++// input.mouse.select on win-i9 (Firefox 158.0.1): a selection over three lines
++// of a white-space:pre <p> read "delta\r\necho", a Linux build claiming
++// Windows "delta\necho".
++static uint32_t ClaimedOSLineBreakFlags(mozilla::dom::Document* aDocument,
++                                        uint32_t aFlags) {
++  constexpr uint32_t kBreaks = nsIDocumentEncoder::OutputCRLineBreak |
++                               nsIDocumentEncoder::OutputLFLineBreak;
++  if ((aFlags & kBreaks) || !aDocument || aDocument->IsInChromeDocShell() ||
++      MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows ||
++      mozilla::dom::NavigatorManager::GetSpoofedOS(
++          mozilla::dom::RoverfoxStorageManager::UserContextId(aDocument)) !=
++          MaskConfig::SpoofedOS::Windows) {
++    return aFlags;
++  }
++  return aFlags | kBreaks;
++}
++
+ nsDocumentEncoder::~nsDocumentEncoder() = default;
+ 
+ NS_IMETHODIMP
+@@ -738,7 +763,7 @@
+ 
+   mMimeType = aMimeType;
+ 
+-  mFlags = aFlags;
++  mFlags = ClaimedOSLineBreakFlags(aDocument, aFlags);
+   mIsCopying = false;
+ 
+   return NS_OK;
+@@ -1749,7 +1774,7 @@
+ 
+   // Make all links absolute when copying
+   // (see related bugs #57296, #41924, #58646, #32768)
+-  mFlags = aFlags | OutputAbsoluteLinks;
++  mFlags = ClaimedOSLineBreakFlags(aDocument, aFlags) | OutputAbsoluteLinks;
+ 
+   if (!mDocument->IsScriptEnabled()) mFlags |= OutputNoScriptContent;
+ 
+diff --git a/dom/serializers/moz.build b/dom/serializers/moz.build
+--- a/dom/serializers/moz.build
++++ b/dom/serializers/moz.build
+@@ -36,4 +36,7 @@
+ 
+ FINAL_LIBRARY = "xul"
+ 
++# Camoufox: include path for MaskConfig.hpp
++LOCAL_INCLUDES += ["/camoucfg"]
++
+ CRASHTEST_MANIFESTS += ["crashtests/crashtests.list"]

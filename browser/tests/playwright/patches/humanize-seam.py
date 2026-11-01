@@ -23,7 +23,11 @@ What PASS means:
       every mousemove the page receives is a planned point, each move ending on
       its target (Firefox coalesces moves within a frame, as with a real mouse,
       so which points arrive depends on frame timing); a different seed plans
-      different moves.
+      different moves;
+    * the same holds in a window too small for the chrome plus the viewport,
+      as a 1366x768 screen draw gives: there Juggler's .browserStack scrolls
+      the browser when a wheel turns, during the next move, and every step
+      of a move is dispatched against where the browser is when it goes out.
 """
 
 import asyncio
@@ -47,9 +51,11 @@ RECORDER = """
 TARGETS = [(900, 500), (120, 600), (700, 80), (400, 400)]
 
 
-async def session(humanize, trace=None):
+async def session(humanize, trace=None, window=None):
     """Moves between TARGETS with a wheel turn after each; what the page saw."""
     kwargs = dict(headless=True, os="linux", humanize=humanize)
+    if window:
+        kwargs["window"] = window
     if EXECUTABLE_PATH:
         kwargs["executable_path"] = EXECUTABLE_PATH
     if trace:
@@ -95,9 +101,11 @@ async def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         runs = {}
-        for name, seed in (("a", 1234), ("b", 1234), ("c", 1235)):
+        # d: 720 px of window for 86 px of chrome and a 700 px viewport.
+        for name, seed, window in (("a", 1234, None), ("b", 1234, None), ("c", 1235, None),
+                                   ("d", 1234, (1366, 720))):
             trace = os.path.join(tmp, f"{name}.jsonl")
-            moves, wheels = await session({"mouse": cursory(), "scroll": notches(), "seed": seed}, trace)
+            moves, wheels = await session({"mouse": cursory(), "scroll": notches(), "seed": seed}, trace, window)
             runs[name] = (planned(trace), moves, wheels)
         plans_a, moves_a, _ = runs["a"]
         plans_b, moves_b, _ = runs["b"]
@@ -110,7 +118,7 @@ async def main() -> int:
             failures.append(f"trace: expected {2 * len(TARGETS) + 1} mouse and scroll plans, got {len(plans_a)} {channels}")
         if plans_a != plans_b:
             failures.append("same seed: the planned input differs between launches")
-        for name in ("a", "b"):
+        for name in ("a", "b", "d"):
             plans, moves, _ = runs[name]
             points = {(round(s["x"]), round(s["y"])) for c, _, _, p in plans if c == "mouse" for s in p}
             stray = [m for target in moves for m in target if tuple(m) not in points]
