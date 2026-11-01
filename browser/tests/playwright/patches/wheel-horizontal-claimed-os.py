@@ -81,8 +81,10 @@ def launch(binary, claimed, page_html, scenario):
         page.set_content(page_html)
         page.wait_for_timeout(300)
         inp = OSInput(page)
-        # Focus the page with a click on an empty spot.
-        inp.move(1100, 700)
+        # Focus the page with a click on an empty spot, inside the viewport: the window follows the drawn
+        # screen, and a short one (a 1280x720 screen gives a 712 px window) put a fixed y=700 below the
+        # window, so the click and every later key reached the X root window and the page saw nothing.
+        inp.move(*page.evaluate("[Math.min(1100, innerWidth - 40), Math.min(700, innerHeight - 40)]"))
         inp.button(1, True)
         inp.button(1, False)
         page.evaluate("document.dispatchEvent(new Event('guard-reset'))")

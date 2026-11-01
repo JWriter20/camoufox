@@ -1,0 +1,300 @@
+diff --git a/docshell/base/BrowsingContext.h b/docshell/base/BrowsingContext.h
+--- a/docshell/base/BrowsingContext.h
++++ b/docshell/base/BrowsingContext.h
+@@ -124,6 +124,10 @@
+    * :-moz-window-inactive pseudoclass. Only read from or set on the          \
+    * top BrowsingContext. */                                                  \
+   FIELD(IsActiveBrowserWindowInternal, bool)                                  \
++  /* Camoufox, Top()-only, set by the parent: a Windows identity's emulated   \
++   * Start menu holds the foreground (widget/gtk/nsWindow.cpp). The page      \
++   * focus emulation (overrideHasFocus) yields to it, as Windows blurs. */    \
++  FIELD(ClaimedShellForeground, bool)                                         \
+   FIELD(OpenerPolicy, nsILoadInfo::CrossOriginOpenerPolicy)                   \
+   /* Current opener for the BrowsingContext. Weak reference */                \
+   FIELD(OpenerId, uint64_t)                                                   \
+@@ -1448,6 +1452,11 @@
+               ContentParent* aSource);
+   void DidSet(FieldIndex<IDX_IsActiveBrowserWindowInternal>, bool aOldValue);
+ 
++  bool CanSet(FieldIndex<IDX_ClaimedShellForeground>, bool,
++              ContentParent* aSource) {
++    return XRE_IsParentProcess() && !aSource && IsTop();
++  }
++
+   // Ensure that we only set the flag on the top level browsingContext.
+   // And then, we do a pre-order walk in the tree to refresh the
+   // volume of all media elements.
+diff --git a/dom/base/Document.cpp b/dom/base/Document.cpp
+--- a/dom/base/Document.cpp
++++ b/dom/base/Document.cpp
+@@ -4999,7 +4999,10 @@
+     return false;
+   }
+ 
+-  if (IsActive() && mDocumentContainer->ShouldOverrideHasFocus()) {
++  // Camoufox: the focus emulation yields to a Windows identity's emulated
++  // Start menu, which takes the foreground as on Windows.
++  if (IsActive() && mDocumentContainer->ShouldOverrideHasFocus() &&
++      !bc->Top()->GetClaimedShellForeground()) {
+     return true;
+   }
+ 
+diff --git a/dom/base/nsFocusManager.cpp b/dom/base/nsFocusManager.cpp
+--- a/dom/base/nsFocusManager.cpp
++++ b/dom/base/nsFocusManager.cpp
+@@ -2495,7 +2495,9 @@
+   }
+ 
+   // Playwright: emulate focused page by never bluring when focus leaves the tab. Camoufox: not when it moves into one of the page's frames, which blurs as in stock.
+-  if (XRE_IsContentProcess() && aIsLeavingDocument && !aAncestorBrowsingContextToFocus && docShell && nsDocShell::Cast(docShell)->ShouldOverrideHasFocus()) {
++  // Camoufox: nor while a Windows identity's emulated Start menu holds the foreground (widget/gtk/nsWindow.cpp), which blurs as on Windows.
++  if (XRE_IsContentProcess() && aIsLeavingDocument && !aAncestorBrowsingContextToFocus && docShell && nsDocShell::Cast(docShell)->ShouldOverrideHasFocus() &&
++      !(nsDocShell::Cast(docShell)->GetBrowsingContext() && nsDocShell::Cast(docShell)->GetBrowsingContext()->Top()->GetClaimedShellForeground())) {
+     return true;
+   }
+ 
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -59,6 +59,7 @@
+ #include "mozilla/WidgetUtils.h"
+ #include "mozilla/WritingModes.h"
+ #include "mozilla/dom/Document.h"
++#include "mozilla/dom/CanonicalBrowsingContext.h"
+ #include "mozilla/dom/WheelEventBinding.h"
+ #include "mozilla/gfx/2D.h"
+ #include "mozilla/gfx/GPUProcessManager.h"
+@@ -3274,9 +3275,161 @@
+   return true;
+ }
+ 
++// Camoufox: the Windows shell's Start menu, for a Windows identity on another
++// OS. On Windows a Win key released with no other key in between opens Start,
++// which takes the foreground: the page sees the key's keydown, never its keyup,
++// and the window blurs. Until Start is dismissed the keyboard is Start's, and
++// a click into the window first only dismisses Start. Measured with SendInput
++// on win-i9 (Windows 11 26200, stock Firefox 158.0.1, it6 jprobe, 2-3 runs
++// each, every run alike):
++//  - Win tap: keydown Meta, blur, hasFocus false, no keyup (state Start).
++//  - Win held while clicking, then released: the same (state Search).
++//  - Start + click: focus then blur at once, no pointer events (-> Search).
++//  - Start + a key: nothing reaches the page (-> Search).
++//  - Search + click: focus, then the click's events; Start is gone.
++//  - Start + Escape or a Win tap: focus comes back; no key events.
++//  - Search + a Win tap: Start again; + Escape or Alt: nothing changes.
++// visibilityState stays visible throughout. Input from the automation driver
++// (Juggler) never reaches these handlers, as it never reaches the shell.
++enum class ClaimedShell { Closed, Start, Search };
++static ClaimedShell sClaimedShell = ClaimedShell::Closed;
++static bool sClaimedWinDown = false;     // a Win key is held
++static bool sClaimedWinChord = false;    // another key went down while it was
++static bool sClaimedWinClick = false;    // a button went down while it was
++static bool sClaimedEatRelease = false;  // the release of a click Start took
++
++static bool ClaimsWindowsShell() {
++  static const bool sClaims =
++      MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
++      MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows;
++  return sClaims;
++}
++
++static bool IsWinKey(const GdkEventKey* aEvent) {
++  return aEvent->keyval == GDK_KEY_Super_L || aEvent->keyval == GDK_KEY_Super_R;
++}
++
++// Tells every page in the window that the shell holds the foreground, so the
++// automation's page focus emulation (overrideHasFocus: hasFocus() always true,
++// no blur when focus leaves, dom/base/Document.cpp, nsFocusManager.cpp) yields
++// to it as Windows blurs. Set before the deactivation it explains: both reach
++// the content processes over PContent, in order.
++static void ClaimedShellForeground(nsWindow* aTop, bool aHeld) {
++  using mozilla::dom::BrowsingContext;
++  using mozilla::dom::CanonicalBrowsingContext;
++  nsIWidgetListener* listener = aTop ? aTop->GetWidgetListener() : nullptr;
++  PresShell* presShell = listener ? listener->GetPresShell() : nullptr;
++  mozilla::dom::Document* doc = presShell ? presShell->GetDocument() : nullptr;
++  BrowsingContext* bc = doc ? doc->GetBrowsingContext() : nullptr;
++  if (!bc) {
++    return;
++  }
++  RefPtr<CanonicalBrowsingContext> top =
++      bc->Canonical()->TopCrossChromeBoundary();
++  (void)top->SetClaimedShellForeground(aHeld);
++  top->CallOnTopDescendants(
++      [aHeld](CanonicalBrowsingContext* aContext) {
++        (void)aContext->SetClaimedShellForeground(aHeld);
++        return mozilla::CallState::Continue;
++      },
++      CanonicalBrowsingContext::TopDescendantKind::All);
++}
++
++// Start takes the foreground: the window deactivates as when another
++// application is focused. aTop: the container window, which GTK's focus
++// events reach.
++static void ClaimedShellOpen(nsWindow* aTop, ClaimedShell aState) {
++  sClaimedShell = aState;
++  if (RefPtr<nsWindow> top = aTop) {
++    ClaimedShellForeground(top, true);
++    top->OnContainerFocusOutEvent(nullptr);
++  }
++}
++
++static void ClaimedShellClose(nsWindow* aTop) {
++  sClaimedShell = ClaimedShell::Closed;
++  if (RefPtr<nsWindow> top = aTop) {
++    ClaimedShellForeground(top, false);
++    top->OnContainerFocusInEvent(nullptr);
++  }
++}
++
++// Whether the shell took this key event (true: the page must not see it).
++static bool ClaimedShellKey(nsWindow* aTop, const GdkEventKey* aEvent,
++                            bool aPress) {
++  if (!ClaimsWindowsShell()) {
++    return false;
++  }
++  const bool win = IsWinKey(aEvent);
++  if (aPress) {
++    if (win) {
++      if (!sClaimedWinDown) {
++        sClaimedWinDown = true;
++        sClaimedWinChord = sClaimedWinClick = false;
++      }
++    } else if (sClaimedWinDown) {
++      sClaimedWinChord = true;
++    }
++    if (sClaimedShell == ClaimedShell::Start && !win &&
++        aEvent->keyval != GDK_KEY_Escape) {
++      sClaimedShell = ClaimedShell::Search;  // typed into Start
++    }
++    return sClaimedShell != ClaimedShell::Closed;
++  }
++  if (win) {
++    const bool tap = sClaimedWinDown && !sClaimedWinChord;
++    sClaimedWinDown = false;
++    if (sClaimedShell == ClaimedShell::Closed) {
++      if (!tap) {
++        return false;
++      }
++      ClaimedShellOpen(aTop, sClaimedWinClick ? ClaimedShell::Search
++                                              : ClaimedShell::Start);
++      return true;
++    }
++    if (tap) {
++      if (sClaimedShell == ClaimedShell::Start) {
++        ClaimedShellClose(aTop);
++      } else {
++        sClaimedShell = ClaimedShell::Start;
++      }
++    }
++    return true;
++  }
++  if (sClaimedShell == ClaimedShell::Start &&
++      aEvent->keyval == GDK_KEY_Escape) {
++    ClaimedShellClose(aTop);
++    return true;
++  }
++  return sClaimedShell != ClaimedShell::Closed;
++}
++
+ void nsWindow::OnButtonPressEvent(GdkEventButton* aEvent) {
+   LOG("Button %u press\n", aEvent->button);
+ 
++  // A Windows identity's Start menu (ClaimedShellKey): a click into the
++  // window while Start is open only dismisses it, and the search pane that
++  // replaces it keeps the foreground; the next click activates the window.
++  if (ClaimsWindowsShell()) {
++    if (sClaimedWinDown) {
++      sClaimedWinClick = true;
++    }
++    if (sClaimedShell == ClaimedShell::Start) {
++      sClaimedShell = ClaimedShell::Search;
++      sClaimedEatRelease = true;
++      if (RefPtr<nsWindow> top = GetContainerWindow()) {
++        top->OnContainerFocusInEvent(nullptr);
++        top->OnContainerFocusOutEvent(nullptr);
++      }
++      return;
++    }
++    if (sClaimedShell == ClaimedShell::Search) {
++      // Activated below, as for any click into an inactive window.
++      sClaimedShell = ClaimedShell::Closed;
++      ClaimedShellForeground(GetContainerWindow(), false);
++    }
++  }
++
+   SetLastPointerDownEvent((GdkEvent*)aEvent);
+   mLastMouseCoordinates.Set(aEvent);
+ 
+@@ -3435,6 +3588,11 @@
+ void nsWindow::OnButtonReleaseEvent(GdkEventButton* aEvent) {
+   LOG("Button %u release\n", aEvent->button);
+ 
++  if (sClaimedEatRelease) {  // its press only dismissed Start
++    sClaimedEatRelease = false;
++    return;
++  }
++
+   SetLastPointerDownEvent(nullptr);
+   mLastMouseCoordinates.Set(aEvent);
+ 
+@@ -3518,6 +3676,12 @@
+ void nsWindow::OnContainerFocusInEvent(GdkEventFocus* aEvent) {
+   LOG("OnContainerFocusInEvent");
+ 
++  if (aEvent && sClaimedShell != ClaimedShell::Closed) {
++    // a real focus change ends an emulated Start menu
++    sClaimedShell = ClaimedShell::Closed;
++    ClaimedShellForeground(this, false);
++  }
++
+   // Unset the urgency hint, if possible
+   GtkWidget* top_window = GetGtkWidget();
+   if (top_window && (gtk_widget_get_visible(top_window))) {
+@@ -3554,6 +3718,11 @@
+ void nsWindow::OnContainerFocusOutEvent(GdkEventFocus* aEvent) {
+   LOG("OnContainerFocusOutEvent");
+ 
++  if (aEvent && sClaimedShell != ClaimedShell::Closed) {
++    sClaimedShell = ClaimedShell::Closed;
++    ClaimedShellForeground(this, false);
++  }
++
+   if (IsTopLevelWidget()) {
+     // Rollup menus when a window is focused out unless a drag is occurring.
+     // This check is because drags grab the keyboard and cause a focus out on
+@@ -3684,12 +3853,18 @@
+ gboolean nsWindow::OnKeyPressEvent(GdkEventKey* aEvent) {
+   LOG("OnKeyPressEvent");
+ 
++  if (ClaimedShellKey(GetContainerWindow(), aEvent, true)) {
++    return TRUE;
++  }
+   KeymapWrapper::HandleKeyPressEvent(this, aEvent);
+   return TRUE;
+ }
+ 
+ gboolean nsWindow::OnKeyReleaseEvent(GdkEventKey* aEvent) {
+   LOG("OnKeyReleaseEvent");
++  if (ClaimedShellKey(GetContainerWindow(), aEvent, false)) {
++    return TRUE;
++  }
+   if (NS_WARN_IF(!KeymapWrapper::HandleKeyReleaseEvent(this, aEvent))) {
+     return FALSE;
+   }
+diff --git a/xpfe/appshell/AppWindow.cpp b/xpfe/appshell/AppWindow.cpp
+--- a/xpfe/appshell/AppWindow.cpp
++++ b/xpfe/appshell/AppWindow.cpp
+@@ -2839,7 +2839,11 @@
+   if (mDocShell) {
+     if (nsCOMPtr<nsPIDOMWindowOuter> window = mDocShell->GetWindow()) {
+       if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+-        if (!fm->IsTestMode()) {
++        // Camoufox: the automation's test mode keeps a window raised, but a
++        // Windows identity's emulated Start menu (widget/gtk/nsWindow.cpp)
++        // lowers it, as Windows does when the shell takes the foreground.
++        BrowsingContext* bc = mDocShell->GetBrowsingContext();
++        if (!fm->IsTestMode() || (bc && bc->GetClaimedShellForeground())) {
+           fm->WindowLowered(window, nsFocusManager::GenerateFocusActionId());
+         }
+       }

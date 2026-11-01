@@ -12,7 +12,7 @@ diff --git a/gfx/thebes/gfxTextRun.cpp b/gfx/thebes/gfxTextRun.cpp
  #include "mozilla/dom/Document.h"
  #include "mozilla/dom/RoverfoxStorageManager.h"
  #include "mozilla/dom/WorkerPrivate.h"
-@@ -3135,12 +3139,121 @@
+@@ -3135,12 +3139,141 @@
    return fe->FindOrMakeFont(&mStyle);
  }
  
@@ -45,6 +45,26 @@ diff --git a/gfx/thebes/gfxTextRun.cpp b/gfx/thebes/gfxTextRun.cpp
 +// The browser-wide landed index, in the cross-process storage.
 +static constexpr const char* kWindowsCmapLoadedKey = "wcmap_loaded_from_";
 +
++// The pass runs on stock's clock: the time this process's main thread spends
++// blocked on an out-of-process text service, which stock does not have, does
++// not age it. Otherwise a page loop measuring text (a font probe walking a
++// family list) reaches a family later than stock does by the service's round
++// trips, and finds a pass started early in the loop already landed where
++// stock still has the family unloaded (gate 10: a fonts.detect loop 20x
++// stock's length measured "Microsoft JhengHei" as the Light face at once).
++static std::atomic<uint64_t> sWindowsCmapStalledUs{0};
++
++extern "C" void camoufox_text_service_waited(unsigned long long aMicros) {
++  if (NS_IsMainThread()) {
++    sWindowsCmapStalledUs += aMicros;
++  }
++}
++
++static mozilla::TimeStamp WindowsCmapNow() {
++  return mozilla::TimeStamp::Now() -
++         mozilla::TimeDuration::FromMicroseconds(double(sWindowsCmapStalledUs));
++}
++
 +// Called with sWindowsCmapMutex held: retire a pass whose time has come.
 +static void WindowsCmapLandLocked(mozilla::TimeStamp aNow) {
 +  if (!sWindowsCmapPassLandsAt.IsNull() && aNow >= sWindowsCmapPassLandsAt) {
@@ -59,7 +79,7 @@ diff --git a/gfx/thebes/gfxTextRun.cpp b/gfx/thebes/gfxTextRun.cpp
 +  if (aSchedule != sWindowsCmapReflowSchedule) {
 +    return;
 +  }
-+  const mozilla::TimeDuration wait = aAt - mozilla::TimeStamp::Now();
++  const mozilla::TimeDuration wait = aAt - WindowsCmapNow();
 +  if (wait > mozilla::TimeDuration()) {
 +    NS_DelayedDispatchToCurrentThread(
 +        NS_NewRunnableFunction(
@@ -71,7 +91,7 @@ diff --git a/gfx/thebes/gfxTextRun.cpp b/gfx/thebes/gfxTextRun.cpp
 +  uint32_t landed;
 +  {
 +    mozilla::StaticMutexAutoLock lock(sWindowsCmapMutex);
-+    WindowsCmapLandLocked(mozilla::TimeStamp::Now());
++    WindowsCmapLandLocked(WindowsCmapNow());
 +    landed = sWindowsCmapLoadedFrom;
 +  }
 +  uint32_t shared = UINT32_MAX;
@@ -98,7 +118,7 @@ diff --git a/gfx/thebes/gfxTextRun.cpp b/gfx/thebes/gfxTextRun.cpp
 +  mozilla::dom::RoverfoxStorageManager::GetUint(kWindowsCmapLoadedKey, 0,
 +                                                shared);
 +  mozilla::StaticMutexAutoLock lock(sWindowsCmapMutex);
-+  const auto now = mozilla::TimeStamp::Now();
++  const auto now = WindowsCmapNow();
 +  WindowsCmapLandLocked(now);
 +  if (aFamilyIndex >= std::min(sWindowsCmapLoadedFrom, shared)) {
 +    return false;
