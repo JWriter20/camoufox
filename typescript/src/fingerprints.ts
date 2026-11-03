@@ -321,6 +321,13 @@ function loadFontGroups(): Record<string, FontUnit[]> {
 	return fontGroupsCache;
 }
 
+/** The families of one addition unit (font-groups.json), e.g. ("win", "office"). */
+export function fontUnitFamilies(osKey: string, unitId: string): Set<string> {
+	return new Set(
+		(loadFontGroups()[osKey] ?? []).find((u) => u.id === unitId)?.fonts ?? [],
+	);
+}
+
 let fontBasesCache: Record<string, FontBase[]> | null = null;
 
 /** The OS-version bases per OS (font-bases.json), drawn entire by weight. */
@@ -871,8 +878,12 @@ export function normalizePresetVoices(
 			isLocalService: vtype === "local",
 		});
 	}
-	if (result.length && !result.some((v) => v.isDefault))
-		result[0].isDefault = true;
+	// As drawVoiceConfig: only macOS marks a default (its system voice, else the
+	// first voice it lists); Windows (SAPI) and Linux mark none.
+	if (osKey === "mac" && result.length && !result.some((v) => v.isDefault)) {
+		const systemVoice = loadVoiceManifests().mac?.systemVoice?.default;
+		(result.find((v) => v.name === systemVoice) ?? result[0]).isDefault = true;
+	}
 	return result;
 }
 
@@ -1363,6 +1374,55 @@ export function setHostIpv6Default(
 }
 
 /**
+ * Firefox's partial release rollouts (Nimbus), as [slug, first Firefox
+ * version, share of profiles, pref, value, draw tag]. Stock Firefox on the
+ * release channel is enrolled by its profile's Nimbus bucket; Camoufox's
+ * channel is never targeted, so each identity draws its enrollment at the
+ * rollout's rate. Mirrors Python's PARTIAL_RELEASE_ROLLOUTS (LEAKS 610/611).
+ */
+export const PARTIAL_RELEASE_ROLLOUTS: ReadonlyArray<
+	[string, number, number, string, unknown, number]
+> = [
+	[
+		"happy-eyeballs-release-rollout",
+		157,
+		0.5,
+		"network.http.happy_eyeballs_enabled",
+		true,
+		0x4e1b,
+	],
+	[
+		"fetch-streaming-upload-rollout",
+		159,
+		0.25,
+		"dom.fetch.streaming_upload",
+		true,
+		0x5712,
+	],
+];
+
+/**
+ * Enroll the identity in Firefox's partial release rollouts at their rates,
+ * following the identity seed so the same identity is enrolled on every
+ * launch. Mirrors Python's set_release_rollout_prefs; a pref the caller set is
+ * left alone.
+ */
+export function setReleaseRolloutPrefs(
+	prefs: Record<string, unknown>,
+	config: Config,
+	salt: number | bigint,
+	ffVersion: string | undefined,
+): void {
+	const version =
+		Number.parseInt(String(ffVersion ?? "").split(".")[0], 10) || 0;
+	const seed = identitySeed(config, salt);
+	for (const [, since, share, pref, value, tag] of PARTIAL_RELEASE_ROLLOUTS) {
+		if (pref in prefs || version < since) continue;
+		if (rng((seed ^ tag) >>> 0).random() < share) prefs[pref] = value;
+	}
+}
+
+/**
  * Windows' location setting for desktop apps, as Firefox reads it
  * (GeolocationSystemWin.cpp). No recorded corpus has it; an estimate a
  * real-device measurement replaces. Mirrors Python's
@@ -1425,11 +1485,12 @@ function loadAudioOutputLatency(): Record<string, any> {
 /**
  * When stock Windows Firefox's deferred font-info loader lands the legacy
  * styled-family aliases after the first legacy lookup (stock 158.0.1 on win-i9:
- * 1727, 1826, 1832 ms on a 100 ms poll). Mirrors Python's
+ * 1727, 1826, 1832 ms on a 100 ms poll; 25H2 26200.9711: 2158, 2029, 2043 ms).
+ * Mirrors Python's
  * WINDOWS_ALIAS_LOAD_MS / set_windows_alias_load_default: drawn per launch for a
  * Windows identity on another OS; a caller's value is kept.
  */
-export const WINDOWS_ALIAS_LOAD_MS: readonly [number, number] = [1630, 1832];
+export const WINDOWS_ALIAS_LOAD_MS: readonly [number, number] = [1630, 2158];
 
 /**
  * How long stock Windows Firefox's character-map pass takes to land after the
@@ -1943,6 +2004,30 @@ export interface ContextFingerprint {
 	preset: Preset;
 }
 
+/**
+ * One browser is one machine: a context is another user of it. These are the
+ * values a user of that machine has of their own; every other identity key is
+ * the machine's. Mirrors Python's CONTEXT_USER_KEYS (LEAKS 619).
+ */
+export const CONTEXT_USER_KEYS: ReadonlyArray<string> = [
+	"timezone",
+	"locale:",
+	"navigator.language",
+	"headers.Accept-Language",
+	"geolocation:",
+	"webrtc:ipv4",
+	"webrtc:ipv6",
+];
+
+/** The machine-level part of a launch identity's CAMOU_CONFIG. */
+export function machineConfig(launchConfig: Config): Config {
+	return Object.fromEntries(
+		Object.entries(launchConfig).filter(
+			([k]) => !CONTEXT_USER_KEYS.some((p) => k.startsWith(p)),
+		),
+	);
+}
+
 /** The OS a navigator.platform value presents, as a Camoufox OS name. */
 export function targetOsFromPlatform(plat: string): SupportedOS {
 	if (plat === "Win32") return "windows";
@@ -1979,6 +2064,7 @@ export function generateContextFingerprint({
 	webgl_config,
 	webgl: claimWebgl = true,
 	screen_bound,
+	machine,
 }: {
 	preset?: Preset | null;
 	os?: string | null;
@@ -1990,6 +2076,7 @@ export function generateContextFingerprint({
 	webgl_config?: [string, string] | null;
 	webgl?: boolean;
 	screen_bound?: Screen | null;
+	machine?: Config | null;
 } = {}): ContextFingerprint {
 	let config: Config;
 	let nav: Record<string, any>;
@@ -1997,7 +2084,46 @@ export function generateContextFingerprint({
 	let webgl: Record<string, any>;
 	let resolvedPreset: Preset;
 
-	if (!isNone(preset)) {
+	if (machine && Object.keys(machine).length) {
+		// The context is a user of the browser's machine: every machine-level
+		// value is the launch identity's (Python's machine= branch).
+		config = machineConfig(machine);
+		const machineOs = targetOsFromPlatform(
+			pyStr(get(config, "navigator.platform", "")),
+		);
+		if (!isNone(preset))
+			throw new ValueError(
+				`A preset is a whole machine, and a context runs on its browser's machine (${machineOs}). Launch a browser with the preset to claim it.`,
+			);
+		if (os && os !== machineOs)
+			throw new ValueError(
+				`A context runs on its browser's machine, which claims ${machineOs}, not ${os}. Launch a browser with that OS to claim it.`,
+			);
+		if (!claimWebgl) {
+			for (const key of Object.keys(config)) {
+				if (key.startsWith("webGl:") || key.startsWith("webGl2:"))
+					delete config[key];
+			}
+		}
+		nav = {
+			platform: config["navigator.platform"],
+			hardwareConcurrency: config["navigator.hardwareConcurrency"],
+		};
+		// No per-context screen: the machine's is the launch's own, which the
+		// page reads from CAMOU_CONFIG with its available rect's origin
+		// (screen.availLeft/availTop) and its taskbar, the work area the
+		// browser places windows in. The per-context setter carries a size
+		// only, so a context that set it read availLeft/availTop 0 -- and, on
+		// a build without the Pro available rect, no taskbar -- while a
+		// window.open() it made was placed in the drawn work area (LEAKS 635;
+		// Python's machine= branch).
+		screen = {};
+		webgl = {
+			unmaskedVendor: config["webGl:vendor"],
+			unmaskedRenderer: config["webGl:renderer"],
+		};
+		resolvedPreset = { navigator: nav, screen, webgl };
+	} else if (!isNone(preset)) {
 		const p = preset as Preset;
 		config = fromPreset(p, ff_version);
 		nav = p.navigator ?? {};

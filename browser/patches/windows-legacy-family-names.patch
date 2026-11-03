@@ -29,7 +29,7 @@ diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFont
  #include <dirent.h>
  #include <dlfcn.h>
  #include <fontconfig/fcfreetype.h>
-@@ -2519,6 +2526,291 @@
+@@ -2519,6 +2526,297 @@
           aLocale.Script().EqualTo("Arab");
  }
  
@@ -185,14 +185,20 @@ diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFont
 +    "yu gothic ui semilight",
 +};
 +
-+// Legacy names stock win-i9 never resolves before the aliases load, even as
-+// the first name asked for (2026-10-31): Rockwell Extra Bold's stripped base
++// Names stock win-i9 never resolves before the aliases load, even as the
++// first name asked for (2026-10-31): Rockwell Extra Bold's stripped base
 +// "rockwell extra" is no family, and Rockwell Condensed's base read does not
-+// list it (inferred: a nameID 1 family of its own, without nameID 16). Whether
-+// such a lookup starts the loader was not measured; it is taken not to.
++// list it (inferred: a nameID 1 family of its own, without nameID 16). The
++// bare variable-font families "Segoe UI Variable" and "Sitka" (typographic
++// family names; DirectWrite lists only the opsz instances, e.g. Sitka Text)
++// are missing too until the loader lands, then resolve to the default
++// instance (stock probe-Y x3, 2026-11-01: missing before, Segoe UI Variable
++// Text / Sitka Text after; asked first, they did not start the loader).
 +static constexpr std::string_view kWindowsLegacyMissingNames[] = {
 +    "rockwell condensed",
 +    "rockwell extra bold",
++    "segoe ui variable",
++    "sitka",
 +};
 +
 +// The base of a legacy name: what Gecko strips it to (up to the last space).
@@ -321,7 +327,32 @@ diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFont
  bool gfxFcPlatformFontList::FindAndAddFamiliesLocked(
      FontVisibilityProvider* aFontVisibilityProvider,
      StyleGenericFontFamily aGeneric, const nsACString& aFamily,
-@@ -2552,6 +2844,45 @@
+@@ -2527,6 +2825,24 @@
+   nsAutoCString familyName(aFamily);
+   ToLowerCase(familyName);
+ 
++  // Camoufox: DirectWrite has no families named after CSS generics, nor
++  // fontconfig's "sans", "sans serif" and "mono": on Windows a quoted generic
++  // ("sans-serif") or one of those names, quoted or not, is an unknown family
++  // and the next family in the list is used (stock win-i9, probe-Y E/E2).
++  // Here fontconfig would substitute its generic alias (Arial, Courier New...).
++  if (aFontVisibilityProvider && !aFontVisibilityProvider->IsChrome() &&
++      mozilla::dom::NavigatorManager::GetSpoofedOS(
++          mozilla::dom::RoverfoxStorageManager::UserContextId(
++              aFontVisibilityProvider->GetDocument())) ==
++          MaskConfig::SpoofedOS::Windows &&
++      (familyName.EqualsLiteral("sans") ||
++       familyName.EqualsLiteral("sans serif") ||
++       familyName.EqualsLiteral("mono") ||
++       ((aFlags & FindFamiliesFlags::eQuotedFamilyName) &&
++        mozilla::StyleSingleFontFamily::Parse(familyName).IsGeneric()))) {
++    return false;
++  }
++
+   if (!(aFlags & FindFamiliesFlags::eQuotedFamilyName)) {
+     // deprecated generic names are explicitly converted to standard generics
+     bool isDeprecatedGeneric = false;
+@@ -2552,6 +2868,45 @@
      }
    }
  

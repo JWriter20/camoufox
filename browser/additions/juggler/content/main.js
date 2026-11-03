@@ -68,9 +68,24 @@ export function initialize(browsingContext, docShell) {
   const contextCrossProcessCookie = Services.cpmm.sharedData.get('juggler:context-cookie-' + browsingContext.originAttributes.userContextId) || { initScripts: [], bindings: [], settings: {} };
   const pageCrossProcessCookie = Services.cpmm.sharedData.get('juggler:page-cookie-' + browsingContext.browserId) || { initScripts: [], bindings: [], interceptFileChooserDialog: false };
 
-  // Enforce focused state for all top level documents.
-  docShell.overrideHasFocus = true;
-  docShell.forceActiveState = true;
+  // Camoufox: upstream Playwright forces every top-level document focused and
+  // active here (focus emulation, so parallel pages all "have focus"). A page
+  // reads it: measured 2026-11-01 on Linux (Xvfb + openbox and headless, 3
+  // launches each), stock Firefox 158.0.1 vs Playwright-driven camoufox:
+  //  - opener behind a window.open() popup, or a window behind a second
+  //    window: stock hasFocus() false, blur on the element, document and
+  //    window; driven hasFocus() true while :-moz-window-inactive matched, and
+  //    no document/window blur (nsFocusManager::BlurImpl skips it).
+  //  - opener tab behind a new foreground tab: stock visibilityState
+  //    "hidden", a visibilitychange, rAF and timers throttled to ~1/s; driven
+  //    "visible", no visibilitychange, rAF at 60 Hz and timers unthrottled.
+  // So the document keeps the window's real focus and activeness, as in stock.
+  // Input that must reach a page in the background goes through
+  // activateAndRun (TargetRegistry.js), which raises its window and selects
+  // its tab first, as a user would. Kept assignable (not removed) so the
+  // docShell flags stay at stock's default explicitly.
+  docShell.overrideHasFocus = false;
+  docShell.forceActiveState = false;
   // A page reads this back: after a scripted same-origin `location.href = ...`
   // and `history.back()` -- no gesture, no permission -- stock Firefox 152.0.4
   // fires pageshow with persisted=true and does not re-run the document's

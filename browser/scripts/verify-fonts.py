@@ -133,6 +133,10 @@ def main():
 
     fonts_root = os.path.abspath(os.path.join(args.bundle, 'fonts'))
     fonts_json = json.load(open(os.path.join(PACKAGE, 'fonts.json'), encoding='utf-8'))
+    with open(os.path.join(PACKAGE, 'font-bases.json'), encoding='utf-8') as fh:
+        font_bases = json.load(fh)
+    with open(os.path.join(PACKAGE, 'font-groups.json'), encoding='utf-8') as fh:
+        font_groups = json.load(fh)
     with open(os.path.join(PACKAGE, 'essential-fonts.json'), encoding='utf-8') as fh:
         essentials = json.load(fh)
     with open(os.path.join(PACKAGE, 'launcher-constants.json'), encoding='utf-8') as fh:
@@ -231,23 +235,45 @@ def main():
                 else:
                     print(f'OK: {len(lst)} {label} names all in fonts.json[{os_key}] ({len(reportable)})')
             # An unconditional pattern rewrite whose TARGET is reportable makes the
-            # alias renderable for every identity, so the alias must be reported by
-            # every identity too (essential). Rewrites to an unbundled/unreported
-            # target are inert (the allowlist blocks the target) and only noted.
+            # alias render wherever the identity has the target: the allowlist
+            # checks each name fontconfig substitutes (gfxPlatformFontList::
+            # FindAndAddFamiliesLocked), not the name the page asked for. So every
+            # identity that has the target must report the alias too: wherever the
+            # draw can take the target (an OS base, or a font-groups unit), it takes
+            # the alias with it -- the same base, an all-or-nothing `bundle` unit
+            # holding both, or the alias always (essential). Rewrites to an
+            # unbundled/unreported target are inert (the allowlist blocks the
+            # target) and only noted.
             skip = {'MS Shell Dlg 2', 'MONO', 'mono', 'sans', 'sans serif', *GENERICS}
             live = {a: t for a, t in aliases.items() if a not in skip and t in rset}
             inert = sorted(a for a, t in aliases.items() if a not in skip and t not in rset)
-            not_always = sorted(set(live) - set(essential))
+            always = set(essential)
+
+            def co_drawn(alias, tgt):
+                if alias in always:
+                    return True
+                if tgt in always:
+                    return False
+                for base in font_bases.get(os_key, []):
+                    if tgt in base['fonts'] and alias not in base['fonts']:
+                        return False
+                for unit in font_groups.get(os_key, []):
+                    if tgt in unit['fonts'] and (unit.get('kind') != 'bundle' or alias not in unit['fonts']):
+                        return False
+                return True
+
+            not_always = sorted(a for a, t in live.items() if not co_drawn(a, t))
             if not_always:
-                msg = (f'{os_key}: fonts.conf rewrites {not_always} unconditionally to a reportable target, '
-                       f'so they render for every identity but are not always reported (_ESSENTIAL_FONTS_{suffix})')
+                msg = (f'{os_key}: fonts.conf rewrites {not_always} unconditionally to a reportable target that a '
+                       f'draw can take without the alias, so they render there but are not reported '
+                       f'(_ESSENTIAL_FONTS_{suffix}, font-bases.json, font-groups.json)')
                 # Renderable-but-unreported is the safe direction of the invariant;
                 # it is a hard failure only where the real OS reports the name
                 # (Windows: every box resolves the GDI substitutes; macOS: the TTC
                 # weight names are real families there).
                 (fail if os_key in ('win', 'mac') else warn)(msg)
             elif live:
-                print(f'OK: {len(live)} live alias rewrites are all essential (always reported)')
+                print(f'OK: {len(live)} live alias rewrites are reported wherever their target is')
             if inert:
                 print(f'note: {len(inert)} alias rewrites are inert for {os_key} (target not reportable): {inert[:4]}...')
 

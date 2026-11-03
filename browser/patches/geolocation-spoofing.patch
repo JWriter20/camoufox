@@ -223,3 +223,46 @@ index 2dc54dc968..5bf84686ce 100644
        if (this.listener) {
          this.listener.update(newLocation);
        }
+diff --git a/toolkit/components/geolocation/GeolocationService.cpp b/toolkit/components/geolocation/GeolocationService.cpp
+index b416d24..6d0090c 100644
+--- a/toolkit/components/geolocation/GeolocationService.cpp
++++ b/toolkit/components/geolocation/GeolocationService.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include "GeolocationService.h"
+ 
++#include "MaskConfig.hpp"
+ #include "mozilla/Services.h"
+ #include "mozilla/StaticPrefs_geo.h"
+ #include "mozilla/glean/DomGeolocationMetrics.h"
+@@ -128,7 +129,15 @@ nsresult GeolocationService::Init(bool isOverride) {
+   // the provider, and some tests rely on the network provider being used.
+   // "geo.provider.testing" is always set for all plain and browser chrome
+   // mochitests, and also for xpcshell tests.
+-  if (!mProvider || Preferences::GetBool("geo.provider.testing", false)) {
++  // Camoufox: the identity's coordinates (geolocation:latitude/longitude) are
++  // served by the network provider (NetworkGeolocationProvider.sys.mjs), so it
++  // replaces the platform one when they are set. Without them the platform's
++  // provider stays, as in stock: on Linux Geoclue / the portal, whose
++  // never-answered request times out (code 3) where the keyless network
++  // provider failed at once (code 2, "Unknown error acquiring position").
++  if (!mProvider || Preferences::GetBool("geo.provider.testing", false) ||
++      (MaskConfig::GetDouble("geolocation:latitude") &&
++       MaskConfig::GetDouble("geolocation:longitude"))) {
+     nsCOMPtr<nsIGeolocationProvider> geoTestProvider =
+         do_GetService(NS_GEOLOCATION_PROVIDER_CONTRACTID);
+ 
+diff --git a/toolkit/components/geolocation/moz.build b/toolkit/components/geolocation/moz.build
+index b75eb47..9a5fd15 100644
+--- a/toolkit/components/geolocation/moz.build
++++ b/toolkit/components/geolocation/moz.build
+@@ -23,6 +23,9 @@ include("/ipc/chromium/chromium-config.mozbuild")
+ 
+ FINAL_LIBRARY = "xul"
+ 
++# MaskConfig.hpp: GeolocationService picks the network provider for configured coordinates.
++LOCAL_INCLUDES += ["/camoucfg"]
++
+ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
+     LOCAL_INCLUDES += [
+         "/dom/system/android",

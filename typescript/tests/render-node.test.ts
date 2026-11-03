@@ -416,6 +416,57 @@ describe.runIf(modelReady)("a launch", () => {
 		]);
 	});
 
+	const SET_ID =
+		"4566dbed18d1ec3862760ebc140906420bb986fc05574b82be3a18752120e571";
+	const bake = (text: string) =>
+		fs.writeFileSync(
+			path.join(path.dirname(proBuild), renderNode.RENDER_SET_FILE),
+			text,
+		);
+
+	it("asks for the render set a pinned build bakes", async () => {
+		// The relay names set_id in every hello; only a renderer of that set admits it.
+		bake(
+			JSON.stringify({
+				schema: 2,
+				kind: "camoufox-render-set-composed",
+				id: "158.0.1-r2+b51dd58fe6ebe",
+				set_id: SET_ID,
+				firefox: "158.0.1",
+				platform: "windows-x64",
+			}),
+		);
+		await launch({ render_node: coordinator.config });
+		const [acquire] = coordinator.calls("POST", "/assignments");
+		expect(acquire.body.render_set).toBe(SET_ID);
+	});
+
+	it("names a render set the farm does not serve, and releases the lease", async () => {
+		bake(JSON.stringify({ set_id: SET_ID }));
+		coordinator.scripted.push([409, {}, `render set not served: ${SET_ID}\n`]);
+		const launched = launch({ render_node: coordinator.config });
+		await expect(launched).rejects.toBeInstanceOf(renderNode.RenderNodeError);
+		await expect(launched).rejects.toThrow(
+			/render set 4566dbed18d1: the farm has no node pack/,
+		);
+		expect(api.calls(".*/release").map((r) => r.body)).toEqual([
+			{ reason: "error" },
+		]);
+	});
+
+	it.each([
+		'{"set_id": "4566"}',
+		'{"id": "158.0.1-r2"}',
+		"[]",
+		"not json",
+	])("refuses a render-set.json without a valid set_id: %s", async (text) => {
+		bake(text);
+		const launched = launch({ render_node: coordinator.config });
+		await expect(launched).rejects.toBeInstanceOf(renderNode.RenderNodeError);
+		await expect(launched).rejects.toThrow(/render-set\.json/);
+		expect(coordinator.calls("POST", "/assignments")).toEqual([]);
+	});
+
 	it("uses the default file for a Pro build", async () => {
 		writeDefault();
 		const opts = await launch({ os: undefined });

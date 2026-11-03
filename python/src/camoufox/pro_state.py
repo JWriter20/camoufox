@@ -288,6 +288,7 @@ _MANAGED_PREF_PREFIXES = (
     "browser.sessionhistory.",
     "browser.tabs.remote.useCrossOriginOpenerPolicy",
     "dom.webgpu.enabled",
+    "dom.webgpu.service-workers.enabled",
     "dom.w3c_touch_events.enabled",
     "gfx.bundled-fonts.activate",
     "javascript.options.use_ucrt_for_sin_cos_tan",

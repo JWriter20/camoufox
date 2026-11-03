@@ -39,9 +39,14 @@ async def probe(binary):
     from camoufox.async_api import AsyncCamoufox
 
     # A screen and window the claimed position fits in: the launcher clamps a
-    # position that would put the window off the screen.
+    # position that would put the window off the screen. The whole work area
+    # is pinned: Firefox keeps a window.open() inside the screen's available
+    # rect, as stock does, so a drawn screen.availLeft (66 for a left dock,
+    # 1280 for a second monitor's origin) moved the popup's x there (it10
+    # gate: [1280, 41]).
     config = {"window.screenX": CLAIMED[0], "window.screenY": CLAIMED[1],
               "screen.width": 1920, "screen.height": 1080,
+              "screen.availLeft": 0, "screen.availTop": 0,
               "screen.availWidth": 1920, "screen.availHeight": 1080,
               "window.outerWidth": 1200, "window.outerHeight": 800}
     async with AsyncCamoufox(headless=True, executable_path=str(binary),

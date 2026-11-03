@@ -20,8 +20,7 @@ font manifest (scripts/data/font-manifests.json) can ever report:
 
 The intersection is deliberate: the bundle carries families a real OS never
 presents as families (weight-variant subfamilies such as "Barlow Black" that
-DirectWrite folds into "Barlow", the bare "Sitka" and "Segoe UI Variable"
-umbrella names, CJK families a stock Windows install does not report), and
+DirectWrite folds into "Barlow", CJK families a stock Windows install does not report), and
 those stay renderable but are never reported. The renderable-but-unreported names
 are written next to the output (fonts.json.unreported.txt is NOT produced in
 the package; pass --dump-union to see them) so the gap stays visible.
@@ -74,12 +73,12 @@ ALIASES = {
         'MS Serif': 'Times New Roman',
         'Roman': 'Times New Roman',
         'Times': 'Times New Roman',
-        'Calibri Light': 'Calibri',
-        'Candara Light': 'Candara',
-        'Corbel Light': 'Corbel',
-        'Leelawadee UI Semilight': 'Leelawadee UI',
-        'Nirmala Text Semilight': 'Nirmala UI',
-        'Nirmala UI Semilight': 'Nirmala UI',
+        # FontSubstitutes entries stock win-i9 resolves (probe-Y E, 2026-11-01).
+        'MS Shell Dlg': 'Microsoft Sans Serif',
+        'Helv': 'Microsoft Sans Serif',
+        'Arial CE': 'Arial',
+        'Arial Baltic': 'Arial',
+        'Courier New CE': 'Courier New',
     },
     # macOS registers each weight of these TTCs as its own family, which
     # fontconfig and fc-scan do not, so they are listed (and always reported, as

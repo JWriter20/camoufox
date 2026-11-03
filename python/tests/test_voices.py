@@ -256,3 +256,17 @@ def test_validate_voices_rejects_unusable_shapes(value):
 )
 def test_validate_voices_accepts_usable_shapes(value):
     validate_voices(value)
+
+
+@pytest.mark.parametrize("target_os", ["windows", "linux"])
+def test_preset_voices_mark_no_default_off_macos(target_os):
+    # Stock Windows (SAPI) and Linux (speech-dispatcher) mark no voice default,
+    # as draw_voice_config does; the preset path used to force the first one.
+    out = _normalize_preset_voices(["Microsoft David:en-US:local", "Microsoft Zira:en-US:local"], target_os)
+    assert len(out) == 2
+    assert not any(v["isDefault"] for v in out)
+
+
+def test_preset_voices_on_macos_default_the_system_voice():
+    out = _normalize_preset_voices(["Albert:en-US:local", "Samantha:en-US:local"], "macos")
+    assert [v["name"] for v in out if v["isDefault"]] == ["Samantha"]

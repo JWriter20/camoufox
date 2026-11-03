@@ -73,8 +73,16 @@ def set_webgpu(prefs: Dict[str, Any], target_os: str, gpu: Gpu, host: Optional[G
     Firefox does on the Microsoft Basic Render Driver. The status is written
     either way, because a persistent profile saves it and the next startup
     reads it. Prefs the caller set are kept.
+
+    Service workers have their own pref, dom.webgpu.service-workers.enabled
+    (Instance::PrefEnabled in dom/webgpu/Instance.cpp), with the same
+    per-platform default: on Windows and Apple Silicon both are true, on a
+    Linux build it is false. Without it a Linux build claiming Windows has
+    every GPU* global in windows and dedicated and shared workers but none in
+    a service worker, which stock Windows Firefox never does.
     """
     enabled = prefs.setdefault('dom.webgpu.enabled', target_os == 'win' or (target_os == 'mac' and gpu[0] == 'Apple'))
+    prefs.setdefault('dom.webgpu.service-workers.enabled', bool(enabled))
     if enabled:
         own_adapter = renders_on_hardware(host) and gpu == host
         prefs.setdefault(WEBGPU_BLOCKLIST_PREF, FEATURE_STATUS_OK if own_adapter else FEATURE_BLOCKED_DEVICE)

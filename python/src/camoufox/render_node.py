@@ -25,6 +25,7 @@ node too when its renderer serves those routes (the assignment's angle_routes).
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -56,6 +57,10 @@ BUSY_WAIT_S = 30.0
 TIMEOUT_S = 10.0
 
 RenderNodeOption = Union[None, bool, str, Path, Dict[str, Any]]
+# A build pinned to one render set carries this beside its binary; its relay client names set_id in every
+# session hello, and the coordinator admits that hello only on a renderer of the same set.
+RENDER_SET_FILE = "render-set.json"
+_SET_ID = re.compile(r"[0-9a-f]{64}")
 
 
 # The farm is reached directly, never through a proxy from the environment: the
@@ -64,6 +69,24 @@ _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 class RenderNodeError(RuntimeError):
     """The render node could not be reached or gave no session."""
+
+
+def baked_render_set(binary: Path) -> Optional[str]:
+    """The set_id a build bakes (render-set.json beside its binary), or None for a build without one.
+
+    The assignment has to ask for that set: the coordinator only then picks a renderer of it, and a binary's
+    hello on any other renderer is refused (the browser exits). A file that names no valid set_id is an error."""
+    path = Path(binary).parent / RENDER_SET_FILE
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
+        raise RenderNodeError(f"Cannot read {path}: {error}") from error
+    set_id = data.get("set_id") if isinstance(data, dict) else None
+    if not isinstance(set_id, str) or not _SET_ID.fullmatch(set_id):
+        raise RenderNodeError(f"{path}: no valid set_id; this build cannot name its render set")
+    return set_id
 
 
 def resolve(option: RenderNodeOption) -> Optional[Dict[str, Any]]:
@@ -140,10 +163,11 @@ class Session:
 
     grants: Dict[str, Any] = {}
 
-    def __init__(self, config: Dict[str, Any], version: str, directory: Path) -> None:
+    def __init__(self, config: Dict[str, Any], version: str, directory: Path, render_set: Optional[str] = None) -> None:
         self.claimed = False
         self.config = config
         self.version = version
+        self.render_set = render_set
         self.path: Optional[Path] = None
         self.text_socket: Optional[Path] = None
         self.assignment: Dict[str, Any] = {}
@@ -207,6 +231,8 @@ class Session:
         }
         if self.config.get("gpu"):
             request["gpu"] = self.config["gpu"]
+        if self.render_set:
+            request["render_set"] = self.render_set
         deadline = time.monotonic() + BUSY_WAIT_S
         while True:
             try:
@@ -217,6 +243,11 @@ class Session:
                 if busy and time.monotonic() < deadline:
                     time.sleep(min(float(error.headers["Retry-After"]), 5.0))
                     continue
+                if error.code == 409 and detail.startswith("render set not served"):
+                    raise RenderNodeError(
+                        f"No render node serves this build's render set {self.render_set[:12]}: the farm has no node"
+                        " pack of it on a machine at its reference OS build and drivers."
+                    ) from error
                 if error.code == 503 and detail == "no compatible renderer":
                     raise RenderNodeError(
                         f"No render node serves Firefox {self.version}"

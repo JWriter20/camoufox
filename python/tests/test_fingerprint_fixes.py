@@ -17,6 +17,7 @@ from camoufox.fingerprints import (
     follow_baseline_protection,
     set_host_ipv6_default,
     set_media_devices_defaults,
+    set_release_rollout_prefs,
 )
 
 
@@ -429,6 +430,48 @@ class TestHostIpv6Default:
         c = self._config(**{"webrtc:hostipv6": False, "webrtc:ipv6": "2001:db8::1"})
         set_host_ipv6_default(c)
         assert c["webrtc:hostipv6"] is False
+
+
+class TestReleaseRolloutPrefs:
+    """Firefox's partial release rollouts (LEAKS 610): stock Firefox's profile
+    is enrolled by its Nimbus bucket, so an identity draws enrollment at the
+    rollout's rate and keeps it on every launch."""
+
+    HEV3 = "network.http.happy_eyeballs_enabled"
+
+    def _config(self, i=0):
+        return {"navigator.userAgent": f"ua{i}", "navigator.platform": "Linux x86_64"}
+
+    def test_same_identity_same_enrollment(self):
+        for i in range(50):
+            a, b = {}, {}
+            set_release_rollout_prefs(a, self._config(i), i, "158")
+            set_release_rollout_prefs(b, self._config(i), i, "158")
+            assert a == b
+
+    def test_happy_eyeballs_at_the_rollout_rate(self):
+        on = 0
+        for i in range(4000):
+            prefs = {}
+            set_release_rollout_prefs(prefs, self._config(i), i, "158")
+            on += prefs.get(self.HEV3) is True
+            assert prefs.get(self.HEV3) in (None, True)
+        assert 0.46 < on / 4000 < 0.54
+
+    def test_rollout_waits_for_its_firefox_version(self):
+        for i in range(200):
+            prefs = {}
+            set_release_rollout_prefs(prefs, self._config(i), i, "158")
+            assert "dom.fetch.streaming_upload" not in prefs
+            old = {}
+            set_release_rollout_prefs(old, self._config(i), i, "156")
+            assert old == {}
+
+    def test_caller_pref_wins(self):
+        for i in range(50):
+            prefs = {self.HEV3: False}
+            set_release_rollout_prefs(prefs, self._config(i), i, "158")
+            assert prefs[self.HEV3] is False
 
 
 class TestPerLaunchTimingDraws:

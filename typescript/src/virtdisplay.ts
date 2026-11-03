@@ -20,8 +20,11 @@ import { OS_NAME } from "./paths.js";
 const DISPLAYFD_READ_TIMEOUT_MS = 30_000;
 
 /**
- * Xvfb root geometry for headless="virtual". It is not observable (screen.* is
- * spoofed per context), so 1x1x24 stays the default; override it with
+ * Xvfb root geometry for headless="virtual". Its size is not observable
+ * (screen.* is spoofed per context, and the browser neither takes a window
+ * outside the root for occluded or unfocused nor fits windows into the 1x1
+ * screen: virtual-display-{off-root-not-occluded,claimed-screen}.patch),
+ * so 1x1x24 stays the default; override it with
  * CAMOUFOX_VIRTUAL_DISPLAY_SIZE="<width>x<height>[x<depth>]".
  */
 export const DEFAULT_SCREEN = "1x1x24";

@@ -218,10 +218,38 @@ export class MouseDispatch {
   }
 
   /**
+   * The open chrome popup over an absolute point, if there is one.
+   *
+   * The parent hands a mouse event at a point inside a visible popup (the date
+   * picker, a permission doorhanger) to that popup, not to the browser under
+   * it (PresShell::EventHandler::ComputeRootFrameToHandleEventWithPopup), as
+   * an OS click there lands on the popup. The renderer never sees it, so there
+   * is no ack to wait for. Waiting cost 5s per event (kAckDeadlineMs): a
+   * click under the picker showPicker() opened took 15s and timed out
+   * Playwright, where stock's click went to the picker at once (2026-11-03,
+   * tests/playwright/patches/popup-covered-click.py). Mirrors
+   * nsXULPopupManager::GetVisiblePopups: open, and not transparent to the mouse.
+   */
+  _popupAt(absX, absY) {
+    const doc = this._win.document;
+    let point = null;
+    for (const popup of doc.querySelectorAll('panel, menupopup, tooltip')) {
+      if (popup.state !== 'open' || this._win.getComputedStyle(popup).pointerEvents === 'none')
+        continue;
+      point ??= this._win.windowUtils.toScreenRectInCSSUnits(absX, absY, 0, 0);
+      const r = popup.getOuterScreenRect();
+      if (point.x >= r.left && point.x < r.right && point.y >= r.top && point.y < r.bottom)
+        return popup;
+    }
+    return null;
+  }
+
+  /**
    * Dispatch one event and wait for the renderer to ack it, under a deadline.
    *
    * Returns the ack event object, or null if none arrived in time -- in which
-   * case the event is dropped and a warning is logged. Never rejects and never
+   * case the event is dropped and a warning is logged -- or {popup} at once
+   * when an open popup over the point took the event (_popupAt). Never rejects and never
    * waits forever: input dispatch is serialized on activateAndRun()'s
    * process-global chain, so an unbounded wait here wedges every later input
    * event in the process, in every tab, for the life of the browser.
@@ -229,8 +257,11 @@ export class MouseDispatch {
   async sendAcked(watcher, eventType, x, y, deadlineMs = kAckDeadlineMs) {
     this._remeasure();
     const {x: absX, y: absY} = this.toAbsolute(x, y);
+    const popup = this._popupAt(absX, absY);
     // This dispatches to the renderer synchronously.
     const jugglerEventId = this._sendAbsolute(eventType, absX, absY);
+    if (popup)
+      return {jugglerEventId, popup};
     // A move reaches the page at the next refresh tick; the renderer acks it
     // on arrival as "mousequeued" (BrowserChild::RecvRealMouseMoveEvent).
     const arrival = eventType === 'mousemove' ? 'mousequeued' : eventType;
@@ -250,7 +281,8 @@ export class MouseDispatch {
    */
   async sendQueuedMove(watcher, deliveryWatcher, x, y) {
     const queued = await this.sendAcked(watcher, 'mousemove', x, y);
-    if (!queued) {
+    // A move a popup took never reaches the page either.
+    if (!queued || queued.popup) {
       deliveryWatcher.dispose();
       return null;
     }

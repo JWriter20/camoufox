@@ -308,11 +308,17 @@ describe("test_launch_environment: prefs", () => {
 			it(`${flag} off clears a ${pref} an earlier launch left in prefs.js`, () => {
 				const dir = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-toggle-"));
 				try {
-					fs.writeFileSync(path.join(dir, "prefs.js"), `user_pref("${pref}", ${JSON.stringify(toggled)});\n`);
+					fs.writeFileSync(
+						path.join(dir, "prefs.js"),
+						`user_pref("${pref}", ${JSON.stringify(toggled)});\n`,
+					);
 					const prefs: Record<string, unknown> = {};
 					setTogglePref(prefs, pref, false, stock, toggled, dir);
 					expect(prefs).toEqual({ [pref]: stock });
-					fs.writeFileSync(path.join(dir, "prefs.js"), `user_pref("${pref}", ${JSON.stringify(stock)});\n`);
+					fs.writeFileSync(
+						path.join(dir, "prefs.js"),
+						`user_pref("${pref}", ${JSON.stringify(stock)});\n`,
+					);
 					const clean: Record<string, unknown> = {};
 					setTogglePref(clean, pref, false, stock, toggled, dir);
 					expect(clean).toEqual({});
@@ -594,6 +600,36 @@ describe("test_launch_environment: prefs", () => {
 				"Arial Black",
 				"Calibri Light",
 				"Franklin Gothic Medium",
+			]);
+		});
+		it("adds Office faces of OS families only with an Office family", async () => {
+			expect(
+				await fontsFor(["Arial", "Franklin Gothic", "Rockwell", "Sitka Text"]),
+			).toEqual([
+				"Arial",
+				"Franklin Gothic",
+				"Rockwell",
+				"Sitka Text",
+				"Arial Black",
+				"Franklin Gothic Medium",
+				"Rockwell Condensed",
+				"Rockwell Extra Bold",
+				"Sitka",
+				"Arial Narrow",
+				"Franklin Gothic Demi",
+				"Franklin Gothic Demi Cond",
+				"Franklin Gothic Heavy",
+				"Franklin Gothic Medium Cond",
+			]);
+			expect(
+				await fontsFor(["Arial", "Franklin Gothic", "Segoe UI Variable Text"]),
+			).toEqual([
+				"Arial",
+				"Franklin Gothic",
+				"Segoe UI Variable Text",
+				"Arial Black",
+				"Franklin Gothic Medium",
+				"Segoe UI Variable",
 			]);
 		});
 		it("adds no alias without its canonical family", async () => {

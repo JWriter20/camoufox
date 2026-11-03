@@ -222,6 +222,26 @@ class TestWebGpu:
 
         assert webgpu(options) == (False, False)
 
+    @pytest.mark.parametrize("claimed, exposed", [("windows", True), ("linux", False), ("macos", None)])
+    def test_service_workers_follow_navigator_gpu(self, claimed, exposed):
+        # A Linux build defaults dom.webgpu.service-workers.enabled to false;
+        # Windows and Apple Silicon Firefox expose WebGPU in service workers
+        # exactly where they expose it at all.
+        with on_host(HOST_GPU):
+            options, _ = launch(os=claimed)
+
+        prefs = options["firefox_user_prefs"]
+        assert prefs["dom.webgpu.service-workers.enabled"] is prefs["dom.webgpu.enabled"]
+        if exposed is not None:
+            assert prefs["dom.webgpu.enabled"] is exposed
+
+    def test_a_caller_service_worker_pref_is_kept(self):
+        prefs = {"dom.webgpu.service-workers.enabled": False}
+        set_webgpu(prefs, "win", WINDOWS_GPU, None)
+
+        assert prefs["dom.webgpu.enabled"] is True
+        assert prefs["dom.webgpu.service-workers.enabled"] is False
+
     @pytest.mark.parametrize(
         "gpu, exposed",
         [(("Apple", "Apple M1, or similar"), True), (("Intel Inc.", "Intel(R) HD Graphics, or similar"), False)],
@@ -277,7 +297,7 @@ class TestContextsOfAHostBrowser:
         assert "llvmpipe" not in renderer_of(browser.new_context.return_value)
 
     def test_another_os_raises(self):
-        with pytest.raises(ValueError, match="canvas_noise=True"):
+        with pytest.raises(ValueError, match="launch a browser that claims the OS or GPU"):
             sync_api.NewContext(browser_on_host(HOST_GPU), os="windows")
 
     def test_a_preset_with_another_gpu_raises(self):
@@ -285,7 +305,7 @@ class TestContextsOfAHostBrowser:
             "navigator": {"platform": "Linux x86_64"},
             "webgl": {"unmaskedVendor": OTHER_GPU[0], "unmaskedRenderer": OTHER_GPU[1]},
         }
-        with pytest.raises(ValueError, match="canvas_noise=True"):
+        with pytest.raises(ValueError, match="launch a browser that claims the OS or GPU"):
             sync_api.NewContext(browser_on_host(HOST_GPU), preset=preset)
 
 

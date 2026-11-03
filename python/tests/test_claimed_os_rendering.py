@@ -188,6 +188,24 @@ class TestLegacyFontFamilies:
             "Arial", "Calibri", "Franklin Gothic", "Arial Black", "Calibri Light", "Franklin Gothic Medium",
         ]
 
+    def test_office_faces_of_os_families_need_an_office_family(self, launch):
+        # A DirectWrite-namespace list (cfparity mirrors win-i9's enumeration): once Windows' font
+        # loader lands, stock resolves the faces' nameID 1/16 names too (frames found Arial Narrow,
+        # Rockwell Extra Bold, Segoe UI Variable and Sitka). Arial Narrow and Franklin Gothic
+        # Demi/Heavy are Office faces of OS families, so only a list with an Office family has them.
+        config, _ = launch(WIN_UA, fonts=["Arial", "Franklin Gothic", "Rockwell", "Sitka Text"])
+        assert config["fonts"] == [
+            "Arial", "Franklin Gothic", "Rockwell", "Sitka Text",
+            "Arial Black", "Franklin Gothic Medium", "Rockwell Condensed", "Rockwell Extra Bold", "Sitka",
+            "Arial Narrow", "Franklin Gothic Demi", "Franklin Gothic Demi Cond", "Franklin Gothic Heavy",
+            "Franklin Gothic Medium Cond",
+        ]
+        config, _ = launch(WIN_UA, fonts=["Arial", "Franklin Gothic", "Segoe UI Variable Text"])
+        assert config["fonts"] == [
+            "Arial", "Franklin Gothic", "Segoe UI Variable Text",
+            "Arial Black", "Franklin Gothic Medium", "Segoe UI Variable",
+        ]
+
     def test_no_alias_without_its_canonical_family(self, launch):
         config, _ = launch(WIN_UA, fonts=["Times New Roman"])
         assert "Arial Black" not in config["fonts"]

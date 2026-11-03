@@ -191,7 +191,7 @@ def test_the_farm_is_reached_directly_whatever_proxy_the_browser_uses(
     dead = "http://127.0.0.1:9"
     monkeypatch.setattr(urllib.request, "getproxies", lambda: {"http": dead, "https": dead, "all": dead})
     opts, _ = node_launch(
-        pro_build, monkeypatch, render_node=coordinator.config, proxy={"server": dead}
+        pro_build, monkeypatch, render_node=coordinator.config, proxy={"server": dead}, geoip=False
     )
     assert len(coordinator.calls("POST", "/assignments")) == 1
     assert render_node.RELAY_ENV in opts["env"]
@@ -285,6 +285,38 @@ def test_a_release_no_node_serves_is_named_and_the_lease_released(
     with pytest.raises(render_node.RenderNodeError, match="Firefox 156.0.1 on .*ANGLE pack"):
         node_launch(pro_build, monkeypatch, render_node=coordinator.config)
     assert [r["body"] for r in api.calls(r".*/release")] == [{"reason": "error"}]
+
+
+SET_ID = "4566dbed18d1ec3862760ebc140906420bb986fc05574b82be3a18752120e571"
+
+
+def test_a_build_pinned_to_a_render_set_asks_for_it(api, coordinator, pro_build, signed_in, monkeypatch):
+    # The Pro carry bakes render-set.json beside the binary; its relay names set_id in every hello, so the
+    # assignment must be on a renderer of that set or the coordinator refuses the hello.
+    (pro_build.parent / render_node.RENDER_SET_FILE).write_text(
+        json.dumps({"schema": 2, "kind": "camoufox-render-set-composed", "id": "158.0.1-r2+b51dd58fe6ebe",
+                    "set_id": SET_ID, "firefox": "158.0.1", "platform": "windows-x64"}))
+    node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+    (acquire,) = coordinator.calls("POST", "/assignments")
+    assert acquire["body"]["render_set"] == SET_ID
+
+
+def test_a_render_set_the_farm_does_not_serve_is_named_and_the_lease_released(
+    api, coordinator, pro_build, signed_in, monkeypatch
+):
+    (pro_build.parent / render_node.RENDER_SET_FILE).write_text(json.dumps({"set_id": SET_ID}))
+    coordinator.scripted.append((409, {}, f"render set not served: {SET_ID}\n".encode()))
+    with pytest.raises(render_node.RenderNodeError, match="render set 4566dbed18d1: the farm has no node pack"):
+        node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+    assert [r["body"] for r in api.calls(r".*/release")] == [{"reason": "error"}]
+
+
+@pytest.mark.parametrize("baked", ['{"set_id": "4566"}', '{"id": "158.0.1-r2"}', "[]", "not json"])
+def test_a_render_set_file_without_a_valid_set_id_is_refused(baked, api, coordinator, pro_build, signed_in, monkeypatch):
+    (pro_build.parent / render_node.RENDER_SET_FILE).write_text(baked)
+    with pytest.raises(render_node.RenderNodeError, match="render-set.json"):
+        node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+    assert coordinator.calls("POST", "/assignments") == []
 
 
 def test_the_default_file_is_used_by_a_pro_build_only(api, coordinator, build, pro_build, signed_in, monkeypatch):
