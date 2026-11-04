@@ -127,13 +127,15 @@ class TestFontFallbackAsyncPref:
         prefs = self._prefs_for("Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0", None)
         assert prefs[self.PREF] is False
 
-    def test_macos_keeps_async_font_fallback(self, isolated_launch_dependencies):
+    def test_macos_keeps_async_font_fallback(self, isolated_launch_dependencies, monkeypatch):
+        monkeypatch.setattr(utils, "_host_os_key", lambda: "mac")
         prefs = self._prefs_for(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0", None
         )
         assert self.PREF not in prefs
 
-    def test_windows_keeps_async_font_fallback(self, isolated_launch_dependencies):
+    def test_windows_keeps_async_font_fallback(self, isolated_launch_dependencies, monkeypatch):
+        monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
         prefs = self._prefs_for(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0", None
         )
@@ -285,6 +287,7 @@ class TestGeoipIPv6:
     def test_no_ipv6_route_is_an_ipv4_only_network(self, monkeypatch, isolated_launch_dependencies):
         sent = self._launch(monkeypatch, None, geoip=self.IPV4)
         assert sent["network:ipv4Only"] is True
+        assert sent["webrtc:hostipv6"] is False
 
     @pytest.mark.parametrize("host_ipv6", ["2001:db8::2", "2001:db8::3"], ids=["elsewhere", "unknown"])
     def test_ipv6_that_disagrees_is_dropped_with_a_warning(
@@ -293,6 +296,21 @@ class TestGeoipIPv6:
         with pytest.warns(utils.LeakWarning, match="IPv6 address geolocates somewhere other"):
             sent = self._launch(monkeypatch, host_ipv6, geoip=self.IPV4)
         assert sent["network:ipv4Only"] is True
+
+    def test_a_real_proxy_places_the_identity_at_its_exit(self, monkeypatch, isolated_launch_dependencies):
+        asked = []
+        monkeypatch.setattr(utils, "ALLOW_GEOIP", True)
+        monkeypatch.setattr(utils, "public_ip", lambda proxy=None: asked.append(proxy) or self.IPV4)
+        sent = self._launch(monkeypatch, None, proxy={"server": "http://proxy.example.com:3128"})
+        assert asked and asked[0] and "proxy.example.com" in asked[0]  # looked up through the proxy
+        assert sent["timezone"] == "America/Chicago" and sent["webrtc:ipv4"] == self.IPV4
+
+    def test_geoip_false_keeps_a_proxied_launch_unlocated(self, monkeypatch, isolated_launch_dependencies):
+        monkeypatch.setattr(utils, "ALLOW_GEOIP", True)
+        monkeypatch.setattr(utils, "public_ip", lambda proxy=None: pytest.fail("geoip=False must not look up"))
+        with pytest.warns(utils.LeakWarning):
+            sent = self._launch(monkeypatch, None, geoip=False, proxy={"server": "http://proxy.example.com:3128"})
+        assert "timezone" not in sent
 
     def test_proxy_leaves_ipv6_alone(self, monkeypatch, isolated_launch_dependencies):
         def no_lookup():
@@ -307,6 +325,7 @@ class TestGeoipIPv6:
         sent = self._launch(monkeypatch, None, geoip="2001:db8::1")
         assert "network:ipv4Only" not in sent
         assert sent["webrtc:ipv6"] == "2001:db8::1"
+        assert sent["webrtc:hostipv6"] is True
 
 
 class TestPrefsReachStartup:
@@ -537,41 +556,84 @@ class TestScreenshotCaret:
     def shot(owner, **kwargs):
         import asyncio
 
-        from camoufox import screenshots
+        from camoufox import driver_defaults
 
         async def original(self, **kw):
             return kw
 
-        return asyncio.run(screenshots._with_caret_default(original)(owner, **kwargs))
+        return asyncio.run(driver_defaults._with_caret_default(original)(owner, **kwargs))
 
     def test_pages_under_a_camoufox_launch_keep_the_caret(self):
-        from camoufox import screenshots
+        from camoufox import driver_defaults
 
-        browser = screenshots.mark(self.Owner())
+        browser = driver_defaults.mark(self.Owner())
         handle = self.Owner(self.Owner(self.Owner(self.Owner(browser))))  # handle, frame, page, context
         assert self.shot(handle, caret=None)["caret"] == "initial"
         assert self.shot(handle)["caret"] == "initial"
 
     def test_the_callers_caret_wins(self):
-        from camoufox import screenshots
+        from camoufox import driver_defaults
 
-        page = self.Owner(screenshots.mark(self.Owner()))
+        page = self.Owner(driver_defaults.mark(self.Owner()))
         assert self.shot(page, caret="hide")["caret"] == "hide"
 
     def test_other_browsers_are_left_alone(self):
         assert self.shot(self.Owner(self.Owner()), caret=None)["caret"] is None
 
+    def test_fill_clicks_a_text_field_without_focus_first(self):
+        import asyncio
+
+        from camoufox import driver_defaults
+
+        clicks = []
+
+        class Field:
+            def __init__(self, focused):
+                self.focused = focused
+                self.first = self
+
+            async def evaluate(self, expression):
+                return {"typed": True, "focused": self.focused}
+
+            async def click(self, **kwargs):
+                clicks.append(kwargs)
+
+        async def original(self, selector, **kwargs):
+            return selector
+
+        browser = driver_defaults.mark(self.Owner())
+        for focused in (False, True):
+            frame = self.Owner(browser)
+            frame.locator = lambda selector, field=Field(focused): field
+            assert asyncio.run(driver_defaults._frame_fill_clicks_first(original)(frame, "#f", timeout=5)) == "#f"
+        assert clicks == [{"timeout": 5, "force": None}]
+
     def test_installs_once_on_page_and_element_handle(self):
         from playwright._impl._element_handle import ElementHandle
         from playwright._impl._page import Page
 
-        from camoufox import screenshots
+        from camoufox import driver_defaults
 
-        screenshots.mark(self.Owner())
-        screenshots.mark(self.Owner())
+        driver_defaults.mark(self.Owner())
+        driver_defaults.mark(self.Owner())
         for cls in (Page, ElementHandle):
-            assert getattr(cls.screenshot, "_camoufox_screenshots", False)
-            assert not getattr(cls.screenshot.__wrapped__, "_camoufox_screenshots", False)
+            assert getattr(cls.screenshot, "_camoufox_driver_defaults", False)
+            assert not getattr(cls.screenshot.__wrapped__, "_camoufox_driver_defaults", False)
+
+    def test_fill_wraps_frame_fill_on_playwright_without_frame__fill(self, monkeypatch):
+        # Playwright before 1.54 has no Frame._fill; launching must not fail there.
+        from playwright._impl import _frame
+
+        from camoufox import driver_defaults
+
+        class OldFrame:
+            async def fill(self, selector, value, **kwargs):
+                return value
+
+        monkeypatch.setattr(_frame, "Frame", OldFrame)
+        driver_defaults.mark(self.Owner())
+        assert getattr(OldFrame.fill, "_camoufox_driver_defaults", False)
+        assert not hasattr(OldFrame, "_fill")
 
 
 class TestDesktopOnlyWarning:

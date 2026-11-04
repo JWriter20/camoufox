@@ -1,5 +1,5 @@
 {
-  "_comment": "Common desktop media devices per OS, in the label format Firefox exposes after a getUserMedia grant (Windows: WASAPI friendly names; macOS: CoreAudio/AVFoundation names; Linux: PulseAudio/PipeWire descriptions and v4l2 card names). A 'card' is a sound device whose microphone and outputs share one groupId. Weights are relative draw weights.",
+  "_comment": "Common desktop media devices per OS, in the label format Firefox exposes after a getUserMedia grant (Windows: WASAPI friendly names; macOS: CoreAudio/AVFoundation names; Linux: PulseAudio/PipeWire descriptions and v4l2 card names). A 'card' is a sound device whose microphone and outputs share one groupId. Weights are relative draw weights. 'camera_modes' gives a camera's largest capture width, height and frame rate (its getCapabilities() maxima; unlisted cameras are 1280x720 at 30 fps) and 'mono_mics' the one-channel microphones (others have two): both are chosen from vendor specifications, not recorded from real devices.",
   "win": {
     "cards": [
       {"w": 30, "mics": ["Microphone Array (Realtek(R) Audio)"], "outs": ["Speakers (Realtek(R) Audio)"]},
@@ -54,7 +54,20 @@
     ],
     "p_headset": 0.22,
     "p_display": 0.28,
-    "p_extra_camera": 0.06
+    "p_extra_camera": 0.06,
+    "camera_modes": {
+      "FHD Webcam": [1920, 1080, 30],
+      "HD Pro Webcam C920": [1920, 1080, 30],
+      "c922 Pro Stream Webcam": [1920, 1080, 60],
+      "Logitech BRIO": [4096, 2160, 60],
+      "Razer Kiyo": [1920, 1080, 60]
+    },
+    "mono_mics": [
+      "Headset (WH-1000XM4 Hands-Free AG Audio)",
+      "Headset (AirPods Pro Hands-Free AG Audio)",
+      "Microphone (Logitech HD Webcam C270)",
+      "Microphone (Microsoft® LifeCam HD-3000)"
+    ]
   },
   "mac": {
     "cards": [
@@ -91,7 +104,15 @@
     ],
     "p_headset": 0.30,
     "p_display": 0.18,
-    "p_extra_camera": 0.08
+    "p_extra_camera": 0.08,
+    "camera_modes": {
+      "HD Pro Webcam C920": [1920, 1080, 30],
+      "Logitech BRIO": [4096, 2160, 60],
+      "C922 Pro Stream Webcam": [1920, 1080, 60],
+      "iPhone Camera": [1920, 1080, 30],
+      "OBSBOT Tiny 2": [3840, 2160, 60]
+    },
+    "mono_mics": ["AirPods", "AirPods Pro", "AirPods Max", "WH-1000XM4"]
   },
   "lin": {
     "cards": [
@@ -143,6 +164,17 @@
     "p_headset": 0.18,
     "p_display": 0.55,
     "p_extra_camera": 0.10,
-    "monitor_sources": true
+    "monitor_sources": true,
+    "camera_modes": {
+      "HD Pro Webcam C920 (046d:082d)": [1920, 1080, 30],
+      "C922 Pro Stream Webcam (046d:085c)": [1920, 1080, 60],
+      "Logitech BRIO (046d:085e)": [4096, 2160, 60]
+    },
+    "mono_mics": [
+      "AirPods Pro",
+      "WH-1000XM4",
+      "Webcam C270 Analog Mono",
+      "Microsoft® LifeCam HD-3000 Analog Mono"
+    ]
   }
 }

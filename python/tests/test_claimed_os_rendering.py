@@ -1,0 +1,213 @@
+"""Rendering answers that come from the host must follow the claimed OS instead.
+
+A Linux build lays text out with its own font prefs, fallback table and
+FreeType metrics. When the identity claims another OS, the launcher sets that
+OS's values; when it claims the host's own, nothing changes. Expected values
+were measured on stock Firefox 152.0.4 on Windows 10 against this build on a
+Linux host claiming Windows (2026-09-24).
+"""
+
+import pytest
+
+from camoufox import utils
+
+from test_launch_environment import isolated_launch_dependencies  # noqa: F401
+
+WIN_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0"
+MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0"
+LIN_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0"
+
+
+@pytest.fixture
+def launch(monkeypatch, isolated_launch_dependencies):  # noqa: F811
+    """launch_options on a Linux host; returns (config, prefs)."""
+    monkeypatch.setattr(utils, "_host_os_key", lambda: "lin")
+    seen = {}
+
+    def capture(config, *args, **kwargs):
+        seen["config"] = dict(config)
+        return {}
+
+    monkeypatch.setattr(utils, "get_env_vars", capture)
+
+    def run(ua, **kwargs):
+        config = {"navigator.userAgent": ua, **kwargs.pop("config", {})}
+        prefs = utils.launch_options(config=config, i_know_what_im_doing=True, **kwargs)["firefox_user_prefs"]
+        return seen["config"], prefs
+
+    return run
+
+
+# Everything this module sets for another OS's identity, config keys and prefs.
+CLAIMED_OS_CONFIG = ("fonts:metrics", "media:spoof_codecs")
+CLAIMED_OS_PREFS = (
+    "font.name-list.emoji",
+    *utils.WINDOWS_UI_COLORS,
+)
+
+
+class TestLinuxHostOnly:
+    """The C++ behind these exists for a Linux build only (gfxPlatformGtk,
+    FreeType), so another host sets none of it, whatever the identity claims."""
+
+    @pytest.mark.parametrize(
+        "host, ua",
+        [("mac", WIN_UA), ("mac", LIN_UA), ("win", MAC_UA), ("win", LIN_UA)],
+    )
+    def test_other_hosts_set_nothing(self, launch, monkeypatch, host, ua):
+        monkeypatch.setattr(utils, "_host_os_key", lambda: host)
+        config, prefs = launch(ua)
+        assert [k for k in CLAIMED_OS_CONFIG if k in config] == []
+        assert [k for k in CLAIMED_OS_PREFS if k in prefs] == []
+
+    def test_linux_host_sets_it(self, launch):
+        config, prefs = launch(WIN_UA)
+        assert all(k in config for k in CLAIMED_OS_CONFIG)
+        assert all(k in prefs for k in CLAIMED_OS_PREFS)
+
+
+class TestFontPrefs:
+    """font.* defaults of the claimed OS, from font-prefs.json."""
+
+    def test_windows_identity_gets_windows_font_prefs(self, launch):
+        _, prefs = launch(WIN_UA)
+        assert prefs["font.name-list.emoji"].startswith("Segoe UI Emoji")
+        assert prefs["font.name-list.serif.th"] == "Tahoma"
+        # A name-list only Linux sets is emptied rather than left to Linux.
+        assert prefs["font.name-list.cursive.ja"] == ""
+
+    def test_macos_identity_gets_macos_font_prefs(self, launch):
+        _, prefs = launch(MAC_UA)
+        assert prefs["font.name-list.serif.th"] == "Thonburi"
+
+    def test_async_fallback_off_on_a_linux_host(self, launch):
+        for ua in (WIN_UA, MAC_UA, LIN_UA):
+            _, prefs = launch(ua)
+            assert prefs["gfx.font_rendering.fallback.async"] is False
+
+    def test_linux_identity_on_linux_host_is_left_alone(self, launch):
+        _, prefs = launch(LIN_UA)
+        assert "font.name-list.emoji" not in prefs
+
+    def test_windows_identity_on_windows_host_is_left_alone(self, launch, monkeypatch):
+        monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
+        _, prefs = launch(WIN_UA)
+        assert "font.name-list.emoji" not in prefs
+        assert "gfx.font_rendering.fallback.async" not in prefs
+
+    def test_caller_pref_wins(self, launch):
+        _, prefs = launch(WIN_UA, firefox_user_prefs={"font.name-list.serif.th": "Garuda"})
+        assert prefs["font.name-list.serif.th"] == "Garuda"
+
+    def test_table_matches_stock_firefox(self):
+        # Spot checks against all.js, so a regeneration cannot quietly agree
+        # with itself.
+        prefs = utils._stock_font_prefs("win", "lin")
+        assert prefs["font.name-list.serif.x-western"] == "Times New Roman"
+        assert prefs["font.name-list.sans-serif.ko"] == "Malgun Gothic, Gulim, Noto Sans CJK KR, Noto Sans KR"
+
+
+class TestFontMetrics:
+    """fonts:metrics "windows": DirectWrite's line boxes on a FreeType host."""
+
+    def test_windows_identity_gets_windows_metrics(self, launch):
+        config, _ = launch(WIN_UA)
+        assert config["fonts:metrics"] == "windows"
+
+    @pytest.mark.parametrize("ua", [MAC_UA, LIN_UA])
+    def test_other_identities_keep_freetype_metrics(self, launch, ua):
+        config, _ = launch(ua)
+        assert "fonts:metrics" not in config
+
+    def test_windows_host_is_left_alone(self, launch, monkeypatch):
+        monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
+        config, _ = launch(WIN_UA)
+        assert "fonts:metrics" not in config
+
+    def test_caller_value_wins(self, launch):
+        config, _ = launch(WIN_UA, config={"fonts:metrics": "freetype"})
+        assert config["fonts:metrics"] == "freetype"
+
+
+class TestCodecs:
+    """The codec matrix and decodingInfo() follow the claimed OS (#558)."""
+
+    def test_windows_identity_claims_windows_codecs(self, launch):
+        config, _ = launch(WIN_UA)
+        assert config["media:spoof_codecs"] is True
+
+    def test_macos_identity_keeps_stock_codecs(self, launch):
+        # Nothing records what decodingInfo() reports on a Mac.
+        config, _ = launch(MAC_UA)
+        assert "media:spoof_codecs" not in config
+
+    def test_host_os_identity_is_left_alone(self, launch, monkeypatch):
+        config, _ = launch(LIN_UA)
+        assert "media:spoof_codecs" not in config
+        monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
+        config, _ = launch(WIN_UA)
+        assert "media:spoof_codecs" not in config
+
+    def test_caller_values_win(self, launch):
+        config, _ = launch(WIN_UA, config={"media:spoof_codecs": False})
+        assert config["media:spoof_codecs"] is False
+
+
+class TestLookAndFeel:
+    """System colours of the claimed OS."""
+
+    def test_windows_identity_gets_windows_look_and_feel(self, launch):
+        _, prefs = launch(WIN_UA)
+        assert utils.WINDOWS_UI_COLORS["ui.highlight"] == "#0078d4"
+        # Windows 11's non-native menu hover, NS_RGBA(0, 0, 0, 30).
+        assert utils.WINDOWS_UI_COLORS["ui.-moz_menuhover"] == "#0000001e"
+        for pref, value in utils.WINDOWS_UI_COLORS.items():
+            assert prefs[pref] == value
+
+    def test_macos_identity_gets_none(self, launch):
+        # They were measured against stock Windows only.
+        _, prefs = launch(MAC_UA)
+        assert "ui.highlight" not in prefs
+
+    def test_host_os_identity_is_left_alone(self, launch, monkeypatch):
+        _, prefs = launch(LIN_UA)
+        assert "ui.highlight" not in prefs
+        monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
+        _, prefs = launch(WIN_UA)
+        assert "ui.highlight" not in prefs
+
+    def test_caller_values_win(self, launch):
+        _, prefs = launch(WIN_UA, firefox_user_prefs={"ui.highlight": "#ff0000"})
+        assert prefs["ui.highlight"] == "#ff0000"
+
+
+class TestLegacyFontFamilies:
+    def test_canonical_families_expose_their_legacy_aliases(self, launch):
+        config, _ = launch(WIN_UA, fonts=["Arial", "Calibri", "Franklin Gothic"])
+        assert config["fonts"] == [
+            "Arial", "Calibri", "Franklin Gothic", "Arial Black", "Calibri Light", "Franklin Gothic Medium",
+        ]
+
+    def test_office_faces_of_os_families_need_an_office_family(self, launch):
+        # A DirectWrite-namespace list (cfparity mirrors win-i9's enumeration): once Windows' font
+        # loader lands, stock resolves the faces' nameID 1/16 names too (frames found Arial Narrow,
+        # Rockwell Extra Bold, Segoe UI Variable and Sitka). Arial Narrow and Franklin Gothic
+        # Demi/Heavy are Office faces of OS families, so only a list with an Office family has them.
+        config, _ = launch(WIN_UA, fonts=["Arial", "Franklin Gothic", "Rockwell", "Sitka Text"])
+        assert config["fonts"] == [
+            "Arial", "Franklin Gothic", "Rockwell", "Sitka Text",
+            "Arial Black", "Franklin Gothic Medium", "Rockwell Condensed", "Rockwell Extra Bold", "Sitka",
+            "Arial Narrow", "Franklin Gothic Demi", "Franklin Gothic Demi Cond", "Franklin Gothic Heavy",
+            "Franklin Gothic Medium Cond",
+        ]
+        config, _ = launch(WIN_UA, fonts=["Arial", "Franklin Gothic", "Segoe UI Variable Text"])
+        assert config["fonts"] == [
+            "Arial", "Franklin Gothic", "Segoe UI Variable Text",
+            "Arial Black", "Franklin Gothic Medium", "Segoe UI Variable",
+        ]
+
+    def test_no_alias_without_its_canonical_family(self, launch):
+        config, _ = launch(WIN_UA, fonts=["Times New Roman"])
+        assert "Arial Black" not in config["fonts"]
+        assert "Calibri Light" not in config["fonts"]
+        assert "Franklin Gothic Medium" not in config["fonts"]

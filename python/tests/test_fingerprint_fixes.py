@@ -15,7 +15,9 @@ from camoufox.fingerprints import (
     clamp_window_position,
     fix_navigator_arch,
     follow_baseline_protection,
+    set_host_ipv6_default,
     set_media_devices_defaults,
+    set_release_rollout_prefs,
 )
 
 
@@ -214,6 +216,22 @@ class TestClampWindowPosition:
         clamp_window_position(c)
         assert c["window.screenX"] == 0
 
+    def test_keeps_the_window_off_the_taskbar(self):
+        # win-i9: 1382x864 at 250 %, available 1382x816, window 1280x816. At y=2 it ran 2 px under
+        # the taskbar, where no page fits (screen_floor), so every context drew a larger screen.
+        c = {
+            "screen.width": 1382, "screen.height": 864, "screen.availWidth": 1382, "screen.availHeight": 816,
+            "window.outerWidth": 1280, "window.outerHeight": 816, "window.screenX": 206, "window.screenY": 2,
+        }
+        clamp_window_position(c)
+        assert (c["window.screenX"], c["window.screenY"]) == (102, 0)
+
+    def test_moves_only_the_keys_it_is_given(self):
+        c = {"screen.width": 1382, "window.outerWidth": 1280, "window.screenX": 206,
+             "screen.height": 864, "window.outerHeight": 816, "window.screenY": 40}
+        clamp_window_position(c, {"window.screenX"})
+        assert (c["window.screenX"], c["window.screenY"]) == (102, 40)
+
 
 class TestSetMediaDevicesDefaults:
     def test_draws_common_desktop_devices(self):
@@ -268,6 +286,33 @@ class TestSetMediaDevicesDefaults:
                 # distinct within a kind (macOS names a webcam and its mic alike)
                 assert len(set(mics)) == len(mics)
                 assert len(set(cams)) == len(cams)
+
+    def test_capture_capabilities_align_with_devices(self):
+        from camoufox.fingerprints import _load_media_devices, draw_media_devices
+
+        cat = _load_media_devices()
+        for os_key in ("win", "mac", "lin"):
+            # every catalogued mode names a real catalogue camera
+            labels = {c["cam"] for c in cat[os_key]["cameras"]}
+            labels |= {c.get("cam") for c in cat[os_key]["cards"] if c.get("cam")}
+            assert set(cat[os_key].get("camera_modes", {})) <= labels
+            for seed in range(50):
+                d = draw_media_devices(os_key, seed)
+                n_cam, n_mic = d["mediaDevices:webcams"], d["mediaDevices:micros"]
+                for k in ("webcamMaxWidths", "webcamMaxHeights", "webcamMaxFrameRates"):
+                    assert len(d[f"mediaDevices:{k}"]) == n_cam
+                assert len(d["mediaDevices:microphoneChannels"]) == n_mic
+                assert set(d["mediaDevices:microphoneChannels"]) <= {1, 2}
+                for w, h, f in zip(d["mediaDevices:webcamMaxWidths"], d["mediaDevices:webcamMaxHeights"],
+                                   d["mediaDevices:webcamMaxFrameRates"]):
+                    assert w >= 1280 and h >= 720 and f >= 30
+        # a Bluetooth hands-free microphone is mono; a microphone array is not
+        mics = {}
+        for seed in range(200):
+            d = draw_media_devices("win", seed)
+            mics.update(zip(d["mediaDevices:microphoneLabels"], d["mediaDevices:microphoneChannels"]))
+        assert mics.get("Headset (WH-1000XM4 Hands-Free AG Audio)") == 1
+        assert mics.get("Microphone Array (Realtek(R) Audio)") == 2
 
     def test_respects_user_set_media_devices(self):
         c = {"mediaDevices:webcams": 5}
@@ -347,3 +392,135 @@ class TestFixHardwareConcurrency:
         c = {"navigator.hardwareConcurrency": 8}
         fp.fix_hardware_concurrency(c)
         assert c["navigator.hardwareConcurrency"] == 8
+
+
+class TestHostIpv6Default:
+    """One adapter, IPv4 only or IPv4 + IPv6: the two network shapes an identity draws."""
+
+    def _config(self, i=0, **extra):
+        return {"navigator.userAgent": f"ua{i}", "navigator.platform": "Win32", **extra}
+
+    def test_draw_is_seeded_by_the_identity(self):
+        a, b = self._config(), self._config()
+        set_host_ipv6_default(a, 7)
+        set_host_ipv6_default(b, 7)
+        assert a["webrtc:hostipv6"] is b["webrtc:hostipv6"]
+
+    def test_share_follows_the_population(self):
+        on = 0
+        for i in range(2000):
+            c = self._config(i)
+            set_host_ipv6_default(c, i)
+            on += c["webrtc:hostipv6"]
+        assert 0.40 < on / 2000 < 0.50
+
+    def test_ipv4_only_network_has_no_ipv6(self):
+        for i in range(50):
+            c = self._config(i, **{"network:ipv4Only": True})
+            set_host_ipv6_default(c, i)
+            assert c["webrtc:hostipv6"] is False
+
+    def test_ipv6_exit_has_ipv6(self):
+        for i in range(50):
+            c = self._config(i, **{"webrtc:ipv6": "2001:db8::1"})
+            set_host_ipv6_default(c, i)
+            assert c["webrtc:hostipv6"] is True
+
+    def test_caller_value_wins(self):
+        c = self._config(**{"webrtc:hostipv6": False, "webrtc:ipv6": "2001:db8::1"})
+        set_host_ipv6_default(c)
+        assert c["webrtc:hostipv6"] is False
+
+
+class TestReleaseRolloutPrefs:
+    """Firefox's partial release rollouts (LEAKS 610): stock Firefox's profile
+    is enrolled by its Nimbus bucket, so an identity draws enrollment at the
+    rollout's rate and keeps it on every launch."""
+
+    HEV3 = "network.http.happy_eyeballs_enabled"
+
+    def _config(self, i=0):
+        return {"navigator.userAgent": f"ua{i}", "navigator.platform": "Linux x86_64"}
+
+    def test_same_identity_same_enrollment(self):
+        for i in range(50):
+            a, b = {}, {}
+            set_release_rollout_prefs(a, self._config(i), i, "158")
+            set_release_rollout_prefs(b, self._config(i), i, "158")
+            assert a == b
+
+    def test_happy_eyeballs_at_the_rollout_rate(self):
+        on = 0
+        for i in range(4000):
+            prefs = {}
+            set_release_rollout_prefs(prefs, self._config(i), i, "158")
+            on += prefs.get(self.HEV3) is True
+            assert prefs.get(self.HEV3) in (None, True)
+        assert 0.46 < on / 4000 < 0.54
+
+    def test_rollout_waits_for_its_firefox_version(self):
+        for i in range(200):
+            prefs = {}
+            set_release_rollout_prefs(prefs, self._config(i), i, "158")
+            assert "dom.fetch.streaming_upload" not in prefs
+            old = {}
+            set_release_rollout_prefs(old, self._config(i), i, "156")
+            assert old == {}
+
+    def test_caller_pref_wins(self):
+        for i in range(50):
+            prefs = {self.HEV3: False}
+            set_release_rollout_prefs(prefs, self._config(i), i, "158")
+            assert prefs[self.HEV3] is False
+
+
+class TestPerLaunchTimingDraws:
+    """The audio output open delay and the Windows alias load time are timing:
+    each launch draws its own (in range), and a caller's value is kept."""
+
+    def test_alias_load_varies_per_launch(self):
+        from camoufox.fingerprints import WINDOWS_ALIAS_LOAD_MS, set_windows_alias_load_default
+
+        seen = set()
+        for _ in range(50):
+            c = {}
+            set_windows_alias_load_default(c, 'win', 'lin')
+            v = c['fonts:windowsAliasLoadMs']
+            assert isinstance(v, int) and WINDOWS_ALIAS_LOAD_MS[0] <= v <= WINDOWS_ALIAS_LOAD_MS[1]
+            seen.add(v)
+        assert len(seen) > 1
+        c = {'fonts:windowsAliasLoadMs': 5}
+        set_windows_alias_load_default(c, 'win', 'lin')
+        assert c['fonts:windowsAliasLoadMs'] == 5
+
+    def test_cmap_load_varies_per_launch(self):
+        from camoufox.fingerprints import WINDOWS_CMAP_LOAD_MS, set_windows_alias_load_default
+
+        seen = set()
+        for _ in range(50):
+            c = {}
+            set_windows_alias_load_default(c, 'win', 'lin')
+            v = c['fonts:windowsCmapLoadMs']
+            assert isinstance(v, int) and WINDOWS_CMAP_LOAD_MS[0] <= v <= WINDOWS_CMAP_LOAD_MS[1]
+            seen.add(v)
+        assert len(seen) > 1
+        c = {'fonts:windowsCmapLoadMs': 7}
+        set_windows_alias_load_default(c, 'win', 'lin')
+        assert c['fonts:windowsCmapLoadMs'] == 7
+        c = {}
+        set_windows_alias_load_default(c, 'win', 'win')
+        set_windows_alias_load_default(c, 'lin', 'lin')
+        assert 'fonts:windowsCmapLoadMs' not in c
+
+    def test_output_latency_delay_varies_per_launch_device_does_not(self):
+        from camoufox.fingerprints import set_output_latency_default
+
+        base = {'navigator.userAgent': 'x', 'screen.width': 1920}
+        devices, delays = set(), set()
+        for _ in range(50):
+            c = dict(base)
+            set_output_latency_default(c, 7, 'win', 'lin')
+            devices.add(c['AudioContext:outputLatency'])
+            delays.add(c['AudioContext:outputLatencyDelayMs'])
+        assert len(devices) == 1
+        assert len(delays) > 1

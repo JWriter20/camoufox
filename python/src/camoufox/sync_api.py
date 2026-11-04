@@ -10,20 +10,26 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from . import screenshots
+from . import _humanize_custom, driver_defaults, pro, render_node
 from .fingerprints import generate_context_fingerprint
 from .ip import Proxy, proxy_exit_geo
 from .utils import (
     attach_context_defaults,
+    attach_persistent_geometry,
     attach_socks5_auth,
+    attach_viewport_fit,
+    context_screen_bound,
     context_identity,
+    hand_over_context_geometry,
     host_identity,
+    launch_geometry,
     launch_options,
     new_context_options,
     persistent_context_options,
     spoofs_window_dimensions,
     start_virtual_display,
     sync_attach_vd,
+    take_back_context_geometry,
 )
 
 
@@ -109,13 +115,19 @@ def NewBrowser(
         **kwargs:
             All other keyword arguments passed to `launch_options()`.
     """
+    # custom() humanize engines run in this process: checked before the launch,
+    # attached to the browser after it (also with from_options).
+    _humanize_custom.check(kwargs.get('humanize'), is_async=False)
     virtual_display, headless = start_virtual_display(headless, debug, kwargs)
     # Everything after the display exists can fail (bad proxy, missing binary,
     # unsatisfiable constraints) before sync/async_attach_vd wires kill() into
     # close, which used to strand one Xvfb and its /tmp/.X<n> lock per failed
     # launch.
     try:
-        return _launch(playwright, virtual_display, headless, from_options, persistent_context, debug, kwargs)
+        browser = _launch(playwright, virtual_display, headless, from_options, persistent_context, debug, kwargs)
+        return _humanize_custom.attach(
+            browser, kwargs.get('humanize'), i_know_what_im_doing=kwargs.get('i_know_what_im_doing')
+        )
     except BaseException:
         if virtual_display:
             virtual_display.kill()
@@ -154,6 +166,9 @@ def _launch(
     from . import cpu_affinity
     from .utils import driver_pid, pinned_core_count
 
+    lease = pro.claim(from_options, virtual_display)
+    # A Camoufox Pro profile runs in its own user-data directory.
+    persistent_context = persistent_context or bool(lease and lease.grants.get('profile'))
     pin_to = pinned_core_count(from_options)
     pid = driver_pid(playwright) if pin_to else None
     previous = cpu_affinity.pin(pid, pin_to) if pid else None
@@ -162,14 +177,23 @@ def _launch(
             context = playwright.firefox.launch_persistent_context(
                 **persistent_context_options(from_options, no_viewport_default)
             )
-            screenshots.mark(context)
+            driver_defaults.mark(context)
+            attach_persistent_geometry(context, from_options)
+            if lease:
+                pro.attach_lease(lease, context, 'close')
             return sync_attach_vd(context, virtual_display)
 
         identity = host_identity(from_options, canvas_noise)
         browser = playwright.firefox.launch(**from_options)
-        attach_context_defaults(browser, no_viewport_default)
+        if lease:
+            pro.attach_lease(lease, browser, 'disconnected')
+        attach_context_defaults(browser, no_viewport_default, launch_geometry(from_options))
         browser._camoufox_host_identity = identity
+        browser._camoufox_render_node = render_node.RELAY_ENV in from_options.get('env', {})
         return sync_attach_vd(browser, virtual_display)
+    except Exception as error:
+        pro.launch_failed(lease, error)
+        raise
     finally:
         if pid:
             cpu_affinity.restore(pid, previous)
@@ -224,11 +248,19 @@ def NewContext(
 
     os, webgl_config = context_identity(browser, os, preset)
     fp = generate_context_fingerprint(
-        preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config
+        preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config,
+        webgl=not vars(browser).get('_camoufox_render_node'),
+        screen_bound=context_screen_bound(browser, os, context_kwargs),
     )
 
-    # A browser launched elsewhere takes SOCKS5 credentials too.
+    # A browser launched elsewhere takes SOCKS5 credentials too, and its
+    # contexts are fitted to their screens as well.
     attach_socks5_auth(browser)
-    context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
+    attach_viewport_fit(browser)
+    hand_over_context_geometry(browser, fp)
+    try:
+        context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
+    finally:
+        take_back_context_geometry(browser)
     context.add_init_script(fp['init_script'])
     return context

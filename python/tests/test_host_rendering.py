@@ -222,6 +222,26 @@ class TestWebGpu:
 
         assert webgpu(options) == (False, False)
 
+    @pytest.mark.parametrize("claimed, exposed", [("windows", True), ("linux", False), ("macos", None)])
+    def test_service_workers_follow_navigator_gpu(self, claimed, exposed):
+        # A Linux build defaults dom.webgpu.service-workers.enabled to false;
+        # Windows and Apple Silicon Firefox expose WebGPU in service workers
+        # exactly where they expose it at all.
+        with on_host(HOST_GPU):
+            options, _ = launch(os=claimed)
+
+        prefs = options["firefox_user_prefs"]
+        assert prefs["dom.webgpu.service-workers.enabled"] is prefs["dom.webgpu.enabled"]
+        if exposed is not None:
+            assert prefs["dom.webgpu.enabled"] is exposed
+
+    def test_a_caller_service_worker_pref_is_kept(self):
+        prefs = {"dom.webgpu.service-workers.enabled": False}
+        set_webgpu(prefs, "win", WINDOWS_GPU, None)
+
+        assert prefs["dom.webgpu.enabled"] is True
+        assert prefs["dom.webgpu.service-workers.enabled"] is False
+
     @pytest.mark.parametrize(
         "gpu, exposed",
         [(("Apple", "Apple M1, or similar"), True), (("Intel Inc.", "Intel(R) HD Graphics, or similar"), False)],
@@ -317,3 +337,17 @@ class TestHostIdentity:
     @pytest.mark.parametrize("canvas_noise", [False, True])
     def test_a_callers_explicit_choice_records_nothing(self, canvas_noise):
         assert self.attach(False, canvas_noise) is None
+
+
+def test_the_probe_carries_the_pro_lease_without_keying_on_it(monkeypatch):
+    from camoufox import host_rendering
+
+    reads = []
+    monkeypatch.setattr(host_rendering, "_PROBED", {})
+    monkeypatch.setattr(host_rendering, "_read_host_gpu", lambda *args: reads.append(args) or HOST_GPU)
+    for lease in ("/run/camoufox-pro/a.json", "/run/camoufox-pro/b.json"):
+        env = {"DISPLAY": ":5", "CAMOU_CONFIG_1": "{}", "CAMOU_LEASE_FILE": lease}
+        assert host_gpu("/x/camoufox", False, env, {}) == HOST_GPU
+
+    # Read once, under the first launch's lease; the identity's CAMOU_ values stay out.
+    assert reads == [("/x/camoufox", False, (("DISPLAY", ":5"),), (), "/run/camoufox-pro/a.json")]

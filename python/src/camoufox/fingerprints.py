@@ -7,7 +7,7 @@ import unicodedata
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from random import Random, choice, randrange
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from camoufox._warnings import WARNINGS_DATA, FallbackWarning, _warn_from_caller
 from camoufox.ip import valid_ipv4, validate_ip
@@ -71,19 +71,26 @@ class Screen:
 
         fpgen takes a predicate per field and rejects a value the predicate
         refuses, so a range is a closure rather than a list of allowed values.
+        One predicate over the whole screen node: fpgen resolves screen.width
+        and screen.height to that same node and each condition resets its
+        evidence (fpgen utils.build_evidence), so with one per field only the
+        height bound held and 1280x1024 met a 1300 px minimum width.
         """
-        conditions: Dict[str, Any] = {}
         lo_w, hi_w = self.min_width, self.max_width
         lo_h, hi_h = self.min_height, self.max_height
-        if lo_w is not None or hi_w is not None:
-            conditions['screen.width'] = lambda w: (
-                isinstance(w, int) and (lo_w is None or w >= lo_w) and (hi_w is None or w <= hi_w)
+        if lo_w is None and hi_w is None and lo_h is None and hi_h is None:
+            return {}
+
+        def within(v: Any, lo: Optional[int], hi: Optional[int]) -> bool:
+            return isinstance(v, int) and (lo is None or v >= lo) and (hi is None or v <= hi)
+
+        return {
+            'screen': lambda s: (
+                isinstance(s, dict)
+                and within(s.get('width'), lo_w, hi_w)
+                and within(s.get('height'), lo_h, hi_h)
             )
-        if lo_h is not None or hi_h is not None:
-            conditions['screen.height'] = lambda h: (
-                isinstance(h, int) and (lo_h is None or h >= lo_h) and (hi_h is None or h <= hi_h)
-            )
-        return conditions
+        }
 
 # Bundled real fingerprint presets
 PRESETS_FILE = Path(__file__).parent / 'fingerprint-presets.json'
@@ -249,6 +256,11 @@ def _load_font_groups() -> Dict[str, List[Dict[str, Any]]]:
             )
             _FONT_GROUPS_CACHE = {}
     return _FONT_GROUPS_CACHE
+
+
+def font_unit_families(os_key: str, unit_id: str) -> Set[str]:
+    """The families of one addition unit (font-groups.json), e.g. ('win', 'office')."""
+    return set(next((u['fonts'] for u in _load_font_groups().get(os_key, []) if u.get('id') == unit_id), ()))
 
 
 _FONT_BASES_CACHE: Optional[Dict[str, List[Dict[str, Any]]]] = None
@@ -747,8 +759,13 @@ def _normalize_preset_voices(
                 'isLocalService': vtype == 'local',
             }
         )
-    if result and not any(v['isDefault'] for v in result):
-        result[0]['isDefault'] = True
+    # As draw_voice_config: only macOS marks a default (its system voice, else
+    # the first voice it lists); Windows (SAPI) and Linux mark none, so forcing
+    # one there gave a Windows or Linux identity a voice no stock install has.
+    if os_key == 'mac' and result and not any(v['isDefault'] for v in result):
+        system_voice = (_load_voice_manifests().get('mac', {}).get('systemVoice') or {}).get('default')
+        default = next((v for v in result if v['name'] == system_voice), result[0])
+        default['isDefault'] = True
     return result
 
 
@@ -858,6 +875,52 @@ def fix_navigator_arch(config: Dict[str, Any], target_os: str) -> None:
 BASELINE_TASKBAR_HEIGHT: Dict[str, int] = LAUNCHER_CONSTANTS['baselineTaskbarHeight']
 BASELINE_MULTI_TOUCH_POINTS: int = LAUNCHER_CONSTANTS['baselineMultiTouchPoints']
 
+# The browser chrome around a page, outer minus inner, as [width, height] CSS
+# px per claimed OS. From fpgen's recorded Firefox windows (every record whose
+# window has a toolbar, outerHeight > innerHeight): the most common value per
+# axis, raised to the largest recorded within 2 px of it, the spread DPR
+# rounding gives one layout. Linux 85 -> 86 tall, macOS 84 -> 86, Windows 129
+# -> 130 and 16 -> 18 wide. No recorded window has a page taller than its
+# screen leaves room for: the 1366x768 records peak at innerHeight 683.
+# tests/test_viewport_fit.py derives these from the model again.
+RECORDED_WINDOW_CHROME: Dict[str, List[int]] = LAUNCHER_CONSTANTS['recordedWindowChrome']
+
+
+def screen_floor(
+    os_key: str,
+    viewport: Optional[Dict[str, int]] = None,
+    window: Optional[Dict[str, int]] = None,
+) -> Tuple[int, int]:
+    """The smallest screen, (width, height), that holds a page's window.
+
+    A page with `viewport` sits in a window the recorded chrome larger; the
+    page also reports `window` ({x, y, width, height}: its position and outer
+    size), which has to be on the screen too. The height adds the taskbar the
+    browser takes out of the available screen for the claimed OS
+    (BASELINE_TASKBAR_HEIGHT), so the window fits screen.availHeight.
+    """
+    width = height = 0
+    if viewport:
+        chrome_w, chrome_h = RECORDED_WINDOW_CHROME[os_key]
+        width, height = viewport['width'] + chrome_w, viewport['height'] + chrome_h
+    if window:
+        width = max(width, max(0, window.get('x') or 0) + window['width'])
+        height = max(height, max(0, window.get('y') or 0) + window['height'])
+    return width, height + BASELINE_TASKBAR_HEIGHT[os_key]
+
+
+def draw_screen(os_key: str, floor: Tuple[int, int]) -> Optional[Tuple[int, int]]:
+    """A recorded screen of the OS at least `floor` in size, or None if the
+    model has none that large."""
+    conditions = Screen(min_width=floor[0], min_height=floor[1]).as_conditions()
+    try:
+        screen = _generator().generate(browser='Firefox', os=_FPGEN_OS[os_key], target='screen', **conditions)
+    except Exception as exc:  # fpgen.exceptions.InvalidConstraints
+        if type(exc).__name__ != 'InvalidConstraints':
+            raise
+        return None
+    return screen['width'], screen['height']
+
 
 def follow_baseline_protection(config: Dict[str, Any], target_os: str) -> None:
     """Claim the available screen and touch points the browser will report.
@@ -932,20 +995,24 @@ def clamp_screen_to_display(
             config[avail_key] = max(1, cap - max(0, screen - avail))
 
 
-def clamp_window_position(config: Dict[str, Any]) -> None:
-    """Keep the window box inside the screen: 0 <= screenX/Y <= screen - outer.
+def clamp_window_position(config: Dict[str, Any], keys: Iterable[str] = ('window.screenX', 'window.screenY')) -> None:
+    """Keep the window box inside the available screen: 0 <= screenX/Y <= avail - outer.
 
     A generated screenX/screenY is consistent with the screen it was generated
     against, so clamp_screen_to_display invalidates it. A window
     positioned partly off its own reported screen is an impossible geometry.
+    The available screen, not the whole one: the browser's pages are fitted to
+    the window on screen.availHeight (screen_floor), and a window at y=2 whose
+    outer height is the available height ran 2 px into the taskbar, so every
+    new context drew a larger screen for it. Only `keys` are moved.
     """
     for axis, pos_key in (('Width', 'window.screenX'), ('Height', 'window.screenY')):
-        screen = config.get(f'screen.{axis.lower()}')
+        room = config.get(f'screen.avail{axis}') or config.get(f'screen.{axis.lower()}')
         outer = config.get(f'window.outer{axis}')
         pos = config.get(pos_key)
-        if pos is None or not (screen and outer):
+        if pos_key not in keys or pos is None or not (room and outer):
             continue
-        config[pos_key] = max(0, min(pos, screen - outer))
+        config[pos_key] = max(0, min(pos, room - outer))
 
 
 def set_media_devices_defaults(config: Dict[str, Any], salt: int = 0) -> None:
@@ -978,6 +1045,189 @@ def set_media_devices_defaults(config: Dict[str, Any], salt: int = 0) -> None:
     config.update(draw_media_devices(os_key, identity_seed(config, salt)))
 
 
+
+# Share of machines whose one adapter carries IPv6 next to IPv4. No recorded
+# corpus has the ICE shape; this is Google's IPv6 adoption figure (~45% of its
+# users in 2025, google.com/ipv6/statistics), which counts global IPv6 only,
+# so it is a lower bound. A real-device measurement replaces it.
+HOST_IPV6_SHARE = 0.45
+
+
+def set_host_ipv6_default(config: Dict[str, Any], salt: int = 0) -> None:
+    """Draw the identity's network shape: one adapter, IPv4 only or IPv4 + IPv6.
+
+    Without a capture permission stock Firefox gathers the default adapter's
+    IPv4 address and the IPv6 address on that same adapter, so a page sees
+    one or two host candidates per transport; webrtc:hostipv6 makes the
+    browser gather the second (webrtc-topology-host-ipv6.patch). Wi-Fi and
+    Ethernet look alike with one adapter, and a second adapter only shows
+    after a capture grant, so every identity has one. Nothing is drawn when
+    the caller set it.
+    """
+    if 'webrtc:hostipv6' in config:
+        return
+    if config.get('network:ipv4Only'):
+        # The host's own IPv6 is turned off: a machine on an IPv4-only network.
+        config['webrtc:hostipv6'] = False
+    elif 'webrtc:ipv6' in config:
+        # The exit address is IPv6, so the machine has IPv6.
+        config['webrtc:hostipv6'] = True
+    else:
+        draw = Random(identity_seed(config, salt) ^ 0x1CE6).random()
+        config['webrtc:hostipv6'] = draw < HOST_IPV6_SHARE
+
+
+# Firefox's partial release rollouts (Nimbus, nimbus-desktop-experiments),
+# as (slug, first Firefox version, share of profiles, pref, value, draw tag).
+# Stock Firefox on the release channel is enrolled in each one by its
+# profile's Nimbus bucket, so a profile keeps its enrollment from launch to
+# launch; Camoufox's channel ("default") is never targeted, so each identity
+# draws its enrollment at the rollout's rate instead. 100% rollouts are default
+# prefs in camoufox.cfg. Enumerated from Remote Settings on 2026-11-03 (LEAKS
+# 610/611); re-check on every Firefox release.
+PARTIAL_RELEASE_ROLLOUTS = (
+    # HEv3: races IPv6 first, so a dual-stack server sees its first QUIC
+    # Initial / TCP SYN over IPv6 (LEAKS 610).
+    ('happy-eyeballs-release-rollout', 157, 0.5, 'network.http.happy_eyeballs_enabled', True, 0x4E1B),
+    ('fetch-streaming-upload-rollout', 159, 0.25, 'dom.fetch.streaming_upload', True, 0x5712),
+)
+
+
+def set_release_rollout_prefs(
+    prefs: Dict[str, Any], config: Dict[str, Any], salt: int, ff_version: Optional[str]
+) -> None:
+    """Enroll the identity in Firefox's partial release rollouts at their rates.
+
+    The draw follows the identity seed, as Nimbus' bucket follows the
+    profile: the same identity is enrolled in the same rollouts on every
+    launch. Every identity draws, one that mirrors the host's OS too, since
+    stock Firefox on that OS is enrolled the same way. A pref the caller set
+    is left alone.
+    """
+    try:
+        version = int(str(ff_version).split('.', 1)[0])
+    except ValueError:
+        version = 0
+    seed = identity_seed(config, salt)
+    for _slug, since, share, pref, value, tag in PARTIAL_RELEASE_ROLLOUTS:
+        if pref in prefs or version < since:
+            continue
+        if Random(seed ^ tag).random() < share:
+            prefs[pref] = value
+
+
+# Windows' location setting for desktop apps, as Firefox reads it
+# (GeolocationSystemWin.cpp): "allowed" lets a granted page have positions;
+# "prompt" (apps still to be allowed, the OS asks) and "denied" (location off
+# for apps) make the page's permission read "prompt" and a position request
+# wait on a dialog. No recorded corpus has this setting (fpgen's
+# permissions.geolocation is the page's own state, not the OS's); these shares
+# are an estimate (Windows 11 setup offers location on by default; win-i9
+# answers "prompt"). A real-device measurement replaces them.
+WINDOWS_LOCATION_SETTING_SHARES = (('allowed', 0.55), ('prompt', 0.30), ('denied', 0.15))
+
+
+def set_location_setting_default(
+    config: Dict[str, Any], salt: int, target_os: str, host_os: Optional[str]
+) -> None:
+    """Draw the identity's OS location setting (geolocation:systemPermission,
+    geolocation-spoofing.patch) for a Windows identity on another host. An
+    identity given coordinates (geoip: the exit's) has location on; one
+    without has it off, never on with no position at the exit. It belongs to the machine, so it follows the identity seed.
+    Nothing is set when the caller set it."""
+    if 'geolocation:systemPermission' in config or target_os != 'win' or host_os == 'win':
+        return
+    if 'geolocation:latitude' in config and 'geolocation:longitude' in config:
+        config['geolocation:systemPermission'] = 'allowed'
+        return
+    # No coordinates: nothing at the exit to report, so location is never on.
+    # A page allowed location would get an error, or this host's position.
+    shares = [(state, share) for state, share in WINDOWS_LOCATION_SETTING_SHARES if state != 'allowed']
+    draw = Random(identity_seed(config, salt) ^ 0x10CA).random() * sum(share for _, share in shares)
+    for state, share in shares:
+        draw -= share
+        if draw < 0:
+            break
+    config['geolocation:systemPermission'] = state
+
+
+_AUDIO_OUTPUT_LATENCY_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_audio_output_latency() -> Dict[str, Any]:
+    """Measured AudioContext.outputLatency per OS (audio-output-latency.json)."""
+    global _AUDIO_OUTPUT_LATENCY_CACHE
+    if _AUDIO_OUTPUT_LATENCY_CACHE is None:
+        path = os.path.join(os.path.dirname(__file__), 'audio-output-latency.json')
+        with open(path, 'rb') as f:
+            _AUDIO_OUTPUT_LATENCY_CACHE = json.loads(f.read())
+    return _AUDIO_OUTPUT_LATENCY_CACHE
+
+
+def launch_uniform() -> float:
+    """One uniform [0, 1) draw for a value that belongs to this launch, not
+    the identity (timing: a real machine's figure moves from launch to
+    launch). The TS launcher draws the same way (fingerprintDeps.random), and
+    the launch goldens pin both to one value."""
+    return Random().random()
+
+
+def set_output_latency_default(
+    config: Dict[str, Any], salt: int, target_os: str, host_os: Optional[str]
+) -> None:
+    """Draw the identity's audio output device latency.
+
+    AudioContext.outputLatency is the output stream's latency: 0 until the
+    stream opens, then a device-specific figure (the host's own on a host of
+    the claimed OS). An identity of another OS would otherwise show the
+    host's figure, or 0 for good on a host with no sound device. The device
+    latency belongs to the machine, so it follows the identity seed; the
+    stream's opening delay is timing, so each launch draws its own.
+    Nothing is set when the caller set the key or the OS has no measured
+    devices.
+    """
+    if 'AudioContext:outputLatency' in config or target_os == host_os:
+        return
+    table = _load_audio_output_latency().get(target_os) or {}
+    devices = table.get('device_latency_s') or []
+    if not devices:
+        return
+    device = _weighted_choice(Random(identity_seed(config, salt) ^ 0xA0D1), devices)
+    config['AudioContext:outputLatency'] = float(device['v'])
+    low, high = table.get('open_delay_ms') or (20, 60)
+    if 'AudioContext:outputLatencyDelayMs' not in config:
+        config['AudioContext:outputLatencyDelayMs'] = float(low + (high - low) * launch_uniform())
+
+# How long stock Windows Firefox's deferred font-info loader takes to land the
+# legacy styled-family aliases once a legacy name is first asked for (stock
+# 158.0.1 on win-i9, 2026-10-31: first seen at 1727, 1826, 1832 ms on a 100 ms
+# poll, so the true times lie up to 100 ms earlier; 2026-11-01, 25H2 26200.9711,
+# probe-Y: 2158, 2029, 2043 ms).
+WINDOWS_ALIAS_LOAD_MS = (1630, 2158)
+
+# How long stock Windows Firefox's character-map pass takes to land after the
+# first fallback within a family whose cmaps are not loaded yet
+# (windows-lazy-cmaps.patch): "Microsoft JhengHei" measured as the generics
+# for 80, 154 and 182 ms (stock 158.0.1 on win-i9, 2026-10-31, 2 ms poll).
+WINDOWS_CMAP_LOAD_MS = (80, 182)
+
+
+def set_windows_alias_load_default(
+    config: Dict[str, Any], target_os: str, host_os: Optional[str]
+) -> None:
+    """Draw this launch's Windows font loader times for a Windows identity
+    on another OS: the legacy-alias load (fonts:windowsAliasLoadMs,
+    windows-legacy-family-names.patch) and the character-map pass
+    (fonts:windowsCmapLoadMs, windows-lazy-cmaps.patch). They are timing, so
+    each launch draws its own; a caller's value is kept."""
+    if target_os != 'win' or target_os == host_os:
+        return
+    for key, (low, high) in (('fonts:windowsAliasLoadMs', WINDOWS_ALIAS_LOAD_MS),
+                             ('fonts:windowsCmapLoadMs', WINDOWS_CMAP_LOAD_MS)):
+        if key not in config:
+            config[key] = low + int(launch_uniform() * (high - low + 1))
+
+
 _MEDIA_DEVICES_CACHE: Optional[Dict[str, Any]] = None
 
 
@@ -1007,6 +1257,9 @@ def _weighted_choice(rng: Random, items: List[Dict[str, Any]]) -> Dict[str, Any]
 # machine line itself (Mac mini / Mac Studio have neither).
 _MEDIA_P_NO_MIC = {'win': 0.08, 'mac': 0.0, 'lin': 0.20}
 _MEDIA_P_BUILTIN_CAM = {'win': 0.78, 'mac': 0.0, 'lin': 0.45}
+# A camera media-devices.json has no camera_modes entry for: a 720p laptop
+# camera, as most are (width, height, frame rate of its largest mode).
+_DEFAULT_CAMERA_MODE = [1280, 720, 30]
 
 
 def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
@@ -1070,6 +1323,12 @@ def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
         for label, grp in list(outs):
             mics.append((f'Monitor of {label}', grp))
 
+    # What each device reports once captured (media-device-spoofing.patch):
+    # a camera's largest mode, a microphone's channel count.
+    modes = cat.get('camera_modes') or {}
+    mono = set(cat.get('mono_mics') or [])
+    cam_modes = [modes.get(c, _DEFAULT_CAMERA_MODE) for c, _ in cams]
+
     return {
         'mediaDevices:enabled': True,
         'mediaDevices:micros': len(mics),
@@ -1081,6 +1340,10 @@ def draw_media_devices(os_key: str, seed: Optional[int]) -> Dict[str, Any]:
         'mediaDevices:webcamGroups': [g for _, g in cams],
         'mediaDevices:speakerLabels': [o for o, _ in outs],
         'mediaDevices:speakerGroups': [g for _, g in outs],
+        'mediaDevices:webcamMaxWidths': [m[0] for m in cam_modes],
+        'mediaDevices:webcamMaxHeights': [m[1] for m in cam_modes],
+        'mediaDevices:webcamMaxFrameRates': [m[2] for m in cam_modes],
+        'mediaDevices:microphoneChannels': [1 if m in mono else 2 for m, _ in mics],
     }
 
 
@@ -1444,12 +1707,17 @@ def _build_init_script(values: Dict[str, Any]) -> str:
                 f'  if (typeof w.{fn_name} === "function") w.{fn_name}({js_val});'
             )
 
-    # Screen dimensions (requires width + height together)
+    # Screen dimensions (requires width + height together). The available rect
+    # rides along when the identity has one; a build that keeps only the full
+    # size ignores the extra arguments.
     sw = values.get('screenWidth')
     sh = values.get('screenHeight')
     if sw and sh:
+        aw = values.get('screenAvailWidth')
+        ah = values.get('screenAvailHeight')
+        dims = f'{sw}, {sh}, {aw}, {ah}' if aw and ah else f'{sw}, {sh}'
         lines.append(
-            f'  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions({sw}, {sh});'
+            f'  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions({dims});'
         )
         scd = values.get('screenColorDepth')
         if scd:
@@ -1519,6 +1787,8 @@ def generate_context_fingerprint(
     locale: Optional[str] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
     webgl_config: Optional[Tuple[str, str]] = None,
+    webgl: bool = True,
+    screen_bound: Optional[Screen] = None,
 ) -> Dict[str, Any]:
     """
     Generate fingerprint values for a single per-context identity.
@@ -1538,6 +1808,10 @@ def generate_context_fingerprint(
             is built but before init_script is rendered (e.g. {'timezone': 'UTC'}).
         webgl_config: The (vendor, renderer) a drawn identity claims, instead of
             drawing one.
+        webgl: False claims no WebGL values, for a browser whose render node
+            reports its own (camoufox.render_node).
+        screen_bound: A bound on the drawn screen (screen_floor: one that holds the
+            window the context's pages report). A preset keeps its own.
     """
     if preset is not None:
         # Use real fingerprint preset
@@ -1547,7 +1821,7 @@ def generate_context_fingerprint(
         webgl = preset.get('webgl', {})
     else:
         # Fall back to synthetic generation
-        fp = generate_fingerprint(os=os)
+        fp = generate_fingerprint(os=os, screen=screen_bound)
         config = from_fpgen(fp, ff_version)
         # fpgen's Linux pool now and then pairs the Linux UA with a Windows
         # platform and oscpu. launch_options() corrects that; this path did
@@ -1583,7 +1857,10 @@ def generate_context_fingerprint(
                 config['navigator.oscpu'] = oscpu
 
         # Draw the GPU and its WebGL data (fpgen.yml does not map these)
-        if not config.get('webGl:vendor') or not config.get('webGl:renderer'):
+        if not webgl:
+            for key in [k for k in config if k.startswith(('webGl:', 'webGl2:'))]:
+                del config[key]
+        elif not config.get('webGl:vendor') or not config.get('webGl:renderer'):
             # Not at the top: camoufox.webgl imports this module.
             from .webgl import sample_webgl_for_screen, webgl_for_gpu
 
@@ -1649,6 +1926,8 @@ def generate_context_fingerprint(
         'webglRenderer': webgl.get('unmaskedRenderer'),
         'screenWidth': screen.get('width'),
         'screenHeight': screen.get('height'),
+        'screenAvailWidth': config.get('screen.availWidth'),
+        'screenAvailHeight': config.get('screen.availHeight'),
         'screenColorDepth': screen.get('colorDepth'),
         'timezone': preset.get('timezone') if isinstance(preset.get('timezone'), str) else config.get('timezone'),
         'fontList': config.get('fonts'),
@@ -1665,16 +1944,28 @@ def generate_context_fingerprint(
     ua = config.get('navigator.userAgent')
     if ua:
         context_options['user_agent'] = ua
-    sw = screen.get('width')
-    sh = screen.get('height')
-    if sw and sh:
-        context_options['viewport'] = {
-            'width': sw,
-            'height': max(sh - 28, 600),
-        }
+    # No viewport: the pages are the browser's window, whose size the page
+    # reads in outerWidth/outerHeight, and the screen is drawn to hold it
+    # (screen_bound). A viewport the size of the screen sat in that window as a
+    # page larger than its own window.
+    # Playwright takes a device scale factor only with a viewport: a context
+    # with its own devicePixelRatio gets the drawn page size as its viewport,
+    # and Juggler sizes the window to it plus the claimed OS's chrome.
     dpr = screen.get('devicePixelRatio')
-    if dpr:
+    inner = (config.get('window.innerWidth'), config.get('window.innerHeight'))
+    avail = (config.get('screen.availWidth'), config.get('screen.availHeight'))
+    if dpr and not all(inner) and all(avail):
+        # A preset records its screen but no window: a maximised one, the
+        # available screen less the recorded chrome of the OS it claims.
+        chrome_w, chrome_h = RECORDED_WINDOW_CHROME[
+            OS_KEYS[platform_to_os(config.get('navigator.platform', ''))]
+        ]
+        inner = (avail[0] - chrome_w, avail[1] - chrome_h)
+    if dpr and all(inner):
+        context_options['viewport'] = {'width': int(inner[0]), 'height': int(inner[1])}
         context_options['device_scale_factor'] = dpr
+    else:
+        context_options['no_viewport'] = True
     tz = config.get('timezone')
     if not tz and isinstance(preset, dict):
         tz = preset.get('timezone')
