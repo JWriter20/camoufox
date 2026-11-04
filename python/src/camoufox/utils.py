@@ -30,7 +30,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_release_rollout_prefs, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, font_unit_families, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_release_rollout_prefs, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, font_unit_families, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence, pro, render_node as render_nodes
 from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
@@ -843,17 +843,6 @@ def _camou_config_blob(from_options: Dict[str, Any]) -> str:
     return ''.join(v for _, v in sorted(chunks))
 
 
-def launch_identity_config(from_options: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The launch identity's CAMOU_CONFIG, or None when the launch has none.
-    NewContext() takes the machine's values from it (machine_config)."""
-    blob = _camou_config_blob(from_options)
-    try:
-        config = orjson.loads(blob) if blob else None
-    except orjson.JSONDecodeError:
-        return None
-    return config if isinstance(config, dict) and config else None
-
-
 def pinned_core_count(from_options: Dict[str, Any]) -> Optional[int]:
     """The core count the browser must be pinned to for these launch options,
     or None: the identity's navigator.hardwareConcurrency when this host can
@@ -1064,22 +1053,7 @@ def launch_geometry(from_options: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             'width': size[0],
             'height': size[1],
         }
-    geometry = {'os': os_key, 'screen': (width, height), 'window': window}
-    avail = avail_rect(config)
-    if avail:
-        geometry['avail'] = avail
-    return geometry
-
-
-def avail_rect(config: Dict[str, Any]) -> Optional[Tuple[int, int, int, int]]:
-    """The identity's available rect, (left, top, width, height), from
-    screen.availLeft/availTop/availWidth/availHeight; None without a size.
-    The browser places windows in it (the claimed screen's work area), and
-    its origin is often not 0,0: a dock or top bar, a second monitor."""
-    width, height = config.get('screen.availWidth'), config.get('screen.availHeight')
-    if not (width and height):
-        return None
-    return int(config.get('screen.availLeft') or 0), int(config.get('screen.availTop') or 0), int(width), int(height)
+    return {'os': os_key, 'screen': (width, height), 'window': window}
 
 
 def _geometry_of(owner: Any) -> Optional[Dict[str, Any]]:
@@ -1097,80 +1071,51 @@ def _fmt(size: Any) -> str:
     return f'{size[0]}x{size[1]}'
 
 
-def fitted_viewport(
-    geometry: Dict[str, Any], screen: Tuple[int, int], viewport: Tuple[int, int]
-) -> Tuple[int, int]:
-    """The largest page, up to `viewport` on each axis, whose window fits the
-    available area of `screen`.
-
-    Juggler sizes the browser's window to the page in the recorded chrome of
-    the claimed OS (RECORDED_WINDOW_CHROME), where the browser's window is
-    (geometry['window']). The window has to fit the identity's available rect
-    (geometry['avail'], origin included) when `screen` is the identity's own;
-    otherwise the screen less the taskbar (BASELINE_TASKBAR_HEIGHT). Each axis
-    is clamped on its own, as a window manager fits a window too large for
-    the work area.
-    """
-    os_key, window = geometry['os'], geometry.get('window')
-    chrome_w, chrome_h = RECORDED_WINDOW_CHROME[os_key]
-    avail = geometry.get('avail') if tuple(screen) == tuple(geometry['screen']) else None
-    left, top, width, height = avail or (0, 0, screen[0], screen[1] - BASELINE_TASKBAR_HEIGHT[os_key])
-    x = max(left, window.get('x') or 0) if window else left
-    y = max(top, window.get('y') or 0) if window else top
-    room = (left + width - x - chrome_w, top + height - y - chrome_h)
-    return min(viewport[0], room[0]), min(viewport[1], room[1])
-
-
-def _fit_viewport(geometry: Dict[str, Any], screen: Tuple[int, int], viewport: Tuple[int, int]) -> Tuple[int, int]:
-    """fitted_viewport(), with a LeakWarning when it is not the viewport asked
-    for. A window position that leaves no room at all keeps the viewport, and
-    warns that it does not fit."""
-    os_key, window = geometry['os'], geometry.get('window')
-    fitted = fitted_viewport(geometry, screen, viewport)
-    if fitted == viewport:
-        return viewport
-    values = dict(
-        viewport=_fmt(viewport), screen=_fmt(screen), os=OS_NAMES[os_key],
-        chrome=_fmt(RECORDED_WINDOW_CHROME[os_key]), taskbar=BASELINE_TASKBAR_HEIGHT[os_key],
-    )
-    if min(fitted) < 1:
-        LeakWarning.warn('viewport_screen', **values,
-                         reason="the browser's window sits where no page fits, so the viewport is kept")
-        return viewport
-    left, top = (geometry.get('avail') or (0, 0))[:2]
-    position = (max(left, window.get('x') or 0), max(top, window.get('y') or 0)) if window else (left, top)
-    LeakWarning.warn('viewport_clamped', **values, fitted=_fmt(fitted), position=f'{position[0]},{position[1]}')
-    return fitted
-
-
-def fit_context_screen(
-    geometry: Dict[str, Any], options: Dict[str, Any]
-) -> Tuple[Optional[Tuple[int, int]], Optional[Tuple[int, int]]]:
-    """(screen, viewport): the screen a new context must claim, or None for
-    the identity's own, and the viewport it gets in place of the one asked
-    for, or None to leave that.
+def fit_context_screen(geometry: Dict[str, Any], options: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """The screen a new context must claim so that its pages fit on it, or None
+    when the identity's own already holds them.
 
     `geometry` is what the context's identity claims (launch_geometry, or a
     NewContext() identity's), `options` Playwright's new_context() options
-    (camelCase, as the client's implementation takes them). A browser is one
-    machine with one screen (LEAKS 619): a context keeps it, and a viewport
-    whose window, the recorded chrome larger, cannot fit its available area
-    is clamped to the largest that fits (fitted_viewport), with a
-    LeakWarning. Playwright's own `screen` option, which Juggler does not
-    apply, is the screen the caller chose: it is claimed as given, and the
-    viewport is fitted to it.
+    (camelCase, as the client's implementation takes them). A viewport sits in
+    a window the recorded chrome larger (screen_floor), and the pages report
+    the browser's window as theirs, so the screen holds both; one that does not
+    is replaced with a recorded screen that does (draw_screen). Playwright's
+    own `screen` option, which Juggler does not apply, is the screen the caller
+    chose: it is claimed as given. The caller's viewport is never changed, so
+    where no screen or no window can hold it, this warns.
     """
+    os_key, screen, window = geometry['os'], geometry['screen'], geometry.get('window')
     viewport = None
     if not options.get('noViewport'):
         viewport = _size(options.get('viewport')) or _size(PLAYWRIGHT_DEFAULT_VIEWPORT)
+    floor = screen_floor(os_key, viewport and {'width': viewport[0], 'height': viewport[1]}, window)
+
+    def holds(size: Tuple[int, int]) -> bool:
+        return size[0] >= floor[0] and size[1] >= floor[1]
+
+    def warn_screen(claimed: Tuple[int, int], reason: str) -> None:
+        LeakWarning.warn(
+            'viewport_screen',
+            viewport=_fmt(viewport or (window['width'], window['height'])),
+            screen=_fmt(claimed), os=OS_NAMES[os_key],
+            chrome=_fmt(RECORDED_WINDOW_CHROME[os_key]),
+            taskbar=BASELINE_TASKBAR_HEIGHT[os_key], reason=reason,
+        )
+
+    claimed: Optional[Tuple[int, int]] = None
     requested = _size(options.get('screen'))
-    screen = requested or geometry['screen']
-    claimed = requested if requested and requested != geometry['screen'] else None
-    fitted = None
-    if viewport:
-        page = _fit_viewport(geometry, screen, viewport)
-        fitted = page if page != viewport else None
-    return claimed, fitted
+    if requested:
+        claimed = requested if requested != screen else None
+        if not holds(requested):
+            warn_screen(requested, 'this one is the screen= the context was given, so it is kept')
+    elif not holds(screen):
+        claimed = draw_screen(os_key, floor)
+        if claimed is None:
+            warn_screen(screen, f'no recorded {OS_NAMES[os_key]} screen is {_fmt(floor)} or larger')
+    if viewport and window and (viewport[0] > window['width'] or viewport[1] > window['height']):
+        LeakWarning.warn('viewport_window', viewport=_fmt(viewport), window=_fmt((window['width'], window['height'])))
+    return claimed
 
 
 def screen_init_script(width: int, height: int) -> str:
@@ -1180,13 +1125,12 @@ def screen_init_script(width: int, height: int) -> str:
 
 
 def attach_viewport_fit(target: Any, geometry: Optional[Dict[str, Any]] = None) -> Any:
-    """Make every new_context()/new_page() of `target` fit its pages on the screen it claims.
+    """Make every new_context()/new_page() of `target` claim a screen its pages fit on.
 
     `geometry` is what the launch's identity claims (launch_geometry). A
     context claims that, or the identity NewContext() hands over, with the
-    viewport fit_context_screen() fits to its screen (and a screen the caller
-    gave set through the per-context screen setter). The context keeps what it
-    claims, for set_viewport_size().
+    screen fit_context_screen() decides set through the per-context screen
+    setter. The context keeps what it claims, for set_viewport_size().
     """
     impl = getattr(target, '_impl_obj', target)
     if geometry is not None:
@@ -1202,9 +1146,7 @@ def attach_viewport_fit(target: Any, geometry: Optional[Dict[str, Any]] = None) 
     async def new_context(*args: Any, **kwargs: Any) -> Any:
         # Read before the first await: NewContext() set it just before this call.
         claimed = vars(impl).pop(_NEXT_CONTEXT, None) or _geometry_of(impl)
-        screen, viewport = fit_context_screen(claimed, kwargs) if claimed else (None, None)
-        if viewport:
-            kwargs['viewport'] = {'width': viewport[0], 'height': viewport[1]}
+        screen = fit_context_screen(claimed, kwargs) if claimed else None
         context = await original(*args, **kwargs)
         if screen:
             await context.add_init_script(script=screen_init_script(*screen))
@@ -1221,13 +1163,13 @@ _AFTER_LOAD = "set_viewport_size() comes after the context's pages have loaded, 
 
 
 def check_viewport_size(geometry: Optional[Dict[str, Any]], size: Any, reason: str = _AFTER_LOAD) -> None:
-    """Warn when a viewport's window, the recorded chrome larger, does not fit
-    the screen of `geometry` (a persistent launch given an identity drawn
-    without its viewport; fit_viewport_size() clamps a later one instead)."""
+    """Warn when page.set_viewport_size() asks for a page its context's screen
+    or window cannot hold. The screen setter is sealed once a page has loaded,
+    so a context keeps the screen it started with."""
     viewport = _size(size)
     if not (geometry and viewport):
         return
-    os_key, screen = geometry['os'], geometry['screen']
+    os_key, screen, window = geometry['os'], geometry['screen'], geometry.get('window')
     floor = screen_floor(os_key, {'width': viewport[0], 'height': viewport[1]})
     if screen[0] < floor[0] or screen[1] < floor[1]:
         LeakWarning.warn(
@@ -1235,18 +1177,8 @@ def check_viewport_size(geometry: Optional[Dict[str, Any]], size: Any, reason: s
             chrome=_fmt(RECORDED_WINDOW_CHROME[os_key]), taskbar=BASELINE_TASKBAR_HEIGHT[os_key],
             reason=reason,
         )
-
-
-def fit_viewport_size(geometry: Optional[Dict[str, Any]], size: Any) -> Any:
-    """The size page.set_viewport_size() gets: `size`, or, when its window
-    cannot fit the context's screen, the largest that does (fitted_viewport),
-    with a LeakWarning. A context keeps its screen (the screen setter is
-    sealed once a page has loaded), so the page gives way."""
-    viewport = _size(size)
-    if not (geometry and viewport):
-        return size
-    page = _fit_viewport(geometry, geometry['screen'], viewport)
-    return size if page == viewport else {'width': page[0], 'height': page[1]}
+    if window and (viewport[0] > window['width'] or viewport[1] > window['height']):
+        LeakWarning.warn('viewport_window', viewport=_fmt(viewport), window=_fmt((window['width'], window['height'])))
 
 
 def _install_viewport_size_check() -> None:
@@ -1258,7 +1190,8 @@ def _install_viewport_size_check() -> None:
 
     @wraps(original)
     async def set_viewport_size(self: Any, viewportSize: Any) -> None:
-        return await original(self, fit_viewport_size(_geometry_of(self.context), viewportSize))
+        check_viewport_size(_geometry_of(self.context), viewportSize)
+        return await original(self, viewportSize)
 
     set_viewport_size._camoufox_viewport_fit = True  # type: ignore[attr-defined]
     Page.set_viewport_size = set_viewport_size
@@ -1366,8 +1299,8 @@ def context_identity(
     ):
         raise ValueError(
             f'This browser renders its canvas as this {host_name} machine, so its contexts claim it'
-            f'{" and its GPU " + repr(gpu) if gpu else ""}. A context runs on its '
-            "browser's machine: launch a browser that claims the OS or GPU you want."
+            f'{" and its GPU " + repr(gpu) if gpu else ""}. Launch it with canvas_noise=True to give '
+            'a context another OS or GPU.'
         )
     return host_name, gpu
 
@@ -1436,15 +1369,11 @@ def hand_over_context_geometry(browser: Any, fingerprint: Dict[str, Any]) -> Non
         vars(impl).pop(_NEXT_CONTEXT, None)
         return
     geometry = _geometry_of(impl)
-    claimed = {
+    vars(impl)[_NEXT_CONTEXT] = {
         'os': OS_KEYS[platform_to_os(config.get('navigator.platform') or '')],
         'screen': (width, height),
         'window': geometry.get('window') if geometry else None,
     }
-    avail = avail_rect(config)
-    if avail and (config.get('screen.width'), config.get('screen.height')) == (width, height):
-        claimed['avail'] = avail
-    vars(impl)[_NEXT_CONTEXT] = claimed
 
 
 def take_back_context_geometry(browser: Any) -> None:
@@ -1472,49 +1401,14 @@ def new_context_options(
     return opts
 
 
-def xvfb_missing() -> Optional[str]:
-    """What headless='virtual' needs and this host lacks (None when it has it all)."""
-    if OS_NAME != 'lin':
-        return 'Linux'
-    for tool, package in (('Xvfb', 'Xvfb (xvfb)'), ('setpriv', 'setpriv (util-linux)')):
-        path = shutil.which(tool)
-        if not path or not os.access(path, os.X_OK):
-            return package
-    return None
-
-
-def headless_mode(headless: Any, kwargs: Optional[Dict[str, Any]] = None) -> Any:
-    """What `headless` runs as. On Linux headless=True is headed on a private Xvfb
-    ('virtual') whenever Xvfb is there.
-
-    Firefox's own -headless has no window system: system colors are Firefox's
-    built-in stand-ins (AccentColor #0060df, Highlight #3399ff), the CSS2 system
-    fonts are `sans-serif 14px`, the window has no frame (outer = inner + toolbar
-    only) and, without the GPU probe, no WebGL. A page reads all of it, and no
-    headed Firefox looks like that. Headed on Xvfb, the browser has a real GTK
-    look-and-feel and window, as stock Firefox on Xvfb does. True -headless is the
-    fallback when Xvfb or setpriv is missing, with a LeakWarning naming it. A
-    caller that passes its own `virtual_display` keeps headless=True as given.
-    """
-    if headless is not True or OS_NAME != 'lin' or (kwargs or {}).get('virtual_display'):
-        return headless
-    missing = xvfb_missing()
-    if missing is None:
-        return 'virtual'
-    LeakWarning.warn('headless_without_xvfb', (kwargs or {}).get('i_know_what_im_doing'), missing=missing)
-    return True
-
-
 def start_virtual_display(
     headless: Any, debug: Optional[bool], kwargs: Dict[str, Any]
 ) -> Tuple[Optional[VirtualDisplay], Any]:
-    """Start the display headless='virtual' or 'virtual-gpu' asks for, or that
-    headless=True runs on (headless_mode).
+    """Start the display headless='virtual' or 'virtual-gpu' asks for.
 
     Pops the display's own options from `kwargs` and points the launch at the
     display. Returns the display, or None, and the headless value to launch with.
     """
-    headless = headless_mode(headless, kwargs)
     gpu = kwargs.pop('gpu', None)
     require_gpu = kwargs.pop('require_gpu', None)
     if headless == 'virtual-gpu':
@@ -1749,9 +1643,7 @@ def launch_options(
             Whether to run the browser in headless mode. Defaults to False.
             Note: If you are running linux, passing headless='virtual' to Camoufox, AsyncCamoufox
             or launch_server will use Xvfb, and headless='virtual-gpu' a headless Xorg
-            server bound to one GPU. There headless=True also uses Xvfb when it is
-            installed (see headless_mode()); launch_options() alone starts no display,
-            so a caller of it runs Firefox headless unless it passes virtual_display.
+            server bound to one GPU.
         main_world_eval (Optional[bool]):
             Whether to enable running scripts in the main world.
             To use this, prepend "mw:" to the script: page.evaluate("mw:" + script).

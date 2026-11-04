@@ -8,12 +8,10 @@ availHeight 768, where a real Firefox window draws 86 px of chrome above the
 page: a machine that cannot exist, and the recorded 1366x768 Firefox windows
 never show a page taller than 683 px.
 
-A browser is one machine with one screen (LEAKS 619), so the launchers keep a
-context on it and clamp a viewport whose window cannot fit its available area
-to the largest that does, with a LeakWarning (new contexts and
-set_viewport_size() alike); they draw a persistent launch around the viewport
-it is given, and warn where only the window could make it consistent (a page
-larger than its window). The
+The launchers give such a context a recorded screen that holds the viewport in
+the recorded chrome, through the per-context screen setter, draw a persistent
+launch around the viewport it is given, and warn where only the window could
+make it consistent (set_viewport_size(), a page larger than its window). The
 browser side is browser/tests/playwright/patches/viewport-fits-screen.py.
 """
 
@@ -143,79 +141,41 @@ def _no_warnings(fn, *args):
 
 
 class TestFitContextScreen:
-    """One machine, one screen (LEAKS 619): a context keeps the screen, and a
-    viewport whose window cannot fit it is clamped, with a LeakWarning."""
+    def test_a_viewport_too_tall_for_the_screen_gets_a_screen_that_holds_it(self):
+        screen = _no_warnings(utils.fit_context_screen, LINUX_1366, {'viewport': VIEWPORT})
+        assert screen is not None
+        assert screen[0] >= 1366 and screen[1] >= 786  # the window, and the viewport in its chrome
 
-    def test_a_viewport_too_tall_for_the_screen_is_clamped_to_the_largest_that_fits(self):
-        with pytest.warns(LeakWarning, match=r'1000x700 viewport does not fit this linux machine.s 1366x768 '
-                                             r'screen.*its page is\s+1000x682.*Launch a browser with a larger screen'):
-            screen, viewport = utils.fit_context_screen(LINUX_1366, {'viewport': VIEWPORT})
-        assert screen is None  # the machine's
-        assert viewport == (1000, 768 - 86)  # the recorded 86 px of Linux chrome, no taskbar
-
-    def test_each_axis_is_clamped_on_its_own(self):
-        geometry = {'os': 'win', 'screen': (1366, 768), 'window': {'x': 0, 'y': 0, 'width': 1366, 'height': 720}}
-        with pytest.warns(LeakWarning, match='viewport does not fit'):
-            _, viewport = utils.fit_context_screen(geometry, {'viewport': {'width': 1600, 'height': 700}})
-        assert viewport == (1366 - 18, 768 - 48 - 130)
-
-    def test_the_window_position_counts(self):
-        geometry = {'os': 'lin', 'screen': (1366, 768), 'window': {'x': 66, 'y': 32, 'width': 1294, 'height': 736}}
-        with pytest.warns(LeakWarning, match='sits at 66,32'):
-            _, viewport = utils.fit_context_screen(geometry, {'viewport': VIEWPORT})
-        assert viewport == (1000, 768 - 32 - 86)
-
-    def test_the_available_rect_and_its_origin_count(self):
-        # A Linux machine with a 66 px dock on the left and a 32 px top bar
-        # (fpgen draws such origins for ~14% of Linux and Windows screens):
-        # the window is placed in that work area (LEAKS 635).
-        geometry = {'os': 'lin', 'screen': (1366, 768), 'window': None, 'avail': (66, 32, 1300, 736)}
-        with pytest.warns(LeakWarning, match='sits at 66,32'):
-            _, viewport = utils.fit_context_screen(geometry, {'viewport': {'width': 1400, 'height': 700}})
-        assert viewport == (1300 - 2, 736 - 86)
-        # A right-hand dock: the work area ends before the screen does.
-        geometry = {'os': 'lin', 'screen': (1366, 768), 'window': None, 'avail': (0, 0, 1300, 768)}
-        with pytest.warns(LeakWarning, match='viewport does not fit'):
-            _, viewport = utils.fit_context_screen(geometry, {'viewport': {'width': 1320, 'height': 600}})
-        assert viewport == (1298, 600)
-
-    def test_a_callers_screen_ignores_the_machines_available_rect(self):
-        geometry = {'os': 'lin', 'screen': (1366, 768), 'window': None, 'avail': (66, 32, 1300, 736)}
-        options = {'viewport': VIEWPORT, 'screen': {'width': 1920, 'height': 1080}}
-        assert _no_warnings(utils.fit_context_screen, geometry, options) == ((1920, 1080), None)
-
-    def test_a_viewport_that_fits_is_left_alone(self):
+    def test_a_screen_that_holds_it_stays(self):
         geometry = {**LINUX_1366, 'screen': (1920, 1080)}
-        assert _no_warnings(utils.fit_context_screen, geometry, {'viewport': VIEWPORT}) == (None, None)
+        assert _no_warnings(utils.fit_context_screen, geometry, {'viewport': VIEWPORT}) is None
 
-    def test_no_viewport_is_left_alone(self):
-        assert _no_warnings(utils.fit_context_screen, LINUX_1366, {'noViewport': True}) == (None, None)
+    def test_no_viewport_is_the_window_the_screen_already_holds(self):
+        assert _no_warnings(utils.fit_context_screen, LINUX_1366, {'noViewport': True}) is None
 
     def test_playwrights_default_viewport_counts_as_asked_for(self):
         geometry = {'os': 'lin', 'screen': (1280, 720), 'window': None}
-        with pytest.warns(LeakWarning, match='1280x720 viewport does not fit'):
-            assert utils.fit_context_screen(geometry, {'viewport': None}) == (None, (1278, 634))
+        screen = _no_warnings(utils.fit_context_screen, geometry, {'viewport': None})
+        assert screen[0] >= 1282 and screen[1] >= 806
 
-    def test_a_viewport_larger_than_the_launch_window_that_fits_the_screen_is_quiet(self):
-        # Juggler sizes the window to the page in its chrome
-        # (juggler-viewport-window.py), so only the screen bounds the page.
-        geometry = {**LINUX_1366, 'screen': (2560, 1440)}
-        options = {'viewport': {'width': 1300, 'height': 900}}
-        assert _no_warnings(utils.fit_context_screen, geometry, options) == (None, None)
+    def test_a_viewport_larger_than_the_window_warns(self):
+        with pytest.warns(LeakWarning, match=r'1300x900 viewport is larger than the 1366x768 browser window'):
+            screen = utils.fit_context_screen(LINUX_1366, {'viewport': {'width': 1300, 'height': 900}})
+        assert screen[1] >= 986
 
     def test_the_callers_screen_option_is_claimed(self):
         options = {'viewport': VIEWPORT, 'screen': {'width': 2560, 'height': 1440}}
-        assert _no_warnings(utils.fit_context_screen, LINUX_1366, options) == ((2560, 1440), None)
+        assert _no_warnings(utils.fit_context_screen, LINUX_1366, options) == (2560, 1440)
 
-    def test_a_callers_screen_that_cannot_hold_it_is_kept_and_the_viewport_fitted(self):
+    def test_a_callers_screen_that_cannot_hold_it_is_kept_and_warned_about(self):
         options = {'viewport': VIEWPORT, 'screen': {'width': 1366, 'height': 700}}
-        with pytest.warns(LeakWarning, match='1000x700 viewport does not fit this linux machine.s 1366x700 screen'):
-            assert utils.fit_context_screen(LINUX_1366, options) == ((1366, 700), (1000, 614))
+        with pytest.warns(LeakWarning, match=r'1000x700 viewport does not fit the 1366x700 screen'):
+            assert utils.fit_context_screen(LINUX_1366, options) == (1366, 700)
 
-    def test_a_window_that_leaves_no_room_keeps_the_viewport_and_warns(self):
-        geometry = {**LINUX_1366, 'window': {'x': 0, 'y': 700, 'width': 1366, 'height': 68}}
-        with pytest.warns(LeakWarning, match="no page fits, so the viewport is kept"):
-            assert utils.fit_context_screen(geometry, {'viewport': VIEWPORT}) == (None, None)
+    def test_no_screen_that_large_warns_and_leaves_the_viewport(self):
+        options = {'viewport': {'width': 20000, 'height': 700}}
+        with pytest.warns(LeakWarning, match='no recorded linux screen'):
+            assert utils.fit_context_screen({**LINUX_1366, 'window': None}, options) is None
 
 
 class _Context:
@@ -236,22 +196,14 @@ class _Browser:
 
 
 class TestAttachViewportFit:
-    def test_the_context_keeps_the_screen_and_gets_the_fitted_viewport(self):
+    def test_the_context_claims_the_fitted_screen(self):
         browser = utils.attach_viewport_fit(_Browser(), LINUX_1366)
-        with pytest.warns(LeakWarning, match='viewport does not fit'):
-            context = asyncio.run(browser.new_context(viewport=VIEWPORT))
-        assert context.scripts == []  # no screen of its own
-        assert vars(context)[utils._GEOMETRY] == LINUX_1366
-        assert browser.calls == [{'viewport': {'width': 1000, 'height': 682}}]
-
-    def test_a_callers_screen_is_set_through_the_screen_setter(self):
-        browser = utils.attach_viewport_fit(_Browser(), LINUX_1366)
-        screen = {'width': 2560, 'height': 1440}
-        context = _no_warnings(asyncio.run, browser.new_context(viewport=VIEWPORT, screen=screen))
+        context = asyncio.run(browser.new_context(viewport=VIEWPORT))
         (script,) = context.scripts
-        assert 'setScreenDimensions(2560, 1440)' in script
-        assert vars(context)[utils._GEOMETRY]['screen'] == (2560, 1440)
-        assert browser.calls == [{'viewport': VIEWPORT, 'screen': screen}]
+        width, height = map(int, script.split('setScreenDimensions(')[1].rstrip(');').split(', '))
+        assert width >= 1366 and height >= 786
+        assert vars(context)[utils._GEOMETRY]['screen'] == (width, height)
+        assert browser.calls == [{'viewport': VIEWPORT}]  # the viewport is the caller's
 
     def test_a_context_that_fits_gets_no_script(self):
         browser = utils.attach_viewport_fit(_Browser(), LINUX_1366)
@@ -261,10 +213,8 @@ class TestAttachViewportFit:
 
     def test_attaching_twice_checks_once(self):
         browser = utils.attach_viewport_fit(utils.attach_viewport_fit(_Browser(), LINUX_1366))
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter('always')
-            asyncio.run(browser.new_context(viewport=VIEWPORT))
-        assert len([w for w in caught if 'viewport does not fit' in str(w.message)]) == 1
+        context = asyncio.run(browser.new_context(viewport=VIEWPORT))
+        assert len(context.scripts) == 1
 
     def test_a_handed_over_identity_is_what_the_context_claims(self):
         browser = utils.attach_viewport_fit(_Browser(), LINUX_1366)
@@ -327,15 +277,6 @@ class TestLaunchGeometry:
                   'screen.width': 1920, 'screen.height': 1080, 'window.innerWidth': 1200, 'window.innerHeight': 800}
         assert utils.launch_geometry(_options(config))['window'] == {'x': 0, 'y': 0, 'width': 1218, 'height': 930}
 
-    def test_the_available_rect_comes_along(self):
-        config = {'navigator.userAgent': 'Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0',
-                  'screen.width': 1366, 'screen.height': 768, 'screen.availLeft': 66, 'screen.availTop': 32,
-                  'screen.availWidth': 1300, 'screen.availHeight': 736}
-        assert utils.launch_geometry(_options(config))['avail'] == (66, 32, 1300, 736)
-        browser = utils.attach_viewport_fit(_Browser(), LINUX_1366)
-        utils.hand_over_context_geometry(browser, {'config': config, 'preset': {}})
-        assert vars(browser)[utils._NEXT_CONTEXT]['avail'] == (66, 32, 1300, 736)
-
     def test_no_screen_claims_nothing(self):
         assert utils.launch_geometry(_options({'window.outerWidth': 1300})) is None
         assert utils.launch_geometry({}) is None
@@ -386,7 +327,7 @@ class TestPersistentLaunchIsDrawnAroundItsViewport:
             config = _config(options)
             assert {k: config[k] for k in caller} == caller  # the caller's, unchanged
             geometry = utils.launch_geometry(options)
-            assert utils.fit_context_screen(geometry, {'noViewport': True}) == (None, None), geometry
+            assert utils.fit_context_screen(geometry, {'noViewport': True}) is None, geometry
         with _host(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             options = utils.launch_options(os='windows', headless=True, i_know_what_im_doing=True,
@@ -402,14 +343,10 @@ class TestPersistentLaunchIsDrawnAroundItsViewport:
 
 
 class TestSetViewportSize:
-    def test_a_size_the_screen_cannot_hold_is_clamped(self):
-        with pytest.warns(LeakWarning, match='1000x700 viewport does not fit this linux machine.s 1366x768 screen'):
-            assert utils.fit_viewport_size(LINUX_1366, VIEWPORT) == {'width': 1000, 'height': 682}
-
-    def test_a_size_that_fits_is_quiet_and_unchanged(self):
-        assert _no_warnings(utils.fit_viewport_size, {**LINUX_1366, 'screen': (1920, 1080)}, VIEWPORT) is VIEWPORT
-        assert _no_warnings(utils.fit_viewport_size, None, VIEWPORT) is VIEWPORT
-
-    def test_a_persistent_launch_without_its_viewport_warns(self):
+    def test_a_size_the_screen_cannot_hold_warns(self):
         with pytest.warns(LeakWarning, match='1000x700 viewport does not fit the 1366x768 screen'):
             utils.check_viewport_size(LINUX_1366, VIEWPORT)
+
+    def test_a_size_that_fits_is_quiet(self):
+        _no_warnings(utils.check_viewport_size, {**LINUX_1366, 'screen': (1920, 1080)}, VIEWPORT)
+        _no_warnings(utils.check_viewport_size, None, VIEWPORT)

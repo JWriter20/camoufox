@@ -32,6 +32,7 @@ import {
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
+	drawScreen,
 	drawVoiceConfig,
 	dropAudioSeed,
 	fixHardwareConcurrency,
@@ -348,7 +349,6 @@ export const utilsDeps = {
 	hasDisplay,
 	largestDisplay,
 	getScreenCons: (headless?: boolean) => getScreenCons(headless),
-	xvfbMissing: (): string | undefined => xvfbMissing(),
 	print: (line: string): void => {
 		process.stdout.write(`${line}\n`);
 	},
@@ -1244,29 +1244,6 @@ export function camouConfigBlob(fromOptions: Record<string, any>): string {
 }
 
 /**
- * The launch identity's CAMOU_CONFIG, or null when the launch has none.
- * NewContext() takes the machine's values from it (machineConfig). Mirrors
- * Python's launch_identity_config.
- */
-export function launchIdentityConfig(
-	fromOptions: Record<string, any>,
-): Record<string, any> | null {
-	const blob = camouConfigBlob(fromOptions);
-	if (!blob) return null;
-	try {
-		const parsed = JSON.parse(blob);
-		return parsed &&
-			typeof parsed === "object" &&
-			!Array.isArray(parsed) &&
-			Object.keys(parsed).length
-			? parsed
-			: null;
-	} catch {
-		return null;
-	}
-}
-
-/**
  * The core count the browser must be pinned to for these launch options, or
  * null: the identity's navigator.hardwareConcurrency when this host can honour
  * it (see cpu_affinity), so a page measuring parallelism sees the reported
@@ -1413,29 +1390,6 @@ export interface Geometry {
 	os: TargetOS;
 	screen: [number, number];
 	window: Box | null;
-	/** The identity's available rect, [left, top, width, height] (availRect). */
-	avail?: [number, number, number, number];
-}
-
-/**
- * The identity's available rect, [left, top, width, height], from
- * screen.availLeft/availTop/availWidth/availHeight; null without a size
- * (python/src/camoufox/utils.py avail_rect). The browser places windows in it
- * (the claimed screen's work area), and its origin is often not 0,0: a dock
- * or top bar, a second monitor.
- */
-export function availRect(
-	config: Record<string, any>,
-): [number, number, number, number] | null {
-	const width = config["screen.availWidth"];
-	const height = config["screen.availHeight"];
-	if (!(width && height)) return null;
-	return [
-		Math.trunc(config["screen.availLeft"] || 0),
-		Math.trunc(config["screen.availTop"] || 0),
-		Math.trunc(width),
-		Math.trunc(height),
-	];
 }
 
 /**
@@ -1477,10 +1431,7 @@ export function launchGeometry(
 				height: size[1],
 			}
 		: null;
-	const geometry: Geometry = { os: osKey, screen: [width, height], window };
-	const avail = availRect(config);
-	if (avail) geometry.avail = avail;
-	return geometry;
+	return { os: osKey, screen: [width, height], window };
 }
 
 function boxSize(value: any): [number, number] | null {
@@ -1509,108 +1460,75 @@ function warnViewportScreen(
 	});
 }
 
-/**
- * The largest page, up to `viewport` on each axis, whose window fits the
- * available area of `screen` (python/src/camoufox/utils.py fitted_viewport).
- *
- * Juggler sizes the browser's window to the page in the recorded chrome of
- * the claimed OS (RECORDED_WINDOW_CHROME), where the browser's window is
- * (geometry.window), and the screen keeps the taskbar
- * (BASELINE_TASKBAR_HEIGHT). Each axis is clamped on its own, as a window
- * manager fits a window too large for the work area.
- */
-export function fittedViewport(
-	geometry: Geometry,
-	screen: readonly number[],
+function warnViewportWindow(
 	viewport: readonly number[],
-): [number, number] {
-	const { os: osKey, window } = geometry;
-	const [chromeW, chromeH] = RECORDED_WINDOW_CHROME[osKey];
-	const own =
-		screen[0] === geometry.screen[0] && screen[1] === geometry.screen[1];
-	const [left, top, width, height] = (own && geometry.avail) || [
-		0,
-		0,
-		screen[0],
-		screen[1] - BASELINE_TASKBAR_HEIGHT[osKey],
-	];
-	const x = window ? Math.max(left, window.x || 0) : left;
-	const y = window ? Math.max(top, window.y || 0) : top;
-	return [
-		Math.min(viewport[0], left + width - x - chromeW),
-		Math.min(viewport[1], top + height - y - chromeH),
-	];
+	window: Box | null,
+): void {
+	if (window && (viewport[0] > window.width || viewport[1] > window.height))
+		LeakWarning.warn("viewport_window", undefined, {
+			viewport: fmtSize(viewport),
+			window: fmtSize([window.width, window.height]),
+		});
 }
 
 /**
- * fittedViewport(), with a LeakWarning when it is not the viewport asked for.
- * A window position that leaves no room at all keeps the viewport, and warns
- * that it does not fit.
- */
-function fitViewport(
-	geometry: Geometry,
-	screen: readonly number[],
-	viewport: [number, number],
-): [number, number] {
-	const fitted = fittedViewport(geometry, screen, viewport);
-	if (fitted[0] === viewport[0] && fitted[1] === viewport[1]) return viewport;
-	if (Math.min(...fitted) < 1) {
-		warnViewportScreen(
-			geometry,
-			viewport,
-			screen,
-			"the browser's window sits where no page fits, so the viewport is kept",
-		);
-		return viewport;
-	}
-	const { os: osKey, window } = geometry;
-	const [left, top] = geometry.avail ?? [0, 0];
-	LeakWarning.warn("viewport_clamped", undefined, {
-		viewport: fmtSize(viewport),
-		screen: fmtSize(screen),
-		os: OS_NAMES[osKey],
-		chrome: fmtSize(RECORDED_WINDOW_CHROME[osKey]),
-		taskbar: BASELINE_TASKBAR_HEIGHT[osKey],
-		fitted: fmtSize(fitted),
-		position: `${Math.max(left, window?.x || 0)},${Math.max(top, window?.y || 0)}`,
-	});
-	return fitted;
-}
-
-/**
- * [screen, viewport]: the screen a new context must claim, or null for the
- * identity's own, and the viewport it gets in place of the one asked for, or
- * null to leave that (python/src/camoufox/utils.py fit_context_screen).
+ * The screen a new context must claim so that its pages fit on it, or null
+ * when the identity's own already holds them
+ * (python/src/camoufox/utils.py fit_context_screen).
  *
- * A browser is one machine with one screen (LEAKS 619): a context keeps it,
- * and a viewport whose window, the recorded chrome larger, cannot fit its
- * available area is clamped to the largest that fits (fittedViewport), with
- * a LeakWarning. Playwright's own `screen` option, which Juggler does not
- * apply, is the screen the caller chose: it is claimed as given, and the
- * viewport is fitted to it.
+ * A viewport sits in a window the recorded chrome larger (screenFloor), and
+ * the pages report the browser's window as theirs, so the screen holds both;
+ * one that does not is replaced with a recorded screen that does
+ * (drawScreen). Playwright's own `screen` option, which Juggler does not
+ * apply, is the screen the caller chose: it is claimed as given. The caller's
+ * viewport is never changed, so where no screen or no window can hold it,
+ * this warns.
  */
 export function fitContextScreen(
 	geometry: Geometry,
 	options: Record<string, any>,
-): [[number, number] | null, [number, number] | null] {
+): [number, number] | null {
+	const { os: osKey, screen, window } = geometry;
 	// `viewport: null` is the JS API's no viewport; left out, Playwright's default.
 	const viewport =
 		options.viewport === null
 			? null
 			: (boxSize(options.viewport) ?? boxSize(PLAYWRIGHT_DEFAULT_VIEWPORT));
+	const floor = screenFloor(
+		osKey,
+		viewport && { width: viewport[0], height: viewport[1] },
+		window,
+	);
+	const holds = (size: readonly number[]) =>
+		size[0] >= floor[0] && size[1] >= floor[1];
+	const shown = viewport ?? (window ? [window.width, window.height] : [0, 0]);
+
+	let claimed: [number, number] | null = null;
 	const requested = boxSize(options.screen);
-	const screen = requested ?? geometry.screen;
-	const claimed =
-		requested &&
-		(requested[0] !== geometry.screen[0] || requested[1] !== geometry.screen[1])
-			? requested
-			: null;
-	let fitted: [number, number] | null = null;
-	if (viewport) {
-		const page = fitViewport(geometry, screen, viewport);
-		if (page !== viewport) fitted = page;
+	if (requested) {
+		claimed =
+			requested[0] !== screen[0] || requested[1] !== screen[1]
+				? requested
+				: null;
+		if (!holds(requested))
+			warnViewportScreen(
+				geometry,
+				shown,
+				requested,
+				"this one is the screen= the context was given, so it is kept",
+			);
+	} else if (!holds(screen)) {
+		claimed = drawScreen(osKey, floor);
+		if (claimed === null)
+			warnViewportScreen(
+				geometry,
+				shown,
+				screen,
+				`no recorded ${OS_NAMES[osKey]} screen is ${fmtSize(floor)} or larger`,
+			);
 	}
-	return [claimed, fitted];
+	if (viewport) warnViewportWindow(viewport, window);
+	return claimed;
 }
 
 /**
@@ -1622,14 +1540,13 @@ export function screenInitScript(width: number, height: number): string {
 }
 
 /**
- * Make every newContext()/newPage() of `target` fit its pages on the screen
- * it claims (python/src/camoufox/utils.py attach_viewport_fit).
+ * Make every newContext()/newPage() of `target` claim a screen its pages fit
+ * on (python/src/camoufox/utils.py attach_viewport_fit).
  *
  * `geometry` is what the launch's identity claims (launchGeometry). A context
- * claims that, or the identity NewContext() hands over, with the viewport
- * fitContextScreen() fits to its screen (and a screen the caller gave set
- * through the per-context screen setter). The context keeps what it claims,
- * for setViewportSize().
+ * claims that, or the identity NewContext() hands over, with the screen
+ * fitContextScreen() decides set through the per-context screen setter. The
+ * context keeps what it claims, for setViewportSize().
  */
 export function attachViewportFit<T>(target: T, geometry?: Geometry | null): T {
 	const owner = target as any;
@@ -1645,14 +1562,7 @@ export function attachViewportFit<T>(target: T, geometry?: Geometry | null): T {
 		const claimed: Geometry | null =
 			owner[CAMOUFOX_NEXT_CONTEXT] ?? owner[CAMOUFOX_GEOMETRY] ?? null;
 		delete owner[CAMOUFOX_NEXT_CONTEXT];
-		const [screen, viewport] = claimed
-			? fitContextScreen(claimed, options ?? {})
-			: [null, null];
-		if (viewport)
-			options = {
-				...options,
-				viewport: { width: viewport[0], height: viewport[1] },
-			};
+		const screen = claimed ? fitContextScreen(claimed, options ?? {}) : null;
 		const context = await original.call(target, options, ...rest);
 		if (screen) await context.addInitScript(screenInitScript(...screen));
 		if (claimed)
@@ -1666,9 +1576,9 @@ export function attachViewportFit<T>(target: T, geometry?: Geometry | null): T {
 }
 
 /**
- * Warn when a viewport's window, the recorded chrome larger, does not fit
- * the screen of `geometry` (a persistent launch given an identity drawn
- * without its viewport; fitViewportSize() clamps a later one instead).
+ * Warn when page.setViewportSize() asks for a page its context's screen or
+ * window cannot hold. The screen setter is sealed once a page has loaded, so
+ * a context keeps the screen it started with.
  */
 export function checkViewportSize(
 	geometry: Geometry | null | undefined,
@@ -1683,23 +1593,7 @@ export function checkViewportSize(
 	});
 	if (geometry.screen[0] < floor[0] || geometry.screen[1] < floor[1])
 		warnViewportScreen(geometry, viewport, geometry.screen, reason);
-}
-
-/**
- * The size page.setViewportSize() gets: `size`, or, when its window cannot
- * fit the context's screen, the largest that does (fittedViewport), with a
- * LeakWarning (python/src/camoufox/utils.py fit_viewport_size). A context
- * keeps its screen (the screen setter is sealed once a page has loaded), so
- * the page gives way.
- */
-export function fitViewportSize(
-	geometry: Geometry | null | undefined,
-	size: any,
-): any {
-	const viewport = boxSize(size);
-	if (!(geometry && viewport)) return size;
-	const page = fitViewport(geometry, geometry.screen, viewport);
-	return page === viewport ? size : { width: page[0], height: page[1] };
+	warnViewportWindow(viewport, geometry.window);
 }
 
 /**
@@ -1818,21 +1712,13 @@ export function handOverContextGeometry(
 		return;
 	}
 	const geometry: Geometry | undefined = browser[CAMOUFOX_GEOMETRY];
-	const claimed: Geometry = {
+	browser[CAMOUFOX_NEXT_CONTEXT] = {
 		os: OS_CODE[
 			targetOsFromPlatform(String(config["navigator.platform"] ?? ""))
 		] as TargetOS,
 		screen: [width, height],
 		window: geometry?.window ?? null,
-	};
-	const avail = availRect(config);
-	if (
-		avail &&
-		config["screen.width"] === width &&
-		config["screen.height"] === height
-	)
-		claimed.avail = avail;
-	browser[CAMOUFOX_NEXT_CONTEXT] = claimed;
+	} satisfies Geometry;
 }
 
 /** Drop a handOverContextGeometry() that no newContext() took. */
@@ -1902,13 +1788,10 @@ export function attachDriverDefaults<T>(target: T): T {
 	) {
 		if (launchedByCamoufox(object)) {
 			if (method === "setViewportSize")
-				params = {
-					...params,
-					viewportSize: fitViewportSize(
-						object._browserContext?.[CAMOUFOX_GEOMETRY],
-						params?.viewportSize,
-					),
-				};
+				checkViewportSize(
+					object._browserContext?.[CAMOUFOX_GEOMETRY],
+					params?.viewportSize,
+				);
 			if (method === "screenshot" && params?.caret === undefined)
 				params = { ...params, caret: "initial" };
 			if (method === "fill") await clickToFocus(object, params);
@@ -2076,8 +1959,8 @@ export function contextIdentity(
 	) {
 		throw new ValueError(
 			`This browser renders its canvas as this ${hostName} machine, so its contexts claim it` +
-				`${gpu ? ` and its GPU ${JSON.stringify(gpu)}` : ""}. A context runs on ` +
-				"its browser's machine: launch a browser that claims the OS or GPU you want.",
+				`${gpu ? ` and its GPU ${JSON.stringify(gpu)}` : ""}. Launch it with canvas_noise: true ` +
+				"to give a context another OS or GPU.",
 		);
 	}
 	return [hostName, gpu];
@@ -2137,61 +2020,8 @@ export interface GpuDisplayOptions {
 	require_gpu?: boolean;
 }
 
-/** What headless="virtual" needs and this host lacks (undefined when it has it all). */
-export function xvfbMissing(): string | undefined {
-	if (utilsDeps.osName() !== "lin") return "Linux";
-	for (const [tool, pkg] of [
-		["Xvfb", "Xvfb (xvfb)"],
-		["setpriv", "setpriv (util-linux)"],
-	]) {
-		try {
-			const found = execFileSync("which", [tool], {
-				encoding: "utf-8",
-				stdio: ["ignore", "pipe", "ignore"],
-			}).trim();
-			if (!found) return pkg;
-			fs.accessSync(found, fs.constants.X_OK);
-		} catch {
-			return pkg;
-		}
-	}
-	return undefined;
-}
-
 /**
- * What `headless` runs as. On Linux headless: true is headed on a private Xvfb
- * ("virtual") whenever Xvfb is there.
- *
- * Firefox's own -headless has no window system: system colors are Firefox's
- * built-in stand-ins (AccentColor #0060df, Highlight #3399ff), the CSS2 system
- * fonts are `sans-serif 14px`, the window has no frame and, without the GPU
- * probe, no WebGL. A page reads all of it, and no headed Firefox looks like
- * that. True -headless is the fallback when Xvfb or setpriv is missing, with a
- * LeakWarning naming it. A caller that passes its own `virtual_display` keeps
- * headless: true as given. (Python: utils.headless_mode.)
- */
-export function headlessMode(
-	headless: Headless | undefined,
-	options?: { virtual_display?: string; i_know_what_im_doing?: boolean },
-): Headless | undefined {
-	if (
-		headless !== true ||
-		utilsDeps.osName() !== "lin" ||
-		options?.virtual_display
-	) {
-		return headless;
-	}
-	const missing = utilsDeps.xvfbMissing();
-	if (missing === undefined) return "virtual";
-	LeakWarning.warn("headless_without_xvfb", options?.i_know_what_im_doing, {
-		missing,
-	});
-	return true;
-}
-
-/**
- * Start the display headless="virtual" or "virtual-gpu" asks for, or that
- * headless: true runs on (headlessMode).
+ * Start the display headless="virtual" or "virtual-gpu" asks for.
  *
  * Takes the display's own options out of `options` and points the launch at
  * the display. Returns the display, or null, and the headless value to launch
@@ -2202,7 +2032,6 @@ export async function startVirtualDisplay(
 	debug: boolean | undefined,
 	options: LaunchOptions & GpuDisplayOptions,
 ): Promise<[VirtualDisplay | null, boolean | undefined]> {
-	headless = headlessMode(headless, options);
 	const { gpu, require_gpu } = options;
 	delete options.gpu;
 	delete options.require_gpu;

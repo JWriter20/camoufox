@@ -1428,21 +1428,12 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 	});
 
 	it("passes farm_gpu through the display, which owns `gpu`", async () => {
-		// Off Linux, so headless: true starts no Xvfb (headlessMode): the
-		// display is not what this test is about.
-		const deps = utils.utilsDeps as any;
-		const osName = deps.osName;
-		deps.osName = () => "win";
-		try {
-			const options: Record<string, any> = { farm_gpu: false };
-			expect(await utils.startVirtualDisplay(true, false, options)).toEqual([
-				null,
-				true,
-			]);
-			expect(options).toEqual({ farm_gpu: false });
-		} finally {
-			deps.osName = osName;
-		}
+		const options: Record<string, any> = { farm_gpu: false };
+		expect(await utils.startVirtualDisplay(true, false, options)).toEqual([
+			null,
+			true,
+		]);
+		expect(options).toEqual({ farm_gpu: false });
 	});
 
 	it("refuses a local GPU display for a farm lease", async () => {

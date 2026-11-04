@@ -2004,30 +2004,6 @@ export interface ContextFingerprint {
 	preset: Preset;
 }
 
-/**
- * One browser is one machine: a context is another user of it. These are the
- * values a user of that machine has of their own; every other identity key is
- * the machine's. Mirrors Python's CONTEXT_USER_KEYS (LEAKS 619).
- */
-export const CONTEXT_USER_KEYS: ReadonlyArray<string> = [
-	"timezone",
-	"locale:",
-	"navigator.language",
-	"headers.Accept-Language",
-	"geolocation:",
-	"webrtc:ipv4",
-	"webrtc:ipv6",
-];
-
-/** The machine-level part of a launch identity's CAMOU_CONFIG. */
-export function machineConfig(launchConfig: Config): Config {
-	return Object.fromEntries(
-		Object.entries(launchConfig).filter(
-			([k]) => !CONTEXT_USER_KEYS.some((p) => k.startsWith(p)),
-		),
-	);
-}
-
 /** The OS a navigator.platform value presents, as a Camoufox OS name. */
 export function targetOsFromPlatform(plat: string): SupportedOS {
 	if (plat === "Win32") return "windows";
@@ -2064,7 +2040,6 @@ export function generateContextFingerprint({
 	webgl_config,
 	webgl: claimWebgl = true,
 	screen_bound,
-	machine,
 }: {
 	preset?: Preset | null;
 	os?: string | null;
@@ -2076,7 +2051,6 @@ export function generateContextFingerprint({
 	webgl_config?: [string, string] | null;
 	webgl?: boolean;
 	screen_bound?: Screen | null;
-	machine?: Config | null;
 } = {}): ContextFingerprint {
 	let config: Config;
 	let nav: Record<string, any>;
@@ -2084,46 +2058,7 @@ export function generateContextFingerprint({
 	let webgl: Record<string, any>;
 	let resolvedPreset: Preset;
 
-	if (machine && Object.keys(machine).length) {
-		// The context is a user of the browser's machine: every machine-level
-		// value is the launch identity's (Python's machine= branch).
-		config = machineConfig(machine);
-		const machineOs = targetOsFromPlatform(
-			pyStr(get(config, "navigator.platform", "")),
-		);
-		if (!isNone(preset))
-			throw new ValueError(
-				`A preset is a whole machine, and a context runs on its browser's machine (${machineOs}). Launch a browser with the preset to claim it.`,
-			);
-		if (os && os !== machineOs)
-			throw new ValueError(
-				`A context runs on its browser's machine, which claims ${machineOs}, not ${os}. Launch a browser with that OS to claim it.`,
-			);
-		if (!claimWebgl) {
-			for (const key of Object.keys(config)) {
-				if (key.startsWith("webGl:") || key.startsWith("webGl2:"))
-					delete config[key];
-			}
-		}
-		nav = {
-			platform: config["navigator.platform"],
-			hardwareConcurrency: config["navigator.hardwareConcurrency"],
-		};
-		// No per-context screen: the machine's is the launch's own, which the
-		// page reads from CAMOU_CONFIG with its available rect's origin
-		// (screen.availLeft/availTop) and its taskbar, the work area the
-		// browser places windows in. The per-context setter carries a size
-		// only, so a context that set it read availLeft/availTop 0 -- and, on
-		// a build without the Pro available rect, no taskbar -- while a
-		// window.open() it made was placed in the drawn work area (LEAKS 635;
-		// Python's machine= branch).
-		screen = {};
-		webgl = {
-			unmaskedVendor: config["webGl:vendor"],
-			unmaskedRenderer: config["webGl:renderer"],
-		};
-		resolvedPreset = { navigator: nav, screen, webgl };
-	} else if (!isNone(preset)) {
+	if (!isNone(preset)) {
 		const p = preset as Preset;
 		config = fromPreset(p, ff_version);
 		nav = p.navigator ?? {};

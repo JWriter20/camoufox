@@ -409,7 +409,7 @@ describe.skipIf(!MODEL.ok)("contexts of a browser on the host", () => {
 	it("another OS throws", async () => {
 		const { browser } = browserOnHost(HOST_GPU);
 		await expect(NewContext(browser, { os: "windows" })).rejects.toThrow(
-			"launch a browser that claims the OS or GPU",
+			"canvas_noise: true",
 		);
 	});
 
@@ -420,7 +420,7 @@ describe.skipIf(!MODEL.ok)("contexts of a browser on the host", () => {
 			webgl: { unmaskedVendor: OTHER_GPU[0], unmaskedRenderer: OTHER_GPU[1] },
 		};
 		await expect(NewContext(browser, { preset })).rejects.toThrow(
-			"launch a browser that claims the OS or GPU",
+			"canvas_noise: true",
 		);
 	});
 });

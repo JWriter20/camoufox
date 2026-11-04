@@ -297,7 +297,7 @@ class TestContextsOfAHostBrowser:
         assert "llvmpipe" not in renderer_of(browser.new_context.return_value)
 
     def test_another_os_raises(self):
-        with pytest.raises(ValueError, match="launch a browser that claims the OS or GPU"):
+        with pytest.raises(ValueError, match="canvas_noise=True"):
             sync_api.NewContext(browser_on_host(HOST_GPU), os="windows")
 
     def test_a_preset_with_another_gpu_raises(self):
@@ -305,7 +305,7 @@ class TestContextsOfAHostBrowser:
             "navigator": {"platform": "Linux x86_64"},
             "webgl": {"unmaskedVendor": OTHER_GPU[0], "unmaskedRenderer": OTHER_GPU[1]},
         }
-        with pytest.raises(ValueError, match="launch a browser that claims the OS or GPU"):
+        with pytest.raises(ValueError, match="canvas_noise=True"):
             sync_api.NewContext(browser_on_host(HOST_GPU), preset=preset)
 
 

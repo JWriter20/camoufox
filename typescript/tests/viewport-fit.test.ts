@@ -1,7 +1,6 @@
 /**
  * A viewport the caller asks for sits on a screen and in a window that can
- * hold it; one that cannot is clamped, since a browser is one machine with one
- * screen (LEAKS 619). Twin of python/tests/test_viewport_fit.py (which also derives
+ * hold it. Twin of python/tests/test_viewport_fit.py (which also derives
  * RECORDED_WINDOW_CHROME from fpgen's recorded windows).
  */
 
@@ -91,163 +90,63 @@ describe("screenFloor", () => {
 	});
 });
 
-// One machine, one screen (LEAKS 619): a context keeps the screen, and a
-// viewport whose window cannot fit it is clamped, with a LeakWarning.
-describe("fitContextScreen", () => {
-	it("clamps a viewport too tall for the screen to the largest that fits", async () => {
-		let fitted: unknown;
-		const messages = await warned(() => {
-			fitted = utils.fitContextScreen(LINUX_1366, { viewport: VIEWPORT });
-		});
-		expect(fitted).toEqual([null, [1000, 768 - 86]]);
+describe.skipIf(!MODEL.ok)("fitContextScreen", () => {
+	it("gives a viewport too tall for the screen a screen that holds it", async () => {
+		let screen: [number, number] | null = null;
+		expect(
+			await warned(() => {
+				screen = utils.fitContextScreen(LINUX_1366, { viewport: VIEWPORT });
+			}),
+		).toEqual([]);
+		expect((screen as unknown as number[])[0]).toBeGreaterThanOrEqual(1366);
+		expect((screen as unknown as number[])[1]).toBeGreaterThanOrEqual(786);
+	});
+
+	it("keeps a screen that holds it, and no viewport", () => {
+		expect(
+			utils.fitContextScreen(
+				{ ...LINUX_1366, screen: [1920, 1080] },
+				{ viewport: VIEWPORT },
+			),
+		).toBeNull();
+		expect(utils.fitContextScreen(LINUX_1366, { viewport: null })).toBeNull();
+	});
+
+	it("counts Playwright's default viewport as asked for", () => {
+		const screen = utils.fitContextScreen(
+			{ os: "lin", screen: [1280, 720], window: null },
+			{},
+		) as number[];
+		expect(screen[0]).toBeGreaterThanOrEqual(1282);
+		expect(screen[1]).toBeGreaterThanOrEqual(806);
+	});
+
+	it("warns about a viewport larger than the window", async () => {
+		const messages = await warned(() =>
+			utils.fitContextScreen(LINUX_1366, {
+				viewport: { width: 1300, height: 900 },
+			}),
+		);
 		expect(messages.join("\n")).toMatch(
-			/1000x700 viewport does not fit this linux machine's 1366x768 screen[\s\S]*its page is\s+1000x682[\s\S]*Launch a browser with a larger screen/,
+			/1300x900 viewport is larger than the 1366x768 browser window/,
 		);
 	});
 
-	it("clamps each axis on its own", async () => {
-		let fitted: unknown;
-		await warned(() => {
-			fitted = utils.fitContextScreen(
-				{
-					os: "win",
-					screen: [1366, 768],
-					window: { x: 0, y: 0, width: 1366, height: 720 },
-				},
-				{ viewport: { width: 1600, height: 700 } },
-			);
-		});
-		expect(fitted).toEqual([null, [1366 - 18, 768 - 48 - 130]]);
-	});
-
-	it("counts the window's position", async () => {
-		let fitted: unknown;
-		const messages = await warned(() => {
-			fitted = utils.fitContextScreen(
-				{
-					os: "lin",
-					screen: [1366, 768],
-					window: { x: 66, y: 32, width: 1294, height: 736 },
-				},
-				{ viewport: VIEWPORT },
-			);
-		});
-		expect(fitted).toEqual([null, [1000, 768 - 32 - 86]]);
-		expect(messages.join("\n")).toMatch(/sits at 66,32/);
-	});
-
-	it("counts the available rect and its origin (LEAKS 635)", async () => {
-		// A Linux machine with a 66 px dock on the left and a 32 px top bar.
-		const docked = {
-			os: "lin" as const,
-			screen: [1366, 768] as [number, number],
-			window: null,
-			avail: [66, 32, 1300, 736] as [number, number, number, number],
-		};
-		let fitted: unknown;
-		const messages = await warned(() => {
-			fitted = utils.fitContextScreen(docked, {
-				viewport: { width: 1400, height: 700 },
-			});
-		});
-		expect(fitted).toEqual([null, [1300 - 2, 736 - 86]]);
-		expect(messages.join("\n")).toMatch(/sits at 66,32/);
-		await warned(() => {
-			fitted = utils.fitContextScreen(
-				{ ...docked, avail: [0, 0, 1300, 768] },
-				{ viewport: { width: 1320, height: 600 } },
-			);
-		});
-		expect(fitted).toEqual([null, [1298, 600]]);
-		// A caller's screen is not the machine's: its rect does not apply.
-		expect(
-			await warned(() => {
-				fitted = utils.fitContextScreen(docked, {
-					viewport: VIEWPORT,
-					screen: { width: 1920, height: 1080 },
-				});
-			}),
-		).toEqual([]);
-		expect(fitted).toEqual([[1920, 1080], null]);
-	});
-
-	it("leaves a viewport that fits, and no viewport", async () => {
-		expect(
-			await warned(() => {
-				expect(
-					utils.fitContextScreen(
-						{ ...LINUX_1366, screen: [1920, 1080] },
-						{ viewport: VIEWPORT },
-					),
-				).toEqual([null, null]);
-				expect(utils.fitContextScreen(LINUX_1366, { viewport: null })).toEqual([
-					null,
-					null,
-				]);
-			}),
-		).toEqual([]);
-	});
-
-	it("counts Playwright's default viewport as asked for", async () => {
-		let fitted: unknown;
-		const messages = await warned(() => {
-			fitted = utils.fitContextScreen(
-				{ os: "lin", screen: [1280, 720], window: null },
-				{},
-			);
-		});
-		expect(fitted).toEqual([null, [1278, 634]]);
-		expect(messages.join("\n")).toMatch(/1280x720 viewport does not fit/);
-	});
-
-	// Juggler sizes the window to the page in its chrome
-	// (juggler-viewport-window.py), so only the screen bounds the page.
-	it("leaves a viewport larger than the launch window that fits the screen, quietly", async () => {
-		let fitted: unknown;
-		const messages = await warned(() => {
-			fitted = utils.fitContextScreen(
-				{ ...LINUX_1366, screen: [2560, 1440] },
-				{ viewport: { width: 1300, height: 900 } },
-			);
-		});
-		expect(fitted).toEqual([null, null]);
-		expect(messages).toEqual([]);
-	});
-
-	it("claims the caller's screen option, and fits the viewport to it", async () => {
+	it("claims the caller's screen option, and warns when it cannot hold the viewport", async () => {
 		expect(
 			utils.fitContextScreen(LINUX_1366, {
 				viewport: VIEWPORT,
 				screen: { width: 2560, height: 1440 },
 			}),
-		).toEqual([[2560, 1440], null]);
-		let fitted: unknown;
-		const messages = await warned(() => {
-			fitted = utils.fitContextScreen(LINUX_1366, {
+		).toEqual([2560, 1440]);
+		const messages = await warned(() =>
+			utils.fitContextScreen(LINUX_1366, {
 				viewport: VIEWPORT,
 				screen: { width: 1366, height: 700 },
-			});
-		});
-		expect(fitted).toEqual([
-			[1366, 700],
-			[1000, 614],
-		]);
-		expect(messages.join("\n")).toMatch(
-			/1000x700 viewport does not fit this linux machine's 1366x700 screen/,
+			}),
 		);
-	});
-
-	it("keeps the viewport, and warns, where the window leaves no room", async () => {
-		let fitted: unknown;
-		const messages = await warned(() => {
-			fitted = utils.fitContextScreen(
-				{ ...LINUX_1366, window: { x: 0, y: 700, width: 1366, height: 68 } },
-				{ viewport: VIEWPORT },
-			);
-		});
-		expect(fitted).toEqual([null, null]);
 		expect(messages.join("\n")).toMatch(
-			/no page fits, so the viewport is kept/,
+			/1000x700 viewport does not fit the 1366x700 screen/,
 		);
 	});
 });
@@ -270,30 +169,19 @@ function fakeBrowser() {
 }
 
 describe.skipIf(!MODEL.ok)("attachViewportFit", () => {
-	it("keeps the screen and gives the context the fitted viewport", async () => {
+	it("makes the context claim the fitted screen", async () => {
 		const { browser, calls } = fakeBrowser();
 		utils.attachViewportFit(browser, LINUX_1366);
 		utils.attachViewportFit(browser); // once only
-		let context: any;
-		const messages = await warned(async () => {
-			context = await browser.newContext({ viewport: VIEWPORT });
-		});
-		expect(
-			messages.filter((m) => /viewport does not fit/.test(m)),
-		).toHaveLength(1);
-		expect(context.scripts).toEqual([]);
-		expect(context[Symbol.for("camoufox.geometry")]).toEqual(LINUX_1366);
-		expect(calls).toEqual([{ viewport: { width: 1000, height: 682 } }]);
-	});
-
-	it("sets a caller's screen through the screen setter", async () => {
-		const { browser, calls } = fakeBrowser();
-		utils.attachViewportFit(browser, LINUX_1366);
-		const screen = { width: 2560, height: 1440 };
-		const context = await browser.newContext({ viewport: VIEWPORT, screen });
+		const context = await browser.newContext({ viewport: VIEWPORT });
 		expect(context.scripts).toHaveLength(1);
-		expect(context.scripts[0]).toContain("setScreenDimensions(2560, 1440)");
-		expect(calls).toEqual([{ viewport: VIEWPORT, screen }]);
+		const match = /setScreenDimensions\((\d+), (\d+)\)/.exec(
+			context.scripts[0],
+		) as RegExpExecArray;
+		const [w, h] = match.slice(1).map(Number);
+		expect(w).toBeGreaterThanOrEqual(1366);
+		expect(h).toBeGreaterThanOrEqual(786);
+		expect(calls).toEqual([{ viewport: VIEWPORT }]);
 	});
 
 	it("leaves a context that fits alone, and takes a handed-over identity", async () => {
@@ -362,28 +250,6 @@ describe("launchGeometry", () => {
 	const options = (config: Record<string, any>) => ({
 		env: { CAMOU_CONFIG_1: JSON.stringify(config) },
 	});
-	it("carries the available rect, origin included (LEAKS 635)", () => {
-		const config = {
-			"navigator.userAgent":
-				"Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
-			"screen.width": 1366,
-			"screen.height": 768,
-			"screen.availLeft": 66,
-			"screen.availTop": 32,
-			"screen.availWidth": 1300,
-			"screen.availHeight": 736,
-		};
-		expect(utils.launchGeometry(options(config))?.avail).toEqual([
-			66, 32, 1300, 736,
-		]);
-		const { browser } = fakeBrowser();
-		utils.attachViewportFit(browser, LINUX_1366);
-		utils.handOverContextGeometry(browser, { config, preset: {} });
-		expect(browser[Symbol.for("camoufox.nextContext")].avail).toEqual([
-			66, 32, 1300, 736,
-		]);
-	});
-
 	it("reads the window and the screen", () => {
 		expect(
 			utils.launchGeometry(
@@ -445,37 +311,20 @@ describe.skipIf(!MODEL.ok)(
 );
 
 describe("setViewportSize", () => {
-	it("clamps a size the screen cannot hold", async () => {
-		let fitted: unknown;
-		const messages = await warned(() => {
-			fitted = utils.fitViewportSize(LINUX_1366, VIEWPORT);
-		});
-		expect(fitted).toEqual({ width: 1000, height: 682 });
-		expect(messages.join("\n")).toMatch(
-			/1000x700 viewport does not fit this linux machine's 1366x768 screen/,
-		);
-	});
-
-	it("leaves a size that fits, quietly", async () => {
-		expect(
-			await warned(() => {
-				expect(
-					utils.fitViewportSize(
-						{ ...LINUX_1366, screen: [1920, 1080] },
-						VIEWPORT,
-					),
-				).toBe(VIEWPORT);
-				expect(utils.fitViewportSize(null, VIEWPORT)).toBe(VIEWPORT);
-			}),
-		).toEqual([]);
-	});
-
-	it("warns about a persistent launch drawn without its viewport", async () => {
+	it("warns about a size the screen cannot hold", async () => {
 		const messages = await warned(() =>
 			utils.checkViewportSize(LINUX_1366, VIEWPORT),
 		);
 		expect(messages.join("\n")).toMatch(
 			/1000x700 viewport does not fit the 1366x768 screen/,
 		);
+		expect(
+			await warned(() =>
+				utils.checkViewportSize(
+					{ ...LINUX_1366, screen: [1920, 1080] },
+					VIEWPORT,
+				),
+			),
+		).toEqual([]);
 	});
 });

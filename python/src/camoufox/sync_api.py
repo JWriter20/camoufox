@@ -22,7 +22,6 @@ from .utils import (
     context_identity,
     hand_over_context_geometry,
     host_identity,
-    launch_identity_config,
     launch_geometry,
     launch_options,
     new_context_options,
@@ -105,9 +104,7 @@ def NewBrowser(
 
     Parameters:
         headless (Optional[Union[bool, Literal['virtual', 'virtual-gpu']]]):
-            True for no visible window: on Linux a headed browser on a private Xvfb
-            display (as 'virtual') when Xvfb is installed, else Firefox headless
-            with a warning; elsewhere Firefox headless. On Linux, 'virtual' runs a headed browser on
+            True for Firefox headless. On Linux, 'virtual' runs a headed browser on
             an Xvfb display, and 'virtual-gpu' on a headless Xorg server bound to
             the GPU `gpu` (or CAMOUFOX_GPU) names; `require_gpu=False` warns instead
             of failing when the browser does not render on it.
@@ -192,8 +189,6 @@ def _launch(
             pro.attach_lease(lease, browser, 'disconnected')
         attach_context_defaults(browser, no_viewport_default, launch_geometry(from_options))
         browser._camoufox_host_identity = identity
-        # One browser is one machine: NewContext() takes its machine-level values from here.
-        browser._camoufox_launch_config = launch_identity_config(from_options)
         browser._camoufox_render_node = render_node.RELAY_ENV in from_options.get('env', {})
         return sync_attach_vd(browser, virtual_display)
     except Exception as error:
@@ -230,9 +225,9 @@ def NewContext(
     Parameters:
         browser: A Browser instance from NewBrowser or Camoufox.
         preset: A fingerprint preset dict to use. If None, fpgen draws a new identity.
-        os: Target OS for the drawn identity ("windows", "macos", "linux"). A context on a
-            browser this library launched runs on that browser's machine: it claims the launch
-            OS, and another os or a preset raises ValueError.
+        os: Target OS for the drawn identity ("windows", "macos", "linux"). On a browser launched
+            without canvas noise, contexts claim the host's OS and GPU, and another os or preset
+            raises ValueError.
         ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
         webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
@@ -256,7 +251,6 @@ def NewContext(
         preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config,
         webgl=not vars(browser).get('_camoufox_render_node'),
         screen_bound=context_screen_bound(browser, os, context_kwargs),
-        machine=vars(browser).get('_camoufox_launch_config'),
     )
 
     # A browser launched elsewhere takes SOCKS5 credentials too, and its
