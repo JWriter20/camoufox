@@ -103,7 +103,14 @@ or PingFang on a machine claiming Linux. No reported name reveals this, and no
 draw test can see it — it is checked directly, by asking fontconfig for every
 file it can reach under each OS's conf and requiring all of them to sit inside
 that OS's own groups (810 / 780 / 793 faces, including browser-shipped
-`TwemojiMozilla.ttf`).
+`TwemojiMozilla.ttf`). The browser adds faces of its own: on startup it
+activates its `fonts/` directory (`gfx.bundled-fonts.activate`), and on Linux
+that call (`FcConfigAppFontAddDir`) is recursive too, so it put all seven
+groups back on every launch's search path; a Windows identity's Arial family
+held macOS's Arial faces. `font-hijacker.patch` makes it add only the
+directory's own files, which is all a stock build's `fonts/` holds.
+`font-fallback-windows.py` catches the leak: with it, `lang="hy"` monospace
+draws with the wrong face.
 
 The reverse direction of invariant 1 is deliberately loose: an OS renders more
 families than it ever reports (529 published vs 335 reported on Windows, 872 vs
@@ -247,7 +254,77 @@ Tahoma`, the `Sitka` / `Segoe UI Variable` scan-time instance families and the
 alias block above. macOS: Helvetica / Times / Menlo / Apple Chancery / Zapfino.
 `system-ui` is left to Gecko, which resolves it itself. The
 `<dir prefix="cwd">fonts</dir>` line that `utils.py` rewrites is kept in all
-three — `verify-fonts.py` fails if it is missing.
+three — `verify-fonts.py` fails if it is missing. Windows hints `hintslight`:
+DirectWrite keeps advances at design units, where full hinting rounded every
+advance to a whole pixel. macOS keeps full hinting, since nothing has measured
+the macOS set against stock macOS.
+
+## Another OS's identity on a Linux host
+
+A Linux build compiles only Linux's font defaults, so without help a Windows
+identity resolved generics and scripts the Linux way (75 of 168 per-script
+widths matched stock Windows). When a Linux host launches a Windows or macOS
+identity (on a macOS or Windows host, where this code is not built, the
+launchers set none of it):
+
+- the launcher sets that OS's `font.*` defaults from
+  `python/src/camoufox/font-prefs.json`, which
+  `browser/scripts/gen-font-prefs.py` reads out of `all.js` (CI's
+  `check-firefox-copies.py` fails until it is regenerated on
+  a Firefox bump), and turns async fallback off on any Linux host;
+- `fallback-fonts-claimed-os.patch` makes `gfxPlatformGtk` use stock's
+  Windows or macOS per-script fallback table, by the launch's
+  `navigator.platform`. Where stock Windows names a face Windows 10 and 11 do
+  not ship (Lao UI, Euphemia), the Windows table follows it with the face
+  DirectWrite's system fallback picks (Leelawadee UI, Gadugi, as the Windows
+  reference measures); this build's own global fallback asks fontconfig, which
+  picked DejaVu Sans whenever a draw had the LibreOffice bundle. For a Windows
+  identity the patch also makes the default font Arial, as stock Windows'
+  `GetDefaultFontForPlatform` does: it is what a lang-tagged generic gets when
+  none of its `font.name-list` fonts is installed (`lang="he"` serif names
+  Narkisim and David, `lang="hy"` monospace Arial AMU, none on Windows 11),
+  where fontconfig matched another face. Pages see the default font, so it
+  follows the OS of the document's context, as `system-ui` does: a macOS
+  context of a Windows launch keeps fontconfig's;
+- a Windows identity gets `fonts:metrics: "windows"`, and
+  `font-metrics-windows.patch` lays text out with the ascent, descent, line
+  gap and em height DirectWrite derives from the same font tables (OS/2
+  `usWin*`, GDI's external-leading rule; Arial Black with its own tables, as
+  stock 158 on Windows 11 measures it, not Arial Bold's)
+  instead of FreeType's pixel-rounded `hhea` values: Arial 16px is 17/18 px
+  as on Windows, not 19/19;
+- a macOS identity has `cmap-unicode-ucs4-fallback.patch` read a font's
+  Unicode-platform UCS4 cmap as the macOS build does, so Geneva, Apple Symbols
+  and Heiti, which carry only that subtable, are used for text.
+
+A macOS identity gets the font defaults, the fallback table and the cmap rule,
+which are stock Firefox's own code and data, and nothing that was only
+measured on Windows: no unhinted fonts.conf,
+no system colours and no codec spoof. The codec spoof would also answer
+`decodingInfo()`, and nothing in the repo records which codecs a Mac reports
+power-efficient (fpgen's macOS `canPlayType()` records do match the spoof).
+Each needs a measurement on stock macOS first.
+
+The guards in `browser/tests/playwright/patches/`:
+
+- `font-fallback-windows.py` measures 28 scripts in three generics against
+  stock Firefox 158 on Windows 11 at devicePixelRatio 1 (at least 162 of 168
+  match; the other 6 are Mongolian, whose bundled `monbaiti.ttf` is older
+  than Windows 11 25H2's) on a pinned draw, the Windows base plus the
+  LibreOffice bundle, and 13 Windows fonts' line boxes at 11, 16 and 37.5px
+  against the same recording (`assets/font-metrics-windows.json`), which the
+  DirectWrite formula reproduces from the font files;
+- `cmap-ucs4-macos.py` checks that Geneva, Apple Symbols and Heiti TC/SC draw
+  with their own advances in a macOS identity, not the next family's;
+- `system-colors-windows.py` checks a Windows identity's 92 CSS system colours
+  against stock Firefox 158 on Windows 11
+  (`assets/system-colors-windows.json`); `windowsUiColors` in
+  `launcher-constants.json` supplies the ones the host theme answers otherwise;
+- `decoding-info-claimed-os.py` checks `decodingInfo()` against stock
+  Firefox 158 on Windows 11 (`assets/decoding-info-windows.json`: every codec
+  supported, smooth and power-efficient at 720p, 1080p and 2160p) with no host
+  decoder, its agreement with `canPlayType()`, and the same answer with
+  ClearKey.
 
 ## Verifying
 
