@@ -24,15 +24,18 @@ const Cu = Components.utils;
 const XUL_NS = 'http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul';
 const helper = new Helper();
 
-// How long a person holds a mouse button for a click: about 100 ms (SD 25),
-// kept within 50-250 ms as key holds are (content/PageAgent.js TypingPace).
+// How long a person holds a mouse button for a click: about 110 ms (SD 30),
+// the human click durations reported in arXiv 2607.26935 (100-120 ms, sigma
+// ~30 ms; a secondary figure, no recorded corpus yet), kept within 50-250 ms
+// as key holds are (content/PageAgent.js TypingPace).
 function clickHold() {
   const n = Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
-  return Math.min(250, Math.max(50, 100 + 25 * n));
+  return Math.min(250, Math.max(50, 110 + 30 * n));
 }
 
 // How long a person's button stays up between the clicks of a double click:
-// about 110 ms (SD 25), kept within 70-180 ms, so press to press stays well
+// about 110 ms (SD 25; an estimate, no published or recorded figure found),
+// kept within 70-180 ms, so press to press stays well
 // inside the OS double-click time with clickHold() before it.
 function clickGap() {
   const n = Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
