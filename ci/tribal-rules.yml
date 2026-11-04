@@ -641,6 +641,20 @@ rules:
       through prefs in camoufox.cfg; uBO keeps its packaged lists through its
       own default (scripts/fetch-ubo.py freeze_lists).
 
+  - id: driven-pages-always-focused
+    title: Every driven page reads as focused and visible, as in upstream Playwright
+    check: manual   # browser/additions/juggler/content/main.js
+    evidence:
+      - "measured 2026-11-01 on Linux against stock 158.0.1: with the window's real focus, a page behind a foreground tab reads visibilityState hidden, and its rAF and a 10 ms setInterval drop to about one a second"
+      - "review of PR 23 on the fork (2026-11-04): real focus throttled every page but the front one, so pages run in parallel in one browser slowed to one timer tick a second"
+    rationale: >-
+      A driver runs many pages at once, and a real user's foreground page is
+      always focused and visible. Real focus would make every other page look
+      like a background tab and run it at background speed. So
+      docShell.overrideHasFocus and forceActiveState stay on for every
+      top-level document. Focus that moves into a page's own iframe still
+      blurs as in stock (0-playwright.patch, driven-iframe-focus-blur.py).
+
   - id: ipv4-only-network-not-disable-ipv6
     title: geoip without a proxy keeps IPv6 only where it agrees, and never uses network.dns.disableIPv6
     check: manual

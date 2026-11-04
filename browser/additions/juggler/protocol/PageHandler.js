@@ -549,17 +549,10 @@ export class PageHandler {
     return await this._pageTarget.setInitScripts(scripts);
   }
 
-  // Keyboard input goes to the active window's selected tab, as OS input does.
   _isFrontPage() {
     const browser = this._pageTarget.linkedBrowser();
     const win = browser?.documentGlobal || browser?.ownerGlobal;
     return !!win && Services.focus.activeWindow === win && win.gBrowser?.selectedBrowser === browser;
-  }
-
-  async _activateForKeyboard() {
-    if (this._isFrontPage())
-      return;
-    await this._pageTarget.activateAndRun(() => this._focusFrontPage());
   }
 
   async _focusFrontPage() {
@@ -574,7 +567,6 @@ export class PageHandler {
   }
 
   async ['Page.dispatchKeyEvent']({type, keyCode, code, key, repeat, location, text}) {
-    await this._activateForKeyboard();
     // key events don't fire if we are dragging.
     if (this._isDragging) {
       if (type === 'keydown' && key === 'Escape') {
@@ -890,7 +882,6 @@ export class PageHandler {
   }
 
   async ['Page.insertText'](options) {
-    await this._activateForKeyboard();
     return await this._contentPage.send('insertText', options);
   }
 
