@@ -14,7 +14,9 @@
       <h1>Build Configuration</h1>
       <p>Please be aware that this page doesn't reflect all the options used to build Firefox.</p>
       <h2>Source</h2>
-      <p>Built from <a href="https://hg.mozilla.org/releases/mozilla-release/rev/48a735cc74a7e6d730f9bf59c3de58f750287a23">https://hg.mozilla.org/releases/mozilla-release/rev/48a735cc74a7e6d730f9bf59c3de58f750287a23</a></p>
+      <p>Built from <a href="https://github.com/mozilla-firefox/firefox/commit/9a2dc53c369c7ae5172018b35988e1d2ffeff402">https://github.com/mozilla-firefox/firefox/commit/9a2dc53c369c7ae5172018b35988e1d2ffeff402</a></p>
+      <h2>Licenses</h2>
+      <p>The licenses of the code in Firefox are listed in <a href="about:license">about:license</a>.</p>
       <h2>Build platform</h2>
       <table class="build-platform-table">
         <tbody>
@@ -52,7 +54,7 @@
         </tbody>
       </table>
       <h2>Configure options</h2>
-      <p>MOZ_AUTOMATION=1 --target=x86_64-pc-windows-msvc MOZILLA_OFFICIAL=1 --enable-update-channel=release MOZBUILD_STATE_PATH=/builds/worker/.mozbuild MOZ_GENERATE_SBOM=1 MOZ_FETCHES_DIR=/builds/worker/fetches 'CFLAGS= -fcrash-diagnostics-dir=/builds/worker/artifacts' 'CXXFLAGS= -fcrash-diagnostics-dir=/builds/worker/artifacts' ENABLE_CLANG_PLUGIN=1 --enable-profile-use=cross --with-pgo-profile-path=/builds/worker/fetches/merged.profdata --with-pgo-jarlog=/builds/worker/fetches/en-US.log MOZ_LTO=cross MOZ_SOURCE_REPO=https://hg.mozilla.org/releases/mozilla-release MOZ_SOURCE_CHANGESET=48a735cc74a7e6d730f9bf59c3de58f750287a23 --enable-js-shell --enable-rust-simd --with-mozilla-api-keyfile=/builds/mozilla-desktop-geoloc-api.key --with-google-safebrowsing-api-keyfile=/builds/sb-gapi.data --enable-official-branding MOZ_SIMPLE_PACKAGE_NAME=target MAR_CHANNEL_ID=firefox-mozilla-release ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-release MOZ_PACKAGE_JSSHELL=1</p>
+      <p>MOZ_AUTOMATION=1 --target=x86_64-pc-windows-msvc MOZILLA_OFFICIAL=1 --enable-update-channel=release MOZBUILD_STATE_PATH=/builds/worker/.mozbuild MOZ_GENERATE_SBOM=1 MOZ_FETCHES_DIR=/builds/worker/fetches 'CFLAGS= -fcrash-diagnostics-dir=/builds/worker/artifacts' 'CXXFLAGS= -fcrash-diagnostics-dir=/builds/worker/artifacts' ENABLE_CLANG_PLUGIN=1 --enable-profile-use=cross --with-pgo-profile-path=/builds/worker/fetches/merged.profdata --with-pgo-jarlog=/builds/worker/fetches/en-US.log MOZ_LTO=cross MOZ_SOURCE_REPO=https://hg.mozilla.org/releases/mozilla-release MOZ_SOURCE_CHANGESET=5add844c26613d7e4d84c799d6e23cf987b1240d MOZ_SOURCE_GIT_REPO=https://github.com/mozilla-firefox/firefox MOZ_SOURCE_GIT_CHANGESET=9a2dc53c369c7ae5172018b35988e1d2ffeff402 --enable-js-shell --enable-rust-simd --with-mozilla-api-keyfile=/builds/mozilla-desktop-geoloc-api.key --with-google-safebrowsing-api-keyfile=/builds/sb-gapi.data --enable-official-branding MOZ_SIMPLE_PACKAGE_NAME=target MAR_CHANNEL_ID=firefox-mozilla-release ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-release MOZ_PACKAGE_JSSHELL=1</p>
     </div>
   </body>
 </html>

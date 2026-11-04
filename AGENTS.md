@@ -124,7 +124,7 @@ persist a change there as a patch, never as an edit to that tree.
 | Path | What it is |
 |---|---|
 | `browser/` | The browser build: `Makefile`, `upstream.sh`, `multibuild.py`, `Dockerfile`, and the directories below. |
-| `browser/patches/` | Diffs applied to Firefox (42 top level, plus `playwright/`, `librewolf/`, `ghostery/`). Browser behaviour changes here. |
+| `browser/patches/` | Diffs applied to Firefox: one per behaviour at the top level, plus `playwright/`, `librewolf/` and `ghostery/`. Browser behaviour changes here. |
 | `browser/additions/camoucfg/` | The C++ config layer. `MaskConfig.hpp` reads `CAMOU_CONFIG`, which the patches consult. |
 | `browser/additions/juggler/` | Camoufox's Juggler, Playwright's Firefox protocol. The page agent runs in an isolated world. `input/` holds the Cursory cursor trajectories. |
 | `browser/settings/` | `camoufox.cfg` (prefs), `properties.json` (every config key and its type; a key the browser stops reading is marked `removed`, never deleted), `humanize-engines.json`, policies. What a build declares to the launchers is in [`docs/launch-rules.md`](docs/launch-rules.md). |
@@ -152,8 +152,15 @@ make package-linux arch=x86_64 # or package-macos / package-windows
 python3 multibuild.py --target linux windows macos --arch x86_64 arm64
 ```
 
-Install `ccache`. A cold build takes about 40 minutes, and an incremental one
-about 5.
+Every build, a local one included, is optimized as stock is
+([`builds-are-optimized-like-stock`](ci/tribal-rules.yml)): with the PGO
+profile Mozilla trained for the same Firefox, cross-language LTO (full on
+x86_64 Linux and Windows, thin elsewhere) and Rust SIMD, from
+`browser/assets/base.mozconfig`. `make dir` installs the Rust release Mozilla
+builds the tree with and fetches the profile pinned in
+`browser/scripts/data/pgo-profiles.json`; after bumping `upstream.sh`, run
+`python3 scripts/pgo.py pin`. Install `ccache`. It caches compiles but not the
+LTO link, so an incremental build still relinks libxul across C++ and Rust.
 
 ## Changing a patch
 
@@ -225,7 +232,7 @@ this section in step with the launcher options.
 
 ## Pitfalls
 
-- **Do not set identity values by hand.** Do not pass Playwright's `user_agent`, or `navigator.*`, `headers.User-Agent`, `screen.*`, `window.*`, `timezone` or `geolocation:*` in `config`. The identity is drawn as a whole; overriding one value leaves the rest describing a different machine. Use `os`, `screen`, `window`, `locale` and `geoip` instead. Manual config keys print a `LeakWarning`.
+- **Do not set identity values by hand.** Do not pass Playwright's `user_agent`, or `navigator.*`, `headers.User-Agent`, `screen.*`, `window.*`, `timezone` or `geolocation:*` in `config`. The identity is drawn as a whole; overriding one value leaves the rest describing a different machine. Use `os`, `screen`, `window`, `locale` and `geoip` instead. Manual config keys print a `LeakWarning`. The coherence checks never replace a key the caller set: one that contradicts the rest of the identity (a Mac at colorDepth 24, a macOS devicePixelRatio of 1.5) is kept, with a second `LeakWarning` that `i_know_what_im_doing` does not silence. Drawn values are repaired; every macOS identity reports colorDepth 30.
 - **Use `geoip=True` with a proxy.** Without it the timezone and locale are the identity's, not the proxy's, and a warning is printed.
 - **`page.evaluate` is isolated.** It cannot read globals the page defined. Use `main_world_eval=True` and prefix the script with `mw:`. Without the option, a `mw:` evaluate fails with "Main world evaluation is disabled". `mw:` cannot return a handle (`evaluate_handle`).
 - **Leave the viewport alone.** When the window size is spoofed, new pages default to `no_viewport=True`; forcing a `viewport` asks the window to resize to something the identity does not claim.

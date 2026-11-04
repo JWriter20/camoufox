@@ -1,12 +1,12 @@
 """
 CSS device-width keeps the screen's fractional CSS size, as stock's does.
 
-At a fractional devicePixelRatio a screen's CSS size is fractional too: win-i9's
+At a fractional devicePixelRatio a screen's CSS size is fractional too: a
 3456x2160 panel at 250 % is 1382.4x864 CSS px. screen.width rounds it to 1382,
-but media queries compare against the unrounded size, so in stock Firefox 158
-`(device-width: 1382px)` and `(device-aspect-ratio: 1382/864)` are false
-(cfparity realms.cssmq and css.media, both GPUs). Camoufox answered them from
-screen.width, so both were true (screen-spoofing.patch, GetDeviceSize).
+but media queries compare against the unrounded size, so in stock Firefox
+`(device-width: 1382px)` and `(device-aspect-ratio: 1382/864)` are false.
+Camoufox answered them from screen.width, so both were true
+(screen-spoofing.patch, GetDeviceSize).
 
 The guard runs on a hidden 3456x2160 display at the identity's 2.5: the
 rounded size must not match, the real one must. The control is a display that

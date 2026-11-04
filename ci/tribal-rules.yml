@@ -34,9 +34,14 @@ rules:
       1280, innerHeight 984, fullpage 1280x5367 either way, with only
       fingerprint-rotation noise in the colour count. Second, it costs
       throughput: past 30-40 concurrent browsers the framebuffer becomes the
-      bottleneck on a machine that handles 70-80 at 1x1. The root window is not
-      a fingerprint -- screen.* comes from the generated fingerprint, applied
-      per context in the browser.
+      bottleneck on a machine that handles 70-80 at 1x1. The root's size is
+      not itself a fingerprint -- screen.* comes from the generated fingerprint,
+      applied per context in the browser -- but a window lying outside the root
+      is observable as occluded and can leave media-device enumeration pending.
+      Firefox also fits windows into the X screen. The 1x1 default therefore
+      depends on virtual-display-off-root-not-occluded.patch and
+      virtual-display-claimed-screen.patch; virtual-display-window-visible,
+      popup-window-size and popup-covered-click guard that combination.
     expect:
       module: camoufox.virtdisplay
       attribute: DEFAULT_SCREEN
@@ -418,6 +423,8 @@ rules:
       - "Linux: WebGL1 ALIASED_LINE_WIDTH_RANGE is [1, 2048] on 146 and [1, 1] on 156, WebGL2 [1, 1] on both. 146's dom/canvas/WebGLContext.cpp:324 forced REQUIRE_COMPAT_PROFILE on WebGL1 unless webgl.1.allow-core-profiles, which 146's StaticPrefList.yaml set on macOS only; 156 removed both, and WebGLContextValidate.cpp:211 reads the driver's range only off a core profile, leaving WebGLTypes.h:654's {1, 1}"
       - "fpgen Linux WebGL2 records: [1, 1] on 97%, the driver's range on the 3% without EXT_depth_clamp (GLES drivers, where Firefox reads it)"
       - "browser/tests/playwright/patches/stock-gpu-parity.py fails on the 146-style WebGL1 range on Linux, on a hardware GPU and on llvmpipe, and passes with the fix"
+      - "Firefox 159 (bug 1735401) exposes EXT_texture_norm16 on WebGL2, no longer behind webgl.enable-draft-extensions: stock 159.0 on M1 (headless) and on Linux llvmpipe (Xvfb) list it on WebGL2 and not WebGL1; stock 158.0.1 on the same Linux and 146.0 on the same M1 list it on neither. dom/canvas/WebGLExtensions.cpp's IsSupported needs GLFeature::texture_norm16, core in desktop GL 3.1"
+      - "Firefox 159 adds EXT_clip_control (GLFeature::clip_control, GL 4.5) and EXT_texture_mirror_clamp_to_edge (GL 4.4) to WebGL1 and WebGL2: stock 159.0 on Linux llvmpipe, x86_64 and aarch64, lists both where 158.0.1 lists neither, and stock 159.0 on M1 lists neither. 159's third_party/angle renderer11_utils.cpp sets textureMirrorClampToEdgeEXT on every D3D11 device and clipControlEXT from feature level 10_0"
     rationale: >-
       fpgen's records are right for the Firefox that made them; what goes
       stale is what that Firefox decided rather than the GPU. Hardware-owned
@@ -713,3 +720,33 @@ rules:
       stable. Weekly was considered and rejected as too many updates for users
       to manage. A fix that cannot wait is cut by dispatching release.yml on
       main, and an open issue labelled `regression` holds the promotion.
+
+  # -------------------------------------------------------------------------
+  # Build
+  # -------------------------------------------------------------------------
+
+  - id: builds-are-optimized-like-stock
+    title: Every build, tested or shipped and on every OS, uses stock's PGO profile, stock's LTO mode and Rust SIMD
+    check: automated
+    evidence:
+      - "PR #886: measured against stock 152.0.4 on the same host, an unoptimized build ran Gecko's C++ 1.3-1.8x slower (JSON.parse 1.52x, location.href 1.77x, createElement 1.32x, TextEncoder 1.45x) and a regexp replace 1.04x, so JSON.parse over a regexp replace read ~3.3 where stock reads ~2.2"
+      - "Stock 158.0.1's about:buildconfig: --enable-profile-use=cross, --with-pgo-profile-path, --with-pgo-jarlog, MOZ_LTO=cross"
+      - "Firefox 158 build/moz.configure/lto-pgo.configure: --enable-lto=cross is full LTO when PGO and MOZ_AUTOMATION are on and the target is x86_64 Linux or Windows, and ThinLTO otherwise; a profile that does not match a function is a warning (-Wno-error=backend-plugin)"
+      - "Firefox 158 taskcluster/kinds/build: every shippable desktop build has use-pgo, and Linux arm64 uses the x86_64 Linux profile"
+      - "Taskcluster indexes each release's generate-profile task by its commit (gecko.v2.mozilla-release.revision.<commit>.firefox.<platform>-profile), and the task's chain-of-trust.json records the profile's sha256"
+      - "PR #886 review: LTO had entered only the tests.yml build, so a release would have been tested on an LTO Linux binary and shipped binaries built without it"
+    rationale: >-
+      A page can time how fast Gecko's C++ runs against JIT-compiled script, so
+      a build optimized differently from stock stands out. Each build uses the
+      profile Mozilla trained for the stock release of the same Firefox, pinned
+      by sha256 in scripts/data/pgo-profiles.json, so the code Camoufox does
+      not patch is optimized as stock's is. Functions a patch changes lose
+      their profile data and nothing else. The options are in base.mozconfig,
+      which every build copies (the tests.yml build, multibuild.py and
+      release.yml alike), so the binary CI tests is configured like the
+      binaries a release ships. Full LTO is asked for on x86_64 Linux and
+      Windows, as stock's configure picks it under MOZ_AUTOMATION, without
+      setting MOZ_AUTOMATION. Rust comes from the release Mozilla builds the
+      tree with (scripts/patch.py reads taskcluster/kinds/toolchain/rust.yml),
+      because lld cannot read Rust bitcode from an LLVM newer than the
+      bootstrapped clang's, and a Rust profile only fits that compiler.

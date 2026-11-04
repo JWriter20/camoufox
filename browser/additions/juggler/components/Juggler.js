@@ -18,9 +18,8 @@ const Cc = Components.classes;
 const Ci = Components.interfaces;
 
 // Camoufox: everything Juggler changes in a page is installed only once a
-// driver is attached (-juggler-pipe). Its frame actor forces every top-level
-// docShell active and focused and turns off its bfcache, so without a driver a
-// background tab stayed visible and unthrottled and no page ever blurred.
+// driver is attached (-juggler-pipe). Its frame actor turns off every
+// top-level docShell's bfcache.
 // focusmanager.testmode belongs to the driver too: it keeps a window that
 // loses focus to another window or a native dialog from being lowered, which a
 // page reads as the missing blur (stock's default is false).

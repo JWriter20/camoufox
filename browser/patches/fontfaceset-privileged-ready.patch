@@ -1,5 +1,5 @@
 diff --git a/layout/style/FontFaceSet.cpp b/layout/style/FontFaceSet.cpp
-index d79060dd93..42d8c67ab2 100644
+index aa8b0d72a0..b3bc50a3b7 100644
 --- a/layout/style/FontFaceSet.cpp
 +++ b/layout/style/FontFaceSet.cpp
 @@ -12,6 +12,8 @@
@@ -27,8 +27,8 @@ index d79060dd93..42d8c67ab2 100644
    for (size_t i = 0; i < tmp->mRuleFaces.Length(); i++) {
      NS_IMPL_CYCLE_COLLECTION_UNLINK(mRuleFaces[i].mFontFace);
    }
-@@ -196,9 +200,37 @@ bool FontFaceSet::ReadyPromiseIsPending() const {
-                 : !mResolveLazilyCreatedReadyPromise;
+@@ -191,9 +195,40 @@ bool FontFaceSet::Check(const nsACString& aFont, const nsAString& aText,
+   return true;
  }
  
 +Promise* FontFaceSet::GetPrivilegedReady(ErrorResult& aRv) {
@@ -43,7 +43,10 @@ index d79060dd93..42d8c67ab2 100644
 +    aRv.Throw(NS_ERROR_FAILURE);
 +    return nullptr;
 +  }
-+  if (!ReadyPromiseIsPending()) {
++  const bool readyPending =
++      mReady ? mReady->State() == Promise::PromiseState::Pending
++             : !mResolveLazilyCreatedReadyPromise;
++  if (!readyPending) {
 +    promise->MaybeResolve(this);
 +  }
 +  mPrivilegedReady.AppendElement(promise);
@@ -65,7 +68,7 @@ index d79060dd93..42d8c67ab2 100644
    if (!mReady) {
      nsCOMPtr<nsIGlobalObject> global = GetParentObject();
      mReady = Promise::Create(global, aRv);
-@@ -420,6 +452,10 @@ void FontFaceSet::MaybeResolve() {
+@@ -469,6 +504,10 @@ void FontFaceSet::MaybeResolve() {
    } else {
      mResolveLazilyCreatedReadyPromise = true;
    }
@@ -73,14 +76,14 @@ index d79060dd93..42d8c67ab2 100644
 +    promise->MaybeResolve(this);
 +  }
 +  mPrivilegedReady.Clear();
- 
-   // Now dispatch the loadingdone/loadingerror events.
-   nsTArray<OwningNonNull<FontFace>> loaded;
+   DispatchEvent(*loadingdone);
+   if (loadingerror) {
+     DispatchEvent(*loadingerror);
 diff --git a/layout/style/FontFaceSet.h b/layout/style/FontFaceSet.h
-index 465c3b2413..a0d2ab588e 100644
+index 4fe3cabe18..5ce78f9f46 100644
 --- a/layout/style/FontFaceSet.h
 +++ b/layout/style/FontFaceSet.h
-@@ -159,6 +159,15 @@ class FontFaceSet final : public DOMEventTargetHelper {
+@@ -150,6 +150,15 @@ class FontFaceSet final : public DOMEventTargetHelper {
    // Whether the ready promise must be resolved when it's created.
    bool mResolveLazilyCreatedReadyPromise = false;
  

@@ -5,7 +5,7 @@ A wheel turns in notches. On Linux (GTK, X11) stock Firefox 158.0.1 delivers
 each notch as its own `wheel` event: deltaMode 1 (lines), deltaY 6,
 wheelDeltaY -120, then DOMMouseScroll with detail 3 and MozMousePixelScroll
 with detail 60 (three 20 px lines), and the scroller moves 120 px per notch.
-Measured with cfparity's driven.wheel (XTest button 5 on Xvfb, three runs,
+Measured with XTest button 5 on Xvfb (three runs,
 identical).
 
 Juggler sent the requested pixels instead, unless humanize was on: deltaMode 0,

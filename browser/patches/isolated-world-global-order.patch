@@ -202,10 +202,10 @@ index 6cbfbceb53..49a996f0e9 100644
  
    /*
 diff --git a/dom/bindings/BindingUtils.h b/dom/bindings/BindingUtils.h
-index 5b7a6a3b95..bcf7558b2c 100644
+index 9ade09b0bc..8a1b08ec1a 100644
 --- a/dom/bindings/BindingUtils.h
 +++ b/dom/bindings/BindingUtils.h
-@@ -21,6 +21,7 @@
+@@ -22,6 +22,7 @@
  #include "jsfriendapi.h"
  #include "mozilla/Array.h"
  #include "mozilla/Assertions.h"
@@ -213,7 +213,7 @@ index 5b7a6a3b95..bcf7558b2c 100644
  #include "mozilla/DeferredFinalize.h"
  #include "mozilla/EnumTypeTraits.h"
  #include "mozilla/EnumeratedRange.h"
-@@ -327,6 +328,33 @@ struct MutableValueHandleWrapper {
+@@ -328,6 +329,33 @@ struct MutableValueHandleWrapper {
  
  }  // namespace binding_detail
  
@@ -247,7 +247,7 @@ index 5b7a6a3b95..bcf7558b2c 100644
  // UnwrapObject overloads that ensure we have a MutableHandle to keep it alive.
  template <prototypes::ID PrototypeID, class T, typename U, typename CxType>
  MOZ_ALWAYS_INLINE nsresult UnwrapObject(JS::MutableHandle<JSObject*> obj,
-@@ -568,6 +596,10 @@ class ProtoAndIfaceCache {
+@@ -569,6 +597,10 @@ class ProtoAndIfaceCache {
    }
  
    ~ProtoAndIfaceCache() {
@@ -258,7 +258,7 @@ index 5b7a6a3b95..bcf7558b2c 100644
      if (mKind == WindowLike) {
        delete mArrayCache;
      } else {
-@@ -606,6 +638,24 @@ class ProtoAndIfaceCache {
+@@ -607,6 +639,24 @@ class ProtoAndIfaceCache {
  
    void Trace(JSTracer* aTracer) { FORWARD_OPERATION(Trace, (aTracer)); }
  
@@ -283,7 +283,7 @@ index 5b7a6a3b95..bcf7558b2c 100644
    size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) {
      size_t n = aMallocSizeOf(this);
      n += (mKind == WindowLike
-@@ -616,6 +666,8 @@ class ProtoAndIfaceCache {
+@@ -617,6 +667,8 @@ class ProtoAndIfaceCache {
  #undef FORWARD_OPERATION
  
   private:
@@ -292,7 +292,7 @@ index 5b7a6a3b95..bcf7558b2c 100644
    union {
      ArrayCache* mArrayCache;
      PageTableCache* mPageTableCache;
-@@ -1264,6 +1316,16 @@ MOZ_ALWAYS_INLINE bool DoGetOrCreateDOMReflector(
+@@ -1261,6 +1313,16 @@ MOZ_ALWAYS_INLINE bool DoGetOrCreateDOMReflector(
    MOZ_ASSERT_IF(givenProto, js::IsObjectInContextCompartment(givenProto, cx));
    JSObject* obj = value->GetWrapper();
    if (obj) {
@@ -310,17 +310,17 @@ index 5b7a6a3b95..bcf7558b2c 100644
      AssertReflectorHasGivenProto(cx, obj, givenProto);
      // Have to reget obj because AssertReflectorHasGivenProto can
 diff --git a/dom/bindings/Codegen.py b/dom/bindings/Codegen.py
-index 9417c3f076..7c67db743d 100644
+index 33560ca1e8..edde0318f4 100644
 --- a/dom/bindings/Codegen.py
 +++ b/dom/bindings/Codegen.py
-@@ -14611,6 +14611,8 @@ class CGResolveOwnPropertyViaResolve(CGAbstractBindingMethod):
-               // them.
-               JSAutoRealm ar(cx, obj);
-               JS_MarkCrossZoneId(cx, id);
+@@ -14629,6 +14629,8 @@ class CGResolveOwnPropertyViaResolve(CGAbstractBindingMethod):
+               if (!JS_WrapId(cx, &wrappedId)) {
+                 return false;
+               }
 +              // Camoufox: see AutoXrayUnderlyingResolve in BindingUtils.h.
 +              binding_detail::AutoXrayUnderlyingResolve underlyingResolve;
                JS::Rooted<mozilla::Maybe<JS::PropertyDescriptor>> objDesc(cx);
-               if (!self->DoResolve(cx, obj, id, &objDesc)) {
+               if (!self->DoResolve(cx, obj, wrappedId, &objDesc)) {
                  return false;
 diff --git a/dom/bindings/WebIDLGlobalNameHash.cpp b/dom/bindings/WebIDLGlobalNameHash.cpp
 index 8bf9c952d5..f3cba19922 100644

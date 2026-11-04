@@ -345,7 +345,7 @@ export class PageHandler {
     // Camoufox: and the page takes the focus, as when a user clicks into it.
     // Raising the window alone left focus on nothing once another window had
     // been open, and the page never learnt it was the active tab again.
-    await this._pageTarget.activateAndRun(() => this._pageTarget.linkedBrowser().focus());
+    await this._pageTarget.activateAndRun(() => this._focusFrontPage());
   }
 
   async ['Page.setCacheDisabled']({cacheDisabled}) {
@@ -401,20 +401,26 @@ export class PageHandler {
     const canvas = win.document.createElementNS('http://www.w3.org/1999/xhtml', 'canvas');
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
-    let ctx = canvas.getContext('2d');
-    ctx.drawImage(snapshot, 0, 0);
-    snapshot.close();
+    try {
+      let ctx = canvas.getContext('2d');
+      ctx.drawImage(snapshot, 0, 0);
 
-    if (mimeType === 'image/jpeg' || mimeType === 'image/webp') {
-      quality ??= mimeType === 'image/webp' ? 100 : 80;
-      if (quality < 0 || quality > 100)
-        throw new Error('Quality must be an integer value between 0 and 100; received ' + quality);
-      quality /= 100;
-    } else {
-      quality = undefined;
+      if (mimeType === 'image/jpeg' || mimeType === 'image/webp') {
+        quality ??= mimeType === 'image/webp' ? 100 : 80;
+        if (quality < 0 || quality > 100)
+          throw new Error('Quality must be an integer value between 0 and 100; received ' + quality);
+        quality /= 100;
+      } else {
+        quality = undefined;
+      }
+      const dataURL = canvas.toDataURL(mimeType, quality);
+      return { data: dataURL.substring(dataURL.indexOf(',') + 1) };
+    } finally {
+      // The canvas is garbage until a GC, and on Windows its backing store stayed
+      // committed until the browser closed (#959). A zero size frees it now.
+      snapshot.close();
+      canvas.width = canvas.height = 0;
     }
-    const dataURL = canvas.toDataURL(mimeType, quality);
-    return { data: dataURL.substring(dataURL.indexOf(',') + 1) };
   }
 
   async ['Page.getContentQuads'](options) {
@@ -706,6 +712,23 @@ export class PageHandler {
       this._userInputGateOpen.add(windowGlobal);
   }
 
+  _isFrontPage() {
+    const browser = this._pageTarget.linkedBrowser();
+    const win = browser?.documentGlobal || browser?.ownerGlobal;
+    return !!win && Services.focus.activeWindow === win && win.gBrowser?.selectedBrowser === browser;
+  }
+
+  async _focusFrontPage() {
+    const browser = this._pageTarget.linkedBrowser();
+    browser.focus();
+    const deadline = Date.now() + 1000;
+    while (!this._isFrontPage() && Date.now() < deadline)
+      await new Promise(resolve => setTimeout(resolve, 10));
+    // A late window activation can move focus to the chrome; put it back.
+    if (this._isFrontPage() && Services.focus.focusedElement !== browser)
+      browser.focus();
+  }
+
   async ['Page.dispatchKeyEvent']({type, keyCode, code, key, repeat, location, text}) {
     await this._awaitUserInputGate();
     // key events don't fire if we are dragging.
@@ -976,7 +999,7 @@ export class PageHandler {
   }
 
   // Windows Firefox after a drag (stock 158.0.1 on win-i9, SendInput, three
-  // runs, cfparity it4 drag): after dragend the page gets the move that waited
+  // runs): after dragend the page gets the move that waited
   // out the drag, with the button still held and the timestamp it was made at
   // (~470 ms before dragend), then a move at the drop point with the button
   // released; the next move's movement counts from the drop point. No widget

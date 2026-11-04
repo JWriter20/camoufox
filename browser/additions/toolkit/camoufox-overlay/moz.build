@@ -3,8 +3,8 @@
 # The stock bytes each claimed OS serves pages, for one Firefox version. A
 # build of another version would serve a stale OS's files, so it stops here.
 
-if CONFIG["MOZ_APP_VERSION"].split("-")[0] != "158.0.1":
-    error("toolkit/camoufox-overlay was generated from stock Firefox 158.0.1, but this is "
+if CONFIG["MOZ_APP_VERSION"].split("-")[0] != "159.0":
+    error("toolkit/camoufox-overlay was generated from stock Firefox 159.0, but this is "
           "Firefox %s: run browser/scripts/gen-os-overlay.py against the stock Windows "
           "and Linux releases of this version" % CONFIG["MOZ_APP_VERSION"].split("-")[0])
 

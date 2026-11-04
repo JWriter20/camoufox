@@ -100,6 +100,43 @@ Get 10% off Byteful Residential Bandwidth with the code: CAMOUFOX10
       Check your IPs: <a href="https://layer3intel.com/?utm_source=github&utm_medium=sponsoring&utm_campaign=camoufox">https://layer3intel.com</a>
     </td>
   </tr>
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://proxyempire.io/?ref=camoufox&utm_source=github&utm_medium=paid_referral&utm_campaign=open_source_sponsorship&utm_content=camoufox" target="_blank">
+        <img width="380" alt="proxyempire" src="https://github.com/user-attachments/assets/d1c5f849-5cb0-4aff-b48c-530bda2ee03f"/>
+      </a>
+    </td>
+    <td valign="middle">
+      <b>🚀 Camoufox × ProxyEmpire</b><br>
+      Running Camoufox? Your proxy layer decides whether you scale — or get blocked.<br>
+      <a href="https://proxyempire.io/?ref=camoufox&utm_source=github&utm_medium=paid_referral&utm_campaign=open_source_sponsorship&utm_content=camoufox">ProxyEmpire</a> delivers:<br>
+      • 🌍 30M+ Residential IPs (170+ countries)<br>
+      • 📱 4G/5G Mobile Proxies<br>
+      • 🔄 Rotating & Sticky Sessions<br>
+      • ⚡ Unlimited Concurrent Sessions<br>
+      • 🎯 Precise geo-targeting<br>
+      • HTTP, HTTPS & SOCKS5 Support<br>
+      Built for scraping, automation, and high-stealth workflows.<br>
+      <b>🔥 Exclusive Offer</b> - Use code <b>Camoufox50</b><br>
+      Get <b>50% recurring discount</b> (not just first month). Upgrade your proxies. Reduce bans. Scale properly
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://niuproxy.com/?utm_source=camoufox&utm_medium=camoufox&ref=camoufox" target="_blank">
+        <img width="380" alt="NiuProxy" src="https://github.com/user-attachments/assets/85dc8020-af1b-4c5d-82a0-6024ce54903b"/>
+      </a>
+    </td>
+    <td valign="middle">
+      🚀 <strong>NiuProxy — Exclusive Camoufox Offer | 20% OFF</strong><br>
+      🔥 Special Prices with Code camoufox80:<br>
+      • Static Native ISP — $4.80/IP<br>
+      • Residential 1TB — $0.44/GB<br>
+      • Residential 10TB — $0.30/GB<br>
+      🎁 <strong>Use camoufox80 for 20% OFF all recharges!</strong><br>
+      👉 <a href="https://niuproxy.com/?utm_source=camoufox&utm_medium=camoufox&ref=camoufox">Visit NiuProxy<a>
+    </td>
+  </tr>
 </table>
 
 ## Tools & Services
@@ -177,47 +214,6 @@ Camoufox is intended to be used with rotating proxies (preferably residential IP
 <table>
   <tr>
     <td width="25%" align="center" valign="middle">
-      <a href="https://proxyempire.io/?ref=camoufox&utm_source=github&utm_medium=paid_referral&utm_campaign=open_source_sponsorship&utm_content=camoufox" target="_blank">
-        <img width="380" alt="proxyempire" src="https://github.com/user-attachments/assets/d1c5f849-5cb0-4aff-b48c-530bda2ee03f"/>
-      </a>
-    </td>
-    <td valign="middle">
-      <b>🚀 Camoufox × ProxyEmpire</b><br>
-      Running Camoufox? Your proxy layer decides whether you scale — or get blocked.<br>
-      <a href="https://proxyempire.io/?ref=camoufox&utm_source=github&utm_medium=paid_referral&utm_campaign=open_source_sponsorship&utm_content=camoufox">ProxyEmpire</a> delivers:<br>
-      • 🌍 30M+ Residential IPs (170+ countries)<br>
-      • 📱 4G/5G Mobile Proxies<br>
-      • 🔄 Rotating & Sticky Sessions<br>
-      • ⚡ Unlimited Concurrent Sessions<br>
-      • 🎯 Precise geo-targeting<br>
-      • HTTP, HTTPS & SOCKS5 Support<br>
-      Built for scraping, automation, and high-stealth workflows.<br>
-      <b>🔥 Exclusive Offer</b> - Use code <b>Camoufox30</b><br>
-      Get <b>30% recurring discount</b> (not just first month). Upgrade your proxies. Reduce bans. Scale properly
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://www.rapidproxy.io/?ref=daijro" target="_blank">
-        <img width="380" alt="rapidproxy" src="https://github.com/user-attachments/assets/140337e0-50d5-452d-8a31-86c6b1761e47"/>
-      </a>
-    </td>
-    <td valign="middle">
-      <a href="https://www.rapidproxy.io/?ref=daijro">RapidProxy</a> - Power Your Data with Premium Proxies.<br>
-      🎁 Try proxies for free  + Use code <strong>RAPID10</strong> for <strong>10% OFF</strong>
-      <br>
-      <strong>Why Choose RapidProxy?</strong><br>
-      • 🌍 90M+ IPs in 200+ countries & regions<br>
-      • ♾️ No expiration on traffic — use anytime, no pressure<br>
-      • 🔥 Unlimited concurrency for maximum performance<br>
-      • 💰 Starting from just &#36;0.65/GB — built for scale<br>
-      • 📍 City-level targeting for precise geo access<br>
-      • 🔄 Flexible session control tailored to your needs<br>
-      Don’t miss out — start your free trial today and experience fast, stable, and scalable proxy performance with <a href="https://www.rapidproxy.io/?ref=daijro">RapidProxy</a>.
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
       <a href="https://www.swiftproxy.net/?ref=daijro" target="_blank">
         <img width="380" alt="swiftproxy" src="https://github.com/user-attachments/assets/2f351c5e-f128-4478-83ff-46a261bea221"/>
       </a>
@@ -275,16 +271,17 @@ Camoufox is intended to be used with rotating proxies (preferably residential IP
       </a>
     </td>
     <td valign="middle">
-      <b>🔍 Camoufox × Thordata</b><br>
-      <b>Real Residential IPs for Smarter AI Agents & Automation</b><br>
-      With <strong>100M+ residential IPs</strong>, Thordata helps your scraper access the web through real user IPs across <strong>195+ countries</strong>.<br>
-      Target specific locations with precision — including <strong>city, ISP, and ASN-level targeting</strong> — so your Camoufox automation runs with a more authentic network identity.<br>
-      • 🔄 <strong>Rotating & Sticky Sessions</strong> (up to 90 minutes)<br>
-      • ⚡ <strong>99.99% uptime</strong> with unlimited concurrent sessions<br>
-      • 🌍 <strong>Global residential coverage</strong> for AI agents, scraping, and automation workflows<br>
-      🎁 <strong>Exclusive for Camoufox users:</strong><br>
-      Get free trial traffic after signup + use code <strong>Camoufox</strong> for <strong>10% OFF</strong>.<br>
-      <a href="https://www.thordata.com/?ls=dcx&lk=dcx" target="_blank">Start your free trial with Thordata</a>
+      <b>Camoufox × Thordata</b><br>
+      <b>Real Residential IPs and Web Data APIs for AI Agents and Automation</b><br>
+      Power your Camoufox workflows with <strong>100M+ residential IPs across 190+ countries</strong>. Use precise geo and network targeting to run scraping, testing, and browser automation from the locations you need.<br>
+      • 🔄 <strong>Rotating and sticky sessions</strong><br>
+      • ⚡ <strong>Unlimited concurrent sessions</strong> for large-scale crawling<br>
+      • 🌍 <strong>Location and network targeting</strong> for reliable regional access<br>
+      • 🖥️ <strong>Web Data APIs:</strong> Use Webpage for rendered page access, Web Scraper API for structured extraction, or SERP API for real-time search results<br>
+      <b>Exclusive offer for Camoufox users<br>
+      Get free trial traffic after signup and use code <strong><code>CAMOUFOX</code></strong> for <strong>10% off</strong>.<br>
+      <strong><a href="https://www.thordata.com/?ls=dcx&lk=dcx" target="_blank">Start your free trial with Thordata →</a></strong>
+    </td>
   </tr>
   <tr>
     <td width="25%" align="center" valign="middle">
@@ -298,12 +295,20 @@ Camoufox is intended to be used with rotating proxies (preferably residential IP
   </tr>
   <tr>
     <td width="25%" align="center" valign="middle">
-      <a href="https://roamproxy.com" target="_blank">
-        <img width="380" alt="Roamproxy" src="https://roamproxy.com/assets/camoufox-banner.png"/>
+      <a href="https://okkproxy.com/?utm_source=camoufox&utm_medium=camoufox&ref=camoufox" target="_blank">
+        <img width="380" alt="OkkProxy" src="https://github.com/user-attachments/assets/15df1ca6-bd84-4eee-9ed3-963bf343a021"/>
       </a>
     </td>
     <td valign="middle">
-      <strong><a href="https://roamproxy.com">Roam</a></strong> — Residential & static residential proxies, pay-as-you-go per GB. Use code CAMOUFOX15 for 15% extra credit on your first top-up.
+      👉 <strong><a href="https://okkproxy.com/?utm_source=camoufox&utm_medium=camoufox&ref=camoufox">Get Started with OkkProxy</a></strong><br>
+      🚀 <strong>🔥 Static ISP Proxy Deals</strong><br>
+      • Broadcast IP — from $1.50/IP<br>
+      • Premium Native IP — from $4.50/IP<br>
+      🔥 <strong>Unlimited Residential Proxies — from $58/day</strong><br>
+      <strong>🎁 Use PAY2 for 10% OFF all recharges!</strong><br>
+      Also available: Rotating Residential and Mobile Proxies.<br>
+      👉 <a href="https://okkproxy.com/?utm_source=camoufox&utm_medium=camoufox&ref=camoufox">Visit NiuProxy<a>
+    </td>
   </tr>
 </table>
 </details>
@@ -556,7 +561,7 @@ The full option list is in the [Python README](python/README.md#launch-options).
 | Telemetry and data reporting removed at compile time | `librewolf/` patches |
 | Onboarding messages disabled | `ghostery/` patch |
 | Mozilla services and background traffic turned off | [`browser/settings/camoufox.cfg`](browser/settings/camoufox.cfg) |
-| Firefox's bundled certificate revocations (OneCRL) enforced in every profile, with no network fetch | `remote-security-settings` patch |
+| Firefox's bundled certificate revocations (OneCRL) enforced in every profile, with no network fetch | Stock Firefox since 159 |
 | Stock browser UI: no theme, toolbar or dialog changes | |
 
 > [!NOTE]
@@ -716,8 +721,10 @@ make run                        # run the build
 make package-linux arch=x86_64  # or package-macos / package-windows
 ```
 
-`make help` lists every target. Install `ccache`: a cold build takes about 40
-minutes and an incremental one about 5.
+`make help` lists every target. Install `ccache`. Every build is optimized as
+stock Firefox's releases are, with Mozilla's PGO profile for the same Firefox
+and cross-language LTO, and ccache cannot cache the LTO link, so an incremental
+build still relinks libxul.
 
 To build and package several targets in one go:
 

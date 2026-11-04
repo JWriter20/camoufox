@@ -10,7 +10,7 @@ reference point mouse movement is measured from. Only then do dragenter and
 dragover start, with nothing hovered, so dragenter has no relatedTarget and no
 dragleave fires for the source. After the drop and dragend the pointer comes
 back as a widget enter at the drop point, and the next move reports no
-movement. Measured with cfparity's driven.drag (XTest input, stock 158.0.1 on
+movement. Measured with the stock-parity harness's driven.drag (XTest input, stock 158.0.1 on
 Xvfb, three runs, identical).
 
 Juggler's emulated drag sent dragover from the first move after dragstart,
@@ -30,7 +30,7 @@ point. Stock's mouseover/mouseenter (button held) come before its
 pointerover/pointerenter (released); Juggler's arrive pointer first. Each
 chain is compared in its own order.
 
-The guard drives the same path as cfparity, through Playwright on a hidden
+The guard drives the same path as the stock-parity harness, through Playwright on a hidden
 X display, and compares the page's event stream with stock's.
 
     python browser/tests/playwright/patches/driven-drag-gtk.py
@@ -75,7 +75,7 @@ RECORD = """(types) => {
   document.getElementById('src').addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', 'x'));
 }"""
 
-# stock 158.0.1, GTK/X11, cfparity driven.drag
+# stock 158.0.1, GTK/X11, the stock-parity harness driven.drag
 H = "html"
 B = "body"
 S = "stage"
@@ -111,7 +111,7 @@ STOCK = [
 
 
 def drive(page):
-    """cfparity's driven.drag path: src centre, held, three moves, the target, released, home."""
+    """the stock-parity harness's driven.drag path: src centre, held, three moves, the target, released, home."""
     steps = [("move", 400, 300), ("move", 80, 200), ("down",), ("move", 90, 205), ("move", 110, 210),
              ("move", 300, 230), ("wait", 0.2), ("move", 320, 230), ("wait", 0.2), ("up",), ("move", 620, 400)]
     for step in steps:

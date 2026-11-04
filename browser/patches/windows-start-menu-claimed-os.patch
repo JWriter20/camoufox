@@ -1,33 +1,24 @@
 diff --git a/docshell/base/BrowsingContext.h b/docshell/base/BrowsingContext.h
+index 42f58899c1..4c1d788056 100644
 --- a/docshell/base/BrowsingContext.h
 +++ b/docshell/base/BrowsingContext.h
-@@ -124,6 +124,10 @@
-    * :-moz-window-inactive pseudoclass. Only read from or set on the          \
-    * top BrowsingContext. */                                                  \
-   FIELD(IsActiveBrowserWindowInternal, bool)                                  \
-+  /* Camoufox, Top()-only, set by the parent: a Windows identity's emulated   \
-+   * Start menu holds the foreground (widget/gtk/nsWindow.cpp). The page      \
-+   * focus emulation (overrideHasFocus) yields to it, as Windows blurs. */    \
-+  FIELD(ClaimedShellForeground, bool)                                         \
-   FIELD(OpenerPolicy, nsILoadInfo::CrossOriginOpenerPolicy)                   \
-   /* Current opener for the BrowsingContext. Weak reference */                \
-   FIELD(OpenerId, uint64_t)                                                   \
-@@ -1448,6 +1452,11 @@
-               ContentParent* aSource);
-   void DidSet(FieldIndex<IDX_IsActiveBrowserWindowInternal>, bool aOldValue);
- 
-+  bool CanSet(FieldIndex<IDX_ClaimedShellForeground>, bool,
-+              ContentParent* aSource) {
-+    return XRE_IsParentProcess() && !aSource && IsTop();
-+  }
-+
-   // Ensure that we only set the flag on the top level browsingContext.
-   // And then, we do a pre-order walk in the tree to refresh the
-   // volume of all media elements.
+@@ -130,6 +130,11 @@ struct EmbedderColorSchemes {
+    * top BrowsingContext. */                                                   \
+   FIELD(IsActiveBrowserWindowInternal, bool,                                   \
+         {.mTopOnly = true, .mCanSet = CanSet::ParentOnly})                     \
++  /* Camoufox, top-only, set by the parent: a Windows identity's emulated      \
++   * Start menu holds the foreground (widget/gtk/nsWindow.cpp). The page       \
++   * focus emulation (overrideHasFocus) yields to it, as Windows blurs. */     \
++  FIELD(ClaimedShellForeground, bool,                                          \
++        {.mTopOnly = true, .mCanSet = CanSet::ParentOnly})                     \
+   FIELD(OpenerPolicy, nsILoadInfo::CrossOriginOpenerPolicy,                    \
+         {.mCanSet = CanSet::Custom})                                           \
+   /* Current opener for the BrowsingContext. Weak reference */                 \
 diff --git a/dom/base/Document.cpp b/dom/base/Document.cpp
+index 5deb11fe65..cb287b83fb 100644
 --- a/dom/base/Document.cpp
 +++ b/dom/base/Document.cpp
-@@ -4999,7 +4999,10 @@
+@@ -5053,7 +5053,10 @@ bool Document::HasFocus(ErrorResult& rv) const {
      return false;
    }
  
@@ -40,9 +31,10 @@ diff --git a/dom/base/Document.cpp b/dom/base/Document.cpp
    }
  
 diff --git a/dom/base/nsFocusManager.cpp b/dom/base/nsFocusManager.cpp
+index a779c968c6..0a067ec2f7 100644
 --- a/dom/base/nsFocusManager.cpp
 +++ b/dom/base/nsFocusManager.cpp
-@@ -2495,7 +2495,9 @@
+@@ -2502,7 +2502,9 @@ bool nsFocusManager::BlurImpl(BrowsingContext* aBrowsingContextToClear,
    }
  
    // Playwright: emulate focused page by never bluring when focus leaves the tab. Camoufox: not when it moves into one of the page's frames, which blurs as in stock.
@@ -54,6 +46,7 @@ diff --git a/dom/base/nsFocusManager.cpp b/dom/base/nsFocusManager.cpp
    }
  
 diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+index f661b57343..67d069d8ef 100644
 --- a/widget/gtk/nsWindow.cpp
 +++ b/widget/gtk/nsWindow.cpp
 @@ -59,6 +59,7 @@
@@ -64,7 +57,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
  #include "mozilla/dom/WheelEventBinding.h"
  #include "mozilla/gfx/2D.h"
  #include "mozilla/gfx/GPUProcessManager.h"
-@@ -3274,9 +3275,161 @@
+@@ -3274,9 +3275,161 @@ bool nsWindow::DoTitlebarAction(LookAndFeel::TitlebarEvent aEvent,
    return true;
  }
  
@@ -226,7 +219,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
    SetLastPointerDownEvent((GdkEvent*)aEvent);
    mLastMouseCoordinates.Set(aEvent);
  
-@@ -3435,6 +3588,11 @@
+@@ -3435,6 +3588,11 @@ void nsWindow::OnButtonPressEvent(GdkEventButton* aEvent) {
  void nsWindow::OnButtonReleaseEvent(GdkEventButton* aEvent) {
    LOG("Button %u release\n", aEvent->button);
  
@@ -238,7 +231,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
    SetLastPointerDownEvent(nullptr);
    mLastMouseCoordinates.Set(aEvent);
  
-@@ -3518,6 +3676,12 @@
+@@ -3518,6 +3676,12 @@ void nsWindow::OnButtonReleaseEvent(GdkEventButton* aEvent) {
  void nsWindow::OnContainerFocusInEvent(GdkEventFocus* aEvent) {
    LOG("OnContainerFocusInEvent");
  
@@ -251,7 +244,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
    // Unset the urgency hint, if possible
    GtkWidget* top_window = GetGtkWidget();
    if (top_window && (gtk_widget_get_visible(top_window))) {
-@@ -3554,6 +3718,11 @@
+@@ -3554,6 +3718,11 @@ void nsWindow::OnContainerFocusInEvent(GdkEventFocus* aEvent) {
  void nsWindow::OnContainerFocusOutEvent(GdkEventFocus* aEvent) {
    LOG("OnContainerFocusOutEvent");
  
@@ -263,7 +256,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
    if (IsTopLevelWidget()) {
      // Rollup menus when a window is focused out unless a drag is occurring.
      // This check is because drags grab the keyboard and cause a focus out on
-@@ -3684,12 +3853,18 @@
+@@ -3684,12 +3853,18 @@ mozilla::CurrentX11TimeGetter* nsWindow::GetCurrentTimeGetter() {
  gboolean nsWindow::OnKeyPressEvent(GdkEventKey* aEvent) {
    LOG("OnKeyPressEvent");
  
@@ -283,9 +276,10 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
      return FALSE;
    }
 diff --git a/xpfe/appshell/AppWindow.cpp b/xpfe/appshell/AppWindow.cpp
+index c602fef55f..e991567139 100644
 --- a/xpfe/appshell/AppWindow.cpp
 +++ b/xpfe/appshell/AppWindow.cpp
-@@ -2839,7 +2839,11 @@
+@@ -2840,7 +2840,11 @@ void AppWindow::WindowDeactivated() {
    if (mDocShell) {
      if (nsCOMPtr<nsPIDOMWindowOuter> window = mDocShell->GetWindow()) {
        if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {

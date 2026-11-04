@@ -119,7 +119,12 @@ import {
 } from "./pycompat.js";
 import * as renderNodes from "./render_node.js";
 import { VirtualDisplay } from "./virtdisplay.js";
-import { FallbackWarning, LeakWarning, warn } from "./warnings.js";
+import {
+	FallbackWarning,
+	LeakWarning,
+	loadWarnings,
+	warn,
+} from "./warnings.js";
 import { firefoxGpus, sampleWebglForScreen, webglForGpu } from "./webgl.js";
 
 type ListOrString = string | string[];
@@ -146,11 +151,7 @@ export function savedPref(
 	}
 }
 
-/**
- * Write a launch toggle's pref the way stock's profile has it: on, the toggled
- * value; off, nothing (stock writes nothing), unless a persistent profile kept a
- * non-stock value in prefs.js from an earlier launch. Mirrors Python's set_toggle_pref.
- */
+/** Write a toggle only when on, or to clear a persistent non-stock value. */
 export function setTogglePref(
 	prefs: Record<string, unknown>,
 	pref: string,
@@ -1146,6 +1147,25 @@ async function keepsIPv6(
 	}
 	LeakWarning.warn("ipv6_elsewhere", iKnowWhatImDoing);
 	return false;
+}
+
+/**
+ * Warns for each coherence violation the launch left in place because the
+ * caller set the values involved. Camoufox does not overwrite what the caller
+ * passed, but an identity no real machine presents is detectable, and a caller
+ * that records its identities needs to know that it holds one (#956).
+ */
+function warnKeptIncoherent(violations: coherence.Violation[]): void {
+	for (const violation of violations) {
+		if (!violation.kept?.length) continue;
+		const keys = violation.kept.join(", ");
+		warn(
+			loadWarnings()
+				.caller_value_incoherent.replaceAll("{keys}", keys)
+				.replace("{detail}", () => violation.detail),
+			"LeakWarning",
+		);
+	}
 }
 
 /**
@@ -2161,7 +2181,9 @@ export interface LaunchOptions {
 	fingerprint_preset?: boolean | Record<string, any>;
 	/** Firefox version to use. Defaults to the current Camoufox version. */
 	ff_version?: number;
-	/** Whether to run the browser in headless mode. Defaults to false. */
+	/** Whether to run the browser in headless mode. Defaults to false.
+	 * NewBrowser and launchServer run headless: true on Linux on Xvfb when available;
+	 * launchOptions() alone starts no display. */
 	headless?: boolean;
 	/** Whether to enable running scripts in the main world ("mw:" prefix). */
 	main_world_eval?: boolean;
@@ -2491,11 +2513,17 @@ async function buildLaunchOptions(
 	if (!i_know_what_im_doing) {
 		warnManualConfig(config);
 	}
+	const callerKeys: ReadonlySet<string> = new Set(Object.keys(config));
 
 	// Snapshot which domains the USER set before fingerprint generation fills in
 	// the rest. The post-generation corrections below must only touch generated
 	// values, never override what the user passed.
 	const userSetNavigator = isDomainSet(config, "navigator.");
+	const userSetArch = isDomainSet(
+		config,
+		"navigator.platform",
+		"navigator.oscpu",
+	);
 	const userSetScreenWindow = isDomainSet(config, "screen.", "window.");
 	const userWindowPosition = new Set(
 		["window.screenX", "window.screenY"].filter((k) => k in config),
@@ -2702,10 +2730,9 @@ async function buildLaunchOptions(
 
 	// Correct fingerprint inconsistencies that leak as headless /
 	// impossible-geometry tells, unless the user is driving these themselves.
-	if (!userSetNavigator) {
-		utilsDeps.fixNavigatorArch(config, targetOs);
+	if (!userSetArch) utilsDeps.fixNavigatorArch(config, targetOs);
+	if (!userSetNavigator)
 		utilsDeps.fixHardwareConcurrency(config, Boolean(pin_cpu_cores));
-	}
 	if (!userSetScreenWindow) {
 		// Lift netbook-era geometry to something current hardware reports,
 		// before the display clamp below so a genuinely small real monitor still
@@ -3108,9 +3135,8 @@ async function buildLaunchOptions(
 		setInto(config, "allowAddonNewtab", true);
 	}
 
-	// Set Firefox user preferences. Each toggle writes its pref on or off: a
-	// persistent profile keeps a user.js pref in prefs.js after the launch that
-	// set it, so a flag that only wrote when on stayed on for good.
+	// Fresh profiles get a toggle's pref only when on. A persistent profile
+	// may need the stock value written once to clear an earlier toggled value.
 	if (block_images) {
 		LeakWarning.warn("block_images", i_know_what_im_doing);
 	}
@@ -3147,7 +3173,9 @@ async function buildLaunchOptions(
 	// Drop values the source supplied that this identity cannot keep, before the
 	// WebGL pool below defers to them. Here, not earlier, because the check
 	// reads the core count and the screen, which the launch replaces above.
-	coherence.dropIncoherentSourceValues(config, targetOs);
+	warnKeptIncoherent(
+		coherence.dropIncoherentSourceValues(config, targetOs, callerKeys),
+	);
 
 	const [coverCanvas, host] = await planRendering(
 		targetOs,
@@ -3249,7 +3277,8 @@ async function buildLaunchOptions(
 	// Every identity passes the whole-identity checks, whatever built it. The
 	// pools are sampled independently, so a machine that never existed can be
 	// assembled from parts that are each fine on their own. See coherence.ts.
-	const incoherent = coherence.apply(config, targetOs);
+	const incoherent = coherence.apply(config, targetOs, callerKeys);
+	warnKeptIncoherent(incoherent);
 	if (incoherent.length && debug) {
 		for (const violation of incoherent) {
 			console.log(
@@ -3259,9 +3288,10 @@ async function buildLaunchOptions(
 	}
 
 	// Render at the claimed display scale, so (resolution) and the CSS geometry
-	// agree with devicePixelRatio as on the real machine (#933).
-	const dpr = Number(config["window.devicePixelRatio"] || 1);
-	if (dpr !== 1 && !("layout.css.devPixelsPerPx" in firefox_user_prefs)) {
+	// agree with devicePixelRatio as on the real machine (#933). That includes 1:
+	// on a HiDPI host the host's own scale would otherwise reach (resolution).
+	const dpr = Number(config["window.devicePixelRatio"]);
+	if (dpr && !("layout.css.devPixelsPerPx" in firefox_user_prefs)) {
 		firefox_user_prefs["layout.css.devPixelsPerPx"] = String(dpr);
 	}
 	if (headless === false && !virtual_display && screenCons) {

@@ -77,36 +77,11 @@ export class MouseDispatch {
   _measured(boundingBox) {
     this._box = boundingBox;
 
-    // The first whole pixel inside the browser element on each axis.
-    //
-    // The element's origin is not pixel-aligned: the chrome above the content is
-    // a fractional number of CSS pixels tall, and how many depends on the spoofed
-    // OS (measured: windows 51.4, macos 53.1, linux 56.5). A relative coordinate
-    // of 0 therefore dispatches at absolute y == boundingBox.top exactly -- the
-    // content area's first, only partly covered row. The widget rounds that to a
-    // whole device row before hit-testing it, and wherever round(top) < top the
-    // rounded row still belongs to chrome, so the event fires as an exit event
-    // rather than eMouseMove and no ack is ever produced (#751, #752).
-    //
-    // Snapping onto ceil() keeps the point inside content pixel 0 while landing
-    // clear of the boundary. It is a sub-pixel shift and only ever affects the
-    // first row/column; boundingBox.left is normally a whole 0 and unaffected.
+    // Snap onto whole pixels fully inside the browser element. Its origin and
+    // size can be fractional, and a rounded point on either boundary belongs
+    // to chrome rather than content, so no renderer ack arrives (#751, #752).
     this._originX = Math.ceil(boundingBox.left);
     this._originY = Math.ceil(boundingBox.top);
-
-    // The far edge has the same problem, and the bounds check below cannot see
-    // it either. The element's height is fractional too -- measured, it is
-    // consistently 0.5 CSS px less than the innerHeight the page reports, so
-    // the page's last row is only half covered. A point in it dispatches at an
-    // absolute coordinate that rounds onto the row *past* the content, and is
-    // dropped exactly like the top-edge case. Deterministic: with the box at
-    // 1920x977.5 +0+56.5, relative y == 977 (innerHeight - 1, well inside the
-    // viewport as far as the page is concerned) dispatches at 1033.5, rounds to
-    // 1034, and the content ends at 1034.
-    //
-    // So clamp to the last whole pixel fully inside the element as well. Found
-    // by tests/playwright/patches/mouse-boundary-sweep.py, not by a report -- it predates
-    // this module and deadlocks a stock build.
     this._limitX = Math.ceil(boundingBox.left + boundingBox.width) - 1;
     this._limitY = Math.ceil(boundingBox.top + boundingBox.height) - 1;
   }
@@ -218,10 +193,38 @@ export class MouseDispatch {
   }
 
   /**
+   * The open chrome popup over an absolute point, if there is one.
+   *
+   * The parent hands a mouse event at a point inside a visible popup (the date
+   * picker, a permission doorhanger) to that popup, not to the browser under
+   * it (PresShell::EventHandler::ComputeRootFrameToHandleEventWithPopup), as
+   * an OS click there lands on the popup. The renderer never sees it, so there
+   * is no ack to wait for. Waiting cost 5s per event (kAckDeadlineMs): a
+   * click under the picker showPicker() opened took 15s and timed out
+   * Playwright, where stock's click went to the picker at once (2026-11-03,
+   * tests/playwright/patches/popup-covered-click.py). Mirrors
+   * nsXULPopupManager::GetVisiblePopups: open, and not transparent to the mouse.
+   */
+  _popupAt(absX, absY) {
+    const doc = this._win.document;
+    let point = null;
+    for (const popup of doc.querySelectorAll('panel, menupopup, tooltip')) {
+      if (popup.state !== 'open' || this._win.getComputedStyle(popup).pointerEvents === 'none')
+        continue;
+      point ??= this._win.windowUtils.toScreenRectInCSSUnits(absX, absY, 0, 0);
+      const r = popup.getOuterScreenRect();
+      if (point.x >= r.left && point.x < r.right && point.y >= r.top && point.y < r.bottom)
+        return popup;
+    }
+    return null;
+  }
+
+  /**
    * Dispatch one event and wait for the renderer to ack it, under a deadline.
    *
    * Returns the ack event object, or null if none arrived in time -- in which
-   * case the event is dropped and a warning is logged. Never rejects and never
+   * case the event is dropped and a warning is logged -- or {popup} at once
+   * when an open popup over the point took the event (_popupAt). Never rejects and never
    * waits forever: input dispatch is serialized on activateAndRun()'s
    * process-global chain, so an unbounded wait here wedges every later input
    * event in the process, in every tab, for the life of the browser.
@@ -229,8 +232,11 @@ export class MouseDispatch {
   async sendAcked(watcher, eventType, x, y, deadlineMs = kAckDeadlineMs) {
     this._remeasure();
     const {x: absX, y: absY} = this.toAbsolute(x, y);
+    const popup = this._popupAt(absX, absY);
     // This dispatches to the renderer synchronously.
     const jugglerEventId = this._sendAbsolute(eventType, absX, absY);
+    if (popup)
+      return {jugglerEventId, popup};
     // A move reaches the page at the next refresh tick; the renderer acks it
     // on arrival as "mousequeued" (BrowserChild::RecvRealMouseMoveEvent).
     const arrival = eventType === 'mousemove' ? 'mousequeued' : eventType;
@@ -250,7 +256,8 @@ export class MouseDispatch {
    */
   async sendQueuedMove(watcher, deliveryWatcher, x, y) {
     const queued = await this.sendAcked(watcher, 'mousemove', x, y);
-    if (!queued) {
+    // A move a popup took never reaches the page either.
+    if (!queued || queued.popup) {
       deliveryWatcher.dispose();
       return null;
     }

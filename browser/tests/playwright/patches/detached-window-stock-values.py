@@ -1,12 +1,12 @@
 """
 A window whose iframe was removed answers what stock's does, not the identity's.
 
-A removed iframe's window has no pres context and no widget. Stock Firefox 158
-then answers devicePixelRatio 1 and navigator.maxTouchPoints 0, whatever the
-screen (cfparity realms.contexts, win-i9 at 250 % with a touch-free screen:
-1 and 0). Camoufox answered the identity's devicePixelRatio and touch points
-there (fingerprint-injection.patch, zz-stock-cost-parity.patch), so a page that
-kept a removed frame's window read a value no stock browser gives.
+A removed iframe's window has no pres context and no widget. Stock Firefox then
+answers devicePixelRatio 1 and navigator.maxTouchPoints 0, whatever the screen
+(measured on Windows at 250 % and on Linux). Camoufox answered the identity's
+devicePixelRatio and touch points there (fingerprint-injection.patch,
+zz-stock-cost-parity.patch), so a page that kept a removed frame's window read
+a value no stock browser gives.
 
     python browser/tests/playwright/patches/detached-window-stock-values.py
 """

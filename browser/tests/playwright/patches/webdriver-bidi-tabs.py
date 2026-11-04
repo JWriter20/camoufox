@@ -10,19 +10,14 @@ steps never finished in Camoufox:
   "openWindow() not supported in Camoufox": every `new_context()` failed.
 - `browsingContext.create` for a foreground tab and `browsingContext.activate`
   wait until the tab that was selected reports `visibilityState` "hidden".
-  Juggler's page agent, which runs in every loaded page even without
-  `--juggler-pipe`, forces its docshell active (`forceActiveState`), so that
-  tab stays "visible", no `visibilitychange` comes, and neither command ever
-  answered: opening a second tab in a window and every `bring_to_front()`
-  between tabs hung.
+  Juggler's page agent used to force every docshell active, so that tab stayed
+  "visible", no `visibilitychange` came, and neither command ever answered:
+  opening a second tab in a window and every `bring_to_front()` between tabs
+  hung.
 
 webdriver-bidi-app-name.patch opens windows for Camoufox as for Firefox, and
-webdriver-bidi-force-active.patch does not wait for "hidden" on a docshell that
-is forced active. Juggler now installs its frame actor (and with it
-forceActiveState) only when a Juggler driver is attached (-juggler-pipe,
-juggler/components/Juggler.js installDriverOverrides), so under BiDi alone no
-docshell is forced and the tab put in the background reports "hidden", as in
-stock Firefox; the guard checks that.
+Juggler no longer forces a docshell active, so the tab put in the background
+reports "hidden", as in stock Firefox, and the wait ends.
 
 Playwright opens every page in a window of its own, so the guard gets a second
 tab in one window from window.open() and switches back with bring_to_front()
@@ -83,7 +78,7 @@ def main() -> int:
             return 1
     sys.stdout.write(r.stdout.decode(errors="replace"))
     if r.returncode == 2:
-        print("FAIL: a background tab does not report 'hidden' as stock Firefox's does")
+        print("FAIL: a background tab does not report \"hidden\" as stock Firefox's does")
         return 1
     if r.returncode:
         print(f"FAIL: child exit {r.returncode}")
