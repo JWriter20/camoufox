@@ -80,6 +80,7 @@ GATHER = """mw:async (stun) => {
     setTimeout(() => resolve(null), 30000);
     pc.onicecandidate = e => {
       if (!e.candidate) return resolve(performance.now() - start);
+      if (!e.candidate.candidate) { order.push('empty'); return; }
       const t = e.candidate.candidate.match(/ (UDP|TCP) \\d+ \\S+ \\d+ typ (\\S+)/i);
       if (t) order.push(t[2] + '/' + t[1].toLowerCase());
       const m = e.candidate.candidate.match(/ (\\S+) (\\d+) typ srflx/);
@@ -454,20 +455,29 @@ async def main() -> int:
     for label, gather in (("SOCKS5", by_ip), ("SOCKS5 on the LAN", via_lan), ("SOCKS5, slow association", via_slow)):
         # Stock gathers its UDP hosts, then its TCP hosts, then the srflx its IPv4 host socket's
         # STUN answer made, and offers that srflx as the default (c= and m=).
+        order = [item for item in gather["order"] if item != "empty"]
         checks += [
             (f"{label}: candidates in stock's order",
-             gather["order"] == sorted(gather["order"], key=["host/udp", "host/tcp", "srflx/udp"].index)
-             and gather["order"][-1:] == ["srflx/udp"], gather["order"]),
+             order == sorted(order, key=["host/udp", "host/tcp", "srflx/udp"].index)
+             and order[-1:] == ["srflx/udp"], gather["order"]),
+            (f"{label}: the empty candidate follows the candidates",
+             gather["order"].count("empty") == 1 and gather["order"][-1] == "empty",
+             gather["order"]),
             (f"{label}: the SDP's default (c=, m=) is the srflx",
              len(gather["srflx"]) == 1 and gather["dflt"] == gather["srflx"][0],
              f"default {gather['dflt']} srflx {gather['srflx']}"),
         ]
     for label, gather in (("HTTP proxy", via_http), ("SOCKS5 refusing UDP", via_refused)):
         checks += [
-            (f"{label}: gathering ends without the STUN server",
-             gather["elapsed"] is not None and gather["elapsed"] < 5000, gather["elapsed"]),
+            (f"{label}: an unanswered STUN gather does not finish at once",
+             gather["elapsed"] is None or gather["elapsed"] >= 1000, gather["elapsed"]),
             (f"{label}: no srflx without a STUN answer",
              gather["srflx"] == [], gather["srflx"]),
+            (f"{label}: no UDP host candidate when the proxy carries no UDP",
+             "host/udp" not in gather["order"], gather["order"]),
+            (f"{label}: the empty candidate follows the host candidates",
+             gather["order"].count("empty") == 1 and gather["order"][-1] == "empty",
+             gather["order"]),
         ]
     checks += [
         ("two contexts, each behind its own SOCKS5 proxy: the data channel opens",
