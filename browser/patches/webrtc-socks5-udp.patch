@@ -943,7 +943,7 @@ diff --git a/dom/media/webrtc/transport/nr_socket_prsock.cpp b/dom/media/webrtc/
 index c8bcce4..d76430e 100644
 --- a/dom/media/webrtc/transport/nr_socket_prsock.cpp
 +++ b/dom/media/webrtc/transport/nr_socket_prsock.cpp
-@@ -753,11 +753,16 @@
+@@ -753,11 +753,16 @@ int NrSocket::sendto(const void* msg, size_t len, int flags,
    // mtransport) or the parent process -- never the content process, which uses
    // NrUdpSocketIpc/NrTcpSocket (gated in NrUdpSocketIpc::sendto and enforced by
    // STUNUDPSocketFilter in the parent process).
@@ -961,7 +961,7 @@ index c8bcce4..d76430e 100644
  
    // TODO: Convert flags?
    status = PR_SendTo(fd_, msg, len, flags, &naddr, PR_INTERVAL_NO_WAIT);
-@@ -1003,6 +1008,223 @@
+@@ -1003,6 +1008,221 @@ abort:
    return (_status);
  }
  
@@ -1004,9 +1004,7 @@ index c8bcce4..d76430e 100644
 +    return R_WOULDBLOCK;
 +  }
 +  if (state_ == State::Failed) {
-+    // A proxy that carries no UDP is a firewall for these datagrams: accepting
-+    // and dropping them lets STUN follow its normal retransmission timeout.
-+    return 0;
++    return R_REJECTED;
 +  }
 +
 +  uint16_t port;
@@ -1185,7 +1183,7 @@ index c8bcce4..d76430e 100644
  NS_IMPL_ISUPPORTS(NrUdpSocketIpcProxy, nsIUDPSocketInternal)
  
  nsresult NrUdpSocketIpcProxy::Init(const RefPtr<NrUdpSocketIpc>& socket) {
-@@ -1291,9 +1513,12 @@
+@@ -1291,9 +1511,12 @@ int NrUdpSocketIpc::sendto(const void* msg, size_t len, int flags,
    // so it is not a trust boundary; STUNUDPSocketFilter enforces the same
    // restriction in the parent process. Drop the packet, but report success so
    // the caller does not retry.
@@ -1199,7 +1197,7 @@ index c8bcce4..d76430e 100644
  
    int r;
    net::NetAddr addr;
-@@ -1602,9 +1827,10 @@
+@@ -1602,9 +1825,10 @@ int NrSocketBase::CreateSocket(
    std::optional<std::pair<uint16_t, uint16_t>> ports;
    // Camoufox: behind a proxy, stock Firefox refuses UDP outright, which leaves
    // a page with no host candidate and no connection even to a peer on this
@@ -1213,7 +1211,7 @@ index c8bcce4..d76430e 100644
        config && config->GetForceProxy() && addr->protocol == IPPROTO_UDP;
  
    if (IsForbiddenAddress(addr)) {
-@@ -1642,6 +1868,8 @@
+@@ -1642,6 +1866,8 @@ int NrSocketBase::CreateSocket(
      } else if (XRE_IsSocketProcess()) {
        if (addr->protocol == IPPROTO_TCP) {
          *sock = new NrTcpSocket(config);
@@ -1222,7 +1220,7 @@ index c8bcce4..d76430e 100644
        } else {
          *sock = new NrSocket();
        }
-@@ -1653,7 +1881,7 @@
+@@ -1653,7 +1879,7 @@ int NrSocketBase::CreateSocket(
        }
      }
  
@@ -1231,7 +1229,7 @@ index c8bcce4..d76430e 100644
      r = (*sock)->create(ports ? &bindAddr : addr);
      if (!r) break;
    }
-@@ -1667,11 +1895,16 @@
+@@ -1667,11 +1893,16 @@ abort:
    return _status;
  }
  

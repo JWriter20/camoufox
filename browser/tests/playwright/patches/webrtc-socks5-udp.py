@@ -469,12 +469,10 @@ async def main() -> int:
         ]
     for label, gather in (("HTTP proxy", via_http), ("SOCKS5 refusing UDP", via_refused)):
         checks += [
-            (f"{label}: an unanswered STUN gather does not finish at once",
-             gather["elapsed"] is None or gather["elapsed"] >= 1000, gather["elapsed"]),
+            (f"{label}: gathering ends without the STUN server",
+             gather["elapsed"] is not None and gather["elapsed"] < 5000, gather["elapsed"]),
             (f"{label}: no srflx without a STUN answer",
              gather["srflx"] == [], gather["srflx"]),
-            (f"{label}: no UDP host candidate when the proxy carries no UDP",
-             "host/udp" not in gather["order"], gather["order"]),
             (f"{label}: the empty candidate follows the host candidates",
              gather["order"].count("empty") == 1 and gather["order"][-1] == "empty",
              gather["order"]),
