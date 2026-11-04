@@ -641,6 +641,21 @@ rules:
       through prefs in camoufox.cfg; uBO keeps its packaged lists through its
       own default (scripts/fetch-ubo.py freeze_lists).
 
+  - id: stock-services-page-visible-only
+    title: A Mozilla service stays at Firefox's default only where a page can tell it is off
+    check: manual   # browser/tests/playwright/patches/tracking-protection-lists.py
+    evidence:
+      - "tracking-protection-lists.py: with Remote Settings off, a fresh profile has no base-fingerprinting or base-cryptomining tables, so Enhanced Tracking Protection lets through a fingerprinting script that stock Firefox blocks"
+      - "with dom.push.serverURL empty, pushManager.subscribe() rejects where stock resolves"
+      - "review of PR 23 on the fork (2026-11-04): the new-tab feeds, connectivity and captive-portal checks, region lookup, search updates and Google Safe Browsing lookups sent Mozilla and Google requests through the user's proxy and changed nothing a page could read"
+    rationale: >-
+      Parity is judged by what a page can observe. Remote Settings, Mozilla's
+      Safe Browsing provider (the tracking-protection lists) and Push stay on,
+      because a page sees the difference when they are off. Services that only
+      a network observer can see stay off, so a scraping fleet does not send
+      Mozilla traffic through every proxy. Re-enable one only with evidence
+      that a page can read its absence.
+
   - id: driven-pages-always-focused
     title: Every driven page reads as focused and visible, as in upstream Playwright
     check: manual   # browser/additions/juggler/content/main.js
