@@ -228,13 +228,16 @@ describe("font draws", () => {
 
 describe("voice draws", () => {
 	const fx = load("voices.json.gz");
-	it(`reproduces ${fx.cases.length} voice lists`, () => {
+	it(`reproduces ${fx.cases.length} voice draws`, () => {
 		for (const c of fx.cases) {
-			const voices = fp.generateRandomVoiceSubset(c.os, c.locale, c.seed);
+			const config = fp.drawVoiceConfig(c.os, c.locale, c.seed);
 			const label = `${c.os} ${c.locale} seed ${c.seed}`;
-			if (c.voices) expect(voices, label).toEqual(c.voices);
+			if (c.config) expect(config, label).toEqual(c.config);
+			expect(h(config), label).toBe(c.hash);
+			if (c.listHash === undefined) continue;
+			const voices = fp.generateRandomVoiceSubset(c.os, c.locale, c.seed);
 			expect(voices.length, label).toBe(c.len);
-			expect(h(voices), label).toBe(c.hash);
+			expect(h(voices), label).toBe(c.listHash);
 		}
 	});
 	it("voice URIs", () => {

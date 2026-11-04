@@ -253,10 +253,16 @@ def record_voices():
     for os_name in OS_NAMES + ('plan9',):
         for locale in VOICE_LOCALES:
             for seed in range(20):
-                voices = fp._generate_random_voice_subset(os_name, locale, seed=seed)
-                case = {'os': os_name, 'locale': locale, 'seed': seed, 'hash': h(voices), 'len': len(voices)}
-                if seed == 0 and locale in (None, 'de-DE'):
-                    case['voices'] = voices
+                # The config a launch sends: a Linux identity's ~15000 voices
+                # go as their grid, so only seed 0 expands the full list.
+                config = fp.draw_voice_config(os_name, locale, seed=seed)
+                case = {'os': os_name, 'locale': locale, 'seed': seed, 'hash': h(config)}
+                if seed == 0:
+                    voices = fp._generate_random_voice_subset(os_name, locale, seed=seed)
+                    case['listHash'] = h(voices)
+                    case['len'] = len(voices)
+                    if locale in (None, 'de-DE'):
+                        case['config'] = config
                 cases.append(case)
     uris = []
     uri_hashes = {}
