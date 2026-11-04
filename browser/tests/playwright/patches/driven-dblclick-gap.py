@@ -8,6 +8,12 @@ milliseconds). Juggler now holds the second press a person's gap after the
 release (PageHandler.js clickGap, 70-180 ms), with clickHold() before it, so
 press to press stays inside the OS double-click time and dblclick still fires.
 
+The first press came under 10 ms after the move that brought the pointer
+onto the button (cfparity driven.dblclick timing/overDown; stock under
+250 ms): a press after a move now waits a person's dwell on the target
+(PageHandler.js hoverDwell, 60-240 ms). A double click at the point the
+pointer already rests on has no move before it and waits for nothing.
+
     python browser/tests/playwright/patches/driven-dblclick-gap.py
 """
 
@@ -23,7 +29,7 @@ RECORD = """() => {
   const b = document.getElementById('b');
   if (b.__rec) return;
   b.__rec = true;
-  for (const t of ['mousedown', 'mouseup', 'dblclick']) b.addEventListener(t, (e) => window.__ev.push([t, e.timeStamp]));
+  for (const t of ['mouseover', 'mousedown', 'mouseup', 'dblclick']) b.addEventListener(t, (e) => window.__ev.push([t, e.timeStamp]));
 }"""
 
 
@@ -31,9 +37,11 @@ def gaps(events):
     downs = [ts for t, ts in events if t == "mousedown"]
     ups = [ts for t, ts in events if t == "mouseup"]
     dbl = sum(1 for t, _ in events if t == "dblclick")
+    over = [ts for t, ts in events if t == "mouseover"]
     if len(downs) != 2 or len(ups) != 2:
         return None
-    return {"upDown": round(downs[1] - ups[0], 1), "pressToPress": round(downs[1] - downs[0], 1), "dblclick": dbl}
+    return {"upDown": round(downs[1] - ups[0], 1), "pressToPress": round(downs[1] - downs[0], 1), "dblclick": dbl,
+            "overDown": round(downs[0] - over[0], 1) if over else None}
 
 
 def probe(binary):
@@ -48,6 +56,9 @@ def probe(binary):
         for name, act in (("locator.dblclick", lambda: page.locator("#b").dblclick()),
                           ("mouse.dblclick", lambda: page.mouse.dblclick(cx, cy)),
                           ("locator.dblclick again", lambda: page.locator("#b").dblclick())):
+            # Off the button first, so each double click's move brings the pointer onto it.
+            page.mouse.move(cx + 300, cy + 200)
+            page.wait_for_timeout(300)
             page.evaluate(RECORD)
             act()
             page.wait_for_timeout(600)
@@ -65,6 +76,8 @@ def main() -> int:
             failures.append(f"{name}: second press {g['upDown']} ms after the first release, want 60-200")
         elif g["pressToPress"] > 450 or g["dblclick"] != 1:
             failures.append(f"{name}: presses {g['pressToPress']} ms apart, {g['dblclick']} dblclick, want <450 and 1")
+        elif g["overDown"] is None or not 50 <= g["overDown"] < 250:
+            failures.append(f"{name}: first press {g['overDown']} ms after the pointer reached the button, want 50-250")
     for f in failures:
         print(f"FAIL: {f}")
     if failures:

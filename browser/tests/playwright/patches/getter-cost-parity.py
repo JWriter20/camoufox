@@ -17,7 +17,7 @@ browser/upstream.sh (--stock <firefox binary>, else downloaded and verified as
 stock-gpu-parity does) and in Camoufox with a launch-level and a per-context
 identity, on the same machine, and fails when a getter costs more than
 SLOWER_FACTOR times stock and at least MIN_GAP_NS more. It also fails when a
-getter is at least MIN_GAP_NS cheaper than stock's and, measured against an
+getter is at least FASTER_MIN_GAP_NS cheaper than stock's and, measured against an
 untouched control getter in the same browser, under 1/FASTER_FACTOR of stock's
 cost: one that skips stock's work shows as plainly (screen.width took 18-24 ns
 against stock's 107 ns when it did). Each figure is the fastest of several
@@ -53,6 +53,10 @@ LAUNCHES = 2
 SLOWER_FACTOR = 2.0
 FASTER_FACTOR = 2.0
 MIN_GAP_NS = 30.0
+# A getter cheaper than stock's needs a smaller gap: what it skipped is real work, and the fastest of several
+# runs is steady to a few ns. VENDOR and VERSION took 14 ns against stock's 35-36 (0.4x, a 21 ns gap, on
+# 159.0-beta.35 without --enable-stdcxx-compat), which a 30 ns floor let through.
+FASTER_MIN_GAP_NS = 12.0
 PAGE_TIMEOUT_S = 240
 FIRST_READ_GAP_MS = 5.0
 
@@ -63,10 +67,14 @@ FIRST_READS = ["navigator.hardwareConcurrency", "screen.width", "screen.colorDep
 # WebGL, on a canvas in the page and an OffscreenCanvas in the worker. 37446 is
 # WEBGL_debug_renderer_info's UNMASKED_RENDERER_WEBGL; the renderer strings are
 # a synchronous round trip to the GPU process in stock, which a spoofed string
-# must not skip.
+# must not skip. VENDOR, VERSION and SHADING_LANGUAGE_VERSION build a std::string
+# per call: stock Linux is built with --enable-stdcxx-compat (the old libstdc++
+# ABI, no small-string buffer), so each one allocates there, and a build without
+# it answered them at 0.47x stock's cost (LEAKS 637).
 WEBGL = [
     "G.getParameter(G.MAX_TEXTURE_SIZE)", "G.getParameter(G.MAX_VERTEX_ATTRIBS)",
-    "G.getParameter(G.VENDOR)", "G.getParameter(G.RENDERER)", "G.getParameter(37446)",
+    "G.getParameter(G.VENDOR)", "G.getParameter(G.VERSION)", "G.getParameter(G.SHADING_LANGUAGE_VERSION)",
+    "G.getParameter(G.RENDERER)", "G.getParameter(37446)",
     "G.getExtension('OES_texture_float')", "G.getSupportedExtensions().length",
 ]
 GL_SETUP = "G.getExtension('WEBGL_debug_renderer_info');"
@@ -316,7 +324,7 @@ def measure() -> int:
                 control = expr in CONTROLS
                 slow = c > SLOWER_FACTOR * s and c - s >= MIN_GAP_NS
                 fast = (FASTER_FACTOR * c / camou_base < s / stock_base
-                        and s - c >= MIN_GAP_NS)
+                        and s - c >= FASTER_MIN_GAP_NS)
                 mark = ("  <- control" if control else "  <- SLOWER" if slow
                         else "  <- FASTER" if fast else "")
                 print(f"{where:6s} {expr[:44]:44s} {s:8.0f} {c:9.0f}{mark}")

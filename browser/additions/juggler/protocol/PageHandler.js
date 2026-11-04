@@ -42,6 +42,16 @@ function clickGap() {
   return Math.min(180, Math.max(70, 110 + 25 * n));
 }
 
+// How long a person's pointer rests on a target before pressing it: about
+// 130 ms (SD 40; an estimate, no published or recorded figure found), kept
+// within 60-240 ms. Stock's OS input reads under 250 ms from arrival to press
+// (cfparity driven.dblclick timing/overDown); Playwright pressed under 10 ms
+// after the move that brought the pointer there.
+function hoverDwell() {
+  const n = Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+  return Math.min(240, Math.max(60, 130 + 40 * n));
+}
+
 function hashConsoleMessage(params) {
   return params.location.lineNumber + ':' + params.location.columnNumber + ':' + params.location.url;
 }
@@ -140,6 +150,9 @@ export class PageHandler {
 
     this._pendingEventWatchers = new Set();
     this._moveDelivery = null;
+    // Arrival order of mouse commands (beforeDispatch).
+    this._mouseTurn = Promise.resolve();
+    this._mouseTurns = new Map();
     this._lastMoveAt = 0;
     this._humanizeAbort = new AbortController();
     // Per-page typing state a keyboard engine plans against (held keys, the
@@ -648,6 +661,7 @@ export class PageHandler {
     await watcher.dispose();
     this._lastTrackedPos = { x, y };
     this._lastMousePosition = { x, y };
+    this._movedAt = ChromeUtils.now();
   }
 
   // Inside activateAndRun: play a scroll engine's plan. Wheel steps are
@@ -830,13 +844,44 @@ export class PageHandler {
   // Called by the protocol session before each command of this page. Any
   // command but another move waits until the page has the last move, so what
   // a caller does after page.mouse.move() sees the move.
+  //
+  // Mouse commands also join the input chain in the order they arrived. Each
+  // one has waits of its own before it gets there (the move's delivery, the
+  // input gate), and a release that cleared them first was dispatched before
+  // its press: the page saw mouseup, then mousedown, and no click
+  // (near-edge-mouse-deadlock.py cold pages, ~1 in 3 runs once mousedown
+  // waited a dwell). A command takes its turn here, synchronously on arrival,
+  // and hands it on once it is queued on the chain (_mouseTurnTaken).
   async beforeDispatch(method, params) {
-    if (method === 'Page.dispatchMouseEvent' && params.type === 'mousemove')
-      return;
+    if (method === 'Page.dispatchMouseEvent') {
+      const previous = this._mouseTurn;
+      let handOn;
+      this._mouseTurn = new Promise(resolve => handOn = resolve);
+      this._mouseTurns.set(params, handOn);
+      await previous;
+      if (params.type === 'mousemove')
+        return;
+    }
     await this._moveDelivered();
   }
 
-  async ['Page.dispatchMouseEvent']({type, x, y, button, clickCount, modifiers, buttons}) {
+  // The command's turn is over: the next mouse command may join the chain.
+  _mouseTurnTaken(params) {
+    const handOn = this._mouseTurns.get(params);
+    this._mouseTurns.delete(params);
+    handOn?.();
+  }
+
+  async ['Page.dispatchMouseEvent'](params) {
+    try {
+      return await this._dispatchMouseEvent(params);
+    } finally {
+      this._mouseTurnTaken(params);
+    }
+  }
+
+  async _dispatchMouseEvent(params) {
+    const {type, x, y, button, clickCount, modifiers, buttons} = params;
     await this._awaitUserInputGate();
     const win = this._pageTarget._window;
     const eventArgs = {button, clickCount, modifiers, buttons};
@@ -889,7 +934,7 @@ export class PageHandler {
     // We must switch to proper tab in the tabbed browser so that
     // 1. Event is dispatched to a proper renderer.
     // 2. We receive an ack from the renderer for the dispatched event.
-    await this._pageTarget.activateAndRun(async () => {
+    const dispatched = this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
       // If someone asks us to dispatch mouse event outside of viewport, then we normally would drop it.
       const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, eventArgs);
@@ -927,6 +972,19 @@ export class PageHandler {
         this._buttonUpAt = undefined;
         if (clickCount > 1 && upAt !== undefined) {
           const wait = upAt + clickGap() - ChromeUtils.now();
+          if (wait > 0)
+            await new Promise(resolve => setTimeout(resolve, wait));
+        }
+        // Camoufox: a press that follows the move bringing the pointer to its
+        // target comes a person's dwell after that move, not right behind it
+        // (Playwright pipelines move and press; cfparity driven.dblclick
+        // timing/overDown read under 10 ms where stock reads under 250). A
+        // script's own longer pause stands; the second press of a double
+        // click follows its gap above, with no move before it.
+        const movedAt = this._movedAt;
+        this._movedAt = undefined;
+        if (clickCount <= 1 && movedAt !== undefined) {
+          const wait = movedAt + hoverDwell() - ChromeUtils.now();
           if (wait > 0)
             await new Promise(resolve => setTimeout(resolve, wait));
         }
@@ -978,6 +1036,8 @@ export class PageHandler {
         // Camoufox: remember where the cursor landed so the next humanized
         // move starts its trajectory from the real previous position.
         this._lastTrackedPos = { x, y };
+        if (!buttons)
+          this._movedAt = ChromeUtils.now();
         // A move with a button held may start a drag, which the page decides
         // when the move reaches it, at the refresh tick.
         if (buttons)
@@ -1037,6 +1097,10 @@ export class PageHandler {
         return;
       }
     }, { muteNotificationsPopup: true });
+    // activateAndRun() queued the slot synchronously: the next command's slot
+    // now comes after this one.
+    this._mouseTurnTaken(params);
+    await dispatched;
   }
 
   // Whether the drag a mousemove started has a drag session. Waited for a
