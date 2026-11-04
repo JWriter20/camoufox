@@ -7,11 +7,11 @@ launch-level `webrtc:ipv4`/`webrtc:ipv6` keys, so a per-context IP was stored
 and never used: a context created behind its own proxy reported no public
 address, or the launch-level one.
 
-The probe gathers against a STUN server that never answers (a silent loopback
-socket), so no real public candidate can form and the run needs no network. That
-is the TCP-proxy case, in which the browser emits a srflx candidate carrying the
-spoofed IP. That candidate used to arrive after the end-of-candidates event,
-which stock Firefox never does.
+The probe gathers against the guard's own STUN server on this host's address
+(Firefox ignores a loopback STUN server). It maps every request to a TEST-NET
+address, as a NAT would, so a real srflx forms without the internet and the
+browser rewrites its address to the context's IP. A srflx comes only from a STUN
+answer: Camoufox no longer makes one up when none came (LEAKS 616).
 
 What PASS means:
     * two contexts in one browser each see their own IP in a srflx candidate;
@@ -23,7 +23,9 @@ What PASS means:
 
 import asyncio
 import socket
+import struct
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -57,6 +59,37 @@ PROBE = """async (stun) => {
 }"""
 
 
+COOKIE = 0x2112A442
+# What the guard's STUN server says it saw: a NAT's public side, never this host.
+MAPPED = "198.51.100.77"
+
+
+def host_address() -> str | None:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 9))  # no datagram is sent; this picks the route's source
+        address = probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+    return None if address.startswith("127.") else address
+
+
+def answer_stun(sock: socket.socket) -> None:
+    """Answers Binding requests with MAPPED and the request's own source port."""
+    mapped = struct.unpack("!I", socket.inet_aton(MAPPED))[0]
+    while True:
+        try:
+            data, src = sock.recvfrom(2048)
+        except OSError:
+            return
+        if len(data) < 20 or struct.unpack("!HHI", data[:8])[0::2] != (1, COOKIE):
+            continue
+        attr = struct.pack("!HHBBHI", 0x0020, 8, 0, 1, src[1] ^ (COOKIE >> 16), mapped ^ COOKIE)
+        sock.sendto(struct.pack("!HHI", 0x0101, len(attr), COOKIE) + data[8:20] + attr, src)
+
+
 async def srflx_ips(page, stun: str) -> list:
     await page.goto("about:blank")
     return await page.evaluate(PROBE, stun)
@@ -65,9 +98,14 @@ async def srflx_ips(page, stun: str) -> list:
 async def main() -> int:
     from camoufox.async_api import AsyncCamoufox, AsyncNewContext
 
-    silent = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    silent.bind(("127.0.0.1", 0))
-    stun = f"stun:127.0.0.1:{silent.getsockname()[1]}"
+    lan = host_address()
+    if lan is None:
+        print("FAIL: this host has no non-loopback IPv4 address for the STUN server")
+        return 1
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind((lan, 0))
+    threading.Thread(target=answer_stun, args=(server,), daemon=True).start()
+    stun = f"stun:{lan}:{server.getsockname()[1]}"
 
     checks = []
     async with AsyncCamoufox(headless=True, os="linux", config={"webrtc:ipv4": LAUNCH_IP},
@@ -77,7 +115,7 @@ async def main() -> int:
         for ip in CONTEXT_IPS:
             context = await AsyncNewContext(browser, os="linux", webrtc_ip=ip)
             checks.append((f"context {ip}", ip, await srflx_ips(await context.new_page(), stun)))
-    silent.close()
+    server.close()
 
     passed = True
     for label, expected, got in checks:
