@@ -1,7 +1,7 @@
 """
 Verify a SOCKS5 proxy that requires a username and password works.
 
-Proxy services such as CamouLink authenticate every SOCKS5 connection with
+SOCKS5 proxies can authenticate every connection with
 RFC 1929 username/password, and often put the session's options in the
 username (`user+denver+os-linux`). Playwright's client refuses
 `proxy={"server": "socks5://...", "username": ...}` outright ("Browser does not

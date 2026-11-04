@@ -91,6 +91,7 @@
   <link rel="localization" href="browser/sidebar.ftl"/>
   <link rel="localization" href="browser/syncedTabs.ftl"/>
   <link rel="localization" href="browser/profiles.ftl"/>
+  <link rel="localization" href="browser/autoTabGrouping.ftl"/>
   <!-- Untranslated FTL files -->
   <link rel="localization" href="preview/credentialChooser.ftl" />
   <link rel="localization" href="preview/enUS-searchFeatures.ftl" />
@@ -99,7 +100,6 @@
   <link rel="localization" href="preview/onboarding.ftl"/>
   <link rel="localization" href="preview/smartTabGroups.ftl"/>
   <link rel="localization" href="preview/genai.ftl"/>
-  <link rel="localization" href="preview/autoTabGrouping.ftl"/>
   <link rel="localization" href="preview/remoteControl.ftl"/>
   <link rel="localization" href="preview/aiWindow.ftl"/>
   <link rel="localization" href="browser/aiWindow.ftl" />
@@ -215,6 +215,7 @@
     <command id="History:UndoCloseWindow" />
     <command id="History:RestoreLastClosedTabOrWindowOrSession" />
     <command id="History:SearchHistory" />
+    <command id="Browser:SearchTabs" />
 
     <!-- The keys for these commands are registered dynamically by gGfxUtils
          when gfx.webrender.debug.enable-capture is set. -->
@@ -277,7 +278,7 @@
          data-l10n-id="downloads-shortcut"
          modifiers="accel,shift"
          command="Tools:Downloads"/>
-    <key id="key_openAddons" data-l10n-id="addons-shortcut" command="Tools:Addons" modifiers="accel,shift"/>
+    <key id="key_openAddons" data-l10n-id="addons-shortcut-2" command="Tools:Addons" modifiers="accel,shift"/>
     <key id="openFileKb" data-l10n-id="file-open-shortcut" command="Browser:OpenFile"  modifiers="accel"/>
     <key id="key_savePage" data-l10n-id="save-page-shortcut" command="Browser:SavePage" modifiers="accel"/>
     <key id="printKb" data-l10n-id="print-shortcut" command="cmd_print"  modifiers="accel"/>
@@ -387,6 +388,7 @@
     <key id="key_privatebrowsing" command="Tools:PrivateBrowsing" data-l10n-id="private-browsing-shortcut"
          modifiers="accel,shift" reserved="true"/>
     <key id="key_screenshot" data-l10n-id="screenshot-shortcut" command="Browser:Screenshot" modifiers="accel,shift"/>
+    <key id="key_searchTabs" data-l10n-id="search-tabs-shortcut" command="Browser:SearchTabs" modifiers="accel,shift"/>
     <key id="key_sanitize" command="Tools:Sanitize" keycode="VK_DELETE" modifiers="accel,shift"/>
     <key id="key_quitApplication" data-l10n-id="quit-app-shortcut"
          modifiers="accel"
@@ -1208,28 +1210,28 @@
 
       <menugroup id="context-navigation">
         <menuitem id="context-back"
-                  data-l10n-id="main-context-menu-back-2"
+                  data-l10n-id="main-context-menu-back-3"
                   data-l10n-args='{"shortcut":""}'
                   class="menuitem-iconic"
                   command="Browser:BackOrBackDuplicate"/>
         <menuitem id="context-forward"
-                  data-l10n-id="main-context-menu-forward-2"
+                  data-l10n-id="main-context-menu-forward-3"
                   data-l10n-args='{"shortcut":""}'
                   class="menuitem-iconic"
                   command="Browser:ForwardOrForwardDuplicate"/>
         <menuitem id="context-reload"
                   class="menuitem-iconic"
                   tooltip="dynamic-shortcut-tooltip"
-                  data-l10n-id="main-context-menu-reload"
+                  data-l10n-id="main-context-menu-reload-2"
                   command="Browser:ReloadOrDuplicate"/>
         <menuitem id="context-stop"
                   class="menuitem-iconic"
                   tooltip="dynamic-shortcut-tooltip"
-                  data-l10n-id="main-context-menu-stop"
+                  data-l10n-id="main-context-menu-stop-2"
                   command="Browser:Stop"/>
         <menuitem id="context-bookmarkpage"
                   class="menuitem-iconic"
-                  data-l10n-id="main-context-menu-bookmark-page"
+                  data-l10n-id="main-context-menu-bookmark-page-2"
                   />
       </menugroup>
       <menuseparator id="context-sep-navigation"/>
@@ -1244,6 +1246,7 @@
       <menuseparator id="context-sep-viewsource-commands"/>
       <menuitem id="spell-no-suggestions"
                 disabled="true"
+                role="note"
                 data-l10n-id="text-action-spell-no-suggestions"/>
       <menuitem id="spell-add-to-dictionary"
                 data-l10n-id="text-action-spell-add-to-dictionary"
@@ -1601,7 +1604,7 @@
                 />
       <menu id="spell-dictionaries"
             data-l10n-id="text-action-spell-dictionaries">
-          <menupopup id="spell-dictionaries-menu" accesskey-conflicts-bug="2073901">
+          <menupopup id="spell-dictionaries-menu">
               <menuseparator id="spell-language-separator"/>
               <menuitem id="spell-add-dictionaries"
                         data-l10n-id="text-action-spell-add-dictionaries"
@@ -1624,7 +1627,8 @@
                 />
       <menuitem id="context-inspect-a11y"
                 hidden="true"
-                data-l10n-id="main-context-menu-inspect-a11y-properties"
+                data-l10n-id="main-context-menu-inspect-a11y-properties2"
+                intended-duplicate-accesskey=""
                 />
       <menuitem id="context-inspect"
                 hidden="true"
@@ -4139,7 +4143,8 @@
     <vbox class="panel-subview-body">
       <toolbarbutton id="allTabsMenu-searchTabs"
                      class="subviewbutton"
-                     data-l10n-id="all-tabs-menu-search-all-tabs"/>
+                     data-l10n-id="all-tabs-menu-search-all-tabs"
+                     key="key_searchTabs"/>
       <toolbarbutton id="allTabsMenu-closeDuplicateTabs"
                      class="subviewbutton"
                      data-l10n-id="all-tabs-menu-close-duplicate-tabs"/>
@@ -5434,7 +5439,7 @@
   <panelview id="content-analysis-panel" class="PanelUI-subView" role="document" mainview-with-header="true">
     <vbox id="content-analysis-panel-container" role="alertdialog" aria-labelledby="content-analysis-header">
       <hbox class="panel-header">
-        <html:h1 id="content-analysis-header" data-l10n-id="content-analysis-panel-title"/>
+        <html:h1 id="content-analysis-header" data-l10n-id="content-analysis-panel-title2"/>
       </hbox>
       <description id="content-analysis-panel-description">
         <html:a is="moz-support-link"
@@ -5987,6 +5992,10 @@
       <menuitem id="menu_searchHistory"
                 command="History:SearchHistory"
                 data-l10n-id="menu-history-search"/>
+      <menuitem id="menu_searchTabs"
+                command="Browser:SearchTabs"
+                key="key_searchTabs"
+                data-l10n-id="menu-history-search-tabs"/>
       <menu id="historyUndoMenu"
             disabled="true" data-l10n-id="menu-history-undo-menu">
         <menupopup id="historyUndoPopup"
@@ -6334,28 +6343,28 @@
 
     <hbox id="nav-bar-customization-target" flex="1">
       <toolbarbutton id="back-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
-                     data-l10n-id="toolbar-button-back-2"
+                     data-l10n-id="toolbar-button-back-3"
                      removable="false" overflows="false"
                      keepbroadcastattributeswhencustomizing="true"
                      command="Browser:BackOrBackDuplicate"
                      tooltip="back-button-tooltip"
                      context="backForwardMenu"/>
       <toolbarbutton id="forward-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
-                     data-l10n-id="toolbar-button-forward-2"
+                     data-l10n-id="toolbar-button-forward-3"
                      removable="false" overflows="false"
                      keepbroadcastattributeswhencustomizing="true"
                      command="Browser:ForwardOrForwardDuplicate"
                      tooltip="forward-button-tooltip"
                      context="backForwardMenu"/>
       <toolbaritem id="stop-reload-button" class="chromeclass-toolbar-additional"
-                   data-l10n-id="toolbar-button-stop-reload"
+                   data-l10n-id="toolbar-button-stop-reload-2"
                    removable="true" overflows="false">
         <toolbarbutton id="reload-button" class="toolbarbutton-1"
-                       data-l10n-id="toolbar-button-reload"
+                       data-l10n-id="toolbar-button-reload-2"
                        command="Browser:ReloadOrDuplicate"
                        tooltip="dynamic-shortcut-tooltip"/>
         <toolbarbutton id="stop-button" class="toolbarbutton-1"
-                       data-l10n-id="toolbar-button-stop"
+                       data-l10n-id="toolbar-button-stop-2"
                        command="Browser:Stop"
                        tooltip="dynamic-shortcut-tooltip"/>
       </toolbaritem>

@@ -8,10 +8,9 @@ world, but the DOM objects they touch belong to the page: if wrapping one for
 the isolated world defines its interface on the page's window, a page that
 lists its globals after a driver read its DOM sees interfaces it never used.
 
-The guard loads the same page twice under Playwright, once with only the
-input fill() causes (a click on the field and a key) and once after typical
-driver work (evaluate, query, locator reads, fill, a screenshot), and has the
-page list its globals when told to. The lists must
+The guard loads the same page twice under Playwright, once with only a
+fill() and once after typical driver work (evaluate, query, locator reads,
+the same fill, a screenshot), and has the page list its globals when told to. The lists must
 match, and every interface the driver used must still work for the page.
 
     python browser/tests/playwright/patches/driven-evaluate-globals.py
@@ -28,7 +27,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import resolve_binary  # noqa: E402
 
 PAGE_TIMEOUT_S = 60
-INPUT_CENTER = (250, 110)  # the input's box on PAGE, where fill() clicks it
 # The page lists its globals when the driver changes the URL's fragment, so the
 # driver never calls into the page to start it, and the page itself does
 # nothing before then: no timers, no requests. It lists before it sends.
@@ -63,7 +61,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def work(page):
-    """Typical driver calls, as cfparity's driven.traps makes them."""
+    """Typical driver calls that wrap page objects and interfaces."""
     page.evaluate("() => document.title")
     page.evaluate("() => ({count: document.querySelectorAll('*').length, title: document.title})")
     page.evaluate("() => document.querySelector('#in')")
@@ -87,15 +85,15 @@ def work(page):
 
 
 def same_input(page):
-    """The input fill() and the screenshot cause, without a driver's reads.
+    """The input work() gives the page, without the driver's other reads.
 
-    fill() clicks the field and types, so the page gets mouse, pointer, focus
-    and key events, and Firefox's own actors wrap them in the page's window as
-    they do for a person's input. The run left alone gets the same input, so
-    the comparison sees only what the driver's reads add.
+    Whatever input fill() sends (a click on the field and keys, or focus and
+    an insertText), the page receives it and Firefox's own actors define the
+    interfaces of its events on the page's window as they do for a person's.
+    The run left alone gets the same fill(), so the comparison sees only what
+    the other reads add.
     """
-    page.mouse.click(*INPUT_CENTER)
-    page.keyboard.type("x")
+    page.locator("#in").fill("x")
 
 
 def globals_of(binary, server, url, driven):
@@ -105,8 +103,8 @@ def globals_of(binary, server, url, driven):
 
     server.arrived = threading.Event()
     # uBlock's content script runs when it likes, and wraps what it touches.
-    # Reader mode's parse-on-load check does too: stock Firefox (158.0.1) reads
-    # the page's location and node geometry after the load's first paint
+    # Reader mode's parse-on-load check does too: stock Firefox reads the
+    # page's location and node geometry after the load's first paint
     # (AboutReaderChild -> Readerable.isProbablyReaderable), which defines
     # Location and DOMRectList on the page's window at whatever point the
     # input has reached by then. Off in both runs, so neither races the input.

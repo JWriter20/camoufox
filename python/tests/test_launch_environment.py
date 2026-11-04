@@ -196,14 +196,7 @@ class TestUiLocaleFollowsIntlLocale:
 
 
 class TestToggleSettingsAreWrittenBothWays:
-    """A persistent profile keeps every pref it was ever launched with.
-
-    Firefox saves a user.js pref into prefs.js, and a later launch that simply
-    omits it does not clear it. A profile once launched with block_webrtc kept
-    WebRTC off after the flag was removed (a real profile's prefs.js still held
-    media.peerconnection.enabled=false), so each toggle writes its pref on every
-    launch, on or off.
-    """
+    """Fresh profiles omit off toggles; persistent profiles clear old values."""
 
     UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
     TOGGLES = [
@@ -219,7 +212,6 @@ class TestToggleSettingsAreWrittenBothWays:
 
     @pytest.mark.parametrize("flag, pref, stock, toggled", TOGGLES)
     def test_off_writes_nothing_as_stock_does(self, isolated_launch_dependencies, flag, pref, stock, toggled):
-        # The permissions check compares the prefs a launch sets with stock's, which sets none.
         assert pref not in self._prefs()
 
     @pytest.mark.parametrize("flag, pref, stock, toggled", TOGGLES)

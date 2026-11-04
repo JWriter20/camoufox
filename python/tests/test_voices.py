@@ -84,7 +84,7 @@ def test_linux_launch_carries_the_grid():
 
 
 def test_a_given_speechd_grid_is_kept():
-    # A caller's grid (cfparity mirrors the host's) is the identity's voices,
+    # A caller's grid is the identity's voices,
     # not something to draw over.
     grid = {"languages": [["English (America)", "en-US"]], "variants": ["Adam"]}
     cfg = _launch_config(os="linux", config={"voices:speechd": grid})
@@ -98,6 +98,7 @@ def test_a_given_speechd_grid_is_kept():
         {"languages": [["Afrikaans", "af"]]},  # no variants
         {"languages": [["Afrikaans"]], "variants": []},  # language without a code
         {"languages": [["Afrikaans", "af"]], "variants": [1]},
+        [["Afrikaans", "af"]],  # not an object
     ],
 )
 def test_validate_speechd_voices_rejects_unusable_shapes(value):

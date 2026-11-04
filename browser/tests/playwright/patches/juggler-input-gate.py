@@ -7,8 +7,8 @@ that reaches a document before its input gate opens: 100 ms after readyState
 became "loading" and three refresh ticks (dom.input_events.security.*,
 PresShell::CanHandleUserInputEvents). Juggler's wheel is not flagged
 synthesized-for-tests, so page.mouse.wheel(0, 300) straight after goto lost
-its first notches: 2, 1 or 0 of 3 reached the page (measured on pkg-it3).
-Juggler's mouse and key events are flagged, so they got through inside the
+its first notches: 2, 1 or 0 of 3 reached the page. Juggler's mouse and key
+events are flagged, so they got through inside the
 gate: a trusted pointermove 15 ms into the page, which no person's Firefox
 delivers.
 

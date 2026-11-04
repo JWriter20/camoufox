@@ -5,7 +5,7 @@ A real mouse reports faster than the refresh driver ticks. Stock Firefox
 158.0.1 on Linux (GTK, X11) queues the moves in the content process and, at
 each tick, dispatches one pointermove/mousemove that carries the queued ones
 in getCoalescedEvents(), and a pointerrawupdate for each move as it arrives.
-cfparity's driven.rate, a 125 Hz XTest sweep on Xvfb (three runs, identical):
+A 125 Hz XTest sweep on Xvfb (three runs, identical):
 one pointermove per frame, 2 to 4 coalesced in each, a pointerrawupdate per
 report.
 

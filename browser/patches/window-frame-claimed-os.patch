@@ -1,4 +1,53 @@
+diff --git a/widget/gtk/ScreenHelperGTK.cpp b/widget/gtk/ScreenHelperGTK.cpp
+index 6d55ea7110..e2ae767b72 100644
+--- a/widget/gtk/ScreenHelperGTK.cpp
++++ b/widget/gtk/ScreenHelperGTK.cpp
+@@ -3,6 +3,7 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "ScreenHelperGTK.h"
++#include "MaskConfig.hpp"
+ 
+ #ifdef MOZ_X11
+ #  include <X11/Xlib.h>
+@@ -185,6 +186,35 @@ static already_AddRefed<Screen> MakeScreenGtk(unsigned int aMonitor,
+     }
+   }
+ 
++  // Camoufox: a Windows identity's work area is the one its screen.avail*
++  // claims (the taskbar's 48 CSS px off the bottom on win-i9), not this X
++  // screen's. Windows Firefox sizes and places new windows inside the work
++  // area -- window.open's default size, a pop-up taller than the screen, the
++  // clamp that keeps a window on screen -- so with the X work area a pop-up
++  // was 864 CSS px tall where stock's is 816, and one opened without a size
++  // sat 48 px lower. The claim is in CSS pixels; the monitor is this
++  // identity's screen at its devicePixelRatio, so the ratio of the two
++  // heights scales it.
++  if (GdkIsX11Display() &&
++      MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
++      MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows) {
++    auto width = MaskConfig::GetUint32("screen.width");
++    auto height = MaskConfig::GetUint32("screen.height");
++    auto avail = MaskConfig::GetRect("screen.availLeft", "screen.availTop",
++                                     "screen.availWidth", "screen.availHeight");
++    if (width && *width && height && *height && avail) {
++      const double sx = double(rect.width) / *width;
++      const double sy = double(rect.height) / *height;
++      const auto& a = *avail;
++      availRect = LayoutDeviceIntRect(
++          rect.x + NSToIntRound(a[0] * sx), rect.y + NSToIntRound(a[1] * sy),
++          NSToIntRound(a[2] * sx), NSToIntRound(a[3] * sy))
++                      .Intersect(rect);
++      LOG_SCREEN("  claimed workarea [%d, %d] -> [%d x %d]", availRect.x,
++                 availRect.y, availRect.width, availRect.height);
++    }
++  }
++
+   if (!rect.width || !rect.height) {
+     NS_WARNING("Reporting screen with zero size!");
+   }
 diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+index 07741a3deb..702d44eed9 100644
 --- a/widget/gtk/nsWindow.cpp
 +++ b/widget/gtk/nsWindow.cpp
 @@ -3,6 +3,9 @@
@@ -238,7 +287,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
  
    // We need to send WindowMoved even if only the client margins changed
    // so that BrowserParent picks up the new offsets.
-@@ -3730,6 +3882,9 @@ void nsWindow::OnWindowStateEvent(GtkWidget* aWidget,
+@@ -3834,6 +3986,9 @@ void nsWindow::OnWindowStateEvent(GtkWidget* aWidget,
        // fullscreen mode if the relevant configure hasn't happened yet or what
        // not.
        RecomputeBounds();
@@ -248,7 +297,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
      }
      if (mWidgetListener) {
        mWidgetListener->SizeModeChanged(mSizeMode);
-@@ -4651,6 +4806,20 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+@@ -4755,6 +4910,20 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
      mGtkWindowAppName = gAppData->name;
    }
  
@@ -269,7 +318,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
    mCreated = true;
    return NS_OK;
  }
-@@ -4782,7 +4951,7 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
+@@ -4886,7 +5055,7 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
      // SSD mode expects coordinates with decorations (outer frame)
      // so put the margin offset back.
      if (!ToplevelUsesCSD()) {
@@ -278,7 +327,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
      }
      return GdkRectangle{cr.x, cr.y, cr.width, cr.height};
    }();
-@@ -4870,11 +5039,16 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
+@@ -4974,11 +5143,16 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
    // the request is granted.
    bool isOrWillBeVisible = mHasReceivedSizeAllocate || mNeedsShow || mIsShown;
    if (!isOrWillBeVisible || IsPopup()) {
@@ -297,7 +346,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
        NotifyWindowMoved(mClientArea.TopLeft());
      }
      if (aResized) {
-@@ -7623,8 +7797,9 @@ void nsWindow::InsertEmoji(RefPtr<nsWindow> aToplevelWindow) {
+@@ -7727,8 +7901,9 @@ void nsWindow::InsertEmoji(RefPtr<nsWindow> aToplevelWindow) {
    auto offset = IsTopLevelWidget()
                      ? DesktopIntPoint()
                      : WidgetToScreenOffsetUnscaled() -
@@ -310,6 +359,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
    LOG("nsWindow::InsertEmoji() carret [%d, %d] offset [%d, %d] height %d",
        int(input.x), int(input.y), int(offset.x), int(offset.y), input.height);
 diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
+index 787e3c4cc3..a817e03de0 100644
 --- a/widget/gtk/nsWindow.h
 +++ b/widget/gtk/nsWindow.h
 @@ -609,6 +609,9 @@ class nsWindow : public nsIWidget {
@@ -339,50 +389,3 @@ diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
  
    // This field omits duplicate scroll events caused by GNOME bug 726878.
    guint32 mLastScrollEventTime = GDK_CURRENT_TIME;
-diff --git a/widget/gtk/ScreenHelperGTK.cpp b/widget/gtk/ScreenHelperGTK.cpp
---- a/widget/gtk/ScreenHelperGTK.cpp
-+++ b/widget/gtk/ScreenHelperGTK.cpp
-@@ -3,6 +3,7 @@
-  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
- 
- #include "ScreenHelperGTK.h"
-+#include "MaskConfig.hpp"
- 
- #ifdef MOZ_X11
- #  include <X11/Xlib.h>
-@@ -149,6 +150,35 @@ static already_AddRefed<Screen> MakeScreenGtk(unsigned int aMonitor,
-     rect = availRect;
-   }
- 
-+  // Camoufox: a Windows identity's work area is the one its screen.avail*
-+  // claims (the taskbar's 48 CSS px off the bottom on win-i9), not this X
-+  // screen's. Windows Firefox sizes and places new windows inside the work
-+  // area -- window.open's default size, a pop-up taller than the screen, the
-+  // clamp that keeps a window on screen -- so with the X work area a pop-up
-+  // was 864 CSS px tall where stock's is 816, and one opened without a size
-+  // sat 48 px lower. The claim is in CSS pixels; the monitor is this
-+  // identity's screen at its devicePixelRatio, so the ratio of the two
-+  // heights scales it.
-+  if (GdkIsX11Display() &&
-+      MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
-+      MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows) {
-+    auto width = MaskConfig::GetUint32("screen.width");
-+    auto height = MaskConfig::GetUint32("screen.height");
-+    auto avail = MaskConfig::GetRect("screen.availLeft", "screen.availTop",
-+                                     "screen.availWidth", "screen.availHeight");
-+    if (width && *width && height && *height && avail) {
-+      const double sx = double(rect.width) / *width;
-+      const double sy = double(rect.height) / *height;
-+      const auto& a = *avail;
-+      availRect = LayoutDeviceIntRect(
-+          rect.x + NSToIntRound(a[0] * sx), rect.y + NSToIntRound(a[1] * sy),
-+          NSToIntRound(a[2] * sx), NSToIntRound(a[3] * sy))
-+                      .Intersect(rect);
-+      LOG_SCREEN("  claimed workarea [%d, %d] -> [%d x %d]", availRect.x,
-+                 availRect.y, availRect.width, availRect.height);
-+    }
-+  }
-+
-   if (!rect.width || !rect.height) {
-     NS_WARNING("Reporting screen with zero size!");
-   }

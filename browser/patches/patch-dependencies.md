@@ -53,6 +53,7 @@ be listed there.
 | `timezone-spoofing.patch` | `timezone` |
 | `timer-lateness-claimed-os.patch` | `navigator.platform` (the timer's own context's, through `NavigatorManager::GetSpoofedOS()`) |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints` |
+| `virtual-display-claimed-screen.patch` | `screen.width`, `screen.height`, `screen.avail*` (the X screen reports the claimed screen when it is smaller) |
 | `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:blockIfNotDefined` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
@@ -82,7 +83,9 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch`, `zz-stock-cost-parity.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `timer-lateness-claimed-os.patch` | `fingerprint-injection.patch` for `/camoucfg` in `dom/base/moz.build`; `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()`; `cross-process-storage.patch` for `RoverfoxStorageManager::UserContextId()` |
 | `windows-lazy-cmaps.patch` | `claimed-os-emoji-pref.patch` for `MaskConfig.hpp` in `gfx/thebes/gfxTextRun.cpp`; `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build`; `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId`; `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
+| `virtual-display-claimed-screen.patch` | `windows-keyboard.patch` for `/camoucfg` in `widget/gtk/moz.build` |
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
+| `per-context-http-user-agent.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetUserAgent()`; `cross-process-storage.patch` for reading the context's value in the parent and worker processes |
 | `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
 
 ## RoverfoxStorageManager
@@ -151,9 +154,9 @@ These patches carry upstream Firefox changes that `browser/upstream.sh`'s
 version does not have yet. Drop each one when the Firefox it moves to ships
 the change.
 
-| Patch | Upstream change |
-|-------|-----------------|
-| `remote-security-settings.patch` | The startup import of the bundled OneCRL list into certificate storage, from mozilla-firefox's `release` branch ([Bug 2084311](https://bugzilla.mozilla.org/show_bug.cgi?id=2084311)). Firefox 158.0.1 ships the matching `security-state/onecrl.json` dump. Without the import a fresh profile has no revocations until its first Remote Settings sync, or none at all when that sync cannot reach Mozilla. |
+None at present. Firefox 159 ships the startup import of the bundled OneCRL
+list ([Bug 2084311](https://bugzilla.mozilla.org/show_bug.cgi?id=2084311)),
+which `remote-security-settings.patch` carried for 158.0.1.
 
 ## Playwright
 

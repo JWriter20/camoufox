@@ -169,6 +169,16 @@ function applyWindowSize(win) {
   // the frame exists, so the frame lands on top of it. Chrome reads the
   // identity's innerWidth/innerHeight too, so the window is measured: the
   // content area starts where the toolbars end and runs to the window's edge.
+  // The bookmarks toolbar shown only on a new tab takes its own room from the
+  // content area, as in stock; it is not part of the identity's outer chrome.
+  const newTabToolbar = () => {
+    const bar = doc.getElementById("PersonalToolbar");
+    if (!bar || bar.collapsed ||
+        Services.prefs.getCharPref("browser.toolbars.bookmarks.visibility", "newtab") !== "newtab") {
+      return 0;
+    }
+    return bar.getBoundingClientRect().height;
+  };
   const misfit = () => {
     const client = doc.documentElement.getBoundingClientRect();
     const start = stack.getBoundingClientRect();
@@ -177,7 +187,7 @@ function applyWindowSize(win) {
         ? Math.round(innerWidth + start.left - client.width)
         : outerWidth ? outerWidth - win.outerWidth : 0,
       innerHeight
-        ? Math.round(innerHeight + start.top - client.height)
+        ? Math.round(innerHeight + start.top - newTabToolbar() - client.height)
         : outerHeight ? outerHeight - win.outerHeight : 0,
     ];
   };
@@ -239,10 +249,7 @@ function applyWindowSize(win) {
   holdStartupSize();
   win.addEventListener("sizemodechange", holdStartupSize);
   win.addEventListener("resize", holdStartupSize);
-  // A viewport the driver sets (Juggler's PageTarget.updateViewportSize) sizes
-  // the window around itself from then on: the identity's size and pin give way
-  // at once, or they undo that resize for the rest of the 5 s and the page
-  // overflows its window.
+  // A driver's viewport takes over from the identity's startup size at once.
   win.addEventListener(
     "CamoufoxViewportSized",
     () => {

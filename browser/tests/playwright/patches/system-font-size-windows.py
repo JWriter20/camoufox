@@ -5,7 +5,7 @@ Stock Windows Firefox converts the NONCLIENTMETRICS font height to CSS px, so
 `font: caption` (and icon, menu, message-box, small-caption, status-bar)
 computes to 12px whatever devicePixelRatio is. font-system-fonts-css2.patch
 multiplied 12 by the claimed devicePixelRatio: 30px at dpr 2.5, where stock
-Firefox 158.0.1 on win-i9 at dpr 2.5 says 12px (6/6 cfparity launches).
+Windows Firefox says 12px.
 
     python browser/tests/playwright/patches/system-font-size-windows.py
 """

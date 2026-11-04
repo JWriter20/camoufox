@@ -52,7 +52,7 @@ from .pkgman import (
 from .gpudisplay import GPU_PREFS, GpuDisplay, async_prove_gpu, prove_gpu, select_gpu
 from .virtdisplay import VirtualDisplay
 from platformdirs import user_cache_dir
-from ._warnings import FallbackWarning, LeakWarning
+from ._warnings import WARNINGS_DATA, FallbackWarning, LeakWarning, _warn_from_caller
 from .host_rendering import Gpu, add_canvas_placeholder, has_canvas_placeholder, host_gpu, renders_on_hardware, set_webgpu
 from .webgl import firefox_gpus, sample_webgl_for_screen, webgl_for_gpu
 
@@ -591,8 +591,8 @@ def validate_speechd_voices(grid: Any) -> None:
     Validates a `voices:speechd` grid: {"languages": [[name, lang], ...],
     "variants": [name, ...]}, the shape MaskConfig::MSpeechdVoices() expands.
     """
-    languages = grid.get('languages')
-    variants = grid.get('variants')
+    languages = grid.get('languages') if isinstance(grid, dict) else None
+    variants = grid.get('variants') if isinstance(grid, dict) else None
     if not (
         isinstance(languages, list)
         and all(
@@ -750,6 +750,21 @@ def _keeps_ipv6(
     return False
 
 
+def warn_kept_incoherent(violations: List[coherence.Violation]) -> None:
+    """
+    Warns for each coherence violation the launch left in place because the
+    caller set the values involved. Camoufox does not overwrite what the caller
+    passed, but an identity no real machine presents is detectable, and a
+    caller that records its identities needs to know that it holds one (#956).
+    """
+    for violation in violations:
+        if violation.kept:
+            _warn_from_caller(
+                WARNINGS_DATA['caller_value_incoherent'].format(keys=', '.join(violation.kept), detail=violation.detail),
+                LeakWarning,
+            )
+
+
 def warn_manual_config(config: Dict[str, Any]) -> None:
     """
     Warns the user if they are manually setting properties that Camoufox already sets internally.
@@ -780,9 +795,8 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
         LeakWarning.warn('viewport', False)
 
 
-
 def saved_pref(profile_dir: Optional[str], pref: str) -> Any:
-    """The value a persistent profile's prefs.js holds for `pref` (None when it holds none)."""
+    """The value a persistent profile's prefs.js holds for pref, if any."""
     if not profile_dir:
         return None
     try:
@@ -801,19 +815,14 @@ def saved_pref(profile_dir: Optional[str], pref: str) -> Any:
 
 def set_toggle_pref(prefs: Dict[str, Any], pref: str, on: bool, stock: Any, toggled: Any,
                     profile_dir: Optional[str]) -> None:
-    """Write a launch toggle's pref the way stock's profile has it.
-
-    On, the toggled value. Off, nothing, as stock writes nothing (the permissions
-    check reads the prefs a launch sets, and a pref at its default is still one
-    stock lacks) -- unless a persistent profile kept a non-stock value from an
-    earlier launch in its prefs.js, which only the stock value written again clears.
-    """
+    """Write a toggle only when on, or to clear a persistent non-stock value."""
     if on:
         prefs.setdefault(pref, toggled)
         return
     saved = saved_pref(profile_dir, pref)
     if saved is not None and saved != stock:
         prefs.setdefault(pref, stock)
+
 
 _WINDOW_DIM_KEYS = (
     'window.outerWidth',
@@ -1869,11 +1878,13 @@ def launch_options(
     # Warn the user for manual config settings
     if not i_know_what_im_doing:
         warn_manual_config(config)
+    _caller_keys = frozenset(config)
 
     # Snapshot which domains the USER set before fingerprint generation fills in
     # the rest. The post-generation fix-ups below must
     # only touch generated values, never override what the user passed.
     _user_set_navigator = is_domain_set(config, 'navigator.')
+    _user_set_arch = is_domain_set(config, 'navigator.platform', 'navigator.oscpu')
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
     _user_window_position = {k for k in ('window.screenX', 'window.screenY') if k in config}
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
@@ -2033,8 +2044,9 @@ def launch_options(
 
     # Correct fingerprint inconsistencies that leak as headless /
     # impossible-geometry tells, unless the user is driving these themselves.
-    if not _user_set_navigator:
+    if not _user_set_arch:
         fix_navigator_arch(config, target_os)
+    if not _user_set_navigator:
         fix_hardware_concurrency(config, can_pin=bool(pin_cpu_cores))
     if not _user_set_screen_window:
         # Lift netbook-era geometry to something current hardware reports,
@@ -2454,9 +2466,8 @@ def launch_options(
     if allow_addon_new_tab:
         set_into(config, 'allowAddonNewtab', True)
 
-    # Set Firefox user preferences. Each toggle writes its pref on or off: a
-    # persistent profile keeps a user.js pref in prefs.js after the launch that
-    # set it, so a flag that only wrote when on stayed on for good.
+    # Fresh profiles get a toggle's pref only when on. A persistent profile
+    # may need the stock value written once to clear an earlier toggled value.
     if block_images:
         LeakWarning.warn('block_images', i_know_what_im_doing)
     if disable_coop:
@@ -2475,7 +2486,7 @@ def launch_options(
     # WebGL pool below defers to them (a preset's own GPU pair wins over
     # sampling). Here, not earlier, because the check reads the core count and
     # the screen, which the host core count and the display clamp replace.
-    coherence.drop_incoherent_source_values(config, target_os)
+    warn_kept_incoherent(coherence.drop_incoherent_source_values(config, target_os, _caller_keys))
 
     cover_canvas, host = plan_rendering(
         target_os,
@@ -2556,14 +2567,16 @@ def launch_options(
     # generator, GPU from fpgen's WebGL records, fonts and voices from their own
     # catalogues -- so a machine that never existed can be assembled from parts
     # that are each fine on their own. See coherence.py.
-    _incoherent = coherence.apply(config, target_os)
+    _incoherent = coherence.apply(config, target_os, _caller_keys)
+    warn_kept_incoherent(_incoherent)
     if _incoherent and debug:
         for _violation in _incoherent:
             print(f'Incoherent identity ({_violation.rule}): {_violation.detail}')
 
     # Render at the claimed display scale, so (resolution) and the CSS geometry
-    # agree with devicePixelRatio as on the real machine (#933).
-    if float(config.get('window.devicePixelRatio') or 1) != 1:
+    # agree with devicePixelRatio as on the real machine (#933). That includes 1:
+    # on a HiDPI host the host's own scale would otherwise reach (resolution).
+    if config.get('window.devicePixelRatio'):
         firefox_user_prefs.setdefault('layout.css.devPixelsPerPx', f"{float(config['window.devicePixelRatio']):g}")
     if headless is False and not virtual_display and screen_cons:
         fit = _physical_scale(config, firefox_user_prefs)

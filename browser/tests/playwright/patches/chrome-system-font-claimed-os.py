@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helpers import Marionette, free_port, hidden_display, launch_kwargs, marionette_args  # noqa: E402
+from helpers import Marionette, free_port, hidden_display, launch_kwargs, marionette_args, marionette_env  # noqa: E402
 
 # A file, not a data: URL: Firefox opens no top-level data: document from the command line.
 PAGE = "<!doctype html><p>bar</p><script>setTimeout(() => open('about:blank', 'x', 'width=300,height=200'), 300)</script>"
@@ -57,7 +57,7 @@ def bar_font(claimed):
         page.write_text(PAGE)
         Path(profile, "user.js").write_text("".join(f"user_pref({json.dumps(k)}, {json.dumps(v)});\n"
                                                     for k, v in prefs.items()))
-        env = {**os.environ, **{k: str(v) for k, v in (options.get("env") or {}).items()},
+        env = {**marionette_env(), **{k: str(v) for k, v in (options.get("env") or {}).items()},
                "MOZ_CRASHREPORTER_DISABLE": "1"}
         args = [a for a in options.get("args") or [] if a not in ("-headless", "--headless")]
         proc = subprocess.Popen([options["executable_path"], *args, "-no-remote", "-profile", profile,

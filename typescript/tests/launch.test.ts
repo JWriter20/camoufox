@@ -22,7 +22,6 @@ import {
 	vi,
 } from "vitest";
 import type { HumanizeManifest, HumanizeSetting } from "../src/humanize.js";
-import { setTogglePref } from "../src/utils.js";
 import {
 	BUNDLE,
 	BUNDLE_EXE,
@@ -288,9 +287,8 @@ describe("test_launch_environment: prefs", () => {
 		});
 	});
 
-	describe("toggle settings are written both ways (test_launch_environment.py)", () => {
-		// A persistent profile keeps a user.js pref in prefs.js, so a toggle that
-		// only wrote when on stayed on after the flag was removed.
+	describe("toggle settings (test_launch_environment.py)", () => {
+		// Fresh profiles omit off toggles; persistent profiles clear old values.
 		const TOGGLES: [string, string, unknown, unknown][] = [
 			["block_webrtc", "media.peerconnection.enabled", true, false],
 			["block_images", "permissions.default.image", 1, 2],
@@ -308,13 +306,19 @@ describe("test_launch_environment: prefs", () => {
 			it(`${flag} off clears a ${pref} an earlier launch left in prefs.js`, () => {
 				const dir = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-toggle-"));
 				try {
-					fs.writeFileSync(path.join(dir, "prefs.js"), `user_pref("${pref}", ${JSON.stringify(toggled)});\n`);
+					fs.writeFileSync(
+						path.join(dir, "prefs.js"),
+						`user_pref("${pref}", ${JSON.stringify(toggled)});\n`,
+					);
 					const prefs: Record<string, unknown> = {};
-					setTogglePref(prefs, pref, false, stock, toggled, dir);
+					utils.setTogglePref(prefs, pref, false, stock, toggled, dir);
 					expect(prefs).toEqual({ [pref]: stock });
-					fs.writeFileSync(path.join(dir, "prefs.js"), `user_pref("${pref}", ${JSON.stringify(stock)});\n`);
+					fs.writeFileSync(
+						path.join(dir, "prefs.js"),
+						`user_pref("${pref}", ${JSON.stringify(stock)});\n`,
+					);
 					const clean: Record<string, unknown> = {};
-					setTogglePref(clean, pref, false, stock, toggled, dir);
+					utils.setTogglePref(clean, pref, false, stock, toggled, dir);
 					expect(clean).toEqual({});
 				} finally {
 					fs.rmSync(dir, { recursive: true, force: true });
@@ -541,7 +545,7 @@ describe("test_launch_environment: prefs", () => {
 			});
 		it("sets the scale, and a caller's pref wins", async () => {
 			expect((await win(2.5))[PREF]).toBe("2.5");
-			expect(PREF in (await win(1))).toBe(false);
+			expect((await win(1))[PREF]).toBe("1");
 			expect(
 				(await win(2.5, { firefox_user_prefs: { [PREF]: "1.0" } }))[PREF],
 			).toBe("1.0");
@@ -1578,6 +1582,31 @@ describe.skipIf(!MODEL.ok)(
 			expect(drawn(first)).toBe(drawn(second));
 		});
 
+		it("a caller user agent alone still fixes the drawn platform", async () => {
+			// A Linux draw can carry another OS's platform beside its Linux oscpu.
+			// The caller set only the user agent, so platform and oscpu follow it.
+			const fp = fingerprints.generateFingerprint({ os: "linux" });
+			fp.navigator.platform = "Win32";
+			const config = await launchConfig({
+				os: undefined,
+				fingerprint: fp,
+				config: { "navigator.userAgent": LINUX_UA },
+			});
+			expect(config["navigator.platform"]).toBe("Linux x86_64");
+			expect(config["navigator.oscpu"]).toBe("Linux x86_64");
+		});
+
+		it("the caller's platform is kept when the user agent is set", async () => {
+			const config = await launchConfig({
+				os: undefined,
+				config: {
+					"navigator.userAgent": LINUX_UA,
+					"navigator.platform": "Linux i686",
+				},
+			});
+			expect(config["navigator.platform"]).toBe("Linux i686");
+		});
+
 		it("a fixed preset reproduces its fonts", async () => {
 			const preset = fingerprints.getRandomPreset("windows", "150");
 			const first = await launchConfig({ fingerprint_preset: preset });
@@ -1921,5 +1950,74 @@ describe("cpu_affinity", () => {
 			"pinned launch restored",
 			"unpinned launch spawned",
 		]);
+	});
+});
+
+describe("test_caller_config_kept", () => {
+	beforeEach(() => stubHost());
+	const MAC = {
+		"navigator.userAgent": MAC_UA,
+		"navigator.platform": "MacIntel",
+		"webGl:vendor": "Apple",
+		"webGl:renderer": "Apple M1, or similar",
+		"screen.width": 1512,
+		"screen.height": 982,
+	};
+	const launchMac = (config: Record<string, any>, key: string) =>
+		launchWarning(
+			{
+				headless: true,
+				i_know_what_im_doing: true,
+				executable_path: BUNDLE_EXE,
+				os: "macos",
+				config,
+			},
+			"LeakWarning",
+			`LEAK: config sets ${key}`,
+		);
+
+	it("keeps an incoherent caller value and warns", async () => {
+		const depth = await launchMac(
+			{ ...MAC, "screen.colorDepth": 24 },
+			"screen.colorDepth",
+		);
+		expect(depth.config["screen.colorDepth"]).toBe(24);
+		expect(depth.config["screen.pixelDepth"] ?? 24).toBe(24);
+		expect(depth.warned).toBe(true);
+		const dpr = await launchMac(
+			{ ...MAC, "window.devicePixelRatio": 1.5 },
+			"window.devicePixelRatio",
+		);
+		expect(dpr.config["window.devicePixelRatio"]).toBe(1.5);
+		expect(dpr.warned).toBe(true);
+		// An Intel Mac GPU behind a notched panel only Apple Silicon Macs have.
+		const intel = "Intel(R) HD Graphics 400, or similar";
+		const gpu = await launchMac(
+			{ ...MAC, "webGl:vendor": "Intel Inc.", "webGl:renderer": intel },
+			"webGl:renderer",
+		);
+		expect(gpu.config["webGl:renderer"]).toBe(intel);
+		expect(gpu.warned).toBe(true);
+	});
+
+	it("is silent when the caller's values are coherent", async () => {
+		const kept = await launchMac(
+			{
+				...MAC,
+				"screen.colorDepth": 30,
+				"screen.pixelDepth": 30,
+				"window.devicePixelRatio": 2,
+			},
+			"",
+		);
+		expect(kept.config["screen.colorDepth"]).toBe(30);
+		expect(kept.warned).toBe(false);
+	});
+
+	it("draws colorDepth 30 for every macOS identity", async () => {
+		const drawn = await launchMac({ "navigator.userAgent": MAC_UA }, "");
+		expect(drawn.config["screen.colorDepth"]).toBe(30);
+		expect(drawn.config["screen.pixelDepth"]).toBe(30);
+		expect(drawn.warned).toBe(false);
 	});
 });

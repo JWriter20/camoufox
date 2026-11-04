@@ -107,6 +107,17 @@ fingerprint immune to `#751`.
 `browser/tests/playwright/patches/input-ack-backstop.py` covers the bounded waits
 themselves: a late renderer ack, and a drag whose page answers late.
 
+## The input gate
+
+Firefox's content process drops user input that reaches a document before its
+input gate opens: `dom.input_events.security.minTimeElapsedInMS` (100 ms) after
+`readyState` became `"loading"`, then `minNumTicks` refresh ticks
+(`PresShell::CanHandleUserInputEvents`). Juggler's mouse and key events are
+synthesized for tests, which the gate exempts, so they reached a page earlier
+than any person's could; its wheel is not exempt, so a wheel straight after
+`goto` lost notches. Every input command now waits for the gate once per
+document (`PageHandler._awaitUserInputGate`). Guard: `juggler-input-gate.py`.
+
 ## Move coalescing
 
 A real mouse reports moves faster than the refresh driver ticks. The content
@@ -123,8 +134,8 @@ queued, and `BrowserChild::RecvRealMouseMoveEvent` acks each one with
 (`MouseDispatch.sendQueuedMove`). Moves are spaced at least 8 ms apart, the
 reports of a 125 Hz mouse, the common rate. A path given as steps
 (`page.mouse.move(x, y, steps=n)`, which Playwright sends as n moves) then
-reaches the page as a real mouse's motion does. Measured with cfparity's
-driven.rate (a 125 Hz XTest sweep on Xvfb against stock 158.0.1): one
+reaches the page as a real mouse's motion does. Measured with a 125 Hz XTest
+sweep on Xvfb against stock 158.0.1: one
 `pointermove` per frame carrying 2 to 4 moves, and a `pointerrawupdate` for
 every move.
 

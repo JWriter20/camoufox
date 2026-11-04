@@ -141,3 +141,9 @@ no_h264_encoder: >-
     WebCodecs reports avc1 encoding unsupported, which Windows Firefox never does.
     Install it (Debian/Ubuntu: `apt install libavcodec60` or the release's libavcodecNN; Fedora: ffmpeg-libs
     from RPM Fusion, which includes libx264).
+
+caller_value_incoherent: >-
+    LEAK: config sets {keys}, which no real machine presents together with the rest of this identity
+    ({detail}). Camoufox launches with the value you passed, but a page that checks these values against each other
+    can tell this browser is not the machine it claims to be. Leave {keys} out of config to have a coherent value drawn.
+    i_know_what_im_doing does not silence this warning.

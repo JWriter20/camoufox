@@ -832,15 +832,7 @@ export class PageTarget {
       this._linkedBrowser.style.setProperty('width', width + 'px');
       this._linkedBrowser.style.setProperty('height', height + 'px');
       this._linkedBrowser.style.setProperty('box-sizing', 'content-box');
-      // Camoufox: hidden, not auto. A window too small for the chrome plus the
-      // viewport (a 1366x768 screen draw with a 1000x700 viewport) leaves the
-      // stack scrolling the browser, and as a user-scrollable box it took
-      // every wheel turn over the page as well: the browser slid up by the
-      // overflow over ~130ms, so the page's mozInnerScreenY and every event's
-      // screenY - clientY changed on a wheel, which a real window that fits
-      // its viewport never does, and a move under way landed off its target
-      // (humanize-seam.py, run d). Juggler's own scrollRectIntoViewIfNeeded
-      // still scrolls it: it passes ScrollFlags::ScrollOverflowHidden.
+      // Keep the stack from taking wheel input as a scrollable overflow box.
       this._linkedBrowser.closest('.browserStack').style.setProperty('overflow', 'hidden');
       this._linkedBrowser.closest('.browserStack').style.setProperty('contain', 'size');
       this._linkedBrowser.closest('.browserStack').style.setProperty('scrollbar-width', 'none');
