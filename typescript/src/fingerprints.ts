@@ -101,25 +101,32 @@ export class Screen {
 		this.maxHeight = maxHeight;
 	}
 
-	/** The bound as fpgen conditions: a predicate per field. */
+	/**
+	 * The bound as fpgen conditions: one predicate over the whole screen node.
+	 * fpgen resolves screen.width and screen.height to that same node and each
+	 * condition resets its evidence (build_evidence), so with one per field
+	 * only the height bound held and 1280x1024 met a 1300 px minimum width.
+	 */
 	asConditions(): Record<string, (value: unknown) => boolean> {
-		const conditions: Record<string, (value: unknown) => boolean> = {};
 		const {
 			minWidth: loW,
 			maxWidth: hiW,
 			minHeight: loH,
 			maxHeight: hiH,
 		} = this;
+		if (loW === null && hiW === null && loH === null && hiH === null) return {};
 		const within = (v: unknown, lo: number | null, hi: number | null) =>
 			typeof v === "number" &&
 			Number.isInteger(v) &&
 			(lo === null || v >= lo) &&
 			(hi === null || v <= hi);
-		if (loW !== null || hiW !== null)
-			conditions["screen.width"] = (w) => within(w, loW, hiW);
-		if (loH !== null || hiH !== null)
-			conditions["screen.height"] = (h) => within(h, loH, hiH);
-		return conditions;
+		return {
+			screen: (s) => {
+				if (typeof s !== "object" || s === null) return false;
+				const { width, height } = s as Record<string, unknown>;
+				return within(width, loW, hiW) && within(height, loH, hiH);
+			},
+		};
 	}
 
 	/** dataclasses.asdict(), with the Python field names (for identitySalt). */
@@ -312,6 +319,13 @@ function loadFontGroups(): Record<string, FontUnit[]> {
 		}
 	}
 	return fontGroupsCache;
+}
+
+/** The families of one addition unit (font-groups.json), e.g. ("win", "office"). */
+export function fontUnitFamilies(osKey: string, unitId: string): Set<string> {
+	return new Set(
+		(loadFontGroups()[osKey] ?? []).find((u) => u.id === unitId)?.fonts ?? [],
+	);
 }
 
 let fontBasesCache: Record<string, FontBase[]> | null = null;
@@ -864,8 +878,12 @@ export function normalizePresetVoices(
 			isLocalService: vtype === "local",
 		});
 	}
-	if (result.length && !result.some((v) => v.isDefault))
-		result[0].isDefault = true;
+	// As drawVoiceConfig: only macOS marks a default (its system voice, else the
+	// first voice it lists); Windows (SAPI) and Linux mark none.
+	if (osKey === "mac" && result.length && !result.some((v) => v.isDefault)) {
+		const systemVoice = loadVoiceManifests().mac?.systemVoice?.default;
+		(result.find((v) => v.name === systemVoice) ?? result[0]).isDefault = true;
+	}
 	return result;
 }
 
@@ -967,6 +985,78 @@ export const BASELINE_TASKBAR_HEIGHT: Record<string, number> =
 export const BASELINE_MULTI_TOUCH_POINTS: number =
 	LAUNCHER_CONSTANTS.baselineMultiTouchPoints;
 
+// The browser chrome around a page, outer minus inner, as [width, height] CSS
+// px per claimed OS. From fpgen's recorded Firefox windows (every record whose
+// window has a toolbar, outerHeight > innerHeight): the most common value per
+// axis, raised to the largest recorded within 2 px of it, the spread DPR
+// rounding gives one layout. Linux 85 -> 86 tall, macOS 84 -> 86, Windows 129
+// -> 130 and 16 -> 18 wide. No recorded window has a page taller than its
+// screen leaves room for: the 1366x768 records peak at innerHeight 683.
+// python/tests/test_viewport_fit.py derives these from the model again.
+export const RECORDED_WINDOW_CHROME: Record<string, [number, number]> =
+	LAUNCHER_CONSTANTS.recordedWindowChrome;
+
+/** A page's size, or a window's position and outer size. */
+export interface Box {
+	x?: number | null;
+	y?: number | null;
+	width: number;
+	height: number;
+}
+
+/**
+ * The smallest screen, [width, height], that holds a page's window.
+ *
+ * A page with `viewport` sits in a window the recorded chrome larger; the page
+ * also reports `window` (its position and outer size), which has to be on the
+ * screen too. The height adds the taskbar the browser takes out of the
+ * available screen for the claimed OS (BASELINE_TASKBAR_HEIGHT), so the window
+ * fits screen.availHeight.
+ */
+export function screenFloor(
+	osKey: string,
+	viewport?: Box | null,
+	window?: Box | null,
+): [number, number] {
+	let width = 0;
+	let height = 0;
+	if (viewport) {
+		const [chromeW, chromeH] = RECORDED_WINDOW_CHROME[osKey];
+		width = viewport.width + chromeW;
+		height = viewport.height + chromeH;
+	}
+	if (window) {
+		width = Math.max(width, Math.max(0, window.x || 0) + window.width);
+		height = Math.max(height, Math.max(0, window.y || 0) + window.height);
+	}
+	return [width, height + BASELINE_TASKBAR_HEIGHT[osKey]];
+}
+
+/**
+ * A recorded screen of the OS at least `floor` in size, or null if the model
+ * has none that large.
+ */
+export function drawScreen(
+	osKey: string,
+	floor: [number, number],
+): [number, number] | null {
+	const conditions = new Screen({
+		minWidth: floor[0],
+		minHeight: floor[1],
+	}).asConditions();
+	let screen: Record<string, any>;
+	try {
+		screen = generate(
+			{ browser: "Firefox", os: FPGEN_OS[osKey], ...conditions },
+			{ target: "screen" },
+		);
+	} catch (err) {
+		if (!(err instanceof InvalidConstraints)) throw err;
+		return null;
+	}
+	return [screen.width, screen.height];
+}
+
 /**
  * Claim the available screen and touch points the browser will report.
  * clampWindowDimensions then fits the window inside that screen.
@@ -1052,17 +1142,32 @@ export function clampScreenToDisplay(
 	}
 }
 
-/** Keep the window box inside the screen: 0 <= screenX/Y <= screen - outer. */
-export function clampWindowPosition(config: Config): void {
+/**
+ * Keep the window box inside the available screen: 0 <= screenX/Y <= avail -
+ * outer. The available screen, not the whole one: pages are fitted to the
+ * window on screen.availHeight (screenFloor), and a window at y=2 whose outer
+ * height is the available height ran 2 px into the taskbar, so every new
+ * context drew a larger screen for it. Only `keys` are moved.
+ */
+export function clampWindowPosition(
+	config: Config,
+	keys: ReadonlySet<string> = new Set(["window.screenX", "window.screenY"]),
+): void {
 	for (const [axis, posKey] of [
 		["Width", "window.screenX"],
 		["Height", "window.screenY"],
 	] as const) {
-		const screen = config[`screen.${axis.toLowerCase()}`];
+		const room =
+			config[`screen.avail${axis}`] || config[`screen.${axis.toLowerCase()}`];
 		const outer = config[`window.outer${axis}`];
 		const pos = config[posKey];
-		if (isNone(pos) || !(pyTruthy(screen) && pyTruthy(outer))) continue;
-		config[posKey] = Math.max(0, Math.min(num(pos), num(screen) - num(outer)));
+		if (
+			!keys.has(posKey) ||
+			isNone(pos) ||
+			!(pyTruthy(room) && pyTruthy(outer))
+		)
+			continue;
+		config[posKey] = Math.max(0, Math.min(num(pos), num(room) - num(outer)));
 	}
 }
 
@@ -1132,6 +1237,9 @@ const MEDIA_P_BUILTIN_CAM: Readonly<Record<string, number>> = {
 	mac: 0.0,
 	lin: 0.45,
 };
+// A camera media-devices.json has no camera_modes entry for: a 720p laptop
+// camera, as most are (width, height, frame rate of its largest mode).
+const DEFAULT_CAMERA_MODE: readonly number[] = [1280, 720, 30];
 
 /**
  * Draw one machine's media devices for `osKey` ('win'|'mac'|'lin'): the
@@ -1190,6 +1298,14 @@ export function drawMediaDevices(
 			mics.push([`Monitor of ${label}`, grp]);
 	}
 
+	// What each device reports once captured (media-device-spoofing.patch):
+	// a camera's largest mode, a microphone's channel count.
+	const modes: Record<string, number[]> = cat.camera_modes ?? {};
+	const mono = new Set<string>(cat.mono_mics ?? []);
+	const camModes = cams.map(([c]) =>
+		Object.hasOwn(modes, c) ? modes[c] : DEFAULT_CAMERA_MODE,
+	);
+
 	return {
 		"mediaDevices:enabled": true,
 		"mediaDevices:micros": mics.length,
@@ -1201,6 +1317,10 @@ export function drawMediaDevices(
 		"mediaDevices:webcamGroups": cams.map(([, g]) => g),
 		"mediaDevices:speakerLabels": outs.map(([o]) => o),
 		"mediaDevices:speakerGroups": outs.map(([, g]) => g),
+		"mediaDevices:webcamMaxWidths": camModes.map((m) => m[0]),
+		"mediaDevices:webcamMaxHeights": camModes.map((m) => m[1]),
+		"mediaDevices:webcamMaxFrameRates": camModes.map((m) => m[2]),
+		"mediaDevices:microphoneChannels": mics.map(([m]) => (mono.has(m) ? 1 : 2)),
 	};
 }
 
@@ -1221,6 +1341,217 @@ export function setMediaDevicesDefaults(
 			? "mac"
 			: "lin";
 	Object.assign(config, drawMediaDevices(osKey, identitySeed(config, salt)));
+}
+
+/**
+ * Share of machines whose one adapter carries IPv6 next to IPv4. No recorded
+ * corpus has the ICE shape; this is Google's IPv6 adoption figure (~45% of its
+ * users in 2025, google.com/ipv6/statistics), which counts global IPv6 only,
+ * so it is a lower bound. A real-device measurement replaces it.
+ */
+export const HOST_IPV6_SHARE = 0.45;
+
+/**
+ * Draw the identity's network shape: one adapter, IPv4 only or IPv4 + IPv6
+ * (webrtc:hostipv6, webrtc-topology-host-ipv6.patch). Mirrors Python's
+ * set_host_ipv6_default; nothing is drawn when the caller set it.
+ */
+export function setHostIpv6Default(
+	config: Config,
+	salt: number | bigint = 0,
+): void {
+	if ("webrtc:hostipv6" in config) return;
+	if (config["network:ipv4Only"]) {
+		// The host's own IPv6 is turned off: a machine on an IPv4-only network.
+		config["webrtc:hostipv6"] = false;
+	} else if ("webrtc:ipv6" in config) {
+		// The exit address is IPv6, so the machine has IPv6.
+		config["webrtc:hostipv6"] = true;
+	} else {
+		const draw = rng((identitySeed(config, salt) ^ 0x1ce6) >>> 0).random();
+		config["webrtc:hostipv6"] = draw < HOST_IPV6_SHARE;
+	}
+}
+
+/**
+ * Firefox's partial release rollouts (Nimbus), as [slug, first Firefox
+ * version, share of profiles, pref, value, draw tag]. Stock Firefox on the
+ * release channel is enrolled by its profile's Nimbus bucket; Camoufox's
+ * channel is never targeted, so each identity draws its enrollment at the
+ * rollout's rate. Mirrors Python's PARTIAL_RELEASE_ROLLOUTS (LEAKS 610/611).
+ */
+export const PARTIAL_RELEASE_ROLLOUTS: ReadonlyArray<
+	[string, number, number, string, unknown, number]
+> = [
+	[
+		"happy-eyeballs-release-rollout",
+		157,
+		0.5,
+		"network.http.happy_eyeballs_enabled",
+		true,
+		0x4e1b,
+	],
+	[
+		"fetch-streaming-upload-rollout",
+		159,
+		0.25,
+		"dom.fetch.streaming_upload",
+		true,
+		0x5712,
+	],
+];
+
+/**
+ * Enroll the identity in Firefox's partial release rollouts at their rates,
+ * following the identity seed so the same identity is enrolled on every
+ * launch. Mirrors Python's set_release_rollout_prefs; a pref the caller set is
+ * left alone.
+ */
+export function setReleaseRolloutPrefs(
+	prefs: Record<string, unknown>,
+	config: Config,
+	salt: number | bigint,
+	ffVersion: string | undefined,
+): void {
+	const version =
+		Number.parseInt(String(ffVersion ?? "").split(".")[0], 10) || 0;
+	const seed = identitySeed(config, salt);
+	for (const [, since, share, pref, value, tag] of PARTIAL_RELEASE_ROLLOUTS) {
+		if (pref in prefs || version < since) continue;
+		if (rng((seed ^ tag) >>> 0).random() < share) prefs[pref] = value;
+	}
+}
+
+/**
+ * Windows' location setting for desktop apps, as Firefox reads it
+ * (GeolocationSystemWin.cpp). No recorded corpus has it; an estimate a
+ * real-device measurement replaces. Mirrors Python's
+ * WINDOWS_LOCATION_SETTING_SHARES.
+ */
+export const WINDOWS_LOCATION_SETTING_SHARES: ReadonlyArray<[string, number]> =
+	[
+		["allowed", 0.55],
+		["prompt", 0.3],
+		["denied", 0.15],
+	];
+
+/**
+ * Draw the identity's OS location setting (geolocation:systemPermission,
+ * geolocation-spoofing.patch) for a Windows identity on another host. Mirrors
+ * Python's set_location_setting_default.
+ */
+export function setLocationSettingDefault(
+	config: Config,
+	salt: number | bigint,
+	targetOs: string,
+	hostOs: string | null,
+): void {
+	if (
+		"geolocation:systemPermission" in config ||
+		targetOs !== "win" ||
+		hostOs === "win"
+	)
+		return;
+	if ("geolocation:latitude" in config && "geolocation:longitude" in config) {
+		config["geolocation:systemPermission"] = "allowed";
+		return;
+	}
+	// No coordinates: nothing at the exit to report, so location is never on.
+	const shares = WINDOWS_LOCATION_SETTING_SHARES.filter(
+		([name]) => name !== "allowed",
+	);
+	let draw =
+		rng((identitySeed(config, salt) ^ 0x10ca) >>> 0).random() *
+		shares.reduce((sum, [, share]) => sum + share, 0);
+	let state = shares[0][0];
+	for (const [name, share] of shares) {
+		state = name;
+		draw -= share;
+		if (draw < 0) break;
+	}
+	config["geolocation:systemPermission"] = state;
+}
+
+let audioOutputLatencyCache: Record<string, any> | undefined;
+
+/** Measured AudioContext.outputLatency per OS (audio-output-latency.json). */
+function loadAudioOutputLatency(): Record<string, any> {
+	audioOutputLatencyCache ??= loadDataFile<Record<string, any>>(
+		"audio-output-latency.json",
+	);
+	return audioOutputLatencyCache;
+}
+
+/**
+ * When stock Windows Firefox's deferred font-info loader lands the legacy
+ * styled-family aliases after the first legacy lookup (stock 158.0.1 on win-i9:
+ * 1727, 1826, 1832 ms on a 100 ms poll; 25H2 26200.9711: 2158, 2029, 2043 ms).
+ * Mirrors Python's
+ * WINDOWS_ALIAS_LOAD_MS / set_windows_alias_load_default: drawn per launch for a
+ * Windows identity on another OS; a caller's value is kept.
+ */
+export const WINDOWS_ALIAS_LOAD_MS: readonly [number, number] = [1630, 2158];
+
+/**
+ * How long stock Windows Firefox's character-map pass takes to land after the
+ * first fallback within a family whose cmaps are not loaded yet
+ * (windows-lazy-cmaps.patch; win-i9: 80, 154, 182 ms). Mirrors Python's
+ * WINDOWS_CMAP_LOAD_MS; drawn with the alias load time.
+ */
+export const WINDOWS_CMAP_LOAD_MS: readonly [number, number] = [80, 182];
+
+/**
+ * Injection point for the draws that belong to the launch, not the identity
+ * (timing: a real machine's figure moves from launch to launch). Mirrors
+ * Python's launch_uniform(); the launch goldens pin both to one value.
+ */
+export const fingerprintDeps = {
+	random: (): number => Math.random(),
+};
+
+export function setWindowsAliasLoadDefault(
+	config: Config,
+	targetOs: string,
+	hostOs: string | null,
+): void {
+	if (targetOs !== "win" || targetOs === hostOs) return;
+	for (const [key, [low, high]] of [
+		["fonts:windowsAliasLoadMs", WINDOWS_ALIAS_LOAD_MS],
+		["fonts:windowsCmapLoadMs", WINDOWS_CMAP_LOAD_MS],
+	] as const) {
+		if (key in config) continue;
+		config[key] = low + Math.floor(fingerprintDeps.random() * (high - low + 1));
+	}
+}
+
+/**
+ * Draw the identity's audio output device latency (AudioContext:outputLatency,
+ * audio-context-spoofing.patch). The device latency follows the identity seed;
+ * the stream's opening delay is drawn per launch. Mirrors Python's
+ * set_output_latency_default; nothing is set when the caller set the key, the
+ * identity claims the host's OS, or the OS has no measured devices.
+ */
+export function setOutputLatencyDefault(
+	config: Config,
+	salt: number | bigint,
+	targetOs: string,
+	hostOs: string | null,
+): void {
+	if ("AudioContext:outputLatency" in config || targetOs === hostOs) return;
+	const table = loadAudioOutputLatency()[targetOs] ?? {};
+	const devices: Array<{ w?: number; v: number }> =
+		table.device_latency_s ?? [];
+	if (!devices.length) return;
+	const device = weightedChoice(
+		rng((identitySeed(config, salt) ^ 0xa0d1) >>> 0),
+		devices,
+	);
+	config["AudioContext:outputLatency"] = Number(device.v);
+	const [low, high] = table.open_delay_ms ?? [20, 60];
+	if (!("AudioContext:outputLatencyDelayMs" in config)) {
+		config["AudioContext:outputLatencyDelayMs"] =
+			low + (high - low) * fingerprintDeps.random();
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1532,6 +1863,8 @@ export interface InitValues {
 	webglRenderer?: string;
 	screenWidth?: number;
 	screenHeight?: number;
+	screenAvailWidth?: number;
+	screenAvailHeight?: number;
 	screenColorDepth?: number;
 	timezone?: string;
 	fontList?: string[];
@@ -1565,12 +1898,20 @@ export function buildInitScript(values: InitValues): string {
 		}
 	}
 
-	// Screen dimensions (requires width + height together)
+	// Screen dimensions (requires width + height together). The available rect
+	// rides along when the identity has one; a build that keeps only the full
+	// size ignores the extra arguments.
 	const sw = values.screenWidth;
 	const sh = values.screenHeight;
 	if (pyTruthy(sw) && pyTruthy(sh)) {
+		const aw = values.screenAvailWidth;
+		const ah = values.screenAvailHeight;
+		const dims =
+			pyTruthy(aw) && pyTruthy(ah)
+				? `${sw}, ${sh}, ${aw}, ${ah}`
+				: `${sw}, ${sh}`;
 		lines.push(
-			`  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions(${sw}, ${sh});`,
+			`  if (typeof w.setScreenDimensions === "function") w.setScreenDimensions(${dims});`,
 		);
 		const scd = values.screenColorDepth;
 		if (pyTruthy(scd)) {
@@ -1683,6 +2024,10 @@ export function targetOsFromPlatform(plat: string): SupportedOS {
  *   and before the init script is rendered.
  * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
  *   of drawing one.
+ * @param webgl false claims no WebGL values, for a browser whose render node
+ *   reports its own (render_node).
+ * @param screen_bound A bound on the drawn screen (screenFloor: one that holds
+ *   the window the context's pages report). A preset keeps its own.
  */
 export function generateContextFingerprint({
 	preset,
@@ -1693,6 +2038,8 @@ export function generateContextFingerprint({
 	locale,
 	config_overrides,
 	webgl_config,
+	webgl: claimWebgl = true,
+	screen_bound,
 }: {
 	preset?: Preset | null;
 	os?: string | null;
@@ -1702,6 +2049,8 @@ export function generateContextFingerprint({
 	locale?: string | null;
 	config_overrides?: Config | null;
 	webgl_config?: [string, string] | null;
+	webgl?: boolean;
+	screen_bound?: Screen | null;
 } = {}): ContextFingerprint {
 	let config: Config;
 	let nav: Record<string, any>;
@@ -1717,7 +2066,10 @@ export function generateContextFingerprint({
 		webgl = p.webgl ?? {};
 		resolvedPreset = p;
 	} else {
-		const fp = generateFingerprint({ os: os ?? undefined });
+		const fp = generateFingerprint({
+			os: os ?? undefined,
+			screen: screen_bound ?? undefined,
+		});
 		config = fromFpgen(fp, ff_version);
 		// fpgen's Linux pool now and then pairs the Linux UA with a Windows
 		// platform and oscpu. launchOptions() corrects that; this path did not,
@@ -1772,7 +2124,12 @@ export function generateContextFingerprint({
 			if (oscpu) config["navigator.oscpu"] = oscpu;
 		}
 
-		if (
+		if (!claimWebgl) {
+			for (const key of Object.keys(config)) {
+				if (key.startsWith("webGl:") || key.startsWith("webGl2:"))
+					delete config[key];
+			}
+		} else if (
 			!pyTruthy(config["webGl:vendor"]) ||
 			!pyTruthy(config["webGl:renderer"])
 		) {
@@ -1851,6 +2208,8 @@ export function generateContextFingerprint({
 		webglRenderer: webgl.unmaskedRenderer,
 		screenWidth: screen.width,
 		screenHeight: screen.height,
+		screenAvailWidth: config["screen.availWidth"],
+		screenAvailHeight: config["screen.availHeight"],
 		screenColorDepth: screen.colorDepth,
 		timezone:
 			typeof resolvedPreset.timezone === "string"
@@ -1868,12 +2227,44 @@ export function generateContextFingerprint({
 	const contextOptions: Record<string, any> = {};
 	const ua = config["navigator.userAgent"];
 	if (pyTruthy(ua)) contextOptions.userAgent = ua;
-	const sw = screen.width;
-	const sh = screen.height;
-	if (pyTruthy(sw) && pyTruthy(sh))
-		contextOptions.viewport = { width: sw, height: Math.max(sh - 28, 600) };
+	// No viewport: the pages are the browser's window, whose size the page
+	// reads in outerWidth/outerHeight, and the screen is drawn to hold it
+	// (screen_bound). A viewport the size of the screen sat in that window as a
+	// page larger than its own window.
+	// Playwright takes a device scale factor only with a viewport: a context
+	// with its own devicePixelRatio gets the drawn page size as its viewport,
+	// and Juggler sizes the window to it plus the claimed OS's chrome.
 	const dpr = screen.devicePixelRatio;
-	if (pyTruthy(dpr)) contextOptions.deviceScaleFactor = dpr;
+	let innerW = config["window.innerWidth"];
+	let innerH = config["window.innerHeight"];
+	const availW = config["screen.availWidth"];
+	const availH = config["screen.availHeight"];
+	if (
+		pyTruthy(dpr) &&
+		!(pyTruthy(innerW) && pyTruthy(innerH)) &&
+		pyTruthy(availW) &&
+		pyTruthy(availH)
+	) {
+		// A preset records its screen but no window: a maximised one, the
+		// available screen less the recorded chrome of the OS it claims.
+		const [chromeW, chromeH] =
+			RECORDED_WINDOW_CHROME[
+				OS_TO_KEY[
+					targetOsFromPlatform(pyStr(get(config, "navigator.platform", "")))
+				]
+			];
+		innerW = num(availW) - chromeW;
+		innerH = num(availH) - chromeH;
+	}
+	if (pyTruthy(dpr) && pyTruthy(innerW) && pyTruthy(innerH)) {
+		contextOptions.viewport = {
+			width: Math.trunc(Number(innerW)),
+			height: Math.trunc(Number(innerH)),
+		};
+		contextOptions.deviceScaleFactor = dpr;
+	} else {
+		contextOptions.viewport = null;
+	}
 	let tz = config.timezone;
 	if (!pyTruthy(tz)) tz = resolvedPreset.timezone;
 	if (pyTruthy(tz)) contextOptions.timezoneId = tz;

@@ -37,6 +37,10 @@ export const FEATURE_BLOCKED_DEVICE = 4;
 // What the launcher itself adds to the browser's environment; none of it
 // changes which device Firefox renders on.
 const LAUNCHER_ENV = ["CAMOU_", "FONTCONFIG_FILE"];
+// Except the Camoufox Pro lease (pro.LEASE_FILE_ENV), without which a Pro build
+// exits before it renders anything. It is not part of the cache key: a new
+// lease does not move the GPU.
+const LEASE_ENV = "CAMOU_LEASE_FILE";
 
 /** A GPU as WEBGL_debug_renderer_info reports it: [vendor, renderer]. */
 export type Gpu = [string, string];
@@ -68,6 +72,13 @@ export function hasCanvasPlaceholder(prefs: Record<string, any>): boolean {
  * Firefox does on the Microsoft Basic Render Driver. The status is written
  * either way, because a persistent profile saves it and the next startup
  * reads it. Prefs the caller set are kept.
+ *
+ * Service workers have their own pref, dom.webgpu.service-workers.enabled
+ * (Instance::PrefEnabled in dom/webgpu/Instance.cpp), with the same
+ * per-platform default: on Windows and Apple Silicon both are true, on a
+ * Linux build it is false. Without it a Linux build claiming Windows has
+ * every GPU* global in windows and dedicated and shared workers but none in
+ * a service worker, which stock Windows Firefox never does.
  */
 export function setWebgpu(
 	prefs: Record<string, any>,
@@ -80,6 +91,11 @@ export function setWebgpu(
 	if (!("dom.webgpu.enabled" in prefs)) {
 		prefs["dom.webgpu.enabled"] =
 			targetOs === "win" || (targetOs === "mac" && gpu[0] === "Apple");
+	}
+	if (!("dom.webgpu.service-workers.enabled" in prefs)) {
+		prefs["dom.webgpu.service-workers.enabled"] = Boolean(
+			prefs["dom.webgpu.enabled"],
+		);
 	}
 	if (prefs["dom.webgpu.enabled"] && !(WEBGPU_BLOCKLIST_PREF in prefs)) {
 		const ownAdapter =
@@ -116,10 +132,14 @@ export function hostGpu(
 	const key = JSON.stringify([executablePath, headless, hostEnv, hostPrefs]);
 	let gpu = probes.get(key);
 	if (!gpu) {
+		const lease = env[LEASE_ENV];
 		gpu = readGpu(
 			executablePath,
 			headless,
-			Object.fromEntries(hostEnv),
+			{
+				...Object.fromEntries(hostEnv),
+				...(lease ? { [LEASE_ENV]: String(lease) } : {}),
+			},
 			Object.fromEntries(hostPrefs),
 		);
 		// Remember a reading, not a failure: the next launch tries again.

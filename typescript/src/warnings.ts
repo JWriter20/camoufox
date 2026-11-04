@@ -73,8 +73,18 @@ export class LeakWarning extends Error {
 	/**
 	 * Warns the caller if a passed parameter can cause leaks.
 	 */
-	static warn(warningKey: string, iKnowWhatImDoing?: boolean): void {
+	static warn(
+		warningKey: string,
+		iKnowWhatImDoing?: boolean,
+		values?: Record<string, unknown>,
+	): void {
 		let warning = loadWarnings()[warningKey];
+		// The message's {name} fields, as Python's str.format fills them.
+		if (values) {
+			warning = warning.replace(/\{(\w+)\}/g, (field, name) =>
+				name in values ? String(values[name]) : field,
+			);
+		}
 		if (iKnowWhatImDoing) {
 			return;
 		}

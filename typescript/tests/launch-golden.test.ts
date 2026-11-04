@@ -161,6 +161,7 @@ beforeAll(async () => {
 			? BigInt(HOST.fresh_salt as bigint)
 			: realSalt(pinned);
 	mods.locales.localeDeps.random = () => HOST.locale_uniform;
+	mods.fingerprints.fingerprintDeps.random = () => HOST.launch_uniform;
 	mods.geolocation.geoipDeps.openDatabase = async () => ({
 		get: (ip: string) => structuredClone(GEO_TABLE[ip] ?? null),
 	});

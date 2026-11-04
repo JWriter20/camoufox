@@ -287,6 +287,34 @@ describe.skipIf(!MODEL.ok)("WebGPU", () => {
 	});
 
 	it.each([
+		["windows", true],
+		["linux", false],
+		["macos", null],
+	])("service workers follow navigator.gpu on %s", async (os, exposed) => {
+		// A Linux build defaults dom.webgpu.service-workers.enabled to false;
+		// Windows and Apple Silicon Firefox expose WebGPU in service workers
+		// exactly where they expose it at all.
+		onHost(HOST_GPU);
+		const { options } = await launch({ os });
+		const prefs = options.firefoxUserPrefs;
+
+		expect(prefs["dom.webgpu.service-workers.enabled"]).toBe(
+			prefs["dom.webgpu.enabled"],
+		);
+		if (exposed !== null) expect(prefs["dom.webgpu.enabled"]).toBe(exposed);
+	});
+
+	it("a caller service-worker pref is kept", () => {
+		const prefs: Record<string, any> = {
+			"dom.webgpu.service-workers.enabled": false,
+		};
+		setWebgpu(prefs, "win", WINDOWS_GPU, null);
+
+		expect(prefs["dom.webgpu.enabled"]).toBe(true);
+		expect(prefs["dom.webgpu.service-workers.enabled"]).toBe(false);
+	});
+
+	it.each([
 		[["Apple", "Apple M1, or similar"] as Gpu, true],
 		[["Intel Inc.", "Intel(R) HD Graphics, or similar"] as Gpu, false],
 	])("macOS has navigator.gpu on Apple Silicon only (%j)", async (gpu, exposed) => {
@@ -318,6 +346,31 @@ it("the probe ignores what the launcher adds to the environment", () => {
 
 	expect(second).toBe(first);
 	expect(launch).toHaveBeenCalledTimes(1);
+});
+
+it("the probe carries the Pro lease without keying on it", () => {
+	const launch = vi
+		.spyOn(firefox, "launch")
+		.mockImplementation(() => new Promise(() => undefined));
+	const [first, second] = ["a", "b"].map((lease) =>
+		hostGpu(
+			"/nonexistent/camoufox-lease",
+			true,
+			{
+				DISPLAY: ":0",
+				CAMOU_CONFIG_1: "{}",
+				CAMOU_LEASE_FILE: `/run/camoufox-pro/${lease}.json`,
+			},
+			{},
+		),
+	);
+
+	expect(second).toBe(first);
+	expect(launch).toHaveBeenCalledTimes(1);
+	expect(launch.mock.calls[0][0]?.env).toEqual({
+		DISPLAY: ":0",
+		CAMOU_LEASE_FILE: "/run/camoufox-pro/a.json",
+	});
 });
 
 function browserOnHost(gpu: Gpu | null) {

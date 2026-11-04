@@ -32,6 +32,17 @@ export const CACHE = path.join(SCRATCH, "xdg-cache", "camoufox");
 export const HOME = path.join(SCRATCH, "home");
 fs.mkdirSync(HOME, { recursive: true });
 
+// A Pro launch uses the render node this machine configured; the suites'
+// must not, so none is found. render-node.test.ts writes its own.
+const renderNode = await import("../src/render_node.js");
+renderNode.renderNodeFiles.defaultPath = path.join(
+	HOME,
+	".config",
+	"camoufox",
+	"render-node.json",
+);
+delete process.env[renderNode.CONFIG_ENV];
+
 export const utils = await import("../src/utils.js");
 export const fingerprints = await import("../src/fingerprints.js");
 export const warnings = await import("../src/warnings.js");

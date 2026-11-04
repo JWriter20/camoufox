@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { Generator } from "fpgen-js";
 import { describe, expect, it, vi } from "vitest";
 import { InvalidIP } from "../src/exceptions.js";
+import * as fp from "../src/fingerprints.js";
 import {
 	appVersionFromUserAgent,
 	buildInitScript,
@@ -228,6 +229,30 @@ describe("clampWindowPosition", () => {
 		};
 		clampWindowPosition(wide);
 		expect(wide["window.screenX"]).toBe(0);
+	});
+
+	it("keeps the window off the taskbar, moving only the keys given", () => {
+		// win-i9: 1382x864 at 250 %, available 1382x816, window 1280x816. At
+		// y=2 it ran 2 px under the taskbar, where no page fits (screenFloor),
+		// so every context drew a larger screen.
+		const c: Record<string, number> = {
+			"screen.width": 1382,
+			"screen.height": 864,
+			"screen.availWidth": 1382,
+			"screen.availHeight": 816,
+			"window.outerWidth": 1280,
+			"window.outerHeight": 816,
+			"window.screenX": 206,
+			"window.screenY": 2,
+		};
+		const all = { ...c };
+		clampWindowPosition(all);
+		expect([all["window.screenX"], all["window.screenY"]]).toEqual([102, 0]);
+		const xOnly = { ...c };
+		clampWindowPosition(xOnly, new Set(["window.screenX"]));
+		expect([xOnly["window.screenX"], xOnly["window.screenY"]]).toEqual([
+			102, 2,
+		]);
 	});
 });
 
@@ -579,6 +604,28 @@ describe("voices (test_voices.py)", () => {
 			isLocalService: true,
 		};
 		expect(normalizePresetVoices([obj], "macos")).toEqual([obj]);
+	});
+
+	it.each([
+		"windows",
+		"linux",
+	])("marks no preset voice default on %s, as stock", (os) => {
+		const out = normalizePresetVoices(
+			["Microsoft David:en-US:local", "Microsoft Zira:en-US:local"],
+			os,
+		);
+		expect(out).toHaveLength(2);
+		expect(out.some((v) => v.isDefault)).toBe(false);
+	});
+
+	it("defaults the macOS system voice in a preset", () => {
+		const out = normalizePresetVoices(
+			["Albert:en-US:local", "Samantha:en-US:local"],
+			"macos",
+		);
+		expect(out.filter((v) => v.isDefault).map((v) => v.name)).toEqual([
+			"Samantha",
+		]);
 	});
 });
 
@@ -1001,5 +1048,118 @@ describe("fromFpgen appVersion", () => {
 		expect(fromFpgen(fingerprint, "156")["navigator.appVersion"]).toBe(
 			"5.0 (X11)",
 		);
+	});
+});
+
+describe("per-launch timing draws", () => {
+	it("the Windows alias load time varies per launch, in range; a caller's value is kept", () => {
+		const seen = new Set<number>();
+		for (let i = 0; i < 50; i++) {
+			const c: Record<string, any> = {};
+			fp.setWindowsAliasLoadDefault(c, "win", "lin");
+			const v = c["fonts:windowsAliasLoadMs"];
+			expect(Number.isInteger(v)).toBe(true);
+			expect(v).toBeGreaterThanOrEqual(fp.WINDOWS_ALIAS_LOAD_MS[0]);
+			expect(v).toBeLessThanOrEqual(fp.WINDOWS_ALIAS_LOAD_MS[1]);
+			seen.add(v);
+		}
+		expect(seen.size).toBeGreaterThan(1);
+		const kept: Record<string, any> = { "fonts:windowsAliasLoadMs": 5 };
+		fp.setWindowsAliasLoadDefault(kept, "win", "lin");
+		expect(kept["fonts:windowsAliasLoadMs"]).toBe(5);
+	});
+
+	it("the Windows cmap pass time varies per launch, in range; a caller's value is kept", () => {
+		const seen = new Set<number>();
+		for (let i = 0; i < 50; i++) {
+			const c: Record<string, any> = {};
+			fp.setWindowsAliasLoadDefault(c, "win", "lin");
+			const v = c["fonts:windowsCmapLoadMs"];
+			expect(Number.isInteger(v)).toBe(true);
+			expect(v).toBeGreaterThanOrEqual(fp.WINDOWS_CMAP_LOAD_MS[0]);
+			expect(v).toBeLessThanOrEqual(fp.WINDOWS_CMAP_LOAD_MS[1]);
+			seen.add(v);
+		}
+		expect(seen.size).toBeGreaterThan(1);
+		const kept: Record<string, any> = { "fonts:windowsCmapLoadMs": 7 };
+		fp.setWindowsAliasLoadDefault(kept, "win", "lin");
+		expect(kept["fonts:windowsCmapLoadMs"]).toBe(7);
+		const none: Record<string, any> = {};
+		fp.setWindowsAliasLoadDefault(none, "win", "win");
+		fp.setWindowsAliasLoadDefault(none, "lin", "lin");
+		expect("fonts:windowsCmapLoadMs" in none).toBe(false);
+	});
+
+	it("the audio open delay varies per launch; the device latency follows the identity", () => {
+		const devices = new Set<number>();
+		const delays = new Set<number>();
+		for (let i = 0; i < 50; i++) {
+			const c: Record<string, any> = {
+				"navigator.userAgent": "x",
+				"screen.width": 1920,
+			};
+			fp.setOutputLatencyDefault(c, 7, "win", "lin");
+			devices.add(c["AudioContext:outputLatency"]);
+			delays.add(c["AudioContext:outputLatencyDelayMs"]);
+		}
+		expect(devices.size).toBe(1);
+		expect(delays.size).toBeGreaterThan(1);
+	});
+});
+
+describe("setReleaseRolloutPrefs", () => {
+	// Python's set_release_rollout_prefs for the same identities (Firefox 159,
+	// so both rollouts in the table apply): the two launchers draw alike.
+	const PY = [
+		{ "network.http.happy_eyeballs_enabled": true },
+		{},
+		{},
+		{},
+		{ "network.http.happy_eyeballs_enabled": true },
+		{ "network.http.happy_eyeballs_enabled": true },
+		{ "network.http.happy_eyeballs_enabled": true },
+		{ "dom.fetch.streaming_upload": true },
+		{
+			"network.http.happy_eyeballs_enabled": true,
+			"dom.fetch.streaming_upload": true,
+		},
+		{
+			"network.http.happy_eyeballs_enabled": true,
+			"dom.fetch.streaming_upload": true,
+		},
+		{ "network.http.happy_eyeballs_enabled": true },
+		{},
+	];
+	const config = (i: number) => ({
+		"navigator.userAgent": `ua${i}`,
+		"navigator.platform": "Linux x86_64",
+	});
+
+	it("draws what the Python launcher draws", () => {
+		PY.forEach((want, i) => {
+			const prefs: Record<string, unknown> = {};
+			fp.setReleaseRolloutPrefs(prefs, config(i), i, "159");
+			expect(prefs).toEqual(want);
+		});
+	});
+
+	it("enrolls in Happy Eyeballs at the rollout's rate", () => {
+		let on = 0;
+		for (let i = 0; i < 4000; i++) {
+			const prefs: Record<string, unknown> = {};
+			fp.setReleaseRolloutPrefs(prefs, config(i), i, "158");
+			if (prefs["network.http.happy_eyeballs_enabled"] === true) on++;
+			expect(prefs["dom.fetch.streaming_upload"]).toBeUndefined();
+		}
+		expect(on / 4000).toBeGreaterThan(0.46);
+		expect(on / 4000).toBeLessThan(0.54);
+	});
+
+	it("leaves a caller's pref alone", () => {
+		const prefs: Record<string, unknown> = {
+			"network.http.happy_eyeballs_enabled": false,
+		};
+		fp.setReleaseRolloutPrefs(prefs, config(0), 0, "158");
+		expect(prefs["network.http.happy_eyeballs_enabled"]).toBe(false);
 	});
 });

@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	afterAll,
 	afterEach,
@@ -20,6 +21,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import type { HumanizeManifest, HumanizeSetting } from "../src/humanize.js";
 import {
 	BUNDLE,
 	BUNDLE_EXE,
@@ -35,10 +37,12 @@ import {
 	warnings,
 } from "./launch-host.js";
 
-const { OSError, PyFloat } = await import("../src/pycompat.js");
+const { OSError, PyFloat, ValueError } = await import("../src/pycompat.js");
 const { Version } = await import("../src/pkgman.js");
-const { InvalidPropertyType, UnknownIPLocation } = await import(
-	"../src/exceptions.js"
+const { InvalidPropertyType, UnknownIPLocation, HumanizeEngineUnavailable } =
+	await import("../src/exceptions.js");
+const { auto, cursory, engine, humanizeConfig, notches, raw } = await import(
+	"../src/humanize.js"
 );
 const cpuAffinity = await import("../src/cpu_affinity.js");
 
@@ -46,6 +50,20 @@ const cpuAffinity = await import("../src/cpu_affinity.js");
 const { MODEL } = await import("./fpgen-setup.js");
 
 const deps = utils.utilsDeps;
+// The humanize-engines.json a build of this checkout ships.
+const SHIPPED_MANIFEST = JSON.parse(
+	fs.readFileSync(
+		path.join(
+			path.dirname(fileURLToPath(import.meta.url)),
+			"..",
+			"..",
+			"browser",
+			"settings",
+			"humanize-engines.json",
+		),
+		"utf-8",
+	),
+);
 // The real disk probe, captured before any test stubs it.
 const realQuotaProbe = deps.stockProfileDiskCapacityKb;
 const LINUX_UA =
@@ -194,11 +212,28 @@ describe("test_launch_environment: prefs", () => {
 		it("linux disables it", async () => {
 			expect((await prefsFor(ua(LINUX_UA)))[PREF]).toBe(false);
 		});
+		// On its own host; on a Linux host the Linux platform code needs it off
+		// whatever the identity claims.
+		const onHost = async (
+			host: "mac" | "win" | "lin",
+			opts: Record<string, any>,
+		) => {
+			const before = deps.hostOsKey;
+			deps.hostOsKey = () => host;
+			try {
+				return await prefsFor(opts);
+			} finally {
+				deps.hostOsKey = before;
+			}
+		};
 		it("macOS keeps it", async () => {
-			expect(PREF in (await prefsFor(ua(MAC_UA)))).toBe(false);
+			expect(PREF in (await onHost("mac", ua(MAC_UA)))).toBe(false);
 		});
 		it("windows keeps it", async () => {
-			expect(PREF in (await prefsFor(ua(WIN_UA)))).toBe(false);
+			expect(PREF in (await onHost("win", ua(WIN_UA)))).toBe(false);
+		});
+		it("another OS's identity on a Linux host disables it", async () => {
+			expect((await onHost("lin", ua(WIN_UA)))[PREF]).toBe(false);
 		});
 		it("the caller's pref wins", async () => {
 			const prefs = await prefsFor({
@@ -206,6 +241,49 @@ describe("test_launch_environment: prefs", () => {
 				firefox_user_prefs: { [PREF]: true },
 			});
 			expect(prefs[PREF]).toBe(true);
+		});
+	});
+
+	describe("another OS's rendering, on a Linux host only (test_claimed_os_rendering.py)", () => {
+		// The C++ behind these exists for a Linux build only (gfxPlatformGtk,
+		// FreeType), so another host sets none of it.
+		const CONFIG_KEYS = ["fonts:metrics", "media:spoof_codecs"];
+		const PREFS = [
+			"font.name-list.emoji",
+			...Object.keys(utils.WINDOWS_UI_COLORS),
+		];
+		const launchOn = async (host: "mac" | "win" | "lin", u: string) => {
+			deps.hostOsKey = () => host;
+			let config: Record<string, any> = {};
+			deps.getEnvVars = (c: Record<string, any>) => {
+				config = { ...c };
+				return {};
+			};
+			const result = await launch({ i_know_what_im_doing: true, ...ua(u) });
+			return { config, prefs: result.firefoxUserPrefs };
+		};
+		for (const [host, u] of [
+			["mac", WIN_UA],
+			["mac", LINUX_UA],
+			["win", MAC_UA],
+			["win", LINUX_UA],
+		] as const) {
+			it(`sets nothing on a ${host} host for ${u.slice(13, 20)}`, async () => {
+				const { config, prefs } = await launchOn(host, u);
+				expect(CONFIG_KEYS.filter((k) => k in config)).toEqual([]);
+				expect(PREFS.filter((k) => k in prefs)).toEqual([]);
+			});
+		}
+		it("gives a macOS identity the font defaults only", async () => {
+			const { config, prefs } = await launchOn("lin", MAC_UA);
+			expect(prefs["font.name-list.serif.th"]).toBe("Thonburi");
+			expect(CONFIG_KEYS.filter((k) => k in config)).toEqual([]);
+			expect(PREFS.slice(1).filter((k) => k in prefs)).toEqual([]);
+		});
+		it("sets it for a Windows identity on a Linux host", async () => {
+			const { config, prefs } = await launchOn("lin", WIN_UA);
+			expect(CONFIG_KEYS.filter((k) => !(k in config))).toEqual([]);
+			expect(PREFS.filter((k) => !(k in prefs))).toEqual([]);
 		});
 	});
 
@@ -497,6 +575,69 @@ describe("test_launch_environment: prefs", () => {
 		});
 	});
 
+	describe("Windows legacy font families", () => {
+		const fontsFor = async (fonts: string[]) => {
+			let config: Record<string, any> = {};
+			deps.getEnvVars = ((c: Record<string, any>) => {
+				config = { ...c };
+				return {};
+			}) as any;
+			await launch({
+				os: "windows",
+				block_webgl: true,
+				i_know_what_im_doing: true,
+				...ua(WIN_UA, { fonts }),
+			});
+			return config.fonts;
+		};
+		it("exposes aliases of each presented canonical family", async () => {
+			expect(await fontsFor(["Arial", "Calibri", "Franklin Gothic"])).toEqual([
+				"Arial",
+				"Calibri",
+				"Franklin Gothic",
+				"Arial Black",
+				"Calibri Light",
+				"Franklin Gothic Medium",
+			]);
+		});
+		it("adds Office faces of OS families only with an Office family", async () => {
+			expect(
+				await fontsFor(["Arial", "Franklin Gothic", "Rockwell", "Sitka Text"]),
+			).toEqual([
+				"Arial",
+				"Franklin Gothic",
+				"Rockwell",
+				"Sitka Text",
+				"Arial Black",
+				"Franklin Gothic Medium",
+				"Rockwell Condensed",
+				"Rockwell Extra Bold",
+				"Sitka",
+				"Arial Narrow",
+				"Franklin Gothic Demi",
+				"Franklin Gothic Demi Cond",
+				"Franklin Gothic Heavy",
+				"Franklin Gothic Medium Cond",
+			]);
+			expect(
+				await fontsFor(["Arial", "Franklin Gothic", "Segoe UI Variable Text"]),
+			).toEqual([
+				"Arial",
+				"Franklin Gothic",
+				"Segoe UI Variable Text",
+				"Arial Black",
+				"Franklin Gothic Medium",
+				"Segoe UI Variable",
+			]);
+		});
+		it("adds no alias without its canonical family", async () => {
+			const fonts = await fontsFor(["Times New Roman"]);
+			expect(fonts).not.toContain("Arial Black");
+			expect(fonts).not.toContain("Calibri Light");
+			expect(fonts).not.toContain("Franklin Gothic Medium");
+		});
+	});
+
 	// test_windows_identity.py
 	describe("a Windows identity on another host behaves as Windows", () => {
 		const STYLE = "widget.non-native-theme.scrollbar.style";
@@ -520,7 +661,7 @@ describe("test_launch_environment: prefs", () => {
 			)) {
 				expect(prefs[pref]).toEqual(value);
 			}
-			expect("media.eme.enabled" in prefs).toBe(false);
+			expect(prefs["media.eme.enabled"]).toBe(true);
 			expect(prefs["middlemouse.paste"]).toBe(false);
 		});
 		it("draws Windows' scrollbars at Windows' size", async () => {
@@ -698,9 +839,7 @@ describe("test_launch_environment: screenshot caret", () => {
 
 	it("pages under a Camoufox launch keep the caret", async () => {
 		const connection = new Connection();
-		const browser = utils.attachScreenshotDefaults(
-			owner(undefined, connection),
-		);
+		const browser = utils.attachDriverDefaults(owner(undefined, connection));
 		// handle, frame, page, context
 		const handle = owner(
 			owner(owner(owner(browser, connection), connection), connection),
@@ -718,10 +857,38 @@ describe("test_launch_environment: screenshot caret", () => {
 		]);
 	});
 
+	it("fill clicks a text field without focus first, and only then", async () => {
+		const connection = new Connection();
+		const browser = utils.attachDriverDefaults(owner(undefined, connection));
+		const clicks: any[] = [];
+		const field = (focused: boolean) => ({
+			first() {
+				return this;
+			},
+			evaluate: async () => ({ typed: true, focused }),
+			click: async (options: any) => {
+				clicks.push(options);
+			},
+		});
+		for (const focused of [false, true]) {
+			const frame = {
+				...owner(browser, connection),
+				locator: () => field(focused),
+			};
+			await connection.sendMessageToServer(frame, "fill", {
+				selector: "#f",
+				value: "x",
+				timeout: 5,
+			});
+		}
+		expect(clicks).toEqual([{ timeout: 5, force: undefined }]);
+		expect(connection.sent.map(([method]) => method)).toEqual(["fill", "fill"]);
+	});
+
 	it("other browsers on the same connection are left alone", async () => {
 		const connection = new Connection();
-		utils.attachScreenshotDefaults(owner(undefined, connection));
-		utils.attachScreenshotDefaults(owner(undefined, connection));
+		utils.attachDriverDefaults(owner(undefined, connection));
+		utils.attachDriverDefaults(owner(undefined, connection));
 		await connection.sendMessageToServer(
 			owner(owner(undefined, connection), connection),
 			"screenshot",
@@ -812,10 +979,17 @@ describe("test_humanize", () => {
 		};
 	});
 
-	const launchHumanize = (humanize: boolean | number) =>
-		launch({ humanize, block_webgl: true, i_know_what_im_doing: true }).then(
-			() => captured,
-		);
+	const launchHumanize = (
+		humanize: HumanizeSetting,
+		manifest: HumanizeManifest | null = null,
+	) => {
+		deps.loadHumanizeEngines = () => manifest;
+		return launch({
+			humanize,
+			block_webgl: true,
+			i_know_what_im_doing: true,
+		}).then(() => captured);
+	};
 
 	it("humanize: true sets no duration", async () => {
 		const config = await launchHumanize(true);
@@ -834,6 +1008,274 @@ describe("test_humanize", () => {
 		expect(utils.configJson({ t: config["humanize:maxTime"] })).toBe(
 			`{"t":${Number.isInteger(duration) ? `${duration}.0` : duration}}`,
 		);
+	});
+	it("launchOptions writes the channel keys", async () => {
+		const config = await launchHumanize(
+			{ mouse: cursory({ maxTime: 0.8 }), scroll: raw(), seed: 9 },
+			SHIPPED_MANIFEST,
+		);
+		expect(config.humanize).toBe(true);
+		expect(config["humanize:mouse"]).toBe("cursory");
+		expect(config["humanize:scroll"]).toBe("raw");
+		expect(Number(config["humanize:maxTime"])).toBe(0.8);
+		expect(config["humanize:seed"]).toBe("9");
+	});
+
+	it("launchOptions refuses an engine the build lacks", async () => {
+		await expect(
+			launchHumanize({ scroll: engine("fancy") }, SHIPPED_MANIFEST),
+		).rejects.toThrow(HumanizeEngineUnavailable);
+	});
+});
+
+describe("test_humanize: per-channel engines (test_humanize.py)", () => {
+	const BASE_MANIFEST = JSON.parse(
+		fs.readFileSync(
+			path.join(
+				path.dirname(fileURLToPath(import.meta.url)),
+				"..",
+				"..",
+				"browser",
+				"settings",
+				"humanize-engines.json",
+			),
+			"utf-8",
+		),
+	);
+	// A build that ships one more engine, `fancy`, on every channel: its
+	// options, their config keys and ranges come from the manifest alone.
+	const FANCY_MANIFEST = {
+		...BASE_MANIFEST,
+		mouse: [...BASE_MANIFEST.mouse, "fancy"],
+		keyboard: [...BASE_MANIFEST.keyboard, "fancy"],
+		scroll: [...BASE_MANIFEST.scroll, "fancy"],
+		engines: {
+			...BASE_MANIFEST.engines,
+			fancy: {
+				module: "chrome://example/fancy.js",
+				movesCursor: true,
+				options: {
+					budgetSeconds: {
+						key: "humanize:fancy:budgetSeconds",
+						min: 1,
+						max: 20,
+					},
+					speed: { key: "humanize:fancy:speed", min: 0.5, max: 2 },
+				},
+			},
+		},
+	};
+	// Config values as they serialize: PyFloat -> number.
+	const plain = (config: Record<string, unknown>) =>
+		JSON.parse(utils.configJson(config));
+
+	it.each<[HumanizeSetting, Record<string, unknown>]>([
+		[undefined, {}],
+		[false, {}],
+		[0, {}],
+		[true, { humanize: true }],
+		[1.5, { humanize: true, "humanize:maxTime": 1.5 }],
+		[
+			{ mouse: cursory({ maxTime: 0.7 }) },
+			{ humanize: true, "humanize:maxTime": 0.7 },
+		],
+		[{ mouse: raw(), keyboard: raw(), scroll: raw() }, {}],
+	])("a build without the manifest gets the legacy keys (%j)", (humanize, expected) => {
+		expect(plain(humanizeConfig(humanize, null))).toEqual(expected);
+	});
+
+	it.each<[HumanizeSetting, string]>([
+		[{ mouse: raw() }, "mouse"],
+		[{ scroll: raw() }, "scroll"],
+		[{ keyboard: engine("fancy") }, "keyboard"],
+		[{ seed: 5 }, "seed"],
+	])("a build without the manifest refuses what it cannot do (%j)", (humanize, channel) => {
+		expect(() => humanizeConfig(humanize, null)).toThrow(
+			HumanizeEngineUnavailable,
+		);
+		try {
+			humanizeConfig(humanize, null);
+		} catch (e) {
+			expect(
+				(e as InstanceType<typeof HumanizeEngineUnavailable>).channel,
+			).toBe(channel);
+		}
+	});
+
+	it.each<[HumanizeSetting, Record<string, unknown>]>([
+		[
+			false,
+			{
+				humanize: false,
+				"humanize:mouse": "raw",
+				"humanize:keyboard": "raw",
+				"humanize:scroll": "raw",
+			},
+		],
+		[
+			true,
+			{
+				humanize: true,
+				"humanize:mouse": "auto",
+				"humanize:keyboard": "auto",
+				"humanize:scroll": "auto",
+			},
+		],
+		[
+			1.5,
+			{
+				humanize: true,
+				"humanize:mouse": "cursory",
+				"humanize:keyboard": "auto",
+				"humanize:scroll": "auto",
+				"humanize:maxTime": 1.5,
+			},
+		],
+		[
+			{
+				mouse: cursory({ maxTime: 1, minTime: 0.2 }),
+				scroll: "raw",
+				seed: 2n ** 64n - 1n,
+			},
+			{
+				humanize: true,
+				"humanize:mouse": "cursory",
+				"humanize:keyboard": "auto",
+				"humanize:scroll": "raw",
+				"humanize:maxTime": 1,
+				"humanize:minTime": 0.2,
+				"humanize:seed": "18446744073709551615",
+			},
+		],
+		[
+			{ mouse: raw(), scroll: notches() },
+			{
+				humanize: true,
+				"humanize:mouse": "raw",
+				"humanize:keyboard": "auto",
+				"humanize:scroll": "notches",
+			},
+		],
+		[
+			{},
+			{
+				humanize: true,
+				"humanize:mouse": "auto",
+				"humanize:keyboard": "auto",
+				"humanize:scroll": "auto",
+			},
+		],
+	])("every humanize key is written on every launch (case %#)", (humanize, expected) => {
+		const config = plain(humanizeConfig(humanize, BASE_MANIFEST));
+		expect(config).toEqual(expected);
+		expect(Object.keys(config)).toEqual(Object.keys(expected));
+	});
+
+	it("an engine needs a build that ships it", () => {
+		expect(() =>
+			humanizeConfig({ keyboard: engine("fancy") }, BASE_MANIFEST),
+		).toThrow(
+			"humanize keyboard: fancy is not available in this build; available: ['raw']",
+		);
+	});
+
+	it("engine options are written to the keys the manifest declares, as floats", () => {
+		const config = humanizeConfig(
+			{
+				keyboard: engine("fancy", { speed: 1.5 }),
+				scroll: engine("fancy", { budgetSeconds: 6 }),
+			},
+			FANCY_MANIFEST,
+		);
+		expect(utils.configJson(config)).toBe(
+			'{"humanize":true,"humanize:mouse":"auto","humanize:keyboard":"fancy","humanize:scroll":"fancy",' +
+				'"humanize:fancy:speed":1.5,"humanize:fancy:budgetSeconds":6.0}',
+		);
+	});
+
+	it("one option key cannot take two values", () => {
+		expect(() =>
+			humanizeConfig(
+				{
+					keyboard: engine("fancy", { budgetSeconds: 5 }),
+					scroll: engine("fancy", { budgetSeconds: 6 }),
+				},
+				FANCY_MANIFEST,
+			),
+		).toThrow("budgetSeconds twice");
+	});
+
+	it.each<[HumanizeSetting, string]>([
+		[
+			{ keyboard: engine("fancy", { budgetSeconds: 21 }) },
+			"budgetSeconds must be in [1, 20]",
+		],
+		[
+			{ keyboard: engine("fancy", { speed: 0.1 }) },
+			"speed must be in [0.5, 2]",
+		],
+		[{ keyboard: engine("fancy", { wpm: 60 }) }, "has no option 'wpm'"],
+		[{ mouse: cursory({ maxTime: -1 }) }, "maxTime must be at least 0"],
+		[{ scroll: engine("notches", { speed: 2 }) }, "has no option 'speed'"],
+	])("engine options are checked against the manifest (case %#)", (humanize, message) => {
+		expect(() => humanizeConfig(humanize, FANCY_MANIFEST)).toThrow(message);
+	});
+
+	it.each<[HumanizeSetting, string]>([
+		[{ mouse: notches() }, "mouse: notches is not available"],
+		[{ keyboard: cursory() }, "keyboard: cursory is not available"],
+		[{ mouse: "fast" }, "mouse: fast is not available"],
+	])("an engine the channel does not list is refused (%j)", (humanize, message) => {
+		expect(() => humanizeConfig(humanize, BASE_MANIFEST)).toThrow(message);
+	});
+
+	it.each<[unknown, string]>([
+		[{ touch: auto() }, "no channel"],
+		[{ mouse: 3 }, "must be an engine"],
+		[
+			{ mouse: engine("cursory", { maxTime: "1" as unknown as number }) },
+			"must be a number",
+		],
+		[{ seed: -1 }, "seed"],
+		[{ seed: 2 ** 64 }, "seed"],
+		["yes", "must be None"],
+	])("malformed settings are refused (%j)", (humanize, message) => {
+		expect(() =>
+			humanizeConfig(humanize as HumanizeSetting, BASE_MANIFEST),
+		).toThrow(ValueError);
+		expect(() =>
+			humanizeConfig(humanize as HumanizeSetting, BASE_MANIFEST),
+		).toThrow(message);
+	});
+
+	it("factories return plain data", () => {
+		expect(cursory({ maxTime: 1 })).toEqual({
+			engine: "cursory",
+			options: { maxTime: 1 },
+		});
+		expect(engine("fancy", { speed: 2 })).toEqual({
+			engine: "fancy",
+			options: { speed: 2 },
+		});
+		expect(JSON.parse(JSON.stringify(auto()))).toEqual(auto());
+	});
+
+	it("a cursor-moving scroll engine with a raw mouse warns", async () => {
+		const { warnings: seen } = await warnings.recordWarnings(() =>
+			humanizeConfig({ mouse: raw(), scroll: engine("fancy") }, FANCY_MANIFEST),
+		);
+		expect(seen.some((w) => w.message.includes("single jump"))).toBe(true);
+	});
+
+	it("the manifest is read beside the executable", () => {
+		const dir = fs.mkdtempSync(path.join(SCRATCH, "manifest-"));
+		const binary = path.join(dir, "camoufox-bin");
+		expect(deps.loadHumanizeEngines(binary)).toBeNull();
+		fs.writeFileSync(
+			path.join(dir, "humanize-engines.json"),
+			JSON.stringify(BASE_MANIFEST),
+		);
+		expect(deps.loadHumanizeEngines(binary)).toEqual(BASE_MANIFEST);
 	});
 });
 
