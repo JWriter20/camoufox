@@ -608,6 +608,8 @@ class Lease:
             )
         self.lease_id = lease["lease_id"]
         self.grants = {name: lease.get(name) for name in SECTIONS}
+        from .proxy_session import log_notices
+        log_notices(lease.get("notices"))
         self.account_id = int(lease.get("account_id") or token_fields(lease["token"])["account_id"])
         self._seq = 0
         self._heartbeat_s = float(lease["limits"]["heartbeat_s"])
@@ -798,11 +800,17 @@ def acquire(
 
 def claim(options: Dict[str, Any], display: Any = None) -> Optional[Any]:
     """
-    The lease or named-node session opened for these options, taken by the browser
-    about to launch with them on `display`. None for a stock build with no session.
+    The lease, managed proxy session or named-node session opened for these options,
+    taken by the browser about to launch with them on `display`. None for a stock
+    build with no session.
     """
     lease = _LIVE.get(str(options.get("env", {}).get(LEASE_FILE_ENV)))
     if lease is None:
+        # A standard build's managed proxy session holds any render node opened with it.
+        from .proxy_session import claim as claim_proxy
+        session = claim_proxy(options)
+        if session is not None:
+            return session
         from .render_node import claim as claim_node
         return claim_node(options)
     if lease.claimed:

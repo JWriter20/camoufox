@@ -33,6 +33,7 @@ from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
 from .ip import Proxy, proxy_auth_env, proxy_auth_init_script, public_ip, public_ipv6, socks5_auth, valid_ipv4, valid_ipv6
 from .managed import Managed, managed_request
+from .proxy_session import ProxySession
 from .locales import handle_locales
 import warnings
 
@@ -1486,8 +1487,8 @@ def resolve_verstr(executable_path: Optional[Path] = None) -> str:
     raise ValueError(f'{ini} names no Version')
 
 
-# The Camoufox Pro lease or node session opened on this thread, released if the
-# rest of the build fails.
+# The Camoufox Pro lease, managed proxy session or node session opened on this
+# thread, released if the rest of the build fails.
 _HELD = threading.local()
 
 
@@ -1496,17 +1497,21 @@ def _release_lease_on_failure(build: Any) -> Any:
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         _HELD.lease = None
         _HELD.node = None
+        _HELD.proxy = None
         try:
             return build(*args, **kwargs)
         except BaseException:
             if _HELD.lease is not None:
                 _HELD.lease.release("error")
+            if _HELD.proxy is not None:
+                _HELD.proxy.release("error")
             if _HELD.node is not None:
                 _HELD.node.release()
             raise
         finally:
             _HELD.lease = None
             _HELD.node = None
+            _HELD.proxy = None
 
     return wrapper
 
@@ -1685,9 +1690,11 @@ def launch_options(
             machine; "standard" and "continuous" profiles are kept warm in the
             cloud and launch with their identity only. Left out, the API decides.
         managed (Optional[Union[Managed, bool]]):
-            A Camoufox Pro managed proxy: a Managed naming the provider, type,
-            network and country wanted, True for the defaults, or False for
-            none. Left out, a `profile` gets the default and a launch without
+            A managed proxy, paid from the account's wallet: a Managed naming
+            the provider, type, network and country wanted, True for the
+            defaults, or False for none. Any build takes it with a Camoufox key
+            (`camoufox login`), pay-as-you-go included; CamouLink needs a Pro
+            plan. Left out, a `profile` gets the default and a launch without
             one goes direct. With your own `proxy` there is none, and passing
             both raises ValueError. See docs/pro.md, "Managed proxies".
         farm_gpu (Optional[bool]):
@@ -1782,9 +1789,14 @@ def launch_options(
             raise ValueError("warm_plan applies to a profile: pass profile too.")
         pro_request["warm_plan"] = warm_plan
     wire = managed_request(managed, profile=profile, proxy=proxy)
-    # Your own proxy tells a lease to add no managed one; a launch with no lease to tell
-    # (a stock build) only fails here when it asked for `managed` itself.
-    if wire is not None and (leased or managed is not None):
+    # A Pro build's managed proxy is a section of its lease, and your own proxy tells the lease to add
+    # none. A standard build has no lease: it opens a proxy session of its own, below, and only when the
+    # launch asked for one, so nobody is put on a metered proxy they did not choose.
+    proxy_wire = None
+    if pro_build is None:
+        if wire not in (None, False):
+            proxy_wire = wire
+    elif wire is not None and (leased or managed is not None):
         pro_request["managed"] = wire
     if farm_gpu is False:
         pro_request["gpu"] = False
@@ -1816,7 +1828,7 @@ def launch_options(
             "profile, warm_plan, managed and farm_gpu are lease options, and this launch carries its own "
             f"{pro.LEASE_FILE_ENV}."
             if pro_build
-            else "profile, warm_plan, managed and farm_gpu need a Camoufox Pro build (see docs/pro.md)."
+            else "profile, warm_plan and farm_gpu need a Camoufox Pro build (see docs/pro.md)."
         )
     # What the lease adds to the environment, after every launch rule.
     pro_env: Dict[str, str] = {}
@@ -2003,11 +2015,20 @@ def launch_options(
                 bypass = [entry for entry in (proxy.get("bypass") or "").split(",") if entry]
                 proxy = {**proxy, "bypass": ",".join([*bypass, farm_host])}
 
+    if proxy_wire is not None:
+        if _HELD.proxy is None:
+            _HELD.proxy = ProxySession(proxy_wire, pro_key)
+        proxy = _HELD.proxy.proxy()
+        if geoip is None:
+            geoip = _HELD.proxy.egress.get("exit_ip") or True
+
     if relay is not None:
         directory = _HELD.lease.path.parent if leased else Path(env[pro.LEASE_FILE_ENV]).parent
         _HELD.node = render_nodes.Session(relay, _firefox_version(Path(browser_binary)), directory)
         if leased:
             _HELD.lease.on_end.append(_HELD.node.release)
+        elif _HELD.proxy is not None:
+            _HELD.proxy.on_end.append(_HELD.node.release)
         else:
             render_nodes.track(_HELD.node)
         pro_env[render_nodes.RELAY_ENV] = str(_HELD.node.path)

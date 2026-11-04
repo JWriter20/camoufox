@@ -101,7 +101,7 @@ describe("typing", () => {
 describe("what a profile may use", () => {
 	it("a static proxy needs a profile", () => {
 		expect(() => request({ type: ProxyType.STATIC })).toThrow(
-			/belongs to a profile/,
+			/kept by a profile or a name/,
 		);
 	});
 

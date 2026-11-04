@@ -105,6 +105,7 @@ import {
 } from "./pkgman.js";
 import * as pro from "./pro.js";
 import { openProfile } from "./pro-profile.js";
+import { ProxySession } from "./proxy_session.js";
 import {
 	comparePyStr,
 	formatPyFloatRepr,
@@ -2244,18 +2245,23 @@ export interface LaunchOptions {
  * Accepts all Playwright Firefox launch options, along with the Camoufox ones
  * documented on {@link LaunchOptions}.
  */
+/** What a launch opened along the way: a Pro lease, a managed proxy session, a render node. */
+interface Held {
+	lease: pro.Lease | null;
+	node: renderNodes.Session | null;
+	proxy: ProxySession | null;
+}
+
 export async function launchOptions(
 	options: LaunchOptions = {},
 ): Promise<Record<string, any>> {
 	// A Camoufox Pro lease or node session opened along the way goes back if the build fails.
-	const held: { lease: pro.Lease | null; node: renderNodes.Session | null } = {
-		lease: null,
-		node: null,
-	};
+	const held: Held = { lease: null, node: null, proxy: null };
 	try {
 		return await buildLaunchOptions(options, held);
 	} catch (error) {
 		await held.lease?.release("error");
+		await held.proxy?.release("error");
 		await held.node?.release();
 		throw error;
 	}
@@ -2317,7 +2323,7 @@ async function buildLaunchOptions(
 		render_node,
 		...passthrough
 	}: LaunchOptions,
-	held: { lease: pro.Lease | null; node: renderNodes.Session | null },
+	held: Held,
 ): Promise<Record<string, any>> {
 	utilsDeps.ensureBrowserProfileDir(env);
 
@@ -2388,9 +2394,13 @@ async function buildLaunchOptions(
 		proRequest.warm_plan = warm_plan;
 	}
 	const wire = managedRequest(managed, { profile, proxy });
-	// Your own proxy tells a lease to add no managed one; a launch with no lease to tell
-	// (a stock build) only fails here when it asked for `managed` itself.
-	if (wire !== undefined && (leased || managed !== undefined)) {
+	// A Pro build's managed proxy is a section of its lease, and your own proxy tells the lease to
+	// add none. A standard build has no lease: it opens a proxy session of its own, below, and only
+	// when the launch asked for one, so nobody is put on a metered proxy they did not choose.
+	let proxyWire: Managed | boolean | undefined;
+	if (!proBuild) {
+		if (wire !== undefined && wire !== false) proxyWire = wire;
+	} else if (wire !== undefined && (leased || managed !== undefined)) {
 		proRequest.managed = wire;
 	}
 	if (farm_gpu === false) proRequest.gpu = false;
@@ -2398,7 +2408,7 @@ async function buildLaunchOptions(
 		throw new ValueError(
 			proBuild
 				? `profile, warm_plan, managed and farm_gpu are lease options, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
-				: "profile, warm_plan, managed and farm_gpu need a Camoufox Pro build (see docs/pro.md).",
+				: "profile, warm_plan and farm_gpu need a Camoufox Pro build (see docs/pro.md).",
 		);
 	}
 	// A render node runs Windows Firefox's ANGLE, so it serves Windows identities of a Pro build.
@@ -2667,6 +2677,12 @@ async function buildLaunchOptions(
 		}
 	}
 
+	if (proxyWire !== undefined) {
+		held.proxy ??= await ProxySession.open(proxyWire, pro_key);
+		proxy = held.proxy.proxy();
+		geoip ??= held.proxy.egress.exit_ip ?? true;
+	}
+
 	if (relay) {
 		const directory = path.dirname(
 			held.lease?.path ?? String(env[pro.LEASE_FILE_ENV]),
@@ -2680,6 +2696,9 @@ async function buildLaunchOptions(
 		if (held.lease) {
 			const opened = node;
 			held.lease.onEnd.push(() => opened.release());
+		} else if (held.proxy) {
+			const opened = node;
+			held.proxy.onEnd.push(() => opened.release());
 		} else {
 			renderNodes.track(node);
 		}

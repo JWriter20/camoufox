@@ -899,8 +899,8 @@ def launch(cloud, pro_exe, monkeypatch):
 def test_a_managed_proxy_routes_the_browser_located_at_its_exit(cloud, launch):
     cloud.sections = {"egress": {"server": "http://100.64.12.34:7190", "username": "0192f0c4", "password": "secret",
                                  "class": "residential", "country": "US", "sticky": True, "exit_ip": "98.97.12.34"}}  # fmt: skip
-    opts = launch(managed=Managed(network=ProxyNetwork.ISP, country="US"))
-    assert launch.mint()["managed"] == {"network": "isp", "country": "US"}
+    opts = launch(managed=Managed(provider=ProxyProvider.EVOMI, network=ProxyNetwork.ISP, country="US"))
+    assert launch.mint()["managed"] == {"provider": "evomi", "network": "isp", "country": "US"}
     assert opts["proxy"] == {
         "server": "http://100.64.12.34:7190",
         "username": "0192f0c4",

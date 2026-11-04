@@ -1,6 +1,7 @@
 """
-Camoufox Pro's managed proxy catalogue: what each provider sells and what it can be targeted at, in
-the same shape whatever the provider (docs/pro.md, "Managed proxies"). Public: no key is needed.
+The managed proxy catalogue: what each provider sells and what it can be targeted at, in the same
+shape whatever the provider (docs/pro.md, "Managed proxies"). Public: no key is needed. And the static
+IPs an account rents under a name (`list_statics`, `release_static`), which need its key.
 
     from camoufox.proxies import list_proxies, proxy_targets
     for product in list_proxies():
@@ -10,11 +11,15 @@ the same shape whatever the provider (docs/pro.md, "Managed proxies"). Public: n
 
 A value from `proxy_targets` is what `Managed(...)` takes: `Managed(provider=..., country="US",
 city=cities[0].value)`.
+
+    for static in list_statics():
+        print(static.name, static.provider, static.network, static.exit_ip, static.paid_through)
+    release_static("shop-ip")    # stop renting it
 """
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from . import pro
 from .managed import ProxyDimension, ProxyNetwork, ProxyProvider, ProxyType
@@ -63,6 +68,22 @@ class ProxyOption:
     observed_at: Optional[str]
     # For a static product, how many IPs in stock carry this value.
     available: Optional[int]
+
+
+@dataclass(frozen=True)
+class NamedStatic:
+    """A static IP the account rents under a name (`Managed(type=ProxyType.STATIC, name=...)`)."""
+
+    name: str
+    provider: Optional[ProxyProvider]
+    type: Optional[ProxyType]
+    network: Optional[ProxyNetwork]
+    country: Optional[str]
+    exit_ip: Optional[str]
+    # When the rent paid so far runs out; it renews from the wallet until the IP is released.
+    paid_through: Optional[str]
+    # A month's rent, your plan's discount applied; None when the product has no monthly rent.
+    monthly_cents: Optional[int]
 
 
 def list_proxies() -> List[ProxyProduct]:
@@ -132,4 +153,37 @@ def _option(entry: Dict[str, Any]) -> ProxyOption:
         listed=bool(entry.get("listed")),
         observed_at=entry.get("observed_at"),
         available=entry.get("available"),
+    )
+
+
+def list_statics(*, key: Optional[str] = None) -> List[NamedStatic]:
+    """The static IPs this account rents under a name. Needs the account's key (`camoufox login`)."""
+    body = pro.call("GET", "/api/v1/proxy/statics", key=pro.resolve_key(key))
+    return [_static(entry) for entry in body.get("statics", [])]
+
+
+def release_static(name: str, *, key: Optional[str] = None) -> None:
+    """Stop renting the static IP held under `name`. The next launch naming it rents a new IP."""
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"release_static takes the static IP's name, not {name!r}")
+    pro.call("DELETE", f"/api/v1/proxy/statics/{quote(name, safe='')}", key=pro.resolve_key(key))
+
+
+def _member(enum: Any, value: Any) -> Any:
+    try:
+        return enum(value)
+    except ValueError:
+        return None
+
+
+def _static(entry: Dict[str, Any]) -> NamedStatic:
+    return NamedStatic(
+        name=str(entry["name"]),
+        provider=_member(ProxyProvider, entry.get("provider")),
+        type=_member(ProxyType, entry.get("type")),
+        network=_member(ProxyNetwork, entry.get("network")),
+        country=entry.get("country"),
+        exit_ip=entry.get("exit_ip"),
+        paid_through=entry.get("paid_through"),
+        monthly_cents=entry.get("monthly_cents"),
     )

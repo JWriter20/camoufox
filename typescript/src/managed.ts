@@ -8,11 +8,13 @@
  */
 import { ValueError } from "./pycompat.js";
 
-/** Who runs the exit. `CAMOULINK` is Camoufox Pro's own Starlink network. */
+/** Who runs the exit. `CAMOULINK` is Camoufox Pro's own Starlink network, for Pro plans; the
+ * partners (`EVOMI`, `RAYOBYTE`, `BYTEFUL`) are open to every account. */
 export const ProxyProvider = {
 	CAMOULINK: "camoulink",
 	EVOMI: "evomi",
 	RAYOBYTE: "rayobyte",
+	BYTEFUL: "byteful",
 } as const;
 export type ProxyProvider = (typeof ProxyProvider)[keyof typeof ProxyProvider];
 
@@ -49,9 +51,15 @@ export type ProxyDimension =
 
 /**
  * The managed proxy a launch asks for. A field left out takes the API's
- * default: provider `CAMOULINK`; type `STATIC` with a profile, `ROTATING`
- * without; network `RESIDENTIAL`, or `ISP` for a static exit from a partner;
- * any country.
+ * default: provider `CAMOULINK` on a Pro build, `EVOMI` on a standard one
+ * (CamouLink needs a Pro plan); type `STATIC` with a profile or a name,
+ * `ROTATING` without; network `RESIDENTIAL`, or `ISP` for a static exit from a
+ * partner; any country.
+ *
+ * `name` keeps a `STATIC` exit without a profile: the account rents that IP
+ * under the name, and every launch naming it exits through the same IP until
+ * it is released (`releaseStatic`). A profile keeps its own, so a name and a
+ * profile conflict.
  *
  * Targeting beyond country: `region` and `city` take a name or its listing
  * value ("New York" and "new_york" are the same), `zip` a postal code, `isp`
@@ -68,6 +76,7 @@ export interface Managed {
 	zip?: string;
 	isp?: string;
 	asn?: number | string;
+	name?: string;
 }
 
 // A profile keeps one IP for life, so it exits only through networks that can hold one.
@@ -78,6 +87,10 @@ const PROFILE_PARTNER_NETWORKS: readonly ProxyNetwork[] = [
 const COUNTRY = /^[A-Z]{2}$/;
 const ASN = /^(?:AS)?[0-9]{1,10}$/i;
 const ZIP = /^[A-Za-z0-9]{2,10}$/;
+const NAME = /^[A-Za-z0-9._-]{1,64}$/;
+/** CamouLink is residential Starlink: country, and SpaceX's ASN only. */
+export const STARLINK_ASN = 14593;
+const CAMOULINK_UNTARGETED = ["region", "city", "zip", "isp"] as const;
 // A place name is ambiguous across countries.
 const NEEDS_COUNTRY = ["region", "city", "zip"] as const;
 const FIELDS = [
@@ -90,6 +103,7 @@ const FIELDS = [
 	"zip",
 	"isp",
 	"asn",
+	"name",
 ] as const;
 
 function member(
@@ -189,12 +203,37 @@ export function managedRequest(
 			`managed ${place} needs a country: a place name is ambiguous without one`,
 		);
 	}
+	if (managed.name !== undefined) {
+		if (typeof managed.name !== "string" || !NAME.test(managed.name)) {
+			throw new ValueError(
+				`managed name must be 1-64 letters, digits, '.', '_' or '-', not ${JSON.stringify(managed.name)}`,
+			);
+		}
+		if (managed.type === ProxyType.ROTATING) {
+			throw new ValueError(
+				"A name keeps a STATIC exit, and ProxyType.ROTATING takes a fresh one each launch: " +
+					"drop the name, or use ProxyType.STATIC.",
+			);
+		}
+	}
+	// Only when named: an unset provider is CamouLink on a Pro lease but a partner on a standard
+	// build's proxy session, and the API checks whichever it turns out to be.
+	if (managed.provider === ProxyProvider.CAMOULINK) checkCamouLink(managed);
 	const hasProfile = profile != null;
-	const kind =
-		managed.type ?? (hasProfile ? ProxyType.STATIC : ProxyType.ROTATING);
-	if (kind === ProxyType.STATIC && !hasProfile) {
+	const named = managed.name !== undefined;
+	if (named && hasProfile) {
 		throw new ValueError(
-			"A STATIC managed proxy belongs to a profile: pass profile too, or use ProxyType.ROTATING.",
+			"managed name and profile conflict: a profile keeps its own static IP. Drop the name, or " +
+				"launch without the profile.",
+		);
+	}
+	const kind =
+		managed.type ??
+		(hasProfile || named ? ProxyType.STATIC : ProxyType.ROTATING);
+	if (kind === ProxyType.STATIC && !hasProfile && !named) {
+		throw new ValueError(
+			"A STATIC managed proxy is kept by a profile or a name: pass profile, or { name } to rent " +
+				"the IP under a name, or use ProxyType.ROTATING.",
 		);
 	}
 	if (kind === ProxyType.ROTATING && hasProfile) {
@@ -220,4 +259,35 @@ export function managedRequest(
 		if (managed[field] !== undefined) (wire as any)[field] = managed[field];
 	}
 	return wire;
+}
+
+/** The API's CamouLink rules (SPEC-EGRESS § 1.1, § 9.2), checked before any call. Whether the
+ * account may buy CamouLink (a Pro plan) is the API's to say: `PlanRequired`. */
+function checkCamouLink(managed: Managed): void {
+	if (
+		managed.network !== undefined &&
+		managed.network !== ProxyNetwork.RESIDENTIAL
+	) {
+		const name = nameOf(ProxyNetwork, managed.network);
+		throw new ValueError(
+			`CamouLink exits are residential Starlink, so its network is ProxyNetwork.RESIDENTIAL, not ${name}; name a partner provider for a ${name} exit.`,
+		);
+	}
+	const targeted = CAMOULINK_UNTARGETED.find(
+		(field) => managed[field] !== undefined,
+	);
+	if (targeted !== undefined) {
+		throw new ValueError(
+			`CamouLink exits cannot be targeted by ${targeted}; they take country and asn (${STARLINK_ASN}).`,
+		);
+	}
+	if (
+		managed.asn !== undefined &&
+		Number(String(managed.asn).toUpperCase().replace(/^AS/, "")) !==
+			STARLINK_ASN
+	) {
+		throw new ValueError(
+			`CamouLink exits are Starlink, AS${STARLINK_ASN}, not ${JSON.stringify(managed.asn)}.`,
+		);
+	}
 }

@@ -14,7 +14,7 @@ import type {
 	ProxyType,
 } from "./managed.js";
 import { ProxyDimension as Dimensions } from "./managed.js";
-import { call } from "./pro.js";
+import { call, resolveKey } from "./pro.js";
 
 const PAGE = 1000;
 
@@ -116,4 +116,48 @@ export async function proxyTargets(
 		after = body.next ?? null;
 		if (!after) return options;
 	}
+}
+
+/** A static IP the account rents under a name (`{ type: ProxyType.STATIC, name }`). */
+export interface NamedStatic {
+	name: string;
+	provider: ProxyProvider;
+	type: ProxyType;
+	network: ProxyNetwork;
+	country: string | null;
+	exit_ip: string | null;
+	/** When the rent paid so far runs out; it renews from the wallet until the IP is released. */
+	paid_through: string | null;
+	/** A month's rent, your plan's discount applied; null when the product has no monthly rent. */
+	monthly_cents: number | null;
+}
+
+/** The static IPs this account rents under a name. Needs the account's key (`camoufox login`). */
+export async function listStatics(
+	options: { key?: string | null } = {},
+): Promise<NamedStatic[]> {
+	const body = await call("GET", "/api/v1/proxy/statics", null, {
+		key: resolveKey(options.key),
+	});
+	return (body.statics ?? []) as NamedStatic[];
+}
+
+/** Stop renting the static IP held under `name`. The next launch naming it rents a new IP. */
+export async function releaseStatic(
+	name: string,
+	options: { key?: string | null } = {},
+): Promise<void> {
+	if (typeof name !== "string" || !name) {
+		throw new TypeError(
+			`releaseStatic takes the static IP's name, not ${JSON.stringify(name)}`,
+		);
+	}
+	await call(
+		"DELETE",
+		`/api/v1/proxy/statics/${encodeURIComponent(name)}`,
+		null,
+		{
+			key: resolveKey(options.key),
+		},
+	);
 }

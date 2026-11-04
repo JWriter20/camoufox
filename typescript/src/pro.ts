@@ -41,6 +41,7 @@ import {
 import { GpuDisplay } from "./gpudisplay.js";
 import type { Managed } from "./managed.js";
 import { OS_NAME, userCacheDir, userConfigDir } from "./paths.js";
+import type { ProxySession } from "./proxy_session.js";
 import { ValueError } from "./pycompat.js";
 import type { Session as RenderNodeSession } from "./render_node.js";
 
@@ -298,7 +299,7 @@ function apiError(
 
 /** Call the Camoufox Pro API. Every failure is a ProError; ProUnavailable is the retryable kind. */
 export async function call(
-	method: "GET" | "POST" | "PUT",
+	method: "GET" | "POST" | "PUT" | "DELETE",
 	route: string,
 	payload: Record<string, any> | null,
 	{
@@ -345,6 +346,16 @@ export function post(
 	options: { key?: string; timeoutS?: number; base?: string } = {},
 ): Promise<Record<string, any>> {
 	return call("POST", route, payload, options);
+}
+
+/** Say what the API had to say about a mint or a proxy session: a replaced static IP, and the like. */
+export function logNotices(notices: unknown): void {
+	if (!Array.isArray(notices)) return;
+	for (const notice of notices) {
+		if (notice && typeof notice === "object" && notice.message) {
+			console.warn(`camoufox: ${notice.message} (${notice.code ?? "notice"})`);
+		}
+	}
 }
 
 export function transient(error: unknown): boolean {
@@ -784,6 +795,7 @@ export class Lease {
 		this.grants = Object.fromEntries(
 			SECTIONS.map((name) => [name, minted[name] ?? null]),
 		);
+		logNotices(minted.notices);
 		this.accountId = Number(
 			minted.account_id ?? tokenFields(minted.token).account_id,
 		);
@@ -1079,9 +1091,13 @@ export async function acquire(
 export async function claim(
 	options: Record<string, any>,
 	display?: unknown,
-): Promise<Lease | RenderNodeSession | null> {
+): Promise<Lease | RenderNodeSession | ProxySession | null> {
 	const lease = LIVE.get(String(options.env?.[LEASE_FILE_ENV]));
 	if (!lease) {
+		// A standard build's managed proxy session holds any render node opened with it.
+		const { claim: claimProxy } = await import("./proxy_session.js");
+		const session = claimProxy(options);
+		if (session) return session;
 		const { claim: claimNode } = await import("./render_node.js");
 		return claimNode(options);
 	}
@@ -1113,7 +1129,7 @@ export function refusal(error: unknown): string | null {
  * when the browser exited because it refused the lease.
  */
 export async function launchFailed(
-	lease: Lease | RenderNodeSession | null,
+	lease: Lease | RenderNodeSession | ProxySession | null,
 	error: unknown,
 ): Promise<void> {
 	await lease?.release("error");
@@ -1144,7 +1160,7 @@ export function attachLease<
 		close(...args: any[]): Promise<void>;
 	},
 >(
-	lease: Lease | RenderNodeSession,
+	lease: Lease | RenderNodeSession | ProxySession,
 	target: T,
 	event: "disconnected" | "close",
 ): T & { pro: ProSession } {

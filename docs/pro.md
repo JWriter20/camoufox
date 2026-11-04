@@ -165,6 +165,37 @@ is the exception: it uses your lease without trying to replace it.
 
 ### Managed proxies
 
+**Any Camoufox build can use one, not only Pro.** With a Camoufox key
+(`camoufox login`) and money in the wallet, a standard Camoufox launch with
+`managed` gets a managed proxy from Evomi, Rayobyte or Byteful: no account at
+each provider, no credentials of theirs to keep. That is pay-as-you-go at list
+price; a Pro plan takes a discount off it. CamouLink, our own Starlink network,
+needs a Pro plan (`PlanRequired` otherwise). On a standard build the launcher
+opens a proxy session, renews it while the browser runs and releases it when
+the browser closes; on a Pro build the proxy comes with the lease.
+
+```python
+from camoufox import Managed, ProxyNetwork, ProxyProvider, ProxyType
+from camoufox.sync_api import Camoufox
+
+# Standard Camoufox, pay-as-you-go: Byteful residential in the UK.
+with Camoufox(managed=Managed(provider=ProxyProvider.BYTEFUL, country="GB")) as browser:
+    browser.new_page().goto("https://example.com")
+
+# A static ISP IP rented under a name, the same IP every launch that names it:
+with Camoufox(managed=Managed(provider=ProxyProvider.EVOMI, type=ProxyType.STATIC,
+                              network=ProxyNetwork.ISP, name="shop-ip")) as browser:
+    browser.new_page().goto("https://example.com")
+```
+
+A named static IP's rent renews monthly from the wallet until you release it:
+`camoufox.proxies.list_statics()` shows what you rent, and
+`release_static("shop-ip")` stops it (TypeScript: `listStatics`,
+`releaseStatic`). A profile keeps its own IP, so `name` and `profile` conflict.
+
+The API's notices about a launch, such as a static IP replaced after its rent
+went unpaid, are logged as warnings: `camoufox: <message> (<code>)`.
+
 Nothing is forced on you: `profile` is optional, and so is any proxy. A Pro
 browser reaches the network one of three ways:
 
@@ -228,14 +259,15 @@ takes the API's default:
 
 | Field | Values | Default |
 |---|---|---|
-| `provider` | `ProxyProvider.CAMOULINK`, `EVOMI`, `RAYOBYTE` | `CAMOULINK`, Camoufox Pro's own Starlink network |
-| `type` | `ProxyType.ROTATING`: a fresh exit each launch, kept for that browser's life. `ProxyType.STATIC`: an exit that stays | `STATIC` with a profile, else `ROTATING` |
+| `provider` | `ProxyProvider.CAMOULINK`, `EVOMI`, `RAYOBYTE`, `BYTEFUL` | `CAMOULINK` (Camoufox Pro's own Starlink network) on a Pro build; `EVOMI` on a standard build |
+| `type` | `ProxyType.ROTATING`: a fresh exit each launch, kept for that browser's life. `ProxyType.STATIC`: an exit that stays | `STATIC` with a profile or a `name`, else `ROTATING` |
 | `network` | `ProxyNetwork.RESIDENTIAL`, `MOBILE`, `ISP`, `DATACENTER` | `RESIDENTIAL`; `ISP` for a static exit from a partner |
 | `country` | an upper-case ISO 3166 code such as `"US"` | any |
 | `region`, `city` | a name or its listing value: `"New York"` and `"new_york"` are the same. Needs `country` | any |
 | `zip` | a postal code, 2-10 letters or digits. Needs `country` | any |
 | `isp` | the listing's value, such as Evomi's carrier code `"tmobileusainc"` | any |
 | `asn` | `14593` or `"AS14593"` | any |
+| `name` | 1-64 letters, digits, `.`, `_` or `-`: keeps a `STATIC` exit without a profile | none |
 
 Which of the last five a product can be targeted by, and the values it has,
 are in the catalogue below. A profile keeps its targeting for life.
@@ -247,7 +279,9 @@ The launcher refuses these before minting, and the API refuses the same:
 
 | Request | Why |
 |---|---|
-| `ProxyType.STATIC` without a `profile` | A static exit belongs to a profile |
+| `ProxyType.STATIC` without a `profile` or a `name` | A static exit is kept by a profile or a name |
+| A `name` with a `profile`, or on `ProxyType.ROTATING` | A profile keeps its own IP; a rotating exit has nothing to keep |
+| `ProxyProvider.CAMOULINK` on a network other than `RESIDENTIAL`, targeted by region, city, ZIP or ISP, or on an ASN other than 14593 | CamouLink is residential Starlink |
 | A `profile` with `ProxyType.ROTATING` | A profile keeps its IP for life |
 | A `profile` on a partner's `RESIDENTIAL` or `DATACENTER` network | A profile exits through CamouLink, or a partner's `MOBILE` or `ISP` network, so it matches its IP for life |
 | `proxy` and `managed` together | Your own proxy is never replaced |
@@ -255,7 +289,7 @@ The launcher refuses these before minting, and the API refuses the same:
 | A `region`, `city` or `zip` without a `country` | A place name is ambiguous across countries |
 
 The API alone refuses a targeting field the product cannot serve (a city on a
-datacenter exit, an ISP on Rayobyte, any ASN but 14593 on CamouLink) with
+datacenter exit, an ISP on Rayobyte or Byteful) with
 `InvalidRequest`, and a value the provider does not have with
 `TargetUnavailable`, whose `details["listing"]` is where to choose from.
 

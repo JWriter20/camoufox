@@ -285,7 +285,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `i_know_what_im_doing` | `boolean` | `false` | Silence the leak warnings above. |
 | `debug` | `boolean` | `false` | Print the config sent to the browser. |
 | `pro_key` | `string` | `CAMOUFOX_PRO_KEY`, then the `camoufox login` key | Camoufox Pro key for a Pro build, which launches with a lease ([docs/pro.md](https://github.com/daijro/camoufox/blob/main/docs/pro.md)). |
-| `profile`, `warm_plan`, `managed`, `farm_gpu` | see docs/pro.md | none | Camoufox Pro lease options: a stored profile, its warm plan, its managed proxy, and `farm_gpu: false` to render on this machine instead of a remote GPU. |
+| `profile`, `warm_plan`, `managed`, `farm_gpu` | see docs/pro.md | none | `managed` is a managed proxy on any build (pay-as-you-go with a Camoufox key); `profile`, `warm_plan` and `farm_gpu: false` are Camoufox Pro lease options: a stored profile, its warm plan, and rendering on this machine instead of a remote GPU. |
 | `render_node` | `boolean`, path or object | from `~/.config/camoufox/render-node.json` | Camoufox Pro: draw WebGL on your own Windows render node (docs/pro.md). |
 
 `Camoufox()` and `NewBrowser()` also take `persistent_context`, `user_data_dir`

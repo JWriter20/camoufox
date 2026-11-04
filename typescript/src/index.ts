@@ -80,9 +80,12 @@ export { CamoufoxFetcher, installedVerStr, RepoConfig } from "./pkgman.js";
 export type { LeaseRequest, ProSession } from "./pro.js";
 export {
 	listProxies,
+	listStatics,
+	type NamedStatic,
 	type ProxyOption,
 	type ProxyProduct,
 	proxyTargets,
+	releaseStatic,
 	type Targeting,
 } from "./proxies.js";
 export { RenderNodeError, type RenderNodeOption } from "./render_node.js";
