@@ -20,8 +20,9 @@ new file mode 100644
 + * +-inf gives +-0 (rsqrt: -inf gives NaN), NaN is quieted, negative rsqrt gives the
 + * default NaN, and a reciprocal below the normal range flushes to +-0. Verified
 + * bit-exact for every one of the 2^32 inputs on AMD Ryzen 7 9850X3D (all four
-+ * instructions) and for [1,2) on Intel i9-11900H (RCPPS binade checksum
-+ * e46220483be10383).
++ * instructions) and on Intel i9-11900H for RCPPS and RSQRTPS (SSE and AVX) over
++ * every input in [1,4) -- each table entry, both exponent parities -- plus 4M
++ * random bit patterns and the edge values (2026-11-04).
 + *
 + * gVendor is set once per process (SkOpts::Init, from the identity's cpu:vendor
 + * when it names a vendor other than the host's); 0 keeps the hardware estimate.
