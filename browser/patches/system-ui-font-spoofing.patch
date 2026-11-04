@@ -1,5 +1,5 @@
 diff --git a/gfx/thebes/gfxPlatformFontList.cpp b/gfx/thebes/gfxPlatformFontList.cpp
-index 42b2b42650..b0aac2e38a 100644
+index c2181d76c7..36f6c3f1e0 100644
 --- a/gfx/thebes/gfxPlatformFontList.cpp
 +++ b/gfx/thebes/gfxPlatformFontList.cpp
 @@ -30,6 +30,7 @@
@@ -10,7 +10,7 @@ index 42b2b42650..b0aac2e38a 100644
  #include "mozilla/gfx/2D.h"
  #include "mozilla/gfx/Logging.h"
  #include "mozilla/glean/GfxMetrics.h"
-@@ -2298,9 +2299,57 @@ void gfxPlatformFontList::MaybeRemoveCmap(gfxCharacterMap* aCharMap,
+@@ -2295,9 +2296,54 @@ void gfxPlatformFontList::MaybeRemoveCmap(gfxCharacterMap* aCharMap,
    }
  }
  
@@ -20,7 +20,8 @@ index 42b2b42650..b0aac2e38a 100644
 +// browser's own UI at a family from another OS leaves it falling back to the
 +// default serif font (daijro/camoufox#695). So does a native identity: on macOS
 +// the real system font is -apple-system (SF Pro), which Helvetica does not
-+// match (measured 2026-09-14: ascent 16 vs 13, 537.6 vs 526.6 px).
++// match (measured 2026-09-14: ascent 16 vs 13, 537.6 vs 526.6 px), and on Linux
++// it is the host's GTK font, which "Ubuntu" matches only on Ubuntu.
 +static MaskConfig::SpoofedOS SystemUISpoofedOS(
 +    FontVisibilityProvider* aFontVisibilityProvider) {
 +  using MaskConfig::SpoofedOS;
@@ -33,14 +34,10 @@ index 42b2b42650..b0aac2e38a 100644
 +  const auto os = mozilla::dom::NavigatorManager::GetSpoofedOS(
 +      mozilla::dom::RoverfoxStorageManager::UserContextId(doc));
 +  switch (os) {
-+#ifndef XP_MACOSX
 +    case SpoofedOS::MacOS:
-+#endif
-+#ifndef XP_WIN
 +    case SpoofedOS::Windows:
-+#endif
 +    case SpoofedOS::Linux:
-+      return os;
++      return os == MaskConfig::HostOS() ? SpoofedOS::None : os;
 +    default:
 +      return SpoofedOS::None;
 +  }
@@ -68,7 +65,7 @@ index 42b2b42650..b0aac2e38a 100644
    // TODO: On macOS, use CTCreateUIFontForLanguage or such thing (though the
    // code below ends up using [NSFont systemFontOfSize: 0.0].
    nsFont systemFont;
-@@ -2428,12 +2477,23 @@ gfxPlatformFontList::GetPrefFontsLangGroupLocked(
+@@ -2425,12 +2471,23 @@ gfxPlatformFontList::GetPrefFontsLangGroupLocked(
    }
  
    auto index = static_cast<size_t>(aGenericType);
@@ -94,7 +91,7 @@ index 42b2b42650..b0aac2e38a 100644
    }
    return prefFonts;
  }
-@@ -3028,6 +3088,11 @@ void gfxPlatformFontList::ClearLangGroupPrefFontsLocked() {
+@@ -3025,6 +3082,11 @@ void gfxPlatformFontList::ClearLangGroupPrefFontsLocked() {
        pref = nullptr;
      }
    }

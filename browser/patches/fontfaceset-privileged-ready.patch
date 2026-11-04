@@ -1,5 +1,5 @@
 diff --git a/layout/style/FontFaceSet.cpp b/layout/style/FontFaceSet.cpp
-index aa8b0d72..b3bc50a3 100644
+index aa8b0d72a0..b3bc50a3b7 100644
 --- a/layout/style/FontFaceSet.cpp
 +++ b/layout/style/FontFaceSet.cpp
 @@ -12,6 +12,8 @@
@@ -80,7 +80,7 @@ index aa8b0d72..b3bc50a3 100644
    if (loadingerror) {
      DispatchEvent(*loadingerror);
 diff --git a/layout/style/FontFaceSet.h b/layout/style/FontFaceSet.h
-index 4fe3cabe..5ce78f9f 100644
+index 4fe3cabe18..5ce78f9f46 100644
 --- a/layout/style/FontFaceSet.h
 +++ b/layout/style/FontFaceSet.h
 @@ -150,6 +150,15 @@ class FontFaceSet final : public DOMEventTargetHelper {
