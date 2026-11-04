@@ -24,6 +24,21 @@ const Cu = Components.utils;
 const XUL_NS = 'http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul';
 const helper = new Helper();
 
+// How long a person holds a mouse button for a click: about 100 ms (SD 25),
+// kept within 50-250 ms as key holds are (content/PageAgent.js TypingPace).
+function clickHold() {
+  const n = Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+  return Math.min(250, Math.max(50, 100 + 25 * n));
+}
+
+// How long a person's button stays up between the clicks of a double click:
+// about 110 ms (SD 25), kept within 70-180 ms, so press to press stays well
+// inside the OS double-click time with clickHold() before it.
+function clickGap() {
+  const n = Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+  return Math.min(180, Math.max(70, 110 + 25 * n));
+}
+
 function hashConsoleMessage(params) {
   return params.location.lineNumber + ':' + params.location.columnNumber + ':' + params.location.url;
 }
@@ -345,6 +360,8 @@ export class PageHandler {
     // Camoufox: and the page takes the focus, as when a user clicks into it.
     // Raising the window alone left focus on nothing once another window had
     // been open, and the page never learnt it was the active tab again.
+    // Waits (bounded) for the window manager to activate the window, so the
+    // page reads as focused once the call returns, as it does for a user.
     await this._pageTarget.activateAndRun(() => this._focusFrontPage());
   }
 
@@ -712,10 +729,23 @@ export class PageHandler {
       this._userInputGateOpen.add(windowGlobal);
   }
 
+  // Camoufox: the OS delivers keys only to the active window's selected tab,
+  // and since Juggler no longer forces every page focused (content/main.js),
+  // a page typed into from behind another window or tab would get trusted
+  // keydowns with document.hasFocus() false, which no person's Firefox
+  // delivers. So keyboard input first brings its page to the front, as the
+  // mouse does through activateAndRun, and waits (bounded) for the window
+  // manager to make its window active.
   _isFrontPage() {
     const browser = this._pageTarget.linkedBrowser();
     const win = browser?.documentGlobal || browser?.ownerGlobal;
     return !!win && Services.focus.activeWindow === win && win.gBrowser?.selectedBrowser === browser;
+  }
+
+  async _activateForKeyboard() {
+    if (this._isFrontPage())
+      return;
+    await this._pageTarget.activateAndRun(() => this._focusFrontPage());
   }
 
   async _focusFrontPage() {
@@ -731,6 +761,7 @@ export class PageHandler {
 
   async ['Page.dispatchKeyEvent']({type, keyCode, code, key, repeat, location, text}) {
     await this._awaitUserInputGate();
+    await this._activateForKeyboard();
     // key events don't fire if we are dragging.
     if (this._isDragging) {
       if (type === 'keydown' && key === 'Escape') {
@@ -886,7 +917,18 @@ export class PageHandler {
         // fire it on press. Follow the claimed OS (measured 2026-09-14: stock
         // Windows contextmenu.buttons=0, camoufox 2).
         const eventNames = (button === 2 && !this._contextMenuOnMouseUp()) ? ['mousedown', 'contextmenu'] : ['mousedown'];
+        // Camoufox: the second press of a double click comes a person's gap
+        // after the release, not right behind it (Playwright pipelines the
+        // clicks; driven-dblclick-gap.py). A script's own longer pause stands.
+        const upAt = this._buttonUpAt;
+        this._buttonUpAt = undefined;
+        if (clickCount > 1 && upAt !== undefined) {
+          const wait = upAt + clickGap() - ChromeUtils.now();
+          if (wait > 0)
+            await new Promise(resolve => setTimeout(resolve, wait));
+        }
         await sendEvents(eventNames);
+        this._buttonDownAt = ChromeUtils.now();
         return;
       }
 
@@ -953,6 +995,8 @@ export class PageHandler {
       }
 
       if (type === 'mouseup') {
+        const downAt = this._buttonDownAt;
+        this._buttonDownAt = undefined;
         await this._settleDrag(true);
         if (this._isDragging) {
           this._dragMotion(dispatch, x, y);
@@ -971,8 +1015,21 @@ export class PageHandler {
           this._isDragging = false;
           await this._deliverDeferredDragMove(win, modifiers, x, y);
         } else {
+          // Camoufox: a person holds a mouse button down for a while before
+          // letting go; Playwright's click() sends mouseup right behind
+          // mousedown (pipelined), so the page saw every press released under
+          // 10 ms (cfparity driven.click timing/downUp). Release no sooner than
+          // a person's hold after the press went in; a script's own longer
+          // `delay` stands as it is (driven-click-hold.py). Here, on the input
+          // chain, so the press has been dispatched before the hold is timed.
+          if (downAt !== undefined) {
+            const wait = downAt + clickHold() - ChromeUtils.now();
+            if (wait > 0)
+              await new Promise(resolve => setTimeout(resolve, wait));
+          }
           const eventNames = (button === 2 && this._contextMenuOnMouseUp()) ? ['mouseup', 'contextmenu'] : ['mouseup'];
           await sendEvents(eventNames);
+          this._buttonUpAt = ChromeUtils.now();
         }
         return;
       }
@@ -1091,6 +1148,7 @@ export class PageHandler {
 
   async ['Page.insertText'](options) {
     await this._awaitUserInputGate();
+    await this._activateForKeyboard();
     const planned = humanizeSeam().plan('keyboard', 'planInsert', await this._keyboardContext(true), options.text);
     if (!planned)
       return await this._contentPage.send('insertText', options);

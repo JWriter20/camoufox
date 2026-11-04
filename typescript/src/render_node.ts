@@ -75,6 +75,36 @@ export type RenderNodeOption =
 	| Record<string, any>;
 
 /** The render node could not be reached or gave no session. */
+/**
+ * A build pinned to one render set carries this beside its binary; its relay client names set_id in every
+ * session hello, and the coordinator admits that hello only on a renderer of the same set.
+ */
+export const RENDER_SET_FILE = "render-set.json";
+
+/**
+ * The set_id a build bakes (render-set.json beside its binary), or null for a build without one. The
+ * assignment has to ask for that set; a file that names no valid set_id is an error.
+ */
+export function bakedRenderSet(binary: string): string | null {
+	const file = path.join(path.dirname(binary), RENDER_SET_FILE);
+	let data: any;
+	try {
+		data = JSON.parse(fs.readFileSync(file, "utf8"));
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+		throw new RenderNodeError(
+			`Cannot read ${file}: ${(error as Error).message}`,
+		);
+	}
+	const setId = data && typeof data === "object" ? data.set_id : undefined;
+	if (typeof setId !== "string" || !/^[0-9a-f]{64}$/.test(setId)) {
+		throw new RenderNodeError(
+			`${file}: no valid set_id; this build cannot name its render set`,
+		);
+	}
+	return setId;
+}
+
 export class RenderNodeError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -218,6 +248,7 @@ export class Session {
 	private constructor(
 		readonly config: RenderNodeConfig,
 		readonly version: string,
+		readonly renderSet: string | null = null,
 	) {}
 
 	/** Take an assignment for Firefox `version` and write its session file in `directory`. */
@@ -225,8 +256,9 @@ export class Session {
 		config: RenderNodeConfig,
 		version: string,
 		directory: string,
+		renderSet: string | null = null,
 	): Promise<Session> {
-		const session = new Session(config, version);
+		const session = new Session(config, version, renderSet);
 		session.assignment = await session.#acquire();
 		const id: string = session.assignment.assignment_id;
 		session.path = path.join(directory, `render-node-${id.slice(0, 16)}.json`);
@@ -296,6 +328,7 @@ export class Session {
 			route: "angle",
 		};
 		if (this.config.gpu) request.gpu = this.config.gpu;
+		if (this.renderSet) request.render_set = this.renderSet;
 		const deadline = performance.now() + renderNodeTiming.busyWaitS * 1000;
 		for (;;) {
 			let answer: any;
@@ -315,6 +348,15 @@ export class Session {
 				) {
 					await sleep(Math.min(Number(retryAfter), 5) * 1000);
 					continue;
+				}
+				if (
+					error.status === 409 &&
+					error.detail.startsWith("render set not served")
+				) {
+					throw new RenderNodeError(
+						`No render node serves this build's render set ${String(this.renderSet).slice(0, 12)}: ` +
+							"the farm has no node pack of it on a machine at its reference OS build and drivers.",
+					);
 				}
 				if (error.status === 503 && error.detail === "no compatible renderer") {
 					throw new RenderNodeError(

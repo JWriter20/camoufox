@@ -195,7 +195,7 @@ host's only when the identity claims the host's GPU. Otherwise
 | `headless=` | What runs | Notes |
 |---|---|---|
 | `False` (default) | A normal window | Needs a display. |
-| `True` | Firefox headless | Camoufox patches the headless tells it knows about. |
+| `True` | On Linux: a headed browser on a private Xvfb display, as `"virtual"`. Elsewhere, or with no `Xvfb`/`setpriv`: Firefox headless | Firefox's own headless mode shows stand-in system colors and fonts and a window with no frame, which pages read, so on Linux `True` runs headed on Xvfb whenever it can; without Xvfb it falls back to Firefox headless with a `LeakWarning` naming what is missing. `launch_options()` alone starts no display. |
 | `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb` and `setpriv` (util-linux). Handled by `Camoufox`, `AsyncCamoufox`, `NewBrowser` and `launch_server`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. Xvfb has no GPU: canvas and WebGL render in software. |
 | `"virtual-gpu"` | A headed browser on a private, headless Xorg server bound to one GPU | Linux only, needs Xorg and the card's driver. Canvas and WebGL render on the card. Handled like `"virtual"`. See [The GPU display](#the-gpu-display). |
 

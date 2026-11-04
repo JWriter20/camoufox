@@ -258,6 +258,11 @@ def _load_font_groups() -> Dict[str, List[Dict[str, Any]]]:
     return _FONT_GROUPS_CACHE
 
 
+def font_unit_families(os_key: str, unit_id: str) -> Set[str]:
+    """The families of one addition unit (font-groups.json), e.g. ('win', 'office')."""
+    return set(next((u['fonts'] for u in _load_font_groups().get(os_key, []) if u.get('id') == unit_id), ()))
+
+
 _FONT_BASES_CACHE: Optional[Dict[str, List[Dict[str, Any]]]] = None
 
 
@@ -754,8 +759,13 @@ def _normalize_preset_voices(
                 'isLocalService': vtype == 'local',
             }
         )
-    if result and not any(v['isDefault'] for v in result):
-        result[0]['isDefault'] = True
+    # As draw_voice_config: only macOS marks a default (its system voice, else
+    # the first voice it lists); Windows (SAPI) and Linux mark none, so forcing
+    # one there gave a Windows or Linux identity a voice no stock install has.
+    if os_key == 'mac' and result and not any(v['isDefault'] for v in result):
+        system_voice = (_load_voice_manifests().get('mac', {}).get('systemVoice') or {}).get('default')
+        default = next((v for v in result if v['name'] == system_voice), result[0])
+        default['isDefault'] = True
     return result
 
 
@@ -1067,6 +1077,45 @@ def set_host_ipv6_default(config: Dict[str, Any], salt: int = 0) -> None:
         config['webrtc:hostipv6'] = draw < HOST_IPV6_SHARE
 
 
+# Firefox's partial release rollouts (Nimbus, nimbus-desktop-experiments),
+# as (slug, first Firefox version, share of profiles, pref, value, draw tag).
+# Stock Firefox on the release channel is enrolled in each one by its
+# profile's Nimbus bucket, so a profile keeps its enrollment from launch to
+# launch; Camoufox's channel ("default") is never targeted, so each identity
+# draws its enrollment at the rollout's rate instead. 100% rollouts are default
+# prefs in camoufox.cfg. Enumerated from Remote Settings on 2026-11-03 (LEAKS
+# 610/611); re-check on every Firefox release.
+PARTIAL_RELEASE_ROLLOUTS = (
+    # HEv3: races IPv6 first, so a dual-stack server sees its first QUIC
+    # Initial / TCP SYN over IPv6 (LEAKS 610).
+    ('happy-eyeballs-release-rollout', 157, 0.5, 'network.http.happy_eyeballs_enabled', True, 0x4E1B),
+    ('fetch-streaming-upload-rollout', 159, 0.25, 'dom.fetch.streaming_upload', True, 0x5712),
+)
+
+
+def set_release_rollout_prefs(
+    prefs: Dict[str, Any], config: Dict[str, Any], salt: int, ff_version: Optional[str]
+) -> None:
+    """Enroll the identity in Firefox's partial release rollouts at their rates.
+
+    The draw follows the identity seed, as Nimbus' bucket follows the
+    profile: the same identity is enrolled in the same rollouts on every
+    launch. Every identity draws, one that mirrors the host's OS too, since
+    stock Firefox on that OS is enrolled the same way. A pref the caller set
+    is left alone.
+    """
+    try:
+        version = int(str(ff_version).split('.', 1)[0])
+    except ValueError:
+        version = 0
+    seed = identity_seed(config, salt)
+    for _slug, since, share, pref, value, tag in PARTIAL_RELEASE_ROLLOUTS:
+        if pref in prefs or version < since:
+            continue
+        if Random(seed ^ tag).random() < share:
+            prefs[pref] = value
+
+
 # Windows' location setting for desktop apps, as Firefox reads it
 # (GeolocationSystemWin.cpp): "allowed" lets a granted page have positions;
 # "prompt" (apps still to be allowed, the OS asks) and "denied" (location off
@@ -1152,8 +1201,9 @@ def set_output_latency_default(
 # How long stock Windows Firefox's deferred font-info loader takes to land the
 # legacy styled-family aliases once a legacy name is first asked for (stock
 # 158.0.1 on win-i9, 2026-10-31: first seen at 1727, 1826, 1832 ms on a 100 ms
-# poll, so the true times lie up to 100 ms earlier).
-WINDOWS_ALIAS_LOAD_MS = (1630, 1832)
+# poll, so the true times lie up to 100 ms earlier; 2026-11-01, 25H2 26200.9711,
+# probe-Y: 2158, 2029, 2043 ms).
+WINDOWS_ALIAS_LOAD_MS = (1630, 2158)
 
 # How long stock Windows Firefox's character-map pass takes to land after the
 # first fallback within a family whose cmaps are not loaded yet
@@ -1728,6 +1778,27 @@ def _build_init_script(values: Dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
+# One browser is one machine: a context is another user of it. These are the
+# values a user of that machine has of their own (where they are, their
+# language, the network exit their proxy gives them); every other identity key
+# -- the OS and browser, CPU, GPU and its WebGL limits, screen and window,
+# fonts and their rendering, voices, the network adapter -- is the machine's.
+# A page reads the machine's values whether or not a per-context setter
+# exists for them (WebGL parameters, window geometry, glyph rendering have
+# none), so a context that drew its own showed a GPU with another GPU's
+# limits (LEAKS 619).
+CONTEXT_USER_KEYS = (
+    'timezone', 'locale:', 'navigator.language', 'headers.Accept-Language', 'geolocation:',
+    'webrtc:ipv4', 'webrtc:ipv6',
+)
+
+
+def machine_config(launch_config: Dict[str, Any]) -> Dict[str, Any]:
+    """The machine-level part of a launch identity's CAMOU_CONFIG: everything
+    but the per-user keys (CONTEXT_USER_KEYS)."""
+    return {k: v for k, v in launch_config.items() if not k.startswith(CONTEXT_USER_KEYS)}
+
+
 def generate_context_fingerprint(
     preset: Optional[Dict] = None,
     os: Optional[str] = None,
@@ -1739,6 +1810,7 @@ def generate_context_fingerprint(
     webgl_config: Optional[Tuple[str, str]] = None,
     webgl: bool = True,
     screen_bound: Optional[Screen] = None,
+    machine: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Generate fingerprint values for a single per-context identity.
@@ -1762,8 +1834,43 @@ def generate_context_fingerprint(
             reports its own (camoufox.render_node).
         screen_bound: A bound on the drawn screen (screen_floor: one that holds the
             window the context's pages report). A preset keeps its own.
+        machine: The browser's launch identity (its CAMOU_CONFIG). The context
+            is a user of that machine: it takes every machine-level value from
+            it (machine_config) and draws nothing of its own but the per-user
+            values. An os or preset for another machine raises ValueError.
     """
-    if preset is not None:
+    if machine:
+        config = machine_config(machine)
+        machine_os = platform_to_os(str(config.get('navigator.platform', '')))
+        if preset is not None:
+            raise ValueError(
+                'A preset is a whole machine, and a context runs on its browser\'s machine '
+                f'({machine_os}). Launch a browser with the preset to claim it.')
+        if os and os != machine_os:
+            raise ValueError(
+                f'A context runs on its browser\'s machine, which claims {machine_os}, not {os}. '
+                'Launch a browser with that OS to claim it.')
+        if not webgl:
+            for key in [k for k in config if k.startswith(('webGl:', 'webGl2:'))]:
+                del config[key]
+        nav = {
+            'platform': config.get('navigator.platform'),
+            'hardwareConcurrency': config.get('navigator.hardwareConcurrency'),
+        }
+        # No per-context screen: the machine's is the launch's own, which the
+        # page reads from CAMOU_CONFIG with its available rect's origin
+        # (screen.availLeft/availTop) and its taskbar, the work area the
+        # browser places windows in. The per-context setter carries a size
+        # only, so a context that set it read availLeft/availTop 0 -- and,
+        # on a build without the Pro available rect, no taskbar -- while a
+        # window.open() it made was placed in the drawn work area (LEAKS 635).
+        screen = {}
+        webgl = {
+            'unmaskedVendor': config.get('webGl:vendor'),
+            'unmaskedRenderer': config.get('webGl:renderer'),
+        }
+        preset = {'navigator': nav, 'screen': screen, 'webgl': webgl}
+    elif preset is not None:
         # Use real fingerprint preset
         config = from_preset(preset, ff_version)
         nav = preset.get('navigator', {})

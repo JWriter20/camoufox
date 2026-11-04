@@ -984,8 +984,10 @@ def test_none_of_it_is_set_without_a_gpu_section(cloud, launch):
     assert "gfx.canvas.renderfarm.enabled" not in opts["firefox_user_prefs"]
 
 
-def test_farm_gpu_is_not_the_display_gpu():
+def test_farm_gpu_is_not_the_display_gpu(monkeypatch):
     # `gpu` picks headless="virtual-gpu"'s card; the farm opt-out must pass through to the lease.
+    # Off Linux, so headless=True starts no Xvfb (headless_mode): the display is not what this tests.
+    monkeypatch.setattr(utils, "OS_NAME", "win")
     kwargs = {"farm_gpu": False}
     assert utils.start_virtual_display(True, False, kwargs) == (None, True)
     assert kwargs == {"farm_gpu": False}

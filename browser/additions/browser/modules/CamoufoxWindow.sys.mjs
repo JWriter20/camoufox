@@ -116,9 +116,32 @@ function applyWindowPosition(win) {
   const UNSET = -1e9;
   const x = ChromeUtils.camouGetDouble("window.screenX", UNSET);
   const y = ChromeUtils.camouGetDouble("window.screenY", UNSET);
-  if (x === UNSET && y === UNSET) {
+  // mozInnerScreenX/Y, where the content area starts on screen, are not
+  // spoofed either: the first window is placed so that its content area
+  // starts there, and an iframe adds its offset in the page and a popup reads
+  // its own window, as in stock. They take precedence over screenX/screenY,
+  // which the launcher always draws: the frame between the two is the
+  // window's own (the claimed OS's client margin plus the toolbars).
+  const innerX = ChromeUtils.camouGetDouble("window.mozInnerScreenX", UNSET);
+  const innerY = ChromeUtils.camouGetDouble("window.mozInnerScreenY", UNSET);
+  if (x === UNSET && y === UNSET && innerX === UNSET && innerY === UNSET) {
     return;
   }
+  // How far the content area starts from the window's corner, as the page's
+  // mozInnerScreenX/Y minus screenX/screenY reads it.
+  const contentOffset = () => {
+    const box = win.gBrowser?.selectedBrowser?.getBoundingClientRect();
+    return box
+      ? [win.mozInnerScreenX + box.left - win.screenX,
+         win.mozInnerScreenY + box.top - win.screenY]
+      : [null, null];
+  };
+  const target = (claimed, inner, current, offset) => {
+    if (inner !== UNSET && offset !== null) {
+      return Math.round(inner - offset);
+    }
+    return claimed === UNSET ? current : claimed;
+  };
   // The window manager places a window when it maps it, after load, so the
   // position is held through startup as the size is. A move is only ever
   // made to a normal window: moving a fullscreen or maximized one restores it.
@@ -131,8 +154,9 @@ function applyWindowPosition(win) {
     if (win.windowState !== win.STATE_NORMAL) {
       return;
     }
-    const tx = x === UNSET ? win.screenX : x;
-    const ty = y === UNSET ? win.screenY : y;
+    const [ox, oy] = contentOffset();
+    const tx = target(x, innerX, win.screenX, ox);
+    const ty = target(y, innerY, win.screenY, oy);
     if (win.screenX !== tx || win.screenY !== ty) {
       win.moveTo(tx, ty);
     }

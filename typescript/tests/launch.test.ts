@@ -600,6 +600,36 @@ describe("test_launch_environment: prefs", () => {
 				"Franklin Gothic Medium",
 			]);
 		});
+		it("adds Office faces of OS families only with an Office family", async () => {
+			expect(
+				await fontsFor(["Arial", "Franklin Gothic", "Rockwell", "Sitka Text"]),
+			).toEqual([
+				"Arial",
+				"Franklin Gothic",
+				"Rockwell",
+				"Sitka Text",
+				"Arial Black",
+				"Franklin Gothic Medium",
+				"Rockwell Condensed",
+				"Rockwell Extra Bold",
+				"Sitka",
+				"Arial Narrow",
+				"Franklin Gothic Demi",
+				"Franklin Gothic Demi Cond",
+				"Franklin Gothic Heavy",
+				"Franklin Gothic Medium Cond",
+			]);
+			expect(
+				await fontsFor(["Arial", "Franklin Gothic", "Segoe UI Variable Text"]),
+			).toEqual([
+				"Arial",
+				"Franklin Gothic",
+				"Segoe UI Variable Text",
+				"Arial Black",
+				"Franklin Gothic Medium",
+				"Segoe UI Variable",
+			]);
+		});
 		it("adds no alias without its canonical family", async () => {
 			const fonts = await fontsFor(["Times New Roman"]);
 			expect(fonts).not.toContain("Arial Black");

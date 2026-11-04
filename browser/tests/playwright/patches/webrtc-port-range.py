@@ -4,17 +4,16 @@ Verify WebRTC candidate ports are in the identity's OS port range.
 A UDP candidate's port is the ephemeral port the OS gave its socket: 32768-60999
 on Linux (the kernel's ip_local_port_range), 49152-65535 on Windows and macOS.
 The host kernel picked it, so a Windows or macOS identity on a Linux host showed
-Linux ports in its host candidates, and in the srflx candidate that reuses the
-host port: ports the claimed OS could not have used.
+Linux ports in its host candidates: ports the claimed OS could not have used.
 
 The probe gathers several peer connections against a STUN server that never
-answers (a silent loopback socket), so the run needs no network and the srflx
-candidate is the one webrtc-ip-spoofing.patch fabricates. Twelve connections
-make a range that is off by one OS fail almost every run, while a correct one
-always passes.
+answers (a silent loopback socket), so the run needs no network. No srflx forms
+without a STUN answer (LEAKS 616), so the host candidates are what is judged.
+Twelve connections make a range that is off by one OS fail almost every run,
+while a correct one always passes.
 
 What PASS means: for a Windows, a macOS and a Linux identity, every UDP host
-and srflx candidate port is inside that OS's range.
+candidate port is inside that OS's range.
 
     python browser/tests/playwright/patches/webrtc-port-range.py
 """
@@ -68,7 +67,7 @@ async def main() -> int:
             page = await browser.new_page()
             await page.goto("about:blank")
             ports = await page.evaluate(PROBE, [stun, CONNECTIONS])
-        for kind in ("host", "srflx"):
+        for kind in ("host",):
             got = ports[kind]
             outside = [p for p in got if not lo <= p <= hi]
             if len(got) >= CONNECTIONS and not outside:

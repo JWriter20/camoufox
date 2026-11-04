@@ -605,6 +605,28 @@ describe("voices (test_voices.py)", () => {
 		};
 		expect(normalizePresetVoices([obj], "macos")).toEqual([obj]);
 	});
+
+	it.each([
+		"windows",
+		"linux",
+	])("marks no preset voice default on %s, as stock", (os) => {
+		const out = normalizePresetVoices(
+			["Microsoft David:en-US:local", "Microsoft Zira:en-US:local"],
+			os,
+		);
+		expect(out).toHaveLength(2);
+		expect(out.some((v) => v.isDefault)).toBe(false);
+	});
+
+	it("defaults the macOS system voice in a preset", () => {
+		const out = normalizePresetVoices(
+			["Albert:en-US:local", "Samantha:en-US:local"],
+			"macos",
+		);
+		expect(out.filter((v) => v.isDefault).map((v) => v.name)).toEqual([
+			"Samantha",
+		]);
+	});
 });
 
 describe("font distribution (test_font_distribution.py)", () => {
@@ -1082,5 +1104,62 @@ describe("per-launch timing draws", () => {
 		}
 		expect(devices.size).toBe(1);
 		expect(delays.size).toBeGreaterThan(1);
+	});
+});
+
+describe("setReleaseRolloutPrefs", () => {
+	// Python's set_release_rollout_prefs for the same identities (Firefox 159,
+	// so both rollouts in the table apply): the two launchers draw alike.
+	const PY = [
+		{ "network.http.happy_eyeballs_enabled": true },
+		{},
+		{},
+		{},
+		{ "network.http.happy_eyeballs_enabled": true },
+		{ "network.http.happy_eyeballs_enabled": true },
+		{ "network.http.happy_eyeballs_enabled": true },
+		{ "dom.fetch.streaming_upload": true },
+		{
+			"network.http.happy_eyeballs_enabled": true,
+			"dom.fetch.streaming_upload": true,
+		},
+		{
+			"network.http.happy_eyeballs_enabled": true,
+			"dom.fetch.streaming_upload": true,
+		},
+		{ "network.http.happy_eyeballs_enabled": true },
+		{},
+	];
+	const config = (i: number) => ({
+		"navigator.userAgent": `ua${i}`,
+		"navigator.platform": "Linux x86_64",
+	});
+
+	it("draws what the Python launcher draws", () => {
+		PY.forEach((want, i) => {
+			const prefs: Record<string, unknown> = {};
+			fp.setReleaseRolloutPrefs(prefs, config(i), i, "159");
+			expect(prefs).toEqual(want);
+		});
+	});
+
+	it("enrolls in Happy Eyeballs at the rollout's rate", () => {
+		let on = 0;
+		for (let i = 0; i < 4000; i++) {
+			const prefs: Record<string, unknown> = {};
+			fp.setReleaseRolloutPrefs(prefs, config(i), i, "158");
+			if (prefs["network.http.happy_eyeballs_enabled"] === true) on++;
+			expect(prefs["dom.fetch.streaming_upload"]).toBeUndefined();
+		}
+		expect(on / 4000).toBeGreaterThan(0.46);
+		expect(on / 4000).toBeLessThan(0.54);
+	});
+
+	it("leaves a caller's pref alone", () => {
+		const prefs: Record<string, unknown> = {
+			"network.http.happy_eyeballs_enabled": false,
+		};
+		fp.setReleaseRolloutPrefs(prefs, config(0), 0, "158");
+		expect(prefs["network.http.happy_eyeballs_enabled"]).toBe(false);
 	});
 });

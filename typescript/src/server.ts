@@ -32,7 +32,8 @@ export interface LaunchServerOptions
 	/** Path of the websocket endpoint. Defaults to a random path. */
 	ws_path?: string;
 	/** Whether to run the browser headless. `"virtual"` spawns an Xvfb display,
-	 * `"virtual-gpu"` a headless Xorg server bound to one GPU. */
+	 * `"virtual-gpu"` a headless Xorg server bound to one GPU. On Linux `true`
+	 * spawns an Xvfb display too when Xvfb is installed (headlessMode). */
 	headless?: Headless;
 }
 

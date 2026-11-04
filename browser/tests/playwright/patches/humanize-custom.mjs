@@ -7,7 +7,7 @@
 import {pathToFileURL} from 'node:url';
 
 const [distPath, seed, executablePath] = process.argv.slice(2);
-const {Camoufox, custom} = await import(pathToFileURL(distPath).href);
+const {Camoufox, Screen, custom} = await import(pathToFileURL(distPath).href);
 
 const BODY = `<body style="margin:0;height:5000px">
   <input id="name" style="position:absolute;left:40px;top:120px;width:200px">
@@ -101,6 +101,9 @@ const {move, keys, scroll} = referenceEngines(log);
 const options = {
   headless: true,
   os: 'linux',
+  // A screen that holds the 1000x700 page: one that cannot clamps the page
+  // (one machine, one screen), and the replay compares pages of one size.
+  screen: new Screen({minWidth: 1100, minHeight: 800}),
   humanize: {mouse: custom(move), keyboard: custom(keys), scroll: custom(scroll), seed: BigInt(seed)},
 };
 if (executablePath)

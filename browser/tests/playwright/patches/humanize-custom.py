@@ -137,7 +137,11 @@ async def custom_session(seed, humanize_extra=None, trace=None, nested=False):
     move, keys, scroll, planned = reference_engines(log)
     humanize = {"mouse": custom(move), "keyboard": custom(keys), "scroll": custom(scroll), "seed": seed}
     humanize.update(humanize_extra or {})
-    kwargs = dict(headless=True, os="linux", humanize=humanize)
+    from camoufox.fingerprints import Screen
+
+    # A screen that holds the 1000x700 page: one that cannot clamps the page
+    # (one machine, one screen), and the replay compares pages of one size.
+    kwargs = dict(headless=True, os="linux", humanize=humanize, screen=Screen(min_width=1100, min_height=800))
     if EXECUTABLE_PATH:
         kwargs["executable_path"] = EXECUTABLE_PATH
     if trace:

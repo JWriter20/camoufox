@@ -23,10 +23,28 @@ What PASS means:
       from that context's relay, and the page's one srflx is the address the
       server mapped, in the candidate, the SDP and getStats(), not the
       identity's `webrtc:ipv4`;
+    * behind a SOCKS5 proxy the UDP host candidate reports the srflx's port, in
+      the candidate, the SDP and getStats(), as behind a port-preserving NAT
+      (stock's srflx port is its host port; LEAKS 617);
+    * candidates come in stock's order (UDP host, TCP host, then the srflx) and
+      the SDP's default (c= and m=) is the srflx, also when the relay's address
+      is a private one (a proxy on the LAN): the srflx was held to a public
+      address, so a LAN proxy's surfaced first, unmapped, and the held hosts'
+      stale default (0.0.0.0, port 9) replaced it (p1 run 2 xvfb-socks);
+    * behind a proxy on the LAN, the srflx is the relay's private address the
+      server mapped, in the candidate, the SDP and getStats(), not the
+      identity's `webrtc:ipv4` (a private srflx was taken for this host's own
+      and spoofed; LEAKS 644);
+    * an association slower than the STUN retransmission timer (100 ms, then
+      doubling) does not reach the server as a burst of copies: each Binding
+      transaction arrives once, as from a machine that sent it at once (the
+      retransmissions queued while associating were all flushed, p1 run 2:
+      5 requests where stock sends 3);
     * a STUN server named by host name is asked through the relay by that name;
     * behind an HTTP proxy, and behind a SOCKS5 proxy that refuses UDP
       ASSOCIATE, nothing reaches the server, gathering ends within a few
-      seconds and the only srflx carries `webrtc:ipv4`, as before;
+      seconds with no srflx: the machine reads as one whose UDP is blocked,
+      since no STUN server ever heard from it (LEAKS 616);
     * two pages in two contexts, each behind its own SOCKS5 proxy and given
       only each other's srflx, open a data channel through both relays.
 
@@ -46,6 +64,8 @@ from helpers import resolve_binary  # noqa: E402
 SPOOFED_IP = "203.0.113.9"
 STUN_ADDR = ("198.51.100.1", 3478)
 STUN_NAME = "stun.relay.test"
+# The STUN server a proxy on the LAN reaches, mapping the relay's private address.
+LAN_STUN_ADDR = ("10.77.0.1", 3478)
 NAMES = {STUN_NAME: STUN_ADDR[0]}
 PAGE = b"<!doctype html><title>proxied</title><body>"
 COOKIE = 0x2112A442
@@ -54,14 +74,18 @@ COOKIE = 0x2112A442
 # RTCStatsReport getStats() returns.
 GATHER = """mw:async (stun) => {
   const pc = new RTCPeerConnection({iceServers: [{urls: stun}]});
-  const srflx = [];
+  const srflx = [], hosts = [], order = [];
   const start = performance.now();
   const ended = new Promise(resolve => {
     setTimeout(() => resolve(null), 30000);
     pc.onicecandidate = e => {
       if (!e.candidate) return resolve(performance.now() - start);
+      const t = e.candidate.candidate.match(/ (UDP|TCP) \\d+ \\S+ \\d+ typ (\\S+)/i);
+      if (t) order.push(t[2] + '/' + t[1].toLowerCase());
       const m = e.candidate.candidate.match(/ (\\S+) (\\d+) typ srflx/);
       if (m) srflx.push(m[1] + ':' + m[2]);
+      const h = e.candidate.candidate.match(/ UDP \\d+ \\S+ (\\d+) typ host/);
+      if (h) hosts.push(Number(h[1]));
     };
   });
   pc.createDataChannel('probe');
@@ -69,13 +93,20 @@ GATHER = """mw:async (stun) => {
   const elapsed = await ended;
   const sdp = [...pc.localDescription.sdp.matchAll(/ (\\S+) (\\d+) typ srflx/g)]
     .map(m => m[1] + ':' + m[2]);
-  const stats = [];
+  const sdpHosts = [...pc.localDescription.sdp.matchAll(/ UDP \\d+ \\S+ (\\d+) typ host/g)]
+    .map(m => Number(m[1]));
+  const stats = [], statsHosts = [];
   (await pc.getStats()).forEach(s => {
     if (s.type === 'local-candidate' && s.candidateType === 'srflx')
       stats.push(s.address + ':' + s.port);
+    if (s.type === 'local-candidate' && s.candidateType === 'host' && s.protocol === 'udp')
+      statsHosts.push(s.port);
   });
+  const c = pc.localDescription.sdp.match(/^c=IN IP4 (\\S+)/m);
+  const m = pc.localDescription.sdp.match(/^m=application (\\d+) /m);
+  const dflt = (c && m) ? c[1] + ':' + m[1] : null;
   pc.close();
-  return {srflx, sdp, stats, elapsed};
+  return {srflx, sdp, stats, elapsed, hosts, sdpHosts, statsHosts, order, dflt};
 }"""
 
 # Each side keeps only its srflx candidates in what it hands the other, so the
@@ -123,6 +154,14 @@ FINISH = """mw:async (answer) => {
 }"""
 
 
+def reports_srflx_port(gather: dict) -> bool:
+    """One srflx, and one UDP host on its port in the candidates, the SDP and getStats()."""
+    if len(gather["srflx"]) != 1:
+        return False
+    port = int(gather["srflx"][0].rsplit(":", 1)[1])
+    return all(ports.count(port) == 1 for ports in (gather["hosts"], gather["sdpHosts"], gather["statsHosts"]))
+
+
 def srflx_only(sdp: str) -> str:
     return "".join(line for line in sdp.splitlines(keepends=True)
                    if not line.startswith("a=candidate:") or " typ srflx" in line)
@@ -145,11 +184,12 @@ class Internet:
 class StunServer:
     """Answers Binding requests with the source it saw as XOR-MAPPED-ADDRESS."""
 
-    def __init__(self, net: Internet) -> None:
-        self.net = net
+    def __init__(self, net: Internet, addr: tuple = STUN_ADDR) -> None:
+        self.net, self.addr = net, addr
         self.requests = []  # source of every Binding request
+        self.transactions = []  # transaction ID of every Binding request
         self.mapped = []  # every XOR-MAPPED-ADDRESS returned, "ip:port"
-        net.hosts[STUN_ADDR] = self.on_datagram
+        net.hosts[addr] = self.on_datagram
 
     def on_datagram(self, data: bytes, src: tuple) -> None:
         if len(data) < 20:
@@ -158,11 +198,12 @@ class StunServer:
         if kind != 0x0001 or cookie != COOKIE:
             return
         self.requests.append(src)
+        self.transactions.append(data[8:20])
         ip = int(ipaddress.IPv4Address(src[0]))
         attr = struct.pack("!HHBBHI", 0x0020, 8, 0, 1, src[1] ^ (COOKIE >> 16), ip ^ COOKIE)
         self.mapped.append(f"{src[0]}:{src[1]}")
         self.net.send(struct.pack("!HHI", 0x0101, len(attr), COOKIE) + data[8:20] + attr,
-                      STUN_ADDR, src)
+                      self.addr, src)
 
 
 async def read_addr(reader: asyncio.StreamReader, atyp: int) -> tuple:
@@ -228,10 +269,11 @@ class Relay(asyncio.DatagramProtocol):
 
 class Socks5Proxy:
     """A no-auth SOCKS5 proxy that serves the page on CONNECT and, unless
-    `udp` is False, relays UDP ASSOCIATE onto `net` from `public_ip`."""
+    `udp` is False, relays UDP ASSOCIATE onto `net` from `public_ip`, answering
+    the ASSOCIATE `delay` seconds late."""
 
-    def __init__(self, net: Internet, public_ip: str, udp: bool = True) -> None:
-        self.net, self.public_ip, self.udp = net, public_ip, udp
+    def __init__(self, net: Internet, public_ip: str, udp: bool = True, delay: float = 0.0) -> None:
+        self.net, self.public_ip, self.udp, self.delay = net, public_ip, udp, delay
         self.associations = 0
         self.refused = 0
         self.strangers = 0
@@ -284,6 +326,7 @@ class Socks5Proxy:
             lambda: Relay(self, control_ip, public), local_addr=("127.0.0.1", 0))
         self.relays.append(relay)
         bound = relay.transport.get_extra_info("sockname")
+        await asyncio.sleep(self.delay)
         writer.write(b"\x05\x00\x00\x01" + socket.inet_aton(bound[0]) + struct.pack("!H", bound[1]))
         await writer.drain()
         # The association lives as long as its control connection.
@@ -317,7 +360,10 @@ async def main() -> int:
     refusing = Socks5Proxy(net, "198.51.100.20", udp=False)
     peer_a = Socks5Proxy(net, "198.51.100.30")
     peer_b = Socks5Proxy(net, "198.51.100.40")
-    proxies = {p: await p.start() for p in (relaying, refusing, peer_a, peer_b)}
+    lan_stun = StunServer(net, LAN_STUN_ADDR)
+    on_lan = Socks5Proxy(net, "10.77.0.10")
+    slow = Socks5Proxy(net, "198.51.100.50", delay=0.5)
+    proxies = {p: await p.start() for p in (relaying, refusing, peer_a, peer_b, on_lan, slow)}
     http = await asyncio.start_server(serve_http_proxy, "127.0.0.1", 0)
     http_port = http.sockets[0].getsockname()[1]
 
@@ -338,6 +384,13 @@ async def main() -> int:
         ip_requests, ip_mapped = list(stun.requests), list(stun.mapped)
         by_name = await page.evaluate(GATHER, f"stun:{STUN_NAME}:{STUN_ADDR[1]}")
         name_requests, name_mapped = stun.requests[len(ip_requests):], stun.mapped[len(ip_mapped):]
+
+        lan_page = await page_behind(browser, socks(on_lan))
+        via_lan = await lan_page.evaluate(GATHER, f"stun:{LAN_STUN_ADDR[0]}:{LAN_STUN_ADDR[1]}")
+        before = len(stun.transactions)
+        slow_page = await page_behind(browser, socks(slow))
+        via_slow = await slow_page.evaluate(GATHER, f"stun:{STUN_ADDR[0]}:{STUN_ADDR[1]}")
+        slow_transactions = stun.transactions[before:]
 
         before = len(stun.requests)
         http_page = await page_behind(browser, f"http://127.0.0.1:{http_port}")
@@ -365,6 +418,26 @@ async def main() -> int:
          f"{len(ip_requests)} requests from {sorted({f'{h}:{p}' for h, p in ip_requests})}"),
         ("SOCKS5: the one srflx is the address the server mapped",
          len(by_ip["srflx"]) == 1 and by_ip["srflx"][0] in ip_mapped, f"{by_ip['srflx']} mapped {sorted(set(ip_mapped))}"),
+        # A port-preserving NAT (most home routers, Linux MASQUERADE) maps the host socket's port
+        # to the same public port, so stock's srflx and UDP host share it; through the relay the
+        # srflx carries the relay's port, which the host then reports too (LEAKS 617).
+        # The srflx's base is the IPv4 UDP host; an IPv6 one keeps its own port.
+        ("SOCKS5: the UDP host candidate reports the srflx's port, in the candidate, SDP and getStats()",
+         reports_srflx_port(by_ip),
+         f"srflx {by_ip['srflx']} host {by_ip['hosts']} sdp {by_ip['sdpHosts']} stats {by_ip['statsHosts']}"),
+        # A site's STUN owner compares the srflx a page reports with the one it mapped; a private
+        # relay address is the relay's all the same, not this host's (LEAKS 644).
+        ("SOCKS5 on the LAN (private relay address): the srflx is the address the server mapped",
+         len(via_lan["srflx"]) == 1 and via_lan["srflx"][0] in lan_stun.mapped
+         and via_lan["sdp"] == via_lan["srflx"] and via_lan["stats"] == via_lan["srflx"],
+         f"{via_lan['srflx']} sdp {via_lan['sdp']} stats {via_lan['stats']} mapped {sorted(set(lan_stun.mapped))}"),
+        ("SOCKS5 on the LAN (private relay address): the UDP host candidate reports the srflx's port",
+         reports_srflx_port(via_lan),
+         f"srflx {via_lan['srflx']} host {via_lan['hosts']} sdp {via_lan['sdpHosts']} stats {via_lan['statsHosts']}"),
+        ("SOCKS5: a slow association still delivers each STUN transaction once",
+         bool(slow_transactions) and len(slow_transactions) == len(set(slow_transactions))
+         and len(via_slow["srflx"]) == 1,
+         f"{len(slow_transactions)} requests, {len(set(slow_transactions))} transactions, srflx {via_slow['srflx']}"),
         ("SOCKS5: the SDP and getStats() carry the same srflx",
          by_ip["sdp"] == by_ip["srflx"] and by_ip["stats"] == by_ip["srflx"],
          f"sdp {by_ip['sdp']} stats {by_ip['stats']}"),
@@ -378,12 +451,23 @@ async def main() -> int:
          unrelayed_requests == 0 and refusing.refused >= 1,
          f"{unrelayed_requests} requests, {refusing.refused} refused associations"),
     ]
+    for label, gather in (("SOCKS5", by_ip), ("SOCKS5 on the LAN", via_lan), ("SOCKS5, slow association", via_slow)):
+        # Stock gathers its UDP hosts, then its TCP hosts, then the srflx its IPv4 host socket's
+        # STUN answer made, and offers that srflx as the default (c= and m=).
+        checks += [
+            (f"{label}: candidates in stock's order",
+             gather["order"] == sorted(gather["order"], key=["host/udp", "host/tcp", "srflx/udp"].index)
+             and gather["order"][-1:] == ["srflx/udp"], gather["order"]),
+            (f"{label}: the SDP's default (c=, m=) is the srflx",
+             len(gather["srflx"]) == 1 and gather["dflt"] == gather["srflx"][0],
+             f"default {gather['dflt']} srflx {gather['srflx']}"),
+        ]
     for label, gather in (("HTTP proxy", via_http), ("SOCKS5 refusing UDP", via_refused)):
         checks += [
             (f"{label}: gathering ends without the STUN server",
              gather["elapsed"] is not None and gather["elapsed"] < 5000, gather["elapsed"]),
-            (f"{label}: the only srflx carries the identity's address",
-             [c.split(":")[0] for c in gather["srflx"]] == [SPOOFED_IP], gather["srflx"]),
+            (f"{label}: no srflx without a STUN answer",
+             gather["srflx"] == [], gather["srflx"]),
         ]
     checks += [
         ("two contexts, each behind its own SOCKS5 proxy: the data channel opens",

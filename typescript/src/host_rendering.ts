@@ -72,6 +72,13 @@ export function hasCanvasPlaceholder(prefs: Record<string, any>): boolean {
  * Firefox does on the Microsoft Basic Render Driver. The status is written
  * either way, because a persistent profile saves it and the next startup
  * reads it. Prefs the caller set are kept.
+ *
+ * Service workers have their own pref, dom.webgpu.service-workers.enabled
+ * (Instance::PrefEnabled in dom/webgpu/Instance.cpp), with the same
+ * per-platform default: on Windows and Apple Silicon both are true, on a
+ * Linux build it is false. Without it a Linux build claiming Windows has
+ * every GPU* global in windows and dedicated and shared workers but none in
+ * a service worker, which stock Windows Firefox never does.
  */
 export function setWebgpu(
 	prefs: Record<string, any>,
@@ -84,6 +91,11 @@ export function setWebgpu(
 	if (!("dom.webgpu.enabled" in prefs)) {
 		prefs["dom.webgpu.enabled"] =
 			targetOs === "win" || (targetOs === "mac" && gpu[0] === "Apple");
+	}
+	if (!("dom.webgpu.service-workers.enabled" in prefs)) {
+		prefs["dom.webgpu.service-workers.enabled"] = Boolean(
+			prefs["dom.webgpu.enabled"],
+		);
 	}
 	if (prefs["dom.webgpu.enabled"] && !(WEBGPU_BLOCKLIST_PREF in prefs)) {
 		const ownAdapter =

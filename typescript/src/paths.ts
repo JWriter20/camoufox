@@ -83,6 +83,7 @@ export const INSTALL_DIR: string = userCacheDir("camoufox");
 export const DATA_FILES: readonly string[] = [
 	"audio-output-latency.json",
 	"browser-pin.json",
+	"display-profiles.json",
 	"essential-fonts.json",
 	"fingerprint-presets.json",
 	"fingerprint-presets-v150.json",
@@ -120,6 +121,7 @@ export function loadDataFile<T = any>(file: string): T {
 export interface LauncherConstants {
 	markerFonts: Record<"win" | "mac" | "lin", string[]>;
 	windowsLegacyFontFamilies: Record<string, string[]>;
+	windowsOfficeLegacyFontFamilies: Record<string, string[]>;
 	windows11MarkerFonts: string[];
 	plausibleCoreCounts: number[];
 	appleSiliconCores: number[];
