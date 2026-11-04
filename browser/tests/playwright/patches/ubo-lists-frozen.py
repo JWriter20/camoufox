@@ -112,7 +112,9 @@ def main() -> int:
     hosts: list = []
     proxy = recording_proxy(hosts)
     try:
-        with Camoufox(headless=True, executable_path=str(binary), i_know_what_im_doing=True,
+        # geoip=False: the recording proxy refuses every CONNECT, so the exit
+        # lookup a proxied launch makes would fail, and location is not tested here.
+        with Camoufox(headless=True, executable_path=str(binary), i_know_what_im_doing=True, geoip=False,
                       proxy={"server": f"http://127.0.0.1:{proxy.getsockname()[1]}"}) as browser:
             page = browser.new_page()
             deadline = time.monotonic() + READY_S
