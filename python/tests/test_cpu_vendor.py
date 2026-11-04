@@ -28,6 +28,15 @@ class TestImplied:
         (INTEL_IGPU, "intel"), (INTEL_ARC_IGPU, "intel"), (INTEL_ARC_DISCRETE, None),
         (AMD_APU, "amd"), (AMD_780M, "amd"), (AMD_DISCRETE, None), (NVIDIA, None), (None, None),
         ("Apple M1, or similar", None),
+        ("ANGLE (AMD, AMD Radeon (TM) Graphics (0x000015E7) Direct3D11 vs_5_0 ps_5_0, D3D11)", "amd"),
+        ("ANGLE (AMD, AMD Radeon(TM) R4 Graphics (0x00009851) Direct3D11 vs_5_0 ps_5_0, D3D11)", "amd"),
+        ("ANGLE (AMD, AMD Radeon(TM) RX Vega 11 Graphics (0x000015D8) Direct3D11 vs_5_0 ps_5_0, D3D11)", "amd"),
+        ("ANGLE (AMD, Radeon HD 3200 Graphics Direct3D11 vs_5_0 ps_5_0)", "amd"),
+        ("ANGLE (AMD, Radeon(TM) RX 460 Graphics (0x000067EF) Direct3D11 vs_5_0 ps_5_0, D3D11)", None),
+        ("ANGLE (AMD, AMD Radeon 610 Series (0x00006665) Direct3D11 vs_5_0 ps_5_0, D3D11)", None),
+        ("ANGLE (AMD, AMD Radeon R7 M265 Series (0x00006604) Direct3D11 vs_5_0 ps_5_0, D3D11)", None),
+        ("ANGLE (AMD, REMBRANDT (rembrandt LLVM 15.0.7 DRM 3.61 6.14.0-37-generic), OpenGL 4.6)", "amd"),
+        ("ANGLE (AMD, NAVI23 (navi23 LLVM 15.0.7 DRM 3.61 6.14.0-37-generic), OpenGL ES 3.2)", None),
     ])
     def test_only_an_integrated_gpu_names_the_cpu(self, renderer, vendor):
         assert cv.implied_cpu_vendor(renderer) == vendor

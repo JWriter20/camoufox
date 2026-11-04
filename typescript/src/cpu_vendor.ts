@@ -18,8 +18,9 @@ export const VENDORS = ["intel", "amd"] as const;
 export type CpuVendor = (typeof VENDORS)[number];
 
 const INTEL_DISCRETE = /Arc\(TM\)\s+(Pro\s+)?[AB]\d{2,3}/i;
+// AMD integrated graphics: every APU name in fpgen's corpus (cpu_vendor.py).
 const AMD_INTEGRATED =
-	/Radeon(\(TM\))?\s+(Graphics\b|Vega\b|\d{3}M\b)|Radeon\(TM\)\s+Vega/i;
+	/Radeon\s?(\(TM\))?\s+(Graphics\b|(RX\s+)?Vega\b|R[2-7]\s+Graphics\b|HD\s+\d{4}\s+Graphics\b|\d{3}M\b)|\b(RENOIR|REMBRANDT|RAVEN2?|PICASSO|CEZANNE|LUCIENNE|BARCELO|PHOENIX|MENDOCINO|VANGOGH)\b/i;
 
 /** Seams for tests. */
 export const cpuVendorDeps = {

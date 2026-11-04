@@ -27,10 +27,14 @@ VENDORS = ('intel', 'amd')
 # Intel's discrete Arc cards (A380/A750/A770, B570/B580, Pro A-series) pair
 # with any CPU; every other Intel renderer is the CPU's own graphics.
 _INTEL_DISCRETE = re.compile(r'Arc\(TM\)\s+(Pro\s+)?[AB]\d{2,3}', re.I)
-# AMD integrated graphics: the APU's "AMD Radeon(TM) Graphics", Vega N, and
-# the 6x0M/7x0M/8x0M/890M parts; discrete Radeons have RX/Pro/R9-style names.
+# AMD integrated graphics, every APU name in fpgen's corpus: the APU's "AMD
+# Radeon(TM) Graphics" (also "Radeon (TM)"), Vega N and RX Vega N, the
+# Kabini/Mullins/Carrizo "R2"-"R7 Graphics", the 6x0M-8x0M/890M parts, and the
+# AMD-chipset "Radeon HD NNNN Graphics". Discrete Radeons have RX NNN, R7 M265,
+# "610 Series"-style names. Older Mesa names an APU by its codename only
+# ("AMD RENOIR", "REMBRANDT (rembrandt LLVM ...)").
 _AMD_INTEGRATED = re.compile(
-    r'Radeon(\(TM\))?\s+(Graphics\b|Vega\b|\d{3}M\b)|Radeon\(TM\)\s+Vega', re.I
+    r'Radeon\s?(\(TM\))?\s+(Graphics\b|(RX\s+)?Vega\b|R[2-7]\s+Graphics\b|HD\s+\d{4}\s+Graphics\b|\d{3}M\b)|\b(RENOIR|REMBRANDT|RAVEN2?|PICASSO|CEZANNE|LUCIENNE|BARCELO|PHOENIX|MENDOCINO|VANGOGH)\b', re.I
 )
 
 
