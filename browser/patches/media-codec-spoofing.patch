@@ -1,3 +1,74 @@
+diff --git a/dom/media/mediacapabilities/MediaCapabilities.cpp b/dom/media/mediacapabilities/MediaCapabilities.cpp
+index 9f08fa9175..a724f8f879 100644
+--- a/dom/media/mediacapabilities/MediaCapabilities.cpp
++++ b/dom/media/mediacapabilities/MediaCapabilities.cpp
+@@ -11,6 +11,7 @@
+ #include "MP4Decoder.h"
+ #include "MediaCapabilitiesValidation.h"
+ #include "MediaInfo.h"
++#include "MaskConfig.hpp"
+ #include "MediaRecorder.h"
+ #include "PDMFactorySupport.h"
+ #include "VPXDecoder.h"
+@@ -1101,9 +1102,14 @@ void MediaCapabilities::CreateNonWebRTCDecodingInfo(
+                 return;
+               }
+ 
+-              if (hwDRM || !videoInfo) {
+-                drmInfo.mPowerEfficient = hwDRM && !!videoInfo;
+-                LOG("DRM hardware decrypt or no video track: {} -> {}",
++              // Camoufox: with media:spoof_codecs the video is decoded by the
++              // claimed OS's decoder, power-efficient as in the unencrypted
++              // answer below, not by the host's.
++              const bool spoofed = MaskConfig::GetBool("media:spoof_codecs");
++              if (hwDRM || !videoInfo || spoofed) {
++                drmInfo.mPowerEfficient = (hwDRM || spoofed) && !!videoInfo;
++                LOG("DRM hardware decrypt, spoofed decoder or no video track: "
++                    "{} -> {}",
+                     aConfiguration, drmInfo);
+                 promise->MaybeResolve(std::move(drmInfo));
+                 return;
+@@ -1132,6 +1138,29 @@ void MediaCapabilities::CreateNonWebRTCDecodingInfo(
+     return;
+   }
+ 
++  // Camoufox: with media:spoof_codecs, canPlayType()/isTypeSupported() answer
++  // for the claimed OS rather than the host's decoders (media-codec-spoofing),
++  // so decodingInfo() must agree with them instead of asking the host: a Linux
++  // container claiming Windows otherwise reports H.264, HEVC and AAC
++  // unsupported, and VP9 software-only. Stock Firefox 158 on Windows 11
++  // reports H.264, HEVC, VP9 and AV1 at 720p, 1080p and 2160p, and Opus,
++  // supported, smooth and power-efficient. The RFP mask's rule for video
++  // still applies. An encrypted query takes the same decoder in the DRM
++  // branch above.
++  if (MaskConfig::GetBool("media:spoof_codecs")) {
++    bool hasVideo = false;
++    for (const auto& config : tracks) {
++      hasVideo |= config->IsVideo();
++    }
++    MediaCapabilitiesDecodingInfo info;
++    info.mSupported = true;
++    info.mSmooth = true;
++    info.mPowerEfficient = !(hasVideo && shouldResistFingerprinting);
++    LOG("spoofed {} -> {}", aConfiguration, info);
++    aPromise->MaybeResolve(std::move(info));
++    return;
++  }
++
+   // Step 4: Otherwise, run the following steps:
+   nsTArray<RefPtr<CapabilitiesPromise>> promises;
+ 
+diff --git a/dom/media/mediacapabilities/moz.build b/dom/media/mediacapabilities/moz.build
+index 786b87a910..74e3855f1a 100644
+--- a/dom/media/mediacapabilities/moz.build
++++ b/dom/media/mediacapabilities/moz.build
+@@ -14,3 +14,6 @@ UNIFIED_SOURCES += [
+ include("/ipc/chromium/chromium-config.mozbuild")
+ 
+ FINAL_LIBRARY = "xul"
++
++# DOM Mask
++LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/dom/media/mp4/MP4Decoder.cpp b/dom/media/mp4/MP4Decoder.cpp
 index fb37d83754..f92936cb84 100644
 --- a/dom/media/mp4/MP4Decoder.cpp

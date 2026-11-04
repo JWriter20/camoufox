@@ -15,9 +15,9 @@ guard sends both, as they do, and checks that nothing moves the render:
     whole buffer), the CreepJS AnalyserNode reads (getFloatFrequencyData and
     getFloatTimeDomainData), a biquad filter and a plain sine all equal the
     recorded stock values for this host's architecture;
-  * in the default context, in a NewContext identity claiming another OS, in a
-    context whose init script calls the old per-context setter, and in a
-    second launch.
+  * in the default context, in a NewContext identity (a user of the launch's
+    machine, with its own init script), in a context whose init script calls
+    the old per-context setter, and in a second launch.
 
 Provenance of EXPECTED: the 2026-10 audio study (audio-study/probe/probe.html,
 the same graphs as PROBE below), 103 runs of stock Firefox 152-158.
@@ -192,7 +192,7 @@ def main() -> int:
     seen = {}
     with Camoufox(from_options=released_library_options()) as browser:
         seen["default context"] = render(browser.new_context())
-        seen["NewContext claiming Windows"] = render(NewContext(browser, os="windows"))
+        seen["NewContext identity"] = render(NewContext(browser))
         old = browser.new_context()
         old.add_init_script(OLD_SETTER)
         seen["context calling setAudioFingerprintSeed"] = render(old)
