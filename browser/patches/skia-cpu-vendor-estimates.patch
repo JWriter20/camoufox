@@ -2,7 +2,7 @@ diff --git a/gfx/skia/skia/src/core/SkCamouApprox.h b/gfx/skia/skia/src/core/SkC
 new file mode 100644
 --- /dev/null
 +++ b/gfx/skia/skia/src/core/SkCamouApprox.h
-@@ -0,0 +1,1615 @@
+@@ -0,0 +1,1616 @@
 +/*
 + * Camoufox: x86 RCPPS / RSQRTPS estimates of a CPU vendor other than the host's.
 + *
