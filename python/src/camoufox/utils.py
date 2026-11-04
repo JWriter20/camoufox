@@ -2143,7 +2143,8 @@ def launch_options(
         # "Arial", "Rockwell" and "Sitka Text". Once Windows' deferred font-info loader lands, stock
         # also resolves the nameID 1/16 names of their faces (Arial Narrow, Rockwell Extra Bold,
         # Sitka), which the allowlist must then hold: windowsLegacyFontFamilies maps each family
-        # stock win-i9 enumerates to those names. Arial and Franklin Gothic are OS families whose
+        # to those names -- the ones stock win-i9 enumerates, plus every bundled static face whose
+        # nameID 1 is a legacy name by windows-legacy-family-names.patch's nameID 16 rule. Arial and Franklin Gothic are OS families whose
         # Office faces (Arial Narrow, Franklin Gothic Demi...) a DirectWrite list cannot show, so
         # windowsOfficeLegacyFontFamilies applies only to a list presenting an Office family
         # (fpgen corpus: Arial Narrow on 383/424 Windows lists with one, 10/99 without).
