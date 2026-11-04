@@ -1,0 +1,1645 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+   - You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        role="document"
+        id="preferences-root">
+
+<head>
+  <!-- @CSP: We should remove 'unsafe-inline' from style-src, see Bug 1579160 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src chrome:; img-src chrome: moz-icon: moz-remote-image: page-icon: https: blob: data:; style-src chrome: data: 'unsafe-inline'; object-src 'none'" />
+
+  <title data-l10n-id="settings-page-title"></title>
+
+  <meta name="color-scheme" content="light dark" />
+  <link rel="stylesheet" href="chrome://global/skin/global.css" />
+
+  <link rel="stylesheet" href="chrome://global/skin/in-content/common.css" />
+  <link
+    rel="stylesheet"
+    href="chrome://browser/skin/preferences/preferences.css"
+  />
+  <link
+    rel="stylesheet"
+    href="chrome://browser/content/preferences/dialogs/handlers.css"
+  />
+  <link
+    rel="stylesheet"
+    href="chrome://browser/skin/preferences/applications.css"
+  />
+  <link rel="stylesheet" href="chrome://browser/skin/preferences/search.css" />
+  <link rel="stylesheet" href="chrome://browser/content/usercontext/usercontext.css" />
+  <link rel="stylesheet" href="chrome://browser/skin/preferences/privacy.css" />
+  <link rel="stylesheet" href="chrome://browser/content/preferences/widgets/setting-group.css" />
+  <link rel="stylesheet" href="chrome://browser/content/preferences/widgets/setting-pane.css" />
+  <link rel="stylesheet" href="chrome://browser/content/preferences/widgets/setting-control.css" />
+
+  <link rel="localization" href="branding/brand.ftl"/>
+  <link rel="localization" href="browser/browser.ftl"/>
+    <!-- Used by fontbuilder.js -->
+  <link rel="localization" href="browser/preferences/fonts.ftl"/>
+  <link rel="localization" href="browser/preferences/moreFromMozilla.ftl"/>
+  <link rel="localization" href="browser/preferences/preferences.ftl"/>
+  <link rel="localization" href="toolkit/branding/brandings.ftl"/>
+  <link rel="localization" href="toolkit/firefoxlabs/features.ftl"/>
+  <link rel="localization" href="toolkit/global/mozPageHeader.ftl"/>
+
+  <!-- Temporary until localization is done -->
+  <link rel="localization" href="preview/smartTabGroups.ftl"/>
+  <link rel="localization" href="preview/privacyPreferences.ftl"/>
+  <link rel="localization" href="browser/ipProtection.ftl"/>
+  <link rel="localization" href="browser/aiFeatures.ftl"/>
+
+  <!-- Links below are only used for search-l10n-ids into subdialogs -->
+  <link rel="localization" href="browser/aboutDialog.ftl"/>
+  <link rel="localization" href="browser/backupSettings.ftl"/>
+  <link rel="localization" href="browser/genai.ftl"/>
+  <link rel="localization" href="browser/search.ftl"/>
+  <link rel="localization" href="browser/preferences/browserIcon.ftl"/>
+  <link rel="localization" href="browser/preferences/clearSiteData.ftl"/>
+  <link rel="localization" href="browser/preferences/colors.ftl"/>
+  <link rel="localization" href="browser/preferences/connection.ftl"/>
+  <link rel="localization" href="browser/preferences/formAutofill.ftl"/>
+  <link rel="localization" href="browser/preferences/languages.ftl"/>
+  <link rel="localization" href="browser/preferences/permissions.ftl"/>
+  <link rel="localization" href="browser/preferences/selectBookmark.ftl"/>
+  <link rel="localization" href="browser/preferences/siteDataSettings.ftl"/>
+  <link rel="localization" href="browser/sanitize.ftl"/>
+  <link rel="localization" href="browser/translations.ftl"/>
+  <link rel="localization" href="preview/enUS-searchFeatures.ftl"/>
+  <link rel="localization" href="security/certificates/certManager.ftl"/>
+  <link rel="localization" href="security/certificates/deviceManager.ftl"/>
+  <link rel="localization" href="toolkit/updates/history.ftl"/>
+  <link rel="localization" href="toolkit/global/profileSelection.ftl"/>
+
+  <link rel="shortcut icon" href="chrome://global/skin/icons/settings.svg"/>
+
+  <script src="chrome://browser/content/utilityOverlay.js"/>
+  <script src="chrome://global/content/preferencesBindings.js"/>
+  <script src="chrome://browser/content/preferences/preferences.js"/>
+  <script src="chrome://browser/content/preferences/extensionControlled.js"/>
+  <script src="chrome://browser/content/preferences/findInPage.js"/>
+  <script src="chrome://browser/content/migration/migration-wizard.mjs" type="module"></script>
+  <script type="module" src="chrome://browser/content/backup/backup-settings.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/dialog-button.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/placeholder-message.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/browser-language-restart-message.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/nav-notice.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/setting-pane.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/setting-group.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/setting-control.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/security-privacy-card.mjs"></script>
+  <script type="module" src="chrome://global/content/elements/moz-input-color.mjs"></script>
+  <script type="module" src="chrome://browser/content/usercontext/container-select.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/sync-device-name.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/sync-engines-list.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/update-information.mjs"></script>
+  <script type="module" src="chrome://browser/content/preferences/widgets/update-state.mjs"></script>
+  <script type="module" src="chrome://browser/content/ipprotection/bandwidth-usage.mjs"></script>
+</head>
+
+<html:body xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+           id="preferences-body">
+
+  <stringbundle id="pkiBundle"
+                src="chrome://pippki/locale/pippki.properties"/>
+  <stringbundle id="browserBundle"
+                src="chrome://browser/locale/browser.properties"/>
+
+  <stack id="preferences-stack" flex="1">
+  <hbox flex="1">
+
+    <html:moz-page-nav id="categories" data-l10n-id="category-nav-heading" allownoselection="true">
+      <html:moz-page-nav-button id="category-general"
+        hidden="true"
+        view="paneGeneral"
+        iconsrc="chrome://browser/skin/preferences/category-general.svg"
+        data-l10n-id="pane-general-title">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-sync"
+        hidden="true"
+        view="paneSync"
+        iconsrc="chrome://browser/skin/preferences/category-sync.svg"
+        data-l10n-id="pane-sync-title3">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-home"
+        view="paneHome"
+        iconsrc="chrome://browser/skin/home.svg"
+        data-l10n-id="pane-home-startup-title2">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-search"
+        view="paneSearch"
+        iconsrc="chrome://browser/skin/preferences/category-search.svg"
+        data-l10n-id="pane-search-title2">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-privacy"
+        view="panePrivacy"
+        iconsrc="chrome://browser/skin/preferences/category-privacy-security.svg"
+        data-l10n-id="pane-privacy-title3">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-passwords-autofill"
+        view="panePasswordsAutofill"
+        iconsrc="chrome://browser/skin/login.svg"
+        data-l10n-id="pane-passwords-autofill-title2">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-appearance"
+        view="paneAppearance"
+        iconsrc="chrome://global/skin/icons/eye.svg"
+        data-l10n-id="pane-appearance-title">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-downloads"
+        view="paneDownloads"
+        iconsrc="chrome://browser/skin/downloads/downloads.svg"
+        data-l10n-id="pane-downloads-title2">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-tabs-browsing"
+        view="paneTabsBrowsing"
+        iconsrc="chrome://global/skin/icons/cursor-arrow.svg"
+        data-l10n-id="pane-tabs-browsing-title2">
+      </html:moz-page-nav-button>
+      <html:hr class="nav-separator" id="nav-separator" role="presentation" />
+      <html:moz-page-nav-button id="category-accessibility"
+        view="paneAccessibility"
+        iconsrc="chrome://browser/skin/preferences/category-accessibility.svg"
+        data-l10n-id="pane-accessibility-title">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-languages"
+        view="paneLanguages"
+        iconsrc="chrome://browser/skin/translations.svg"
+        data-l10n-id="pane-languages-title2">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-ai-features"
+        view="paneAi"
+        iconsrc="chrome://global/skin/icons/highlights.svg"
+        data-l10n-id="pane-ai-controls-title2">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-permissions-data"
+        view="panePermissionsData"
+        iconsrc="chrome://browser/skin/permissions.svg"
+        data-l10n-id="pane-permissions-data-title2">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-experimental"
+        hidden="true"
+        view="paneExperimental"
+        iconsrc="chrome://browser/skin/labs-16.svg"
+        data-l10n-id="settings-pane-labs-title2">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-about-firefox"
+        view="paneAbout"
+        iconsrc="chrome://browser/skin/sidebar/firefox.svg"
+        data-l10n-id="pane-about-firefox-title">
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="category-more-from-mozilla"
+        hidden="true"
+        view="paneMoreFromMozilla"
+        iconsrc="chrome://browser/skin/preferences/mozilla-16.svg"
+        data-l10n-id="more-from-moz-title2">
+      </html:moz-page-nav-button>
+
+      <!-- Hidden sub-page entries (CSS display:none via .hidden-category).
+           These keep gotoPref() routing working for sub-pages that are
+           navigated to from within other panes. -->
+      <html:moz-page-nav-button class="hidden-category" view="paneProfiles"/>
+      <html:moz-page-nav-button class="hidden-category" view="paneTranslations"/>
+
+      <!-- Footer links -->
+      <html:moz-page-nav-button id="addonsButton"
+        slot="secondary-nav"
+        iconsrc="chrome://mozapps/skin/extensions/extension.svg"
+        data-l10n-id="addons-button-label2"
+        href="about:addons"
+      >
+      </html:moz-page-nav-button>
+      <html:moz-page-nav-button id="helpButton"
+        slot="secondary-nav"
+        support-page="preferences"
+        iconsrc="chrome://global/skin/icons/help.svg"
+        data-l10n-id="help-button-label2">
+      </html:moz-page-nav-button>
+    </html:moz-page-nav>
+
+    <keyset>
+      <key data-l10n-id="focus-search" key="" modifiers="accel" id="focusSearch1"/>
+    </keyset>
+
+    <vbox class="main-content" flex="1" align="start">
+      <vbox class="pane-container">
+        <html:div id="search-container">
+          <html:nav-notice
+            id="policies-container-content"
+            hidden="true"
+            href="about:policies"
+            iconsrc="chrome://global/skin/icons/organizational-unit.svg"
+            data-l10n-id="managed-notice-nav"
+          />
+          <html:nav-notice
+            id="tls-key-logging-container-content"
+            hidden="true"
+            iconsrc="chrome://global/skin/icons/security-custom-root.svg"
+            data-l10n-id="tls-key-logging-notice-nav"
+            support-page="sslkeylogfile-warning"
+          />
+          <html:moz-input-search
+            id="searchInput"
+            data-l10n-id="search-input-box2"
+            data-l10n-attrs="placeholder"
+          />
+        </html:div>
+        <vbox id="mainPrefPane">
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+   - You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<hbox id="header-searchResults"
+      class="subcategory"
+      hidden="true"
+      data-hidden-from-search="true"
+      data-category="paneSearchResults">
+  <html:moz-button id="search-results-back-button"
+                   type="ghost"
+                   iconsrc="chrome://global/skin/icons/arrow-left.svg"
+                   data-l10n-id="back-nav-button-title2"></html:moz-button>
+  <html:div id="search-tooltip-container"></html:div>
+
+  <html:h2 id="search-query-header" data-l10n-id="search-results-header"></html:h2>
+</hbox>
+
+<groupbox id="no-results-message"
+          data-hidden-from-search="true"
+          data-category="paneSearchResults"
+          hidden="true">
+  <vbox class="no-results-container">
+    <label id="sorry-message" data-l10n-id="search-results-empty-message2">
+      <html:span data-l10n-name="query" id="sorry-message-query"/>
+    </label>
+    <label id="need-help" data-l10n-id="search-results-help-link">
+      <html:a is="moz-support-link" class="text-link" data-l10n-name="url" support-page="preferences"/>
+    </label>
+  </vbox>
+</groupbox>
+
+<!-- General panel -->
+
+<script src="chrome://browser/content/preferences/main.js"/>
+<script src="chrome://browser/content/preferences/translations.js"/>
+
+  <script src="chrome://browser/content/aboutDialog-appUpdater.js"/>
+
+<script src="chrome://mozapps/content/preferences/fontbuilder.js"/>
+
+<html:template id="template-paneGeneral">
+<hbox id="generalCategory"
+      class="subcategory"
+      hidden="true"
+      data-category="paneGeneral">
+  <html:h1 data-l10n-id="pane-general-title"/>
+</hbox>
+
+<!-- Default browser -->
+<html:setting-group groupid="defaultBrowser" data-category="paneGeneral" hidden="true" />
+
+<!-- Startup -->
+<html:setting-group id="startupGroup" groupid="startup" data-category="paneGeneral" hidden="true"/>
+
+<!-- Data migration -->
+<html:setting-group groupid="importBrowserData" id="dataMigrationGroup" data-category="paneGeneral" hidden="true" data-srd-migrated="" />
+
+<!-- Profiles -->
+<html:setting-group id="profilesGroup" groupid="profiles" data-category="paneGeneral" hidden="true" data-srd-migrated="" />
+
+<!-- Tab preferences -->
+<html:setting-group data-category="paneGeneral" hidden="true" groupid="tabs" data-srd-migrated="" />
+
+<!-- Browser layout -->
+<html:setting-group groupid="browserLayout" data-category="paneGeneral" data-subcategory="layout" data-srd-migrated="" hidden="true"></html:setting-group>
+
+<hbox id="languageAndAppearanceCategory"
+      class="subcategory"
+      hidden="true"
+      data-category="paneGeneral">
+  <html:h1 data-l10n-id="language-and-appearance-header"/>
+</hbox>
+
+<!-- Website appearance -->
+<html:setting-group groupid="appearance" data-category="paneGeneral" data-srd-migrated="" hidden="true"></html:setting-group>
+
+<!-- Zoom -->
+<html:setting-group id="zoomGroup" groupid="zoom" data-category="paneGeneral" hidden="true" data-srd-migrated="" />
+
+<!-- Fonts -->
+<html:setting-group id="fontsGroup" groupid="fonts" data-category="paneGeneral" hidden="true" data-srd-migrated="" />
+
+<!-- Colors -->
+<html:setting-group id="contrastControlGroup" groupid="contrast" data-category="paneGeneral" hidden="true" data-srd-migrated="" />
+
+
+<!-- Languages -->
+<html:setting-group groupid="browserLanguage" data-srd-migrated="" hidden="true" data-category="paneGeneral"></html:setting-group>
+<html:setting-group groupid="websiteLanguage" data-srd-migrated="" hidden="true" data-category="paneGeneral"></html:setting-group>
+<groupbox id="languagesGroup" data-category="paneGeneral" hidden="true" data-srd-groupid="browserLanguage">
+  <label><html:h2 data-l10n-id="language-header"/></label>
+
+  <vbox id="browserLanguagesBox" align="start" hidden="true">
+    <description flex="1" controls="chooseBrowserLanguage" data-l10n-id="choose-browser-language-description"/>
+    <hbox>
+      <menulist id="primaryBrowserLocale">
+        <menupopup/>
+      </menulist>
+      <button id="manageBrowserLanguagesButton"
+              is="highlightable-button"
+              class="accessory-button"
+              data-l10n-id="manage-browser-languages-button"/>
+    </hbox>
+  </vbox>
+  <vbox id="confirmBrowserLanguage" hidden="true" data-srd-groupid="browserLanguage"></vbox>
+
+  <hbox id="languagesBox" align="center" data-srd-groupid="websiteLanguage">
+    <description flex="1" control="chooseLanguage" data-l10n-id="choose-language-description"/>
+    <button id="chooseLanguage"
+            is="highlightable-button"
+            class="accessory-button"
+            data-l10n-id="choose-button"
+            search-l10n-ids="
+              webpage-languages-window2.title,
+              languages-description,
+              languages-customize-moveup.label,
+              languages-customize-movedown.label,
+              languages-customize-remove.label,
+              languages-customize-select-language.placeholder,
+              languages-customize-add.label,
+            " />
+  </hbox>
+
+  <checkbox id="useSystemLocale" hidden="true"
+            data-l10n-id="use-system-locale"
+            data-l10n-args='{"localeName": "und"}'
+            preference="intl.regional_prefs.use_os_locales"/>
+
+  <!-- This Translations UI is the pre-settings-redesign UI and should be removed
+       when getting ready for the settings redesign to fully ship. -->
+  <vbox id="translationsGroup" data-srd-groupid="translations" hidden="true" data-subcategory="translations">
+    <label><html:h2 data-l10n-id="translations-manage-header"/></label>
+    <hbox id="translations-manage-description" align="center">
+      <description flex="1" data-l10n-id="translations-manage-intro-2"/>
+      <button id="translations-manage-settings-button"
+              is="highlightable-button"
+              class="accessory-button"
+              data-l10n-id="translations-manage-settings-button"/>
+    </hbox>
+    <vbox>
+      <html:div id="translations-manage-install-list" tabindex="-1">
+        <hbox class="translations-manage-language">
+          <label data-l10n-id="translations-manage-download-description"></label>
+          <button id="translations-manage-install-all"
+                  data-l10n-id="translations-manage-language-download-all-button"></button>
+          <button id="translations-manage-delete-all"
+                  data-l10n-id="translations-manage-language-remove-all-button"></button>
+        </hbox>
+        <!-- The downloadable languages will be listed here. -->
+      </html:div>
+      <description id="translations-manage-error" hidden="true"></description>
+    </vbox>
+  </vbox>
+</groupbox>
+
+<!-- This Translations UI is compatible with the settings redesign -->
+<html:setting-group data-category="paneGeneral" groupid="translations" data-srd-migrated="" hidden="true"/>
+
+<html:setting-group data-category="paneGeneral" groupid="spellCheck" data-srd-migrated="" hidden="true"/>
+
+<!-- Files and Applications -->
+<hbox id="filesAndApplicationsCategory"
+      class="subcategory"
+      hidden="true"
+      data-srd-groupid="applications"
+      data-category="paneGeneral">
+  <html:h1 data-l10n-id="files-and-applications-title"/>
+</hbox>
+
+<!-- Downloads -->
+<html:setting-group groupid="downloads" data-category="paneGeneral" data-srd-migrated="" hidden="true"/>
+
+<!-- Applications -->
+<groupbox id="applicationsGroup" data-category="paneGeneral" hidden="true" data-srd-migrated=""
+  data-srd-groupid="applications">
+  <label><html:h2 data-l10n-id="applications-header"/></label>
+  <description class="description-deemphasized" data-l10n-id="applications-description"/>
+  <html:moz-input-search
+      id="filter"
+      data-l10n-id="applications-filter"
+      data-l10n-attrs="placeholder"
+      aria-controls="handlersView"/>
+
+  <listheader id="handlersViewHeader">
+    <treecol id="typeColumn" data-l10n-id="applications-type-column" value="type"
+             persist="sortDirection"
+             style="flex: 1 50%" sortDirection="ascending"/>
+    <treecol id="actionColumn" data-l10n-id="applications-action-column" value="action"
+             persist="sortDirection"
+             style="flex: 1 50%"/>
+  </listheader>
+  <richlistbox id="handlersView"
+               preference="pref.downloads.disable_button.edit_actions"/>
+  <label id="handleNewFileTypesDesc"
+         data-l10n-id="applications-handle-new-file-types-description"/>
+  <radiogroup id="handleNewFileTypes"
+              preference="browser.download.always_ask_before_handling_new_types">
+    <radio id="saveForNewTypes"
+           value="false"
+           data-l10n-id="applications-save-for-new-types"/>
+    <radio id="askBeforeHandling"
+           value="true"
+           data-l10n-id="applications-ask-before-handling"/>
+  </radiogroup>
+</groupbox>
+
+<!-- DRM Content -->
+<html:setting-group groupid="drm" data-category="paneGeneral" data-subcategory="drm" hidden="true" data-srd-migrated="" />
+
+<!-- Update -->
+<html:setting-group groupid="updates" data-category="paneGeneral" hidden="true" data-srd-migrated="" />
+
+<!-- Performance -->
+<html:setting-group groupid="performance" data-category="paneGeneral" hidden="true" data-srd-migrated="" />
+
+<!-- Browsing -->
+<html:setting-group groupid="browsing" data-category="paneGeneral" hidden="true"/>
+
+<!-- Keyboard and Scrolling -->
+<html:setting-group groupid="keyboardAndScrolling" data-category="paneGeneral" hidden="true" data-srd-migrated="" />
+
+<!-- Motion and Link -->
+<html:setting-group groupid="motionAndLink" data-category="paneGeneral" hidden="true" data-srd-migrated="" />
+
+<!-- Network Settings-->
+<html:setting-group groupid="networkProxy" data-category="paneGeneral" data-subcategory="netsettings" hidden="true" data-srd-migrated="" />
+</html:template>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+   - You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+    <script src="chrome://browser/content/preferences/search.js"/>
+    <html:template id="template-paneSearch">
+    <hbox id="searchCategory"
+          class="subcategory"
+          hidden="true"
+          data-category="paneSearch"
+          data-srd-groupid="defaultEngine">
+      <html:h1 data-l10n-id="pane-search-title2"/>
+    </hbox>
+
+    <!-- Default Search Engine -->
+    <html:setting-group groupid="defaultEngine" data-srd-migrated="" data-category="paneSearch" hidden="true"/>
+
+
+    <!-- Search Suggestions -->
+    <html:setting-group groupid="searchSuggestions" data-srd-migrated="" data-category="paneSearch" hidden="true" />
+
+    <!-- Firefox Suggest / Address Bar -->
+    <html:setting-group groupid="firefoxSuggest" data-category="paneSearch" hidden="true" data-subcategory="locationBar" data-srd-migrated=""/>
+
+    <!-- Search Shortcuts -->
+    <groupbox id="oneClickSearchProvidersGroup" data-category="paneSearch" hidden="true" data-srd-groupid="searchShortcuts">
+      <label><html:h2 data-l10n-id="search-one-click-header2" /></label>
+      <description class="description-deemphasized" data-l10n-id="search-one-click-desc" />
+      <tree id="engineList" flex="1" rows="11" hidecolumnpicker="true" editable="true"
+            seltype="single" allowunderflowscroll="true">
+        <treechildren id="engineChildren" flex="1"/>
+        <treecols>
+          <treecol id="engineShown" type="checkbox" editable="true" sortable="false"/>
+          <treecol id="engineName" flex="1" data-l10n-id="search-choose-engine-column" sortable="false"/>
+          <treecol id="engineKeyword" flex="1" data-l10n-id="search-choose-keyword-column" sortable="false"/>
+        </treecols>
+      </tree>
+
+      <hbox>
+        <button id="restoreDefaultSearchEngines"
+                is="highlightable-button"
+                data-l10n-id="search-restore-default"
+                />
+        <spacer flex="1"/>
+        <button id="addEngineButton"
+                is="highlightable-button"
+                class="searchEngineAction"
+                data-l10n-id="search-add-engine"
+                search-l10n-ids="
+                  add-engine-button,
+                  add-engine-name,
+                  add-engine-keyword2,
+                  add-engine-url2,
+                  add-engine-dialog2.buttonlabelaccept,
+                "
+                />
+        <button id="editEngineButton"
+                is="highlightable-button"
+                class="searchEngineAction"
+                disabled="true"
+                data-l10n-id="search-edit-engine"
+                />
+        <button id="removeEngineButton"
+                is="highlightable-button"
+                class="searchEngineAction"
+                data-l10n-id="search-remove-engine"
+                disabled="true"
+                />
+
+      </hbox>
+      <hbox id="addEnginesBox" pack="start">
+        <label id="addEngines" data-l10n-id="search-find-more-link" is="text-link"></label>
+      </hbox>
+    </groupbox>
+    </html:template>
+
+<!-- Privacy panel -->
+
+<script src="chrome://browser/content/preferences/privacy.js"/>
+<stringbundle id="signonBundle" src="chrome://passwordmgr/locale/passwordmgr.properties"/>
+<html:template id="template-panePrivacy">
+<hbox id="browserPrivacyCategory"
+      class="subcategory"
+      hidden="true"
+      data-category="panePrivacy"
+      data-srd-groupid="etpStatus">
+  <html:h1 data-l10n-id="privacy-header"/>
+</hbox>
+
+<html:setting-group hidden="true" groupid="securityPrivacyStatus" data-category="panePrivacy" data-srd-migrated="" />
+<html:setting-group hidden="true" groupid="securityPrivacyWarnings" data-category="panePrivacy" data-srd-migrated="" />
+
+<!-- Enhanced Tracking Protection Status Section -->
+<html:setting-group groupid="etpStatus" id="etpStatusCard" data-category="panePrivacy" data-subcategory="etpStatus" hidden="true" data-srd-migrated=""></html:setting-group>
+
+<!-- Tracking / Content Blocking -->
+<groupbox id="trackingGroup" data-category="panePrivacy" data-srd-groupid="etpStatus" hidden="true" aria-describedby="contentBlockingDescription" class="highlighting-group">
+  <label id="contentBlockingHeader"><html:h2 data-l10n-id="content-blocking-enhanced-tracking-protection"/></label>
+  <vbox data-subcategory="trackingprotection">
+    <hbox align="start">
+      <image id="trackingProtectionShield"/>
+      <description class="description-with-side-element" flex="1">
+        <html:span id="contentBlockingDescription" data-l10n-id="content-blocking-section-top-level-description"></html:span>
+        <html:a is="moz-support-link"
+                id="contentBlockingLearnMore"
+                class="learnMore"
+                data-l10n-id="content-blocking-learn-more"
+                support-page="enhanced-tracking-protection"
+        />
+      </description>
+      <button id="trackingProtectionExceptions"
+              is="highlightable-button"
+              class="accessory-button"
+              data-l10n-id="tracking-manage-exceptions"
+              preference="pref.privacy.disable_button.tracking_protection_exceptions"
+              search-l10n-ids="
+                permissions-address,
+                permissions-disable-etp,
+                permissions-remove.label,
+                permissions-remove-all.label,
+                permissions-exceptions-etp-window2.title,
+                permissions-exceptions-manage-etp-desc,
+              "/>
+    </hbox>
+    <hbox id="rfpIncompatibilityWarning" class="info-box-container" hidden="true">
+      <vbox class="info-icon-container">
+        <html:img class="info-icon"></html:img>
+      </vbox>
+      <vbox flex="1">
+        <description>
+          <html:span data-l10n-id="content-blocking-rfp-incompatibility-warning"/>
+          <html:a is="moz-support-link"
+                  class="learnMore"
+                  support-page="resist-fingerprinting"
+          />
+        </description>
+      </vbox>
+    </hbox>
+    <hbox id="fpiIncompatibilityWarning" class="info-box-container" hidden="true">
+      <vbox class="info-icon-container">
+        <html:img class="info-icon"></html:img>
+      </vbox>
+      <vbox flex="1">
+        <description>
+          <html:span data-l10n-id="content-blocking-fpi-incompatibility-warning"/>
+        </description>
+      </vbox>
+    </hbox>
+    <vbox id="contentBlockingCategories">
+      <radiogroup id="contentBlockingCategoryRadio"
+                  preference="browser.contentblocking.category"
+                  aria-labelledby="trackingProtectionMenuDesc">
+        <vbox id="contentBlockingOptionStandard" class="privacy-detailedoption info-box-container">
+          <hbox>
+            <radio id="standardRadio"
+                   value="standard"
+                   data-l10n-id="enhanced-tracking-protection-setting-standard"
+                   flex="1"/>
+            <button id="standardArrow"
+                    is="highlightable-button"
+                    class="arrowhead"
+                    data-l10n-id="content-blocking-expand-section"
+                    aria-expanded="false"/>
+          </hbox>
+          <vbox class="indent">
+            <description data-l10n-id="content-blocking-etp-standard-desc"></description>
+            <vbox class="privacy-extra-information">
+              <label class="content-blocking-extra-blocking-desc" data-l10n-id="content-blocking-etp-blocking-desc"/>
+              <vbox class="indent">
+                <hbox class="extra-information-label social-media-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-social-media-trackers"/>
+                </hbox>
+                <hbox class="extra-information-label cross-site-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-cookies-in-all-windows2"/>
+                </hbox>
+                <hbox class="extra-information-label third-party-tracking-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label all-third-party-cookies-private-windows-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cross-site-cookies-private-windows"/>
+                </hbox>
+                <hbox class="extra-information-label third-party-tracking-cookies-plus-isolate-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-isolate-cross-site-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label pb-trackers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-private-windows"/>
+                </hbox>
+                <hbox class="extra-information-label trackers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-windows-tracking-content"/>
+                </hbox>
+                <hbox class="extra-information-label all-third-party-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cross-site-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label all-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label unvisited-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-unvisited-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label cryptominers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cryptominers"/>
+                </hbox>
+                <hbox class="extra-information-label fingerprinters-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-fingerprinters"/>
+                </hbox>
+              </vbox>
+              <vbox id="etpStandardTCPBox" class="content-blocking-warning info-box-container">
+                <label class="content-blocking-warning-title" data-l10n-id="content-blocking-etp-standard-tcp-title"/>
+                <description>
+                  <html:span data-l10n-id="content-blocking-etp-standard-tcp-rollout-description"></html:span>
+                  <html:a is="moz-support-link"
+                          id="tcp-learn-more-link"
+                          class="learnMore"
+                          data-l10n-id="content-blocking-etp-standard-tcp-rollout-learn-more"
+                          support-page="total-cookie-protection"
+                  />
+                </description>
+              </vbox>
+              <html:div class="content-blocking-warning info-box-container reload-tabs" hidden="true">
+                <html:div class="content-blocking-reload-desc-container">
+                  <html:div class="info-icon-container">
+                    <html:img class="info-icon"/>
+                  </html:div>
+                  <html:span data-l10n-id="content-blocking-reload-description"
+                             class="content-blocking-reload-description" />
+                </html:div>
+                <button class="accessory-button reload-tabs-button primary"
+                        is="highlightable-button"
+                        data-l10n-id="content-blocking-reload-tabs-button"/>
+              </html:div>
+            </vbox>
+          </vbox>
+        </vbox>
+        <vbox id="contentBlockingOptionStrict" class="privacy-detailedoption info-box-container">
+          <hbox>
+            <radio id="strictRadio"
+                   value="strict"
+                   data-l10n-id="enhanced-tracking-protection-setting-strict"
+                   flex="1"/>
+            <button id="strictArrow"
+                    is="highlightable-button"
+                    class="arrowhead"
+                    data-l10n-id="content-blocking-expand-section"
+                    aria-expanded="false"/>
+          </hbox>
+          <vbox class="indent">
+            <label data-l10n-id="content-blocking-etp-strict-desc"></label>
+            <vbox class="privacy-extra-information">
+              <label class="content-blocking-extra-blocking-desc" data-l10n-id="content-blocking-etp-blocking-desc"/>
+              <vbox class="indent">
+                <hbox class="extra-information-label social-media-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-social-media-trackers"/>
+                </hbox>
+                <hbox class="extra-information-label third-party-tracking-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label all-third-party-cookies-private-windows-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cross-site-cookies-private-windows"/>
+                </hbox>
+                <hbox class="extra-information-label cross-site-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-cookies-in-all-windows2"/>
+                </hbox>
+                <hbox class="extra-information-label pb-trackers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-private-windows"/>
+                </hbox>
+                <hbox class="extra-information-label trackers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-windows-tracking-content"/>
+                </hbox>
+                <hbox class="extra-information-label all-third-party-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cross-site-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label all-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label unvisited-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-unvisited-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label third-party-tracking-cookies-plus-isolate-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-isolate-cross-site-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label cryptominers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cryptominers"/>
+                </hbox>
+                <hbox class="extra-information-label fingerprinters-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-known-and-suspected-fingerprinters"/>
+                </hbox>
+              </vbox>
+            </vbox>
+          </vbox>
+          <vbox class="privacy-extra-information">
+            <vbox class="content-blocking-exceptions">
+              <html:moz-checkbox id="contentBlockingBaselineExceptionsStrict"
+                                  class="content-blocking-checkbox"
+                                  flex="1"
+                                  data-l10n-id="content-blocking-baseline-exceptions-3"
+                                  preference="privacy.trackingprotection.allow_list.baseline.enabled"
+                                  support-page="manage-enhanced-tracking-protection-exceptions">
+                <html:moz-checkbox id="contentBlockingConvenienceExceptionsStrict"
+                                    slot="nested"
+                                    class="content-blocking-checkbox"
+                                    flex="1"
+                                    data-l10n-id="content-blocking-convenience-exceptions-3"
+                                    preference="privacy.trackingprotection.allow_list.convenience.enabled"/>
+              </html:moz-checkbox>
+            </vbox>
+              <html:div class="content-blocking-warning info-box-container reload-tabs" hidden="true">
+                <html:div class="content-blocking-reload-desc-container">
+                  <html:div class="info-icon-container">
+                    <html:img class="info-icon"/>
+                  </html:div>
+                  <html:span data-l10n-id="content-blocking-reload-description"
+                              class="content-blocking-reload-description" />
+                </html:div>
+                <button class="accessory-button reload-tabs-button primary"
+                        is="highlightable-button"
+                        data-l10n-id="content-blocking-reload-tabs-button"/>
+              </html:div>
+              <vbox class="content-blocking-warning info-box-container">
+                <hbox>
+                  <image class="content-blocking-warning-image"/>
+                  <label class="content-blocking-warning-title" data-l10n-id="content-blocking-warning-title-2"/>
+                </hbox>
+              <description>
+                <html:span class="content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description-4"></html:span>
+                <html:a is="moz-support-link"
+                        class="learnMore"
+                        data-l10n-id="content-blocking-warning-learn-how"
+                        support-page="turn-off-etp-desktop"
+                />
+              </description>
+            </vbox>
+          </vbox>
+        </vbox>
+        <vbox id="contentBlockingOptionCustom" class="privacy-detailedoption info-box-container">
+          <hbox>
+            <radio id="customRadio"
+                   value="custom"
+                   data-l10n-id="enhanced-tracking-protection-setting-custom"
+                   flex="1"/>
+            <button id="customArrow"
+                    is="highlightable-button"
+                    class="arrowhead"
+                    data-l10n-id="content-blocking-expand-section"
+                    aria-expanded="false"/>
+          </hbox>
+          <vbox class="indent">
+            <description id="contentBlockingCustomDesc" data-l10n-id="content-blocking-etp-custom-desc"></description>
+            <vbox class="privacy-extra-information">
+                <hbox class="reject-trackers-ui custom-option">
+                  <checkbox id="contentBlockingBlockCookiesCheckbox"
+                            class="content-blocking-checkbox" flex="1"
+                            data-l10n-id="content-blocking-cookies-label"
+                            aria-describedby="contentBlockingCustomDesc"
+                            preference="network.cookie.cookieBehavior"/>
+                  <vbox>
+                    <menulist id="blockCookiesMenu"
+                              sizetopopup="none"
+                              preference="network.cookie.cookieBehavior">
+                      <menupopup>
+                        <menuitem id="blockCookiesSocialMedia" data-l10n-id="sitedata-option-block-cross-site-trackers" value="trackers"/>
+                        <menuitem id="isolateCookiesSocialMedia" data-l10n-id="sitedata-option-block-cross-site-cookies2" value="isolate"/>
+                        <menuitem data-l10n-id="sitedata-option-block-unvisited" value="unvisited"/>
+                        <menuitem data-l10n-id="sitedata-option-block-all-cross-site-cookies" value="all-third-parties"/>
+                        <menuitem data-l10n-id="sitedata-option-block-all" value="always"/>
+                      </menupopup>
+                    </menulist>
+                  </vbox>
+                </hbox>
+                <hbox id="contentBlockingTrackingProtectionExtensionContentLabel"
+                      align="center" hidden="true" class="extension-controlled">
+                  <description control="contentBlockingDisableTrackingProtectionExtension" flex="1"/>
+                  <button id="contentBlockingDisableTrackingProtectionExtension"
+                          is="highlightable-button"
+                          class="extension-controlled-button accessory-button"
+                          data-l10n-id="disable-extension" hidden="true"/>
+                </hbox>
+                  <hbox class="custom-option">
+                    <checkbox id="contentBlockingTrackingProtectionCheckbox"
+                              class="content-blocking-checkbox" flex="1"
+                              data-l10n-id="content-blocking-tracking-content-label"
+                              aria-describedby="contentBlockingCustomDesc"/>
+                    <vbox>
+                      <menulist id="trackingProtectionMenu">
+                        <menupopup>
+                          <menuitem data-l10n-id="content-blocking-option-private" value="private"/>
+                          <menuitem data-l10n-id="content-blocking-tracking-protection-option-all-windows" value="always"/>
+                        </menupopup>
+                      </menulist>
+                    </vbox>
+                  </hbox>
+                <hbox class="custom-option" id="contentBlockingCryptominersOption">
+                  <checkbox id="contentBlockingCryptominersCheckbox"
+                            class="content-blocking-checkbox" flex="1"
+                            preference="privacy.trackingprotection.cryptomining.enabled"
+                            data-l10n-id="content-blocking-cryptominers-label"
+                            aria-describedby="contentBlockingCustomDesc"/>
+                </hbox>
+                <hbox class="custom-option" id="contentBlockingFingerprintersOption">
+                  <checkbox id="contentBlockingFingerprintersCheckbox"
+                            class="content-blocking-checkbox" flex="1"
+                            preference="privacy.trackingprotection.fingerprinting.enabled"
+                            data-l10n-id="content-blocking-known-fingerprinters-label"
+                            aria-describedby="contentBlockingCustomDesc"/>
+                </hbox>
+                <hbox class="custom-option">
+                    <checkbox id="contentBlockingFingerprintingProtectionCheckbox"
+                              class="content-blocking-checkbox" flex="1"
+                              data-l10n-id="content-blocking-suspected-fingerprinters-label"
+                              aria-describedby="contentBlockingCustomDesc"/>
+                    <vbox>
+                      <menulist id="fingerprintingProtectionMenu">
+                        <menupopup>
+                          <menuitem data-l10n-id="content-blocking-option-private" value="private"/>
+                          <menuitem data-l10n-id="content-blocking-tracking-protection-option-all-windows" value="always"/>
+                        </menupopup>
+                      </menulist>
+                    </vbox>
+                  </hbox>
+            </vbox>
+          </vbox>
+          <vbox class="privacy-extra-information">
+              <vbox class="content-blocking-exceptions">
+                <html:moz-checkbox id="contentBlockingBaselineExceptionsCustom"
+                                   class="content-blocking-checkbox"
+                                   flex="1"
+                                   data-l10n-id="content-blocking-baseline-exceptions-3"
+                                   preference="privacy.trackingprotection.allow_list.baseline.enabled"
+                                   support-page="manage-enhanced-tracking-protection-exceptions">
+                  <html:moz-checkbox id="contentBlockingConvenienceExceptionsCustom"
+                                     slot="nested"
+                                     class="content-blocking-checkbox"
+                                     flex="1"
+                                     data-l10n-id="content-blocking-convenience-exceptions-3"
+                                     preference="privacy.trackingprotection.allow_list.convenience.enabled"/>
+                </html:moz-checkbox>
+              </vbox>
+              <html:div class="content-blocking-warning info-box-container reload-tabs" hidden="true">
+                <html:div class="content-blocking-reload-desc-container">
+                  <html:div class="info-icon-container">
+                    <html:img class="info-icon"/>
+                  </html:div>
+                  <html:span data-l10n-id="content-blocking-reload-description"
+                             class="content-blocking-reload-description" />
+                </html:div>
+                <button class="accessory-button reload-tabs-button primary"
+                        is="highlightable-button"
+                        data-l10n-id="content-blocking-reload-tabs-button"/>
+              </html:div>
+              <vbox class="content-blocking-warning info-box-container">
+                <hbox>
+                  <image class="content-blocking-warning-image"/>
+                  <label class="content-blocking-warning-title" data-l10n-id="content-blocking-warning-title-custom"/>
+                </hbox>
+                <description>
+                  <html:span class="content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description-4"></html:span>
+                  <html:a is="moz-support-link"
+                          class="learnMore"
+                          data-l10n-id="content-blocking-warning-learn-how"
+                          support-page="turn-off-etp-desktop"
+                  />
+                </description>
+              </vbox>
+          </vbox>
+        </vbox>
+      </radiogroup>
+    </vbox>
+  </vbox>
+</groupbox>
+<html:setting-group id="nonTechnicalPrivacyGroup" groupid="nonTechnicalPrivacy" data-category="panePrivacy" hidden="true" data-srd-groupid="nonTechnicalPrivacy2"/>
+<html:setting-group groupid="nonTechnicalPrivacy2" data-category="panePrivacy" hidden="true" data-srd-migrated=""/>
+
+<!-- Firefox VPN - IP Protection -->
+<html:setting-group groupid="ipprotection" data-category="panePrivacy" data-subcategory="vpn" hidden="true" data-srd-migrated=""></html:setting-group>
+
+<html:setting-group groupid="cookiesAndSiteData" data-category="panePrivacy" hidden="true" data-srd-groupid="cookiesAndSiteData2"/>
+<html:setting-group groupid="cookiesAndSiteData2" data-category="panePrivacy" hidden="true" data-srd-migrated="" />
+
+<!-- Passwords -->
+<groupbox id="passwordsGroup" orient="vertical" data-category="panePrivacy" data-subcategory="logins" hidden="true" data-srd-groupid="passwords" data-srd-migrated="">
+  <label><html:h2 data-l10n-id="pane-privacy-passwords-header" data-l10n-attrs="searchkeywords"/></label>
+
+  <vbox id="passwordSettings">
+    <hbox id="passwordManagerExtensionContent"
+          class="extension-controlled"
+          align="center"
+          hidden="true">
+          <description control="disablePasswordManagerExtension"
+                       flex="1"/>
+          <button id="disablePasswordManagerExtension"
+                  class="extension-controlled-button accessory-button"
+                  data-l10n-id="disable-extension"
+                  hidden="true" />
+    </hbox>
+    <hbox>
+      <vbox flex="1">
+        <hbox>
+          <checkbox id="savePasswords"
+                    data-l10n-id="forms-ask-to-save-passwords"
+                    preference="signon.rememberSignons"
+                    flex="1" />
+        </hbox>
+        <hbox class="indent" flex="1">
+          <checkbox id="passwordAutofillCheckbox"
+                    data-l10n-id="forms-fill-usernames-and-passwords"
+                    preference="signon.autofillForms"
+                    flex="1" />
+        </hbox>
+        <hbox class="indent" id="generatePasswordsBox" flex="1">
+          <checkbox id="generatePasswords"
+                    data-l10n-id="forms-suggest-passwords"
+                    preference="signon.generation.enabled"
+                    flex="1" />
+        </hbox>
+      </vbox>
+      <vbox align="end">
+        <button id="passwordExceptions"
+                is="highlightable-button"
+                class="accessory-button"
+                data-l10n-id="forms-exceptions"
+                preference="pref.privacy.disable_button.view_passwords_exceptions"
+                search-l10n-ids="
+                  permissions-address,
+                  permissions-exceptions-saved-passwords-window.title,
+                  permissions-exceptions-saved-passwords-desc,
+                "/>
+        <button id="showPasswords"
+                is="highlightable-button"
+                class="accessory-button"
+                data-l10n-id="forms-saved-passwords"
+                preference="pref.privacy.disable_button.view_passwords"/>
+      </vbox>
+    </hbox>
+    <hbox class="indent" id="relayIntegrationBox" flex="1" align="center">
+      <checkbox id="relayIntegration"
+                class="tail-with-learn-more"
+                data-l10n-id="preferences-relay-integration-checkbox2"/>
+      <html:a is="moz-support-link"
+              id="relayIntegrationLearnMoreLink"
+              class="learnMore"
+              data-l10n-id="relay-integration-learn-more-link"/>
+    </hbox>
+    <hbox class="indent" id="breachAlertsBox" flex="1" align="center">
+      <checkbox id="breachAlerts"
+                class="tail-with-learn-more"
+                data-l10n-id="forms-breach-alerts"
+                preference="signon.management.page.breach-alerts.enabled"/>
+      <html:a is="moz-support-link"
+              id="breachAlertsLearnMoreLink"
+              data-l10n-id="forms-breach-alerts-learn-more-link"
+              support-page="lockwise-alerts"
+      />
+    </hbox>
+  </vbox>
+  <vbox>
+    <hbox id="osReauthRow" align="center">
+      <checkbox id="osReauthCheckbox"
+                data-l10n-id="forms-os-reauth"/>
+    </hbox>
+  </vbox>
+  <vbox>
+    <hbox id="masterPasswordRow" align="center">
+      <checkbox id="useMasterPassword"
+                data-l10n-id="forms-primary-pw-use"
+                class="tail-with-learn-more"/>
+      <html:a is="moz-support-link"
+              id="primaryPasswordLearnMoreLink"
+              data-l10n-id="forms-primary-pw-learn-more-link"
+              support-page="primary-password-stored-logins"
+      />
+      <spacer flex="1"/>
+      <button id="changeMasterPassword"
+              is="highlightable-button"
+              class="accessory-button"
+              search-l10n-ids="forms-master-pw-change.label"
+              data-l10n-id="forms-primary-pw-change"/>
+    </hbox>
+    <description class="indent tip-caption"
+                 data-l10n-id="forms-primary-pw-former-name"
+                 data-l10n-attrs="hidden"
+                 flex="1"/>
+    <hbox id="windows-sso" align="center">
+      <checkbox data-l10n-id="forms-windows-sso"
+                preference="network.http.windows-sso.enabled"
+                class="tail-with-learn-more"/>
+      <html:a is="moz-support-link"
+              id="windowsSSOLearnMoreLink"
+              data-l10n-id="forms-windows-sso-learn-more-link"
+              support-page="windows-sso"
+      />
+    </hbox>
+    <description id="windows-sso-caption" class="indent tip-caption"
+           data-l10n-id="forms-windows-sso-desc"/>
+  </vbox>
+
+  <label id="openWindowsPasskeySettings">
+    <html:a class="text-link" data-l10n-id="windows-passkey-settings-label" href="ms-settings:savedpasskeys" />
+  </label>
+  <!--
+    Those two strings are meant to be invisible and will be used exclusively to provide
+    localization for an alert window.
+  -->
+  <label id="fips-title" hidden="true" data-l10n-id="forms-primary-pw-fips-title"></label>
+  <label id="fips-desc" hidden="true" data-l10n-id="forms-master-pw-fips-desc"></label>
+</groupbox>
+
+<html:setting-group groupid="passwords" hidden="true" data-category="panePrivacy" data-srd-migrated=""/>
+
+<html:setting-group data-category="panePrivacy" data-subcategory="payment-methods-autofill credit-card-autofill" groupid="payments" data-group="formAutofill" hidden="true" data-srd-migrated="" />
+<html:setting-group data-category="panePrivacy" data-subcategory="addresses-autofill address-autofill" groupid="addresses" data-group="formAutofill" hidden="true" data-srd-migrated="" />
+
+<!-- History -->
+<html:setting-group groupid="history" data-category="panePrivacy" hidden="true" data-srd-groupid="history2"/>
+<html:setting-group groupid="history2" data-category="panePrivacy" hidden="true" data-srd-migrated=""/>
+
+<!-- Permissions -->
+<html:setting-group groupid="permissions" data-category="panePrivacy" data-subcategory="permissions" hidden="true" data-srd-migrated=""></html:setting-group>
+
+<!-- Firefox Data Collection and Use -->
+<html:setting-group groupid="dataCollection" data-category="panePrivacy" hidden="true"
+  class="subcategory" data-srd-migrated=""></html:setting-group>
+<html:setting-group groupid="privacyPanel" id="privacyPanelGroup" data-category="panePrivacy" hidden="true" data-srd-migrated=""></html:setting-group>
+
+<groupbox data-category="panePrivacy" hidden="true" data-srd-groupid="dataCollection">
+  <vbox id="privacySegmentationSection" data-subcategory="privacy-segmentation" hidden="true">
+    <label>
+      <html:h2 data-l10n-id="privacy-segmentation-section-header"/>
+    </label>
+    <label data-l10n-id="privacy-segmentation-section-description"/>
+    <radiogroup id="privacyDataFeatureRecommendationRadioGroup" preference="browser.dataFeatureRecommendations.enabled">
+        <radio id="privacyDataFeatureRecommendationEnabled"
+                data-l10n-id="privacy-segmentation-radio-off"
+                value="true"/>
+        <radio id="privacyDataFeatureRecommendationDisabled"
+                data-l10n-id="privacy-segmentation-radio-on"
+                value="false"/>
+    </radiogroup>
+  </vbox>
+</groupbox>
+
+<hbox id="securityCategory"
+      class="subcategory"
+      hidden="true"
+      data-category="panePrivacy"
+      data-srd-groupid="etpStatus">
+  <html:h1 data-l10n-id="security-header"/>
+</hbox>
+
+<!-- addons, forgery (phishing) UI Security -->
+<html:setting-group groupid="browsingProtection" data-category="panePrivacy" hidden="true" data-srd-migrated=""></html:setting-group>
+
+<!-- Certificates -->
+<html:setting-group groupid="certificates" data-category="panePrivacy" hidden="true" data-srd-migrated=""></html:setting-group>
+
+<!-- HTTPS-ONLY Mode -->
+<html:setting-group groupid="httpsOnly" data-category="panePrivacy" hidden="true" data-srd-migrated=""/>
+
+<!-- DoH -->
+<html:setting-group hidden="true" data-category="panePrivacy" groupid="dnsOverHttps" data-srd-migrated="" />
+
+<hbox id="DoHCategory"
+      class="subcategory"
+      hidden="true"
+      data-category="panePrivacy"
+      data-srd-groupid="dnsOverHttps">
+  <html:h1 data-l10n-id="preferences-doh-header"/>
+</hbox>
+
+<groupbox id="dohBox" data-category="panePrivacy" data-subcategory="doh" hidden="true" class="highlighting-group"  data-srd-groupid="dnsOverHttps">
+  <label class="search-header" searchkeywords="doh trr" hidden="true"><html:h2 data-l10n-id="preferences-doh-header"/></label>
+  <vbox flex="1">
+    <description id="dohDescription" class="tail-with-learn-more description-deemphasized" data-l10n-id="preferences-doh-description2"></description>
+    <html:a is="moz-support-link"
+            id="dohLearnMore"
+            class="learnMore"
+            support-page="dns-over-https"
+    />
+  </vbox>
+  <vbox id="dohStatusSection" class="privacy-detailedoption info-box-container">
+    <hbox>
+      <label id="dohStatus" class="doh-status-label tail-with-learn-more"/>
+      <html:a is="moz-support-link"
+            id="dohStatusLearnMore"
+            class="learnMore"
+            support-page="doh-status"
+            hidden="true"/>
+    </hbox>
+    <label class="doh-status-label" id="dohResolver"/>
+    <label class="doh-status-label" id="dohSteeringStatus" data-l10n-id="preferences-doh-steering-status" hidden="true"/>
+  </vbox>
+  <button id="dohExceptionsButton"
+          is="highlightable-button"
+          class="accessory-button"
+          data-l10n-id="preferences-doh-manage-exceptions"
+          search-l10n-ids="
+            permissions-doh-entry-field,
+            permissions-doh-add-exception.label,
+            permissions-doh-remove.label,
+            permissions-doh-remove-all.label,
+            permissions-exceptions-doh-window.title,
+            permissions-exceptions-manage-doh-desc,
+          "/>
+  <vbox>
+    <label><html:h2 id="dohGroupMessage" data-l10n-id="preferences-doh-group-message2"/></label>
+    <vbox id="dohCategories">
+      <radiogroup id="dohCategoryRadioGroup"
+                  preference="network.trr.mode" aria-labelledby="dohGroupMessage">
+        <vbox id="dohOptionDefault" class="privacy-detailedoption info-box-container">
+          <hbox>
+            <radio id="dohDefaultRadio"
+                   value="0"
+                   data-l10n-id="preferences-doh-setting-default"
+                   flex="1"/>
+            <button id="dohDefaultArrow"
+                    is="highlightable-button"
+                    class="arrowhead doh-expand-section"
+                    data-l10n-id="preferences-doh-expand-section"
+                    aria-expanded="false"/>
+          </hbox>
+          <vbox class="indent">
+            <label data-l10n-id="preferences-doh-default-desc"></label>
+            <vbox class="privacy-extra-information">
+              <vbox class="indent">
+                <hbox class="extra-information-label">
+                  <label class="doh-label" data-l10n-id="preferences-doh-default-detailed-desc-1"/>
+                </hbox>
+                <hbox class="extra-information-label">
+                  <label class="doh-label" data-l10n-id="preferences-doh-default-detailed-desc-2"/>
+                </hbox>
+                <hbox class="extra-information-label">
+                  <label class="doh-label tail-with-learn-more" data-l10n-id="preferences-doh-default-detailed-desc-3"/>
+                  <html:a is="moz-support-link"
+                          id="default-desc-3-learn-more"
+                          class="learnMore"
+                          support-page="doh-local-provider"
+                  />
+                </hbox>
+                <hbox class="extra-information-label">
+                  <label class="doh-label" data-l10n-id="preferences-doh-default-detailed-desc-4"/>
+                </hbox>
+                <hbox class="extra-information-label">
+                  <label class="doh-label tail-with-learn-more" data-l10n-id="preferences-doh-default-detailed-desc-5"/>
+                  <html:a is="moz-support-link"
+                          id="default-desc-5-learn-more"
+                          class="learnMore"
+                          support-page="firefox-turn-off-secure-dns"
+                  />
+                </hbox>
+              </vbox>
+            </vbox>
+          </vbox>
+        </vbox>
+        <vbox id="dohOptionEnabled" class="privacy-detailedoption info-box-container">
+          <hbox>
+            <radio id="dohEnabledRadio"
+                   value="2"
+                   data-l10n-id="preferences-doh-setting-enabled"
+                   flex="1"/>
+            <button id="dohEnabledArrow"
+                    is="highlightable-button"
+                    class="arrowhead doh-expand-section"
+                    data-l10n-id="preferences-doh-expand-section"
+                    aria-expanded="false"/>
+          </hbox>
+          <vbox class="indent">
+            <label data-l10n-id="preferences-doh-enabled-desc"></label>
+            <vbox class="privacy-extra-information">
+              <vbox class="indent">
+                <hbox class="extra-information-label">
+                  <label class="doh-label" data-l10n-id="preferences-doh-enabled-detailed-desc-1"/>
+                </hbox>
+                <hbox class="extra-information-label">
+                  <label class="doh-label" data-l10n-id="preferences-doh-enabled-detailed-desc-2"/>
+                </hbox>
+              </vbox>
+              <vbox class="extra-information-label">
+                <label data-l10n-id="preferences-doh-select-resolver"/>
+                <menulist id="dohEnabledResolverChoices"
+                          sizetopopup="none">
+                </menulist>
+                <html:input id="dohEnabledInputField" type="text" style="flex: 1;"
+                    preference="network.trr.custom_uri" hidden="true"/>
+              </vbox>
+            </vbox>
+          </vbox>
+        </vbox>
+        <vbox id="dohOptionStrict" class="privacy-detailedoption info-box-container">
+          <hbox>
+            <radio id="dohStrictRadio"
+                   value="3"
+                   data-l10n-id="preferences-doh-setting-strict"
+                   flex="1"/>
+            <button id="dohStrictArrow"
+                    is="highlightable-button"
+                    class="arrowhead doh-expand-section"
+                    data-l10n-id="preferences-doh-expand-section"
+                    aria-expanded="false"/>
+          </hbox>
+          <vbox class="indent">
+            <label data-l10n-id="preferences-doh-strict-desc"></label>
+            <vbox class="privacy-extra-information">
+              <vbox class="indent">
+                <hbox class="extra-information-label">
+                  <label class="doh-label" data-l10n-id="preferences-doh-strict-detailed-desc-1"/>
+                </hbox>
+                <hbox class="extra-information-label">
+                  <label class="doh-label" data-l10n-id="preferences-doh-strict-detailed-desc-2"/>
+                </hbox>
+                <hbox class="extra-information-label">
+                  <label class="doh-label" data-l10n-id="preferences-doh-strict-detailed-desc-3"/>
+                </hbox>
+              </vbox>
+              <vbox class="extra-information-label">
+                <label data-l10n-id="preferences-doh-select-resolver"/>
+                <menulist id="dohStrictResolverChoices"
+                          sizetopopup="none">
+                </menulist>
+                <html:input id="dohStrictInputField" type="text" style="flex: 1;"
+                    preference="network.trr.custom_uri" hidden="true"/>
+              </vbox>
+            </vbox>
+          </vbox>
+        </vbox>
+        <vbox id="dohOptionOff" class="privacy-detailedoption info-box-container">
+          <hbox>
+            <radio id="dohOffRadio"
+                   value="5"
+                   data-l10n-id="preferences-doh-setting-off"
+                   flex="1"/>
+          </hbox>
+          <vbox class="indent">
+            <label data-l10n-id="preferences-doh-off-desc"></label>
+          </vbox>
+        </vbox>
+      </radiogroup>
+    </vbox>
+  </vbox>
+</groupbox>
+
+</html:template>
+
+<!-- Sync panel -->
+
+<script src="chrome://browser/content/preferences/sync.js"/>
+<html:template id="template-paneSync">
+<hbox id="firefoxAccountCategory"
+    class="subcategory"
+    hidden="true"
+    data-category="paneSync"
+    data-srd-groupid="sync">
+  <html:h1 data-l10n-id="pane-sync-title3"/>
+</hbox>
+
+<deck id="weavePrefsDeck" data-category="paneSync" data-srd-groupid="sync" hidden="true"
+      data-hidden-from-search="true">
+  <groupbox id="noFxaAccount">
+    <hbox>
+      <vbox flex="1">
+        <label id="noFxaCaption"><html:h2 data-l10n-id="sync-signedout-caption"/></label>
+        <description id="noFxaDescription" class="description-deemphasized" flex="1" data-l10n-id="sync-signedout-description2"/>
+      </vbox>
+      <vbox>
+        <image class="fxaSyncIllustration" alt=""/>
+      </vbox>
+    </hbox>
+    <hbox id="fxaNoLoginStatus" align="center" flex="1">
+      <vbox flex="1">
+        <hbox align="center" flex="1">
+          <button id="noFxaSignIn"
+                  is="highlightable-button"
+                  class="accessory-button"
+                  data-l10n-id="sync-signedout-account-signin3"/>
+        </hbox>
+      </vbox>
+    </hbox>
+    <label class="fxaMobilePromo" data-l10n-id="sync-mobile-promo">
+      <html:img
+        role="none"
+        src="chrome://browser/skin/logo-android.svg"
+        data-l10n-name="android-icon"
+        class="androidIcon"/>
+      <html:a
+        data-l10n-name="android-link"
+        class="fxaMobilePromo-android text-link" target="_blank"/>
+      <html:img
+        role="none"
+        src="chrome://browser/skin/logo-ios.svg"
+        data-l10n-name="ios-icon"
+        class="iOSIcon"/>
+      <html:a
+        data-l10n-name="ios-link"
+        class="fxaMobilePromo-ios text-link" target="_blank"/>
+    </label>
+  </groupbox>
+
+  <vbox id="hasFxaAccount">
+    <hbox>
+      <vbox id="fxaContentWrapper" flex="1">
+        <groupbox id="fxaGroup">
+          <label class="search-header" hidden="true"><html:h2 data-l10n-id="pane-sync-title3"/></label>
+
+          <deck id="fxaLoginStatus" flex="1">
+
+            <!-- logged in and verified and all is good -->
+            <hbox id="fxaLoginVerified" align="center" flex="1">
+              <image id="openChangeProfileImage"
+                     class="fxaProfileImage actionable"
+                     role="button"
+                     data-l10n-attrs="alt"
+                     data-l10n-id="sync-profile-picture-with-alt"/>
+              <vbox flex="1" pack="center">
+                <hbox flex="1" align="baseline">
+                  <label id="fxaDisplayName" hidden="true">
+                    <html:h2 id="fxaDisplayNameHeading"/>
+                  </label>
+                  <label id="fxaEmailAddress" flex="1" crop="end"/>
+                  <button id="fxaUnlinkButton"
+                          is="highlightable-button"
+                          class="accessory-button"
+                          data-l10n-id="sync-sign-out"/>
+                </hbox>
+                <hbox>
+                  <html:a id="verifiedManage" class="openLink" target="_blank"
+                          data-l10n-id="sync-manage-account"/>
+                </hbox>
+              </vbox>
+            </hbox>
+
+            <!-- logged in to an unverified account -->
+            <hbox id="fxaLoginUnverified">
+              <vbox>
+                <image class="fxaProfileImage"
+                       data-l10n-attrs="alt"
+                       data-l10n-id="sync-profile-picture-account-problem"/>
+              </vbox>
+              <vbox flex="1" pack="center">
+                <hbox align="center">
+                  <image class="fxaLoginRejectedWarning"
+                         data-l10n-attrs="alt"
+                         data-l10n-id="fxa-login-rejected-warning"/>
+                  <description flex="1"
+                    class="l10nArgsEmailAddress"
+                    data-l10n-id="sync-signedin-unverified"
+                    data-l10n-args='{"email": ""}'/>
+                </hbox>
+                <hbox class="fxaAccountBoxButtons">
+                  <button id="verifyFxaAccount"
+                          is="highlightable-button"
+                          data-l10n-id="sync-verify-account"/>
+                  <button id="unverifiedUnlinkFxaAccount"
+                          is="highlightable-button"
+                          data-l10n-id="sync-remove-account"/>
+                </hbox>
+              </vbox>
+            </hbox>
+
+            <!-- logged in locally but server rejected credentials -->
+            <hbox id="fxaLoginRejected">
+              <vbox>
+                <image class="fxaProfileImage"
+                       data-l10n-attrs="alt"
+                       data-l10n-id="sync-profile-picture-account-problem"/>
+              </vbox>
+              <vbox flex="1" pack="center">
+                <hbox align="center">
+                  <image class="fxaLoginRejectedWarning"
+                         data-l10n-attrs="alt"
+                         data-l10n-id="fxa-login-rejected-warning"/>
+                  <description flex="1"
+                    class="l10nArgsEmailAddress"
+                    data-l10n-id="sync-signedin-login-failure"
+                    data-l10n-args='{"email": ""}'/>
+                </hbox>
+                <hbox class="fxaAccountBoxButtons">
+                  <button id="rejectReSignIn"
+                          is="highlightable-button"
+                          data-l10n-id="sync-sign-in"/>
+                  <button id="rejectUnlinkFxaAccount"
+                          is="highlightable-button"
+                          data-l10n-id="sync-remove-account"/>
+                </hbox>
+              </vbox>
+            </hbox>
+          </deck>
+        </groupbox>
+
+        <groupbox>
+          <label control="fxaSyncComputerName">
+            <html:h2 data-l10n-id="sync-device-name-header"/>
+          </label>
+          <hbox id="fxaDeviceName">
+            <html:input id="fxaSyncComputerName" type="text" disabled="true"/>
+            <button id="fxaChangeDeviceName"
+                    is="highlightable-button"
+                    class="needs-account-ready"
+                    data-l10n-id="sync-device-name-change"/>
+            <button id="fxaCancelChangeDeviceName"
+                    is="highlightable-button"
+                    data-l10n-id="sync-device-name-cancel"
+                    hidden="true"/>
+            <button id="fxaSaveChangeDeviceName"
+                    is="highlightable-button"
+                    data-l10n-id="sync-device-name-save"
+                    hidden="true"/>
+          </hbox>
+        </groupbox>
+
+        <groupbox>
+          <vbox id="syncStatusContainer" flex="1">
+            <hbox>
+              <html:h2 id="syncStatusTitle" data-l10n-id="prefs-syncing-off"/>
+              <spacer flex="1"/>
+              <!-- 'Sync Now' button, visible only when sync is on -->
+              <button id="syncNow" class="accessory-button needs-account-ready"></button>
+            </hbox>
+            <vbox id="syncNotConfigured">
+              <hbox class="sync-group info-box-container">
+                <vbox flex="1">
+                  <label data-l10n-id="prefs-sync-offer-setup-label2"/>
+                </vbox>
+              <button id="syncSetup"
+                      is="highlightable-button"
+                      class="accessory-button needs-account-ready"
+                      data-l10n-id="prefs-sync-turn-on-syncing"/>
+              </hbox>
+            </vbox>
+
+            <vbox id="syncConfigured">
+              <vbox class="sync-group sync-info-box sync-configured">
+                <label data-l10n-id="sync-syncing-across-devices-heading"/>
+                <html:div class="sync-engines-list">
+                  <html:div engine_preference="services.sync.engine.bookmarks">
+                    <image class="sync-engine-image sync-engine-bookmarks" alt=""/>
+                    <label data-l10n-id="sync-currently-syncing-bookmarks"/>
+                  </html:div>
+                  <html:div engine_preference="services.sync.engine.history">
+                    <image class="sync-engine-image sync-engine-history" alt=""/>
+                    <label data-l10n-id="sync-currently-syncing-history"/>
+                  </html:div>
+                  <html:div engine_preference="services.sync.engine.tabs">
+                    <image class="sync-engine-image sync-engine-tabs" alt=""/>
+                    <label data-l10n-id="sync-currently-syncing-tabs"/>
+                  </html:div>
+                  <html:div engine_preference="services.sync.engine.passwords">
+                    <image class="sync-engine-image sync-engine-passwords" alt=""/>
+                    <label data-l10n-id="sync-currently-syncing-passwords"/>
+                  </html:div>
+                  <html:div engine_preference="services.sync.engine.addresses">
+                    <image class="sync-engine-image sync-engine-addresses" alt=""/>
+                    <label data-l10n-id="sync-currently-syncing-addresses"/>
+                  </html:div>
+                  <html:div engine_preference="services.sync.engine.creditcards">
+                    <image class="sync-engine-image sync-engine-creditcards" alt=""/>
+                    <label data-l10n-id="sync-currently-syncing-payment-methods"/>
+                  </html:div>
+                  <html:div engine_preference="services.sync.engine.addons">
+                    <image class="sync-engine-image sync-engine-addons" alt=""/>
+                    <label data-l10n-id="sync-currently-syncing-addons"/>
+                  </html:div>
+                  <html:div engine_preference="services.sync.engine.prefs">
+                    <image class="sync-engine-image sync-engine-prefs" alt=""/>
+                    <label data-l10n-id="sync-currently-syncing-settings"/>
+                  </html:div>
+                </html:div>
+                <hbox>
+                  <button id="syncChangeOptions"
+                          is="highlightable-button"
+                          data-l10n-id="sync-manage-options"/>
+                  <spacer flex="1"/>
+                </hbox>
+              </vbox>
+            </vbox>
+          </vbox>
+        </groupbox>
+      </vbox>
+    </hbox>
+    <vbox id="syncConnectAnotherDevice"
+          align="start">
+      <html:a id="connect-another-device"
+             is="text-link"
+             class="fxaMobilePromo"
+             target="_blank"
+             data-l10n-id="sync-connect-another-device"/>
+    </vbox>
+</vbox>
+</deck>
+
+
+<!-- Firefox Backup -->
+<html:setting-group groupid="backup" hidden="true" data-category="paneSync" data-subcategory="backup" data-srd-migrated="" />
+
+</html:template>
+
+<!-- More From Mozilla panel -->
+
+<script src="chrome://browser/content/preferences/moreFromMozilla.js"/>
+<html:template xmlns="http://www.w3.org/1999/xhtml" id="template-paneMoreFromMozilla">
+  <div id="moreFromMozillaCategory-header"
+    class="subcategory"
+    data-hidden-from-search="true"
+    hidden="true"
+    data-category="paneMoreFromMozilla">
+    <h1 class="title" data-l10n-id="more-from-moz-title2"/>
+    <p class="subtitle description-deemphasized" data-l10n-id="more-from-moz-subtitle"/>
+  </div>
+  <div id="moreFromMozillaCategory"
+    data-category="paneMoreFromMozilla"
+    hidden="true"
+    data-hidden-from-search="true">
+  </div>
+</html:template>
+
+<html:template xmlns="http://www.w3.org/1999/xhtml" id="simple">
+  <article class="mozilla-product-item simple">
+
+    <div>
+      <h2 class="product-title"/>
+      <div class="product-description-box">
+        <div class="description description-deemphasized"/>
+        <a class="text-link" target="_blank" hidden="true"/>
+      </div>
+    </div>
+
+    <button type="button" class="primary small-button" hidden="true"/>
+
+    <div class="qr-code-box" hidden="">
+      <h3 class="qr-code-box-title"/>
+      <div class="qr-code-box-image-wrapper">
+        <img class="qr-code-box-image"/>
+        <img class="qr-code-box-logo" src="chrome://branding/content/about-logo.svg"/>
+      </div>
+      <a class="qr-code-link text-link" target="_blank" hidden=""/>
+    </div>
+
+  </article>
+</html:template>
+        </vbox>
+      </vbox>
+    </vbox>
+  </hbox>
+
+  <stack id="dialogStack" hidden="true"/>
+  <vbox id="dialogTemplate" class="dialogOverlay" align="center" pack="center" topmost="true" hidden="true">
+    <vbox class="dialogBox"
+          pack="end"
+          role="dialog"
+          aria-labelledby="dialogTitle">
+      <hbox class="dialogTitleBar" align="center">
+        <label class="dialogTitle" flex="1"/>
+        <html:moz-button class="dialogClose"
+                         type="icon ghost"
+                         size="small"
+                         iconsrc="chrome://global/skin/icons/close.svg"
+                         data-l10n-id="close-button"/>
+      </hbox>
+      <browser class="dialogFrame"
+               autoscroll="false"
+               disablehistory="true"/>
+    </vbox>
+  </vbox>
+  </stack>
+
+  <html:dialog id="migrationWizardDialog"></html:dialog>
+</html:body>
+</html>

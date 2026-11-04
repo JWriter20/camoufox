@@ -1,0 +1,99 @@
+diff --git a/dom/xul/XULMenuParentElement.cpp b/dom/xul/XULMenuParentElement.cpp
+--- a/dom/xul/XULMenuParentElement.cpp
++++ b/dom/xul/XULMenuParentElement.cpp
+@@ -20,9 +20,24 @@
+ #include "nsStringFwd.h"
+ #include "nsXULElement.h"
+ #include "nsXULPopupManager.h"
++#include "MaskConfig.hpp"
+ 
+ namespace mozilla::dom {
+ 
++// Camoufox: whether keyboard navigation in an open menulist (a <select>'s
++// dropdown) selects the item at once, as Windows Firefox does (see
++// SetActiveMenuChild). Elsewhere the item only becomes the value with Enter,
++// so Escape after an arrow key put the old value back; stock Firefox 158.0.1
++// on win-i9 (cfparity input.forms.select) kept the new one and fired input
++// and change. A Windows identity on another host behaves as Windows does.
++static bool MenuListSelectsByKeyboard() {
++#ifdef XP_WIN
++  return true;
++#else
++  return MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows;
++#endif
++}
++
+ NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(XULMenuParentElement,
+                                                nsXULElement)
+ NS_IMPL_CYCLE_COLLECTION_INHERITED(XULMenuParentElement, nsXULElement,
+@@ -152,13 +167,12 @@ void XULMenuParentElement::SetActiveMenu
+   if (IsInMenuList()) {
+     if (nsMenuPopupFrame* f = do_QueryFrame(GetPrimaryFrame())) {
+       f->EnsureActiveMenuListItemIsVisible();
+-#ifdef XP_WIN
+       // On Windows, a menulist should update its value whenever navigation was
+       // done by the keyboard.
+       //
+       // NOTE(emilio): This is a rather odd per-platform behavior difference,
+       // but other browsers also do this.
+-      if (aByKey == ByKey::Yes && f->IsOpen()) {
++      if (aByKey == ByKey::Yes && f->IsOpen() && MenuListSelectsByKeyboard()) {
+         // Fire a command event as the new item, but we don't want to close the
+         // menu, blink it, or update any other state of the menuitem. The
+         // command event will cause the item to be selected.
+@@ -167,7 +181,6 @@ void XULMenuParentElement::SetActiveMenu
+                                            nullptr, presShell, false, false,
+                                            false, false);
+       }
+-#endif
+     }
+   }
+ }
+diff --git a/dom/xul/moz.build b/dom/xul/moz.build
+--- a/dom/xul/moz.build
++++ b/dom/xul/moz.build
+@@ -87,6 +87,9 @@ LOCAL_INCLUDES += [
+     "/layout/xul/tree",
+ ]
+ 
++# Camoufox: MaskConfig, for the claimed OS (menulist-keyboard-claimed-os.patch).
++LOCAL_INCLUDES += ["/camoucfg"]
++
+ include("/ipc/chromium/chromium-config.mozbuild")
+ 
+ FINAL_LIBRARY = "xul"
+diff --git a/layout/xul/moz.build b/layout/xul/moz.build
+--- a/layout/xul/moz.build
++++ b/layout/xul/moz.build
+@@ -48,3 +48,6 @@ LOCAL_INCLUDES += [
+     "/dom/base",
+     "/dom/xul",
+ ]
++
++# Camoufox: MaskConfig, for the claimed OS (menulist-keyboard-claimed-os.patch).
++LOCAL_INCLUDES += ["/camoucfg"]
+diff --git a/layout/xul/nsXULPopupManager.cpp b/layout/xul/nsXULPopupManager.cpp
+--- a/layout/xul/nsXULPopupManager.cpp
++++ b/layout/xul/nsXULPopupManager.cpp
+@@ -61,6 +61,7 @@
+ #include "nsPIWindowRoot.h"
+ #include "nsPresContextInlines.h"
+ #include "nsXULElement.h"
++#include "MaskConfig.hpp"
+ 
+ using namespace mozilla;
+ using namespace mozilla::dom;
+@@ -2564,7 +2565,12 @@ bool nsXULPopupManager::HandleKeyboardNa
+ #elif defined XP_MACOSX
+           Wrap::No;
+ #else
+-          Wrap::Yes;
++          // Camoufox: a Windows identity's menulist (a <select>'s dropdown)
++          // stops at its first and last option, as Windows Firefox's does.
++          aFrame->IsMenuList() && MaskConfig::GetSpoofedOS() ==
++                                      MaskConfig::SpoofedOS::Windows
++              ? Wrap::No
++              : Wrap::Yes;
+ #endif
+ 
+       if (aDir == eNavigationDirection_Before) {

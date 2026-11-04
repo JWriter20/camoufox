@@ -1,0 +1,30 @@
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -5231,7 +5231,14 @@
+ /* virtual */
+ bool nsWindow::PrepareForFullscreenTransition(nsISupports** aData) {
+   if (!mCompositedScreen) {
+-    return false;
++    // Camoufox: asked for a transition (full-screen-api.transition-duration,
++    // which stock GTK builds leave at "0 0" and the launcher sets to a claimed
++    // OS's fade), a screen that cannot fade the window still takes the fade's
++    // time: Windows and macOS fire fullscreenchange after the fade-in, and a
++    // page can time requestFullscreen(). No data: PerformFullscreenTransition
++    // only waits.
++    *aData = nullptr;
++    return true;
+   }
+   *aData = do_AddRef(new FullscreenTransitionWindow(mShell)).take();
+   return true;
+@@ -5242,6 +5249,10 @@
+                                            uint16_t aDuration,
+                                            nsISupports* aData,
+                                            nsIRunnable* aCallback) {
++  if (!aData) {
++    NS_DelayedDispatchToCurrentThread(do_AddRef(aCallback), aDuration);
++    return;
++  }
+   auto* data = static_cast<FullscreenTransitionWindow*>(aData);
+   // This will be released at the end of the last timeout callback for it.
+   auto* transitionData =
