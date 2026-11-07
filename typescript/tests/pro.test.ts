@@ -133,7 +133,7 @@ describe.runIf(modelReady)("launchOptions", () => {
 		fs.cpSync(BUNDLE, dir, { recursive: true });
 		exe = path.join(dir, "camoufox-bin");
 	});
-	const launch = (env: Record<string, string> = {}) =>
+	const launch = (env: Record<string, string> = {}, options = {}) =>
 		quietly(() =>
 			utils.launchOptions({
 				env: { HOME, ...env },
@@ -141,6 +141,7 @@ describe.runIf(modelReady)("launchOptions", () => {
 				os: "windows",
 				headless: true,
 				i_know_what_im_doing: true,
+				...options,
 			}),
 		);
 	const makePro = () =>
@@ -158,6 +159,23 @@ describe.runIf(modelReady)("launchOptions", () => {
 		const opts = await launch();
 		expect(api.requests).toEqual([]);
 		expect(pro.LEASE_FILE_ENV in opts.env).toBe(false);
+	});
+
+	it("launches a stock build with your own proxy", async () => {
+		const proxy = { server: "http://my.proxy:8080" };
+		const opts = await launch({}, { proxy, geoip: false });
+		expect(api.requests).toEqual([]);
+		expect(opts.proxy).toEqual(proxy);
+	});
+
+	it("launches your own lease file with your own proxy", async () => {
+		makePro();
+		const opts = await launch(
+			{ [pro.LEASE_FILE_ENV]: "/run/mine.json" },
+			{ proxy: { server: "http://my.proxy:8080" }, geoip: false },
+		);
+		expect(api.requests).toEqual([]);
+		expect(opts.env[pro.LEASE_FILE_ENV]).toBe("/run/mine.json");
 	});
 
 	it("says how to sign in when a Pro build has no key", async () => {
@@ -358,10 +376,13 @@ describe("sign-in", () => {
 describe("a refused mint", () => {
 	it.each([
 		[401, "invalid_api_key", errors.NotSignedIn],
-		[402, "subscription_required", errors.SubscriptionRequired],
+		[402, "wallet_empty", errors.WalletEmpty],
+		[402, "plan_required", errors.PlanRequired],
+		[402, "topup_required", errors.TopupRequired],
 		[403, "account_suspended", errors.AccountSuspended],
 		[403, "build_not_allowlisted", errors.BuildNotAllowlisted],
 		[409, "lease_limit_reached", errors.LeaseLimitReached],
+		[409, "gpu_limit_reached", errors.GpuLimitReached],
 		[412, "capability_mismatch", errors.CapabilityMismatch],
 	] as const)("%i %s raises its own type without retrying", async (status, code, Kind) => {
 		api.script("/api/v1/leases", [
@@ -395,6 +416,31 @@ describe("a refused mint", () => {
 			},
 		]);
 		await expect(acquire()).rejects.toThrow(/runner-3/);
+	});
+
+	it("carries plan_required's feature and gpu_limit_reached's retry_after", async () => {
+		api.script("/api/v1/leases", [
+			402,
+			{
+				error: "plan_required",
+				message: "Cookie warming needs a plan.",
+				details: { feature: "warming" },
+			},
+		]);
+		const required = await acquire().catch((e) => e);
+		expect(required).toBeInstanceOf(errors.PlanRequired);
+		expect(required.details).toEqual({ feature: "warming" });
+		api.script("/api/v1/leases", [
+			409,
+			{
+				error: "gpu_limit_reached",
+				message: "All 2 GPUs are in use.",
+				retry_after: 30,
+			},
+		]);
+		const limited = await acquire().catch((e) => e);
+		expect(limited).toBeInstanceOf(errors.GpuLimitReached);
+		expect(limited.retry_after).toBe(30);
 	});
 
 	it("is retried when the API is unreachable, with one idempotency key", async () => {
@@ -643,7 +689,7 @@ describe("camoufox pro --activate", () => {
 		expect(lines).toEqual([
 			`[ ok ] lease verified: ${release.path.split("/")[4]} for 156.0.1-pro.1, windows identity, layout fidelity`,
 			"[ -- ] profile: not granted",
-			"[ -- ] egress: not granted",
+			"[ -- ] managed: not granted",
 			"[ -- ] gpu: not granted",
 			"[ -- ] captcha: not granted",
 			"[ ok ] lease released",
@@ -678,7 +724,7 @@ describe("camoufox pro --activate", () => {
 		expect(verified).toBe(true);
 		expect(lines.slice(1, 5)).toEqual([
 			"[ -- ] profile: not granted",
-			"[ ok ] egress: granted (residential, US)",
+			"[ ok ] managed: granted (residential, US)",
 			"[ -- ] gpu: not granted",
 			"[ ok ] captcha: granted (250)",
 		]);
@@ -714,15 +760,15 @@ describe("camoufox pro --activate", () => {
 		api.script("/api/v1/leases", [
 			402,
 			{
-				error: "subscription_required",
-				message: "No active plan.",
+				error: "wallet_empty",
+				message: "The wallet is empty.",
 				resolution_url: "https://camoufox.com/pro",
 			},
 		]);
 		const { verified, lines } = await activate();
 		expect(verified).toBe(false);
 		expect(lines).toEqual([
-			"[FAIL] lease: No active plan. https://camoufox.com/pro",
+			"[FAIL] lease: The wallet is empty. https://camoufox.com/pro",
 		]);
 		expect(api.calls(".*/release")).toEqual([]);
 	});

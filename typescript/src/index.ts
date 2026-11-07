@@ -15,21 +15,25 @@ export {
 } from "./async_api.js";
 export {
 	AccountSuspended,
-	AllowanceExhausted,
 	BuildNotAllowlisted,
 	CapabilityMismatch,
+	EgressUnavailable,
+	GpuLimitReached,
 	GpuUnavailable,
 	InvalidRequest,
 	LeaseLimitReached,
 	LeaseRefused,
 	NotSignedIn,
+	PlanRequired,
 	ProClockSkew,
 	ProError,
 	ProfileMismatch,
 	ProUnavailable,
 	RateLimited,
 	StatePoolSealed,
-	SubscriptionRequired,
+	TargetUnavailable,
+	TopupRequired,
+	WalletEmpty,
 } from "./exceptions.js";
 export {
 	generateContextFingerprint,
@@ -60,6 +64,13 @@ export {
 	type PlayStep,
 } from "./humanize-custom.js";
 export {
+	type Managed,
+	ProxyDimension,
+	ProxyNetwork,
+	ProxyProvider,
+	ProxyType,
+} from "./managed.js";
+export {
 	findInstalledVersion,
 	listInstalled,
 	printTree,
@@ -67,6 +78,16 @@ export {
 export { INSTALL_DIR, OS_NAME } from "./paths.js";
 export { CamoufoxFetcher, installedVerStr, RepoConfig } from "./pkgman.js";
 export type { LeaseRequest, ProSession } from "./pro.js";
+export {
+	listProxies,
+	listStatics,
+	type NamedStatic,
+	type ProxyOption,
+	type ProxyProduct,
+	proxyTargets,
+	releaseStatic,
+	type Targeting,
+} from "./proxies.js";
 export { RenderNodeError, type RenderNodeOption } from "./render_node.js";
 export { type LaunchServerOptions, launchServer } from "./server.js";
 export {

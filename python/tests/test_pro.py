@@ -28,13 +28,16 @@ from camoufox.exceptions import (
     AccountSuspended,
     BuildNotAllowlisted,
     CapabilityMismatch,
+    GpuLimitReached,
     LeaseLimitReached,
     LeaseRefused,
     NotSignedIn,
+    PlanRequired,
     ProClockSkew,
     ProUnavailable,
     RateLimited,
-    SubscriptionRequired,
+    TopupRequired,
+    WalletEmpty,
 )
 
 GOLDEN = json.loads((Path(__file__).parent / "data" / "pro-lease-golden.json").read_text())
@@ -225,6 +228,20 @@ def test_a_stock_build_makes_no_request(api, build, monkeypatch):
     assert pro.LEASE_FILE_ENV not in opts["env"]
 
 
+def test_a_stock_build_launches_with_your_own_proxy(api, build, monkeypatch):
+    proxy = {"server": "http://my.proxy:8080"}
+    opts = launch(build, monkeypatch, proxy=proxy, geoip=False, i_know_what_im_doing=True)
+    assert api.requests == []
+    assert opts["proxy"] == proxy
+
+
+def test_your_own_lease_file_launches_with_your_own_proxy(api, pro_build, monkeypatch):
+    monkeypatch.setenv(pro.LEASE_FILE_ENV, "/run/mine.json")
+    opts = launch(pro_build, monkeypatch, proxy={"server": "http://my.proxy:8080"}, geoip=False, i_know_what_im_doing=True)
+    assert api.requests == []
+    assert opts["env"][pro.LEASE_FILE_ENV] == "/run/mine.json"
+
+
 def test_a_pro_build_without_a_key_says_how_to_sign_in(api, pro_build, monkeypatch):
     with pytest.raises(NotSignedIn, match="camoufox login"):
         launch(pro_build, monkeypatch)
@@ -378,10 +395,13 @@ def test_device_flow_that_is_not_approved_fails_clearly(api, code):
     "status, code, kind",
     [
         (401, "invalid_api_key", NotSignedIn),
-        (402, "subscription_required", SubscriptionRequired),
+        (402, "wallet_empty", WalletEmpty),
+        (402, "plan_required", PlanRequired),
+        (402, "topup_required", TopupRequired),
         (403, "account_suspended", AccountSuspended),
         (403, "build_not_allowlisted", BuildNotAllowlisted),
         (409, "lease_limit_reached", LeaseLimitReached),
+        (409, "gpu_limit_reached", GpuLimitReached),
         (412, "capability_mismatch", CapabilityMismatch),
     ],
 )
@@ -404,6 +424,19 @@ def test_lease_limit_names_the_holders(api):
     }))
     with pytest.raises(LeaseLimitReached, match="runner-3"):
         acquire()
+
+
+def test_plan_required_names_the_feature_and_gpu_limit_says_when_to_retry(api):
+    api.script("/api/v1/leases", (402, {
+        "error": "plan_required", "message": "Cookie warming needs a plan.", "details": {"feature": "warming"},
+    }))
+    with pytest.raises(PlanRequired) as raised:
+        acquire()
+    assert raised.value.details == {"feature": "warming"}
+    api.script("/api/v1/leases", (409, {"error": "gpu_limit_reached", "message": "All 2 GPUs are in use.", "retry_after": 30}))
+    with pytest.raises(GpuLimitReached) as raised:
+        acquire()
+    assert raised.value.retry_after == 30
 
 
 def test_an_unreachable_api_is_retried_with_one_idempotency_key(api):
@@ -589,7 +622,7 @@ def test_activate_verifies_a_lease_and_releases_it(api, pro_build, monkeypatch):
     assert result.output.splitlines() == [
         f"[ ok ] lease verified: {api.requests[1]['path'].split('/')[4]} for 156.0.1-pro.1, windows identity, layout fidelity",
         "[ -- ] profile: not granted",
-        "[ -- ] egress: not granted",
+        "[ -- ] managed: not granted",
         "[ -- ] gpu: not granted",
         "[ -- ] captcha: not granted",
         "[ ok ] lease released",
@@ -613,7 +646,7 @@ def test_activate_reports_only_the_sections_the_lease_carries_and_no_credentials
     assert result.exit_code == 0, result.output
     assert result.output.splitlines()[1:5] == [
         "[ -- ] profile: not granted",
-        "[ ok ] egress: granted (residential, US)",
+        "[ ok ] managed: granted (residential, US)",
         "[ -- ] gpu: not granted",
         "[ ok ] captcha: granted (250)",
     ]
@@ -695,11 +728,11 @@ def test_activate_reports_a_refused_lease_and_fails(api, pro_build, monkeypatch)
     monkeypatch.setenv(pro.KEY_ENV, KEY)
     api.script(
         "/api/v1/leases",
-        (402, {"error": "subscription_required", "message": "No active plan.", "resolution_url": "https://camoufox.com/pro"}),
+        (402, {"error": "wallet_empty", "message": "The wallet is empty.", "resolution_url": "https://camoufox.com/pro"}),
     )
     result = activate(pro_build)
     assert result.exit_code == 1
-    assert result.output.splitlines() == ["[FAIL] lease: No active plan. https://camoufox.com/pro"]
+    assert result.output.splitlines() == ["[FAIL] lease: The wallet is empty. https://camoufox.com/pro"]
     assert api.calls(".*/release") == []
 
 

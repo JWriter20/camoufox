@@ -82,6 +82,7 @@ import {
 	validIPv6,
 } from "./ip.js";
 import { handleLocales } from "./locales.js";
+import { type Managed, managedRequest } from "./managed.js";
 import {
 	INSTALL_DIR,
 	LAUNCHER_CONSTANTS,
@@ -104,6 +105,7 @@ import {
 } from "./pkgman.js";
 import * as pro from "./pro.js";
 import { openProfile } from "./pro-profile.js";
+import { ProxySession } from "./proxy_session.js";
 import {
 	comparePyStr,
 	formatPyFloatRepr,
@@ -2238,13 +2240,12 @@ export interface LaunchOptions {
 	 * machine; `"standard"` and `"continuous"` profiles are kept warm in the
 	 * cloud and launch with their identity only. Left out, the API decides. */
 	warm_plan?: "none" | "standard" | "continuous";
-	/** Camoufox Pro managed egress: `false` for none, `true` for CamouProxy
-	 * with defaults, or the egress wanted, e.g. `{ class: "residential",
-	 * country: "US" }`, with `provider` naming a partner provider instead of
-	 * CamouProxy. Left out, a `profile` gets CamouProxy and a launch without
-	 * one goes direct.
-	 * With your own `proxy` there is none, and passing both throws. */
-	egress?: boolean | pro.EgressRequest;
+	/** A Camoufox Pro managed proxy: a `Managed` naming the provider, type,
+	 * network and country wanted, `true` for the defaults, or `false` for none.
+	 * Left out, a `profile` gets the default and a launch without one goes
+	 * direct. With your own `proxy` there is none, and passing both throws.
+	 * See docs/pro.md, "Managed proxies". */
+	managed?: boolean | Managed;
 	/** `false` renders WebGL, WebGPU and canvas on this machine's GPU for a
 	 * Camoufox Pro Windows identity, instead of on a remote GPU. */
 	farm_gpu?: false;
@@ -2266,18 +2267,23 @@ export interface LaunchOptions {
  * Accepts all Playwright Firefox launch options, along with the Camoufox ones
  * documented on {@link LaunchOptions}.
  */
+/** What a launch opened along the way: a Pro lease, a managed proxy session, a render node. */
+interface Held {
+	lease: pro.Lease | null;
+	node: renderNodes.Session | null;
+	proxy: ProxySession | null;
+}
+
 export async function launchOptions(
 	options: LaunchOptions = {},
 ): Promise<Record<string, any>> {
 	// A Camoufox Pro lease or node session opened along the way goes back if the build fails.
-	const held: { lease: pro.Lease | null; node: renderNodes.Session | null } = {
-		lease: null,
-		node: null,
-	};
+	const held: Held = { lease: null, node: null, proxy: null };
 	try {
 		return await buildLaunchOptions(options, held);
 	} catch (error) {
 		await held.lease?.release("error");
+		await held.proxy?.release("error");
 		await held.node?.release();
 		throw error;
 	}
@@ -2334,12 +2340,12 @@ async function buildLaunchOptions(
 		pro_key,
 		profile,
 		warm_plan,
-		egress,
+		managed,
 		farm_gpu,
 		render_node,
 		...passthrough
 	}: LaunchOptions,
-	held: { lease: pro.Lease | null; node: renderNodes.Session | null },
+	held: Held,
 ): Promise<Record<string, any>> {
 	utilsDeps.ensureBrowserProfileDir(env);
 
@@ -2409,21 +2415,22 @@ async function buildLaunchOptions(
 		}
 		proRequest.warm_plan = warm_plan;
 	}
-	// The caller's own proxy is never replaced by managed egress, and asking for both is a mistake
-	// worth naming rather than a request to drop one of them quietly.
-	if (proxy != null && egress !== undefined && egress !== false) {
-		throw new ValueError(
-			"proxy and egress conflict: with your own proxy there is no managed egress. " +
-				"Pass proxy to use your own, or egress (and no proxy) for managed egress.",
-		);
+	const wire = managedRequest(managed, { profile, proxy });
+	// A Pro build's managed proxy is a section of its lease, and your own proxy tells the lease to
+	// add none. A standard build has no lease: it opens a proxy session of its own, below, and only
+	// when the launch asked for one, so nobody is put on a metered proxy they did not choose.
+	let proxyWire: Managed | boolean | undefined;
+	if (!proBuild) {
+		if (wire !== undefined && wire !== false) proxyWire = wire;
+	} else if (wire !== undefined && (leased || managed !== undefined)) {
+		proRequest.managed = wire;
 	}
-	if (egress !== undefined) proRequest.egress = egress;
 	if (farm_gpu === false) proRequest.gpu = false;
 	if (Object.keys(proRequest).length && !leased) {
 		throw new ValueError(
 			proBuild
-				? `profile, warm_plan, egress and farm_gpu are lease options, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
-				: "profile, warm_plan, egress and farm_gpu need a Camoufox Pro build (see docs/pro.md).",
+				? `profile, warm_plan, managed and farm_gpu are lease options, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
+				: "profile, warm_plan and farm_gpu need a Camoufox Pro build (see docs/pro.md).",
 		);
 	}
 	// A render node runs Windows Firefox's ANGLE, so it serves Windows identities of a Pro build.
@@ -2451,8 +2458,6 @@ async function buildLaunchOptions(
 		}
 	}
 	let node: renderNodes.Session | null = null;
-	// Your own proxy, asked for no other way, means no managed egress.
-	if (proxy != null) proRequest.egress = false;
 	// What the lease adds to the environment, after every launch rule.
 	const proEnv: EnvVars = {};
 
@@ -2677,7 +2682,7 @@ async function buildLaunchOptions(
 				server: grants.egress.server,
 				username: grants.egress.username,
 				password: grants.egress.password,
-				// The egress refuses local destinations, so they go direct.
+				// The managed proxy refuses local destinations, so they go direct.
 				bypass: "localhost,127.0.0.1,::1,*.local",
 			};
 			geoip ??= grants.egress.exit_ip ?? true;
@@ -2700,6 +2705,12 @@ async function buildLaunchOptions(
 		}
 	}
 
+	if (proxyWire !== undefined) {
+		held.proxy ??= await ProxySession.open(proxyWire, pro_key);
+		proxy = held.proxy.proxy();
+		geoip ??= held.proxy.egress.exit_ip ?? true;
+	}
+
 	if (relay) {
 		const directory = path.dirname(
 			held.lease?.path ?? String(env[pro.LEASE_FILE_ENV]),
@@ -2713,6 +2724,9 @@ async function buildLaunchOptions(
 		if (held.lease) {
 			const opened = node;
 			held.lease.onEnd.push(() => opened.release());
+		} else if (held.proxy) {
+			const opened = node;
+			held.proxy.onEnd.push(() => opened.release());
 		} else {
 			renderNodes.track(node);
 		}

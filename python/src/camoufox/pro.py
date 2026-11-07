@@ -40,21 +40,25 @@ from platformdirs import user_cache_dir, user_config_dir
 from .gpudisplay import GpuDisplay
 from .exceptions import (
     AccountSuspended,
-    AllowanceExhausted,
     BuildNotAllowlisted,
     CapabilityMismatch,
+    EgressUnavailable,
+    GpuLimitReached,
     GpuUnavailable,
     InvalidRequest,
     LeaseLimitReached,
     LeaseRefused,
     NotSignedIn,
+    PlanRequired,
     ProClockSkew,
     ProError,
     ProfileMismatch,
     ProUnavailable,
     RateLimited,
     StatePoolSealed,
-    SubscriptionRequired,
+    TargetUnavailable,
+    TopupRequired,
+    WalletEmpty,
 )
 
 API_ENV = "CAMOUFOX_PRO_API"
@@ -96,8 +100,9 @@ log = logging.getLogger("camoufox.pro")
 _BY_CODE = {
     "invalid_request": InvalidRequest,
     "invalid_api_key": NotSignedIn,
-    "subscription_required": SubscriptionRequired,
-    "allowance_exhausted": AllowanceExhausted,
+    "wallet_empty": WalletEmpty,
+    "plan_required": PlanRequired,
+    "topup_required": TopupRequired,
     "account_suspended": AccountSuspended,
     "build_not_allowlisted": BuildNotAllowlisted,
     "lease_limit_reached": LeaseLimitReached,
@@ -106,6 +111,9 @@ _BY_CODE = {
     "profile_mismatch": ProfileMismatch,
     "state_pool_sealed": StatePoolSealed,
     "gpu_unavailable": GpuUnavailable,
+    "gpu_limit_reached": GpuLimitReached,
+    "egress_unavailable": EgressUnavailable,
+    "target_unavailable": TargetUnavailable,
 }
 
 
@@ -474,9 +482,10 @@ class Lease:
 
     `request` is what the mint asks for beyond the build and OS, each field left
     out unless set: `profile` names the profile to launch (and `warm_plan` the
-    plan a new one is created with), `egress: False` keeps managed egress off
-    (the caller's own proxy is never replaced) and a dict states the egress
-    wanted, and `gpu: False` renders on this machine.
+    plan a new one is created with), `managed: False` asks for no managed proxy
+    (the caller's own proxy is never replaced), `True` or a dict asks for one
+    (camoufox.managed.managed_request builds it), and `gpu: False` renders on
+    this machine.
     """
 
     def __init__(self, build: ProBuild, target_os: str, key: str, request: Optional[Dict[str, Any]] = None) -> None:
@@ -594,11 +603,13 @@ class Lease:
                 time.sleep(error.retry_after or delay)
         if self.lease_id and self.grants.get("egress"):
             log.warning(
-                "camoufox-pro: the new lease carries a new egress credential; the running browser keeps "
-                "the old one, so restart it to use managed egress again"
+                "camoufox-pro: the new lease carries a new managed proxy credential; the running browser "
+                "keeps the old one, so restart it to use the managed proxy again"
             )
         self.lease_id = lease["lease_id"]
         self.grants = {name: lease.get(name) for name in SECTIONS}
+        from .proxy_session import log_notices
+        log_notices(lease.get("notices"))
         self.account_id = int(lease.get("account_id") or token_fields(lease["token"])["account_id"])
         self._seq = 0
         self._heartbeat_s = float(lease["limits"]["heartbeat_s"])
@@ -789,11 +800,17 @@ def acquire(
 
 def claim(options: Dict[str, Any], display: Any = None) -> Optional[Any]:
     """
-    The lease or named-node session opened for these options, taken by the browser
-    about to launch with them on `display`. None for a stock build with no session.
+    The lease, managed proxy session or named-node session opened for these options,
+    taken by the browser about to launch with them on `display`. None for a stock
+    build with no session.
     """
     lease = _LIVE.get(str(options.get("env", {}).get(LEASE_FILE_ENV)))
     if lease is None:
+        # A standard build's managed proxy session holds any render node opened with it.
+        from .proxy_session import claim as claim_proxy
+        session = claim_proxy(options)
+        if session is not None:
+            return session
         from .render_node import claim as claim_node
         return claim_node(options)
     if lease.claimed:
@@ -876,13 +893,16 @@ def attach_lease(lease: Lease, target: Any, event: str, *, is_async: bool = Fals
 
 # ── camoufox pro --activate ──────────────────────────────────────────────────
 
-# What --activate shows of a granted section: never its credentials.
+# What --activate shows of a granted section: never its credentials. The lease's `egress` section is
+# what the `managed` launch option asked for, so it is shown under that name.
 _SHOWN = {"egress": ("class", "country"), "gpu": ("mode", "renderer"), "captcha": ("remaining",)}
+_LABEL = {"egress": "managed"}
 
 
 def _granted(name: str, section: Dict[str, Any]) -> str:
     detail = ", ".join(str(section[field]) for field in _SHOWN.get(name, ()) if section.get(field) is not None)
-    return f"{name}: granted ({detail})" if detail else f"{name}: granted"
+    label = _LABEL.get(name, name)
+    return f"{label}: granted ({detail})" if detail else f"{label}: granted"
 
 
 def activate(build_file: str, target_os: str, key: Optional[str] = None, echo: Callable[[str], None] = print) -> bool:
@@ -907,7 +927,7 @@ def activate(build_file: str, target_os: str, key: Optional[str] = None, echo: C
         )
         for name in SECTIONS:
             section = lease.grants.get(name)
-            echo(f"[ ok ] {_granted(name, section)}" if section else f"[ -- ] {name}: not granted")
+            echo(f"[ ok ] {_granted(name, section)}" if section else f"[ -- ] {_LABEL.get(name, name)}: not granted")
     finally:
         released = lease.release()
     echo("[ ok ] lease released" if released else "[ -- ] lease not released: the API frees it when it expires")

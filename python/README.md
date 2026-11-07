@@ -331,7 +331,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `i_know_what_im_doing` | `bool` | `False` | Silence the leak warnings above. |
 | `debug` | `bool` | `False` | Print the config sent to the browser. |
 | `pro_key` | `str` | `CAMOUFOX_PRO_KEY`, then the `camoufox login` key | Camoufox Pro key for a Pro build, which launches with a lease ([docs/pro.md](https://github.com/daijro/camoufox/blob/main/docs/pro.md)). |
-| `profile`, `warm_plan`, `egress`, `farm_gpu` | see docs/pro.md | none | Camoufox Pro lease options: a stored profile, its warm plan, managed egress, and `farm_gpu=False` to render on this machine instead of a remote GPU. |
+| `profile`, `warm_plan`, `managed`, `farm_gpu` | see docs/pro.md | none | `managed` is a managed proxy on any build (pay-as-you-go with a Camoufox key); `profile`, `warm_plan` and `farm_gpu=False` are Camoufox Pro lease options: a stored profile, its warm plan, and rendering on this machine instead of a remote GPU. |
 | `render_node` | `bool`, path or dict | from `~/.config/camoufox/render-node.json` | Camoufox Pro: draw WebGL on your own Windows render node (docs/pro.md). |
 | `pool_profile` | `str` | none | Camoufox Pro's pool warmer only: the pool profile this launch presents. |
 
