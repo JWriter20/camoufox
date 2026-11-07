@@ -44,6 +44,7 @@ import { OS_NAME, userCacheDir, userConfigDir } from "./paths.js";
 import type { ProxySession } from "./proxy_session.js";
 import { ValueError } from "./pycompat.js";
 import type { Session as RenderNodeSession } from "./render_node.js";
+import { directory as sceneCacheDirectory } from "./scene_cache.js";
 
 export const API_ENV = "CAMOUFOX_PRO_API";
 export const KEY_ENV = "CAMOUFOX_PRO_KEY";
@@ -554,6 +555,7 @@ export function leaseFileBytes(
 	targetOs: string,
 	fidelity: string,
 	writtenAt: number,
+	sceneCacheDir: string | null = null,
 ): string {
 	return JSON.stringify({
 		v: 1,
@@ -564,7 +566,7 @@ export function leaseFileBytes(
 		paths: {
 			identity_bundle: null,
 			font_metrics: null,
-			scene_cache_dir: null,
+			scene_cache_dir: sceneCacheDir,
 			gpu_bundle: null,
 		},
 		written_at: writtenAt,
@@ -632,6 +634,8 @@ export class Lease {
 	accountId = 0;
 	/** The remote-rendering file, while the lease grants remote rendering. */
 	renderPath: string | null = null;
+	/** Where the scene cache for this browser build and OS lives, while the lease grants remote rendering. */
+	sceneCacheDir: string | null = null;
 	/** Run in place of a plain release when the browser closes. */
 	onClose: SessionEnd | null = null;
 	/** Run when the process exits with the browser never closed, before the release. */
@@ -811,6 +815,13 @@ export class Lease {
 			await this.#postRelease("error");
 			throw new ProClockSkew(skew);
 		}
+		this.sceneCacheDir = this.grants.gpu
+			? sceneCacheDirectory(
+					this.build.version,
+					this.build.build_hash,
+					this.targetOs,
+				)
+			: null;
 		this.#write(minted.token);
 		this.#writeRender(this.grants.gpu);
 	}
@@ -847,6 +858,7 @@ export class Lease {
 				this.targetOs,
 				this.#fidelity,
 				Math.floor(Date.now() / 1000),
+				this.sceneCacheDir,
 			),
 		);
 	}

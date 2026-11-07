@@ -37,6 +37,7 @@ from urllib.parse import urlsplit
 import requests
 from platformdirs import user_cache_dir, user_config_dir
 
+from . import scene_cache
 from .gpudisplay import GpuDisplay
 from .exceptions import (
     AccountSuspended,
@@ -420,7 +421,9 @@ def token_fields(token: str) -> Dict[str, Any]:
     }
 
 
-def lease_file_bytes(token: str, target_os: str, fidelity: str, written_at: int) -> bytes:
+def lease_file_bytes(
+    token: str, target_os: str, fidelity: str, written_at: int, scene_cache_dir: Optional[str] = None
+) -> bytes:
     """SPEC-LEASE § 8.2. Byte for byte what the TypeScript launcher writes for the same inputs."""
     body = {
         "v": 1,
@@ -428,10 +431,11 @@ def lease_file_bytes(token: str, target_os: str, fidelity: str, written_at: int)
         "token": token,
         "os": target_os,
         "fidelity": fidelity,
-        "paths": {"identity_bundle": None, "font_metrics": None, "scene_cache_dir": None, "gpu_bundle": None},
+        "paths": {"identity_bundle": None, "font_metrics": None, "scene_cache_dir": scene_cache_dir, "gpu_bundle": None},
         "written_at": written_at,
     }
-    return json.dumps(body, separators=(",", ":")).encode()
+    # Unescaped, as JSON.stringify writes it: a cache directory can hold a non-ASCII user name.
+    return json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
 
 
 _skew_warned = False
@@ -502,6 +506,8 @@ class Lease:
         self.account_id = 0
         # The remote-rendering file, while the lease grants remote rendering.
         self.render_path: Optional[Path] = None
+        # Where the scene cache for this browser build and OS lives, while the lease grants remote rendering.
+        self.scene_cache_dir: Optional[str] = None
         # Run in place of a plain release when the browser closes.
         self.on_close: Optional[Callable[["Lease"], None]] = None
         # Run when the process exits with the browser never closed, before the release.
@@ -620,14 +626,21 @@ class Lease:
         if abs(skew) > SKEW_REFUSE_S:
             self._post_release("error")
             raise ProClockSkew(skew)
+        gpu = self.grants.get("gpu")
+        self.scene_cache_dir = (
+            str(scene_cache.directory(self.build.version, self.build.build_hash, self.target_os)) if gpu else None
+        )
         self._write(lease["token"])
-        self._write_render(self.grants.get("gpu"))
+        self._write_render(gpu)
 
     def _write(self, token: str) -> None:
         with self._write_lock:
             if self._released:
                 return
-            write_private(self.path, lease_file_bytes(token, self.target_os, self._fidelity, int(time.time())))
+            write_private(
+                self.path,
+                lease_file_bytes(token, self.target_os, self._fidelity, int(time.time()), self.scene_cache_dir),
+            )
 
     def _write_render(self, gpu: Optional[Dict[str, Any]]) -> None:
         """Write the remote-rendering file verbatim, as the browser reads it, when `gpu` carries one."""
