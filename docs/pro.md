@@ -512,6 +512,20 @@ await browser.close();
 `.pro.leaseId` (`.pro.lease_id` in Python) is the lease's id. `remaining` is
 the solves left when the lease was minted.
 
+## The scene cache
+
+A lease that grants remote rendering also keeps a scene cache on this machine:
+one SQLite file per browser build and OS, under
+`<user cache dir>/camoufox/pro/scene-cache/`. It can reach 20 GiB. The launcher
+downloads it in the background and checks for a new one about once a day
+(`CAMOUFOX_PRO_SCENE_CACHE_UPDATE_S`, in seconds). A download resumes after a
+dropped connection, and the file is checked against its SHA-256 before it is
+used. Files for another browser build or OS are deleted at launch.
+
+The browser reads the file once per process, so a new file applies from the next
+launch, and the first launch runs without one. Nothing here can fail a launch: a
+failed download is logged, and rendering carries on through the render gateway.
+
 ## When a launch fails
 
 Every error below is a `ProError`, importable from `camoufox.exceptions` in

@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 # Needs the pro extra (pip install "camoufox[pro]"), which CI installs.
-from camoufox import Managed, ProxyNetwork, ProxyProvider, ProxyType, pro, pro_profile, pro_state, utils
+from camoufox import Managed, ProxyNetwork, ProxyProvider, ProxyType, pro, pro_profile, pro_state, scene_cache, utils
 from camoufox.exceptions import GpuUnavailable, ProfileMismatch, StatePoolSealed
 from camoufox.gpudisplay import GpuDisplay
 from camoufox.host_rendering import has_canvas_placeholder
@@ -974,6 +974,30 @@ def test_the_browser_is_pointed_at_the_render_document(cloud, launch):
     # The farm draws on the identity's OS: no canvas cover, and contexts are not held to this host.
     assert not has_canvas_placeholder(opts["firefox_user_prefs"])
     assert utils.host_identity(opts, None) is None
+
+
+def test_the_scene_cache_is_named_only_when_a_checked_file_is_there(cloud, launch, monkeypatch):
+    cloud.sections = {"gpu": GPU}
+    # No gateway behind render.example in this suite: the update only logs.
+    monkeypatch.setattr(scene_cache, "update", lambda *a: None)
+    opts = launch()
+    assert scene_cache.PREF not in opts["firefox_user_prefs"]
+    written = json.loads(Path(opts["env"][pro.LEASE_FILE_ENV]).read_text())
+    folder = Path(written["paths"]["scene_cache_dir"])
+    assert folder.is_dir() and folder == scene_cache.directory(BUILD.version, BUILD.build_hash, "windows")
+
+    data = scene_cache.SQLITE_MAGIC + b"x" * 100
+    sha = "e" * 64
+    (folder / f"{sha}.sqlite").write_bytes(data)
+    (folder / scene_cache.STATE).write_text(json.dumps({"sha256": sha, "bytes": len(data), "checked_at": 1}))
+    opts = launch()
+    assert opts["firefox_user_prefs"][scene_cache.PREF] == str(folder / f"{sha}.sqlite")
+
+
+def test_a_lease_without_a_gpu_leaves_the_scene_cache_alone(cloud, launch):
+    opts = launch(farm_gpu=False)
+    assert scene_cache.PREF not in opts["firefox_user_prefs"]
+    assert json.loads(Path(opts["env"][pro.LEASE_FILE_ENV]).read_text())["paths"]["scene_cache_dir"] is None
 
 
 def test_the_render_farm_is_reached_directly_not_through_the_pages_proxy(cloud, launch):

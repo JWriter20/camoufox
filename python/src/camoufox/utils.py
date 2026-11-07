@@ -28,7 +28,7 @@ from .exceptions import (
     UnknownIPLocation,
 )
 from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
-from . import coherence, pro, render_node as render_nodes
+from . import coherence, pro, render_node as render_nodes, scene_cache
 from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
 from .ip import Proxy, proxy_auth_env, proxy_auth_init_script, public_ip, public_ipv6, socks5_auth, valid_ipv4, valid_ipv6
@@ -2016,6 +2016,10 @@ def launch_options(
             pro_env[pro.RENDER_FILE_ENV] = str(lease.render_path)
             firefox_user_prefs.update(grants["gpu"]["prefs"])
             _user_pref_keys.update(grants["gpu"]["prefs"])
+            scene_file = scene_cache.attach(lease)
+            if scene_file is not None:
+                firefox_user_prefs[scene_cache.PREF] = str(scene_file)
+                _user_pref_keys.add(scene_cache.PREF)
             # The farm draws the canvas on the identity's own OS, so there is nothing to cover.
             if canvas_noise is None:
                 canvas_noise = False

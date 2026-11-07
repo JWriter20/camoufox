@@ -120,6 +120,7 @@ import {
 	ValueError,
 } from "./pycompat.js";
 import * as renderNodes from "./render_node.js";
+import * as sceneCache from "./scene_cache.js";
 import { VirtualDisplay } from "./virtdisplay.js";
 import {
 	FallbackWarning,
@@ -2693,6 +2694,11 @@ async function buildLaunchOptions(
 			proEnv[pro.RENDER_FILE_ENV] = held.lease.renderPath as string;
 			Object.assign(firefox_user_prefs, grants.gpu.prefs);
 			for (const key of Object.keys(grants.gpu.prefs)) userPrefKeys.add(key);
+			const sceneFile = sceneCache.attach(held.lease);
+			if (sceneFile !== null) {
+				firefox_user_prefs[sceneCache.PREF] = sceneFile;
+				userPrefKeys.add(sceneCache.PREF);
+			}
 			// The farm draws the canvas on the identity's own OS, so there is nothing to cover.
 			canvas_noise ??= false;
 			// The farm is reached directly: the page's proxy is for the page, and one that cannot reach
