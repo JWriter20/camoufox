@@ -17,6 +17,7 @@ import {
 	firefox,
 } from "playwright-core";
 import * as cpuAffinity from "./cpu_affinity.js";
+import { attachDriverDefaults } from "./driver_defaults.js";
 import { generateContextFingerprint } from "./fingerprints.js";
 import * as humanizeCustom from "./humanize-custom.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
@@ -25,7 +26,6 @@ import { RELAY_ENV } from "./render_node.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
-	attachDriverDefaults,
 	attachNoViewportDefault,
 	attachPersistentGeometry,
 	attachSocks5Auth,

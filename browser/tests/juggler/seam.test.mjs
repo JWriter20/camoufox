@@ -277,3 +277,19 @@ test('the trace records the plan, what was dispatched when, and the stream posit
     assert.deepEqual(record.dispatched.map(d => d.tActual), record.plan.map(step => step.t));
   }
 });
+
+test('a trace that cannot be written warns once and never fails the input', async () => {
+  let now = 0;
+  let writes = 0;
+  const s = seam({'humanize:mouse': 'cursory', 'humanize:seed': '11'}, {
+    trace: async () => { writes++; throw new Error('disk full'); },
+    clock: () => now,
+    sleep: async ms => { now += ms; },
+  });
+  for (const [x, y] of TARGETS.slice(0, 2)) {
+    const planned = s.plan('mouse', 'planMove', page, {x, y});
+    assert.equal(await s.play(planned, async () => true, {command: 'Page.dispatchMouseEvent', page: 'p1'}), 'ok');
+  }
+  assert.equal(writes, 2);
+  assert.deepEqual(s.warnings, ['humanize_trace: could not write the trace: disk full']);
+});

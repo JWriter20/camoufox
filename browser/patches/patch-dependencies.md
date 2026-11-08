@@ -134,11 +134,15 @@ context:
   ASSOCIATE relay on the tab's proxy, and makes a refused destination fail at
   once instead of being dropped silently.
 - `webrtc-ip-spoofing.patch` rewrites candidate, SDP and `getStats()` addresses
-  to `webrtc:ipv4`/`ipv6` and fabricates a srflx when ICE found none. The new
-  patch keeps a srflx or relay address gathered through the proxy as it is,
-  because a page's own STUN server already saw that address. The fabricated
-  srflx is still made for an HTTP proxy and for a SOCKS5 proxy that refuses
-  UDP.
+  to `webrtc:ipv4`/`ipv6`; it makes up host candidates when none reached the
+  page, never a srflx. It also decides whether a page is behind a proxy
+  (`ShouldForceProxy`): Juggler records each proxy it sets, which decides for a
+  document with no HTTP channel, so a direct launch stays direct and a proxied
+  one never gathers around its proxy. The new patch keeps a srflx or
+  relay address gathered through the proxy as it is, because a page's own STUN
+  server already saw that address. Behind an HTTP proxy, or a SOCKS5 proxy that
+  refuses UDP, no srflx surfaces: the page reads a machine whose UDP is
+  blocked, not one that made a STUN answer up.
 
 ICE sockets live in the socket process, and proxies are resolved in the
 parent. The patch adds an optional `LoadInfoArgs` to the existing

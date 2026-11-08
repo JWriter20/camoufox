@@ -14,7 +14,8 @@ and WebGL 2 "AllowWebgl2:false". Stock Firefox 158 headless does the same, but
 Camoufox headless claims a desktop browser, and a desktop Firefox without WebGL
 is rare. The same empty gfxInfo also drops H264 from WebRTC's codec list.
 headless-software-webgl.patch probes through EGL with Mesa's software GL when
-headless and keeps headless WebGL on Mesa's software EGL device.
+headless and there is no display, and keeps that WebGL on Mesa's software EGL
+device. A headless launch that still has a display uses it, as stock does.
 
 The check: one bare launch -headless (no DISPLAY, no WAYLAND_DISPLAY) and one
 bare launch headed on a private Xvfb, same binary. Headless must get a WebGL 1
@@ -138,8 +139,8 @@ def main() -> int:
         headed = report(binary, display)
 
     if not isinstance(headed.get("webgl"), dict) or "error" in headed["webgl"]:
-        print(f"NOTE: no WebGL headed on Xvfb either, nothing to compare: {headed}")
-        return 0
+        print(f"FAIL: no WebGL headed on Xvfb, nothing to compare: {headed}")
+        return 1
 
     failures = []
     for k in ("webgl", "webgl2"):

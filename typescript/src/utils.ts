@@ -62,7 +62,6 @@ import {
 	type Gpu,
 	hasCanvasPlaceholder,
 	hostGpu,
-	rendersOnHardware,
 	setWebgpu,
 } from "./host_rendering.js";
 import {
@@ -716,6 +715,9 @@ export function validateConfig(
 	for (const [key, value] of Object.entries(configMap)) {
 		const entry = properties[key];
 		if (!entry) {
+			if (key === "voices:speechd") {
+				LeakWarning.warn("voices_unread");
+			}
 			utilsDeps.print(`Skipping unknown patch ${key} : ${pyStr(value)}`);
 			continue; // Property not supported by this browser version; skip silently
 		}
@@ -1720,103 +1722,13 @@ export function takeBackContextGeometry(browser: any): void {
 	delete browser[CAMOUFOX_NEXT_CONTEXT];
 }
 
-const CAMOUFOX_DRIVER_DEFAULTS = Symbol.for("camoufox.driverDefaults");
-
 /**
- * Whether a fill() target is a text field a person types into, and whether it
- * has focus. Runs in the page, so it is a function (a string would be an
- * expression to Playwright's JS client).
+ * page.setViewportSize() on a page of a Camoufox launch: checkViewportSize()
+ * against what the page's context claims (attachDriverDefaults in
+ * driver_defaults.ts calls it where the client sends the request).
  */
-const FILL_TARGET = (e: any) => {
-	const active = e.ownerDocument.activeElement;
-	const type =
-		e.localName === "input"
-			? (e.getAttribute("type") || "text").toLowerCase()
-			: null;
-	const typed =
-		e.localName === "textarea" ||
-		e.isContentEditable ||
-		["text", "search", "email", "url", "tel", "password", "number"].includes(
-			type,
-		);
-	return {
-		typed,
-		focused: active === e || (e.isContentEditable && e.contains(active)),
-	};
-};
-
-/**
- * Driver calls that reach the page as a person's actions would
- * (python/src/camoufox/driver_defaults.py). Applies to every page under
- * `target` (a Browser or BrowserContext from a Camoufox launch); the defaults
- * are filled in where the client sends the request, so page, frame, element
- * and locator calls all get them, and other browsers in the process are left
- * alone.
- *
- * Screenshots leave the page alone. Unless told caret: "initial", Playwright
- * hides the caret by setting `caret-color: transparent !important` in the
- * style attribute of every input, textarea and contenteditable element, from
- * its utility world: the page sees each change, reads the transparent caret
- * while the capture runs, and is left with `style` attributes it did not have.
- * Firefox's capture never paints the caret, so screenshots default to
- * caret: "initial"; an explicit caret is kept.
- *
- * fill() clicks the field first. Playwright focuses it by script, so the page
- * gets focus with no pointer or mouse event before it, where a person clicks
- * the field. A text field without focus is clicked (Playwright's click,
- * through the OS-path dispatch) before the fill; a focused one is typed into
- * as it is, and fields fill() sets without typing are left alone.
- */
-export function attachDriverDefaults<T>(target: T): T {
-	const owner = target as any;
-	owner[CAMOUFOX_DRIVER_DEFAULTS] = true;
-	const connection = owner._connection;
-	if (!connection || connection[CAMOUFOX_DRIVER_DEFAULTS]) return target;
-	connection[CAMOUFOX_DRIVER_DEFAULTS] = true;
-	const send = connection.sendMessageToServer;
-	connection.sendMessageToServer = async function (
-		object: any,
-		method: string,
-		params: Record<string, any>,
-		...rest: any[]
-	) {
-		if (launchedByCamoufox(object)) {
-			if (method === "setViewportSize")
-				checkViewportSize(
-					object._browserContext?.[CAMOUFOX_GEOMETRY],
-					params?.viewportSize,
-				);
-			if (method === "screenshot" && params?.caret === undefined)
-				params = { ...params, caret: "initial" };
-			if (method === "fill") await clickToFocus(object, params);
-		}
-		return send.call(this, object, method, params, ...rest);
-	};
-	return target;
-}
-
-async function clickToFocus(object: any, params: Record<string, any>) {
-	// A Frame fills by selector (page, frame and locator fill); an ElementHandle fills itself.
-	let field = object;
-	if (
-		typeof params?.selector === "string" &&
-		typeof object.locator === "function"
-	) {
-		field = object.locator(params.selector);
-		if (!params.strict) field = field.first();
-	}
-	if (typeof field.evaluate !== "function" || typeof field.click !== "function")
-		return;
-	const info = await field.evaluate(FILL_TARGET);
-	if (info?.typed && !info.focused)
-		await field.click({ timeout: params?.timeout, force: params?.force });
-}
-
-/** ElementHandle -> Frame -> Page -> BrowserContext -> Browser. */
-function launchedByCamoufox(object: any): boolean {
-	for (let owner = object; owner; owner = owner._parent)
-		if (owner[CAMOUFOX_DRIVER_DEFAULTS]) return true;
-	return false;
+export function checkPageViewportSize(page: any, size: any): void {
+	checkViewportSize(page?._browserContext?.[CAMOUFOX_GEOMETRY], size);
 }
 
 /**
@@ -1843,10 +1755,10 @@ export type HostIdentity = [TargetOS | null, Gpu | null];
  * Whether the canvas is covered, and the host GPU the identity claims.
  *
  * The canvas renders on the host, so the identity claims the host's GPU when it
- * can: on the host's OS, with no GPU named, on a hardware GPU fpgen has
- * recorded there. A software renderer matches any GPU, and with WebGL off no GPU
- * is claimed. Any other identity contradicts the pixels, so the canvas is
- * covered unless the caller chose canvas_noise: false.
+ * can: on the host's OS, with no GPU named, a GPU or software renderer fpgen has
+ * recorded there. With WebGL off no GPU is claimed. Any other identity
+ * contradicts the pixels, so the canvas is covered unless the caller chose
+ * canvas_noise: false.
  */
 export async function planRendering(
 	targetOs: string | null,
@@ -1858,7 +1770,7 @@ export async function planRendering(
 	if (canvasNoise) return [true, null];
 	if (targetOs && targetOs === utilsDeps.hostOsKey() && !namedGpu) {
 		const host = webglDisabled ? null : await probe();
-		if (!rendersOnHardware(host)) return [false, null];
+		if (host === null) return [false, null];
 		const recorded = await utilsDeps.firefoxGpus(targetOs);
 		if (
 			recorded.some(
@@ -2874,6 +2786,14 @@ async function buildLaunchOptions(
 	} else {
 		setInto(firefox_user_prefs, "ui.useOverlayScrollbars", 1);
 	}
+
+	// Stock doubles a wheel's lines on Windows and Linux and never on macOS, and
+	// a page reads the result in deltaY (docs/input-dispatch.md).
+	setInto(
+		firefox_user_prefs,
+		"mousewheel.system_scroll_override.enabled",
+		targetOs !== "mac",
+	);
 
 	// A Windows identity on another host: answers that come from the host
 	// build's platform code are set to what stock Windows Firefox gives.

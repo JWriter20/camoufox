@@ -1,4 +1,8 @@
+from pathlib import Path
+
 import pytest
+
+SETTINGS = Path(__file__).resolve().parents[2] / 'browser' / 'settings'
 
 
 @pytest.fixture(autouse=True)
@@ -20,3 +24,16 @@ def no_render_node(monkeypatch, tmp_path):
 
     monkeypatch.delenv(render_node.CONFIG_ENV, raising=False)
     monkeypatch.setattr(render_node, 'DEFAULT_PATH', tmp_path / 'render-node.json')
+
+
+@pytest.fixture(autouse=True)
+def properties_of_this_checkout(monkeypatch):
+    """launch_options reads properties.json from the installed build, and CI
+    installs the last published one. This suite tests the checkout, whose
+    launcher may draw a key that build predates, so it reads the checkout's."""
+    from camoufox import utils
+
+    load = utils._load_properties
+    monkeypatch.setattr(
+        utils, '_load_properties', lambda path=None: load(path or SETTINGS / 'camoufox-bin')
+    )
