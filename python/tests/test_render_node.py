@@ -190,8 +190,10 @@ def test_the_farm_is_reached_directly_whatever_proxy_the_browser_uses(
     # in the environment) would hand the farm's token to the proxy, or fail and draw nothing.
     dead = "http://127.0.0.1:9"
     monkeypatch.setattr(urllib.request, "getproxies", lambda: {"http": dead, "https": dead, "all": dead})
+    # geoip=False: with a proxy set, the launcher would otherwise look the proxy's IP up
+    # through it, and this one is dead. The test is about the farm, not GeoIP.
     opts, _ = node_launch(
-        pro_build, monkeypatch, render_node=coordinator.config, proxy={"server": dead}
+        pro_build, monkeypatch, render_node=coordinator.config, proxy={"server": dead}, geoip=False
     )
     assert len(coordinator.calls("POST", "/assignments")) == 1
     assert render_node.RELAY_ENV in opts["env"]
