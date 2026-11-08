@@ -35,13 +35,22 @@ rules:
       fingerprint-rotation noise in the colour count. Second, it costs
       throughput: past 30-40 concurrent browsers the framebuffer becomes the
       bottleneck on a machine that handles 70-80 at 1x1. The root's size is
-      not itself a fingerprint -- screen.* comes from the generated fingerprint,
-      applied per context in the browser -- but a window lying outside the root
-      is observable as occluded and can leave media-device enumeration pending.
-      Firefox also fits windows into the X screen. The 1x1 default therefore
-      depends on virtual-display-off-root-not-occluded.patch and
-      virtual-display-claimed-screen.patch; virtual-display-window-visible,
-      popup-window-size and popup-covered-click guard that combination.
+      not a fingerprint -- screen.* comes from the generated fingerprint,
+      applied per context in the browser -- but a window lying outside the
+      root is observable: X reports it fully obscured, and an occluded
+      window's navigator.mediaDevices.enumerateDevices() never settles
+      (measured 2026-11-03, window at the identity's 319,76 on the 1x1 root),
+      and with no window manager it is never focused either (X focus follows
+      the pointer, which a 1x1 root pins at 0,0). Firefox also sizes and
+      places windows inside the X screen: on 1x1 a 400x300 window.open came
+      up 120x54 at 0,0. So 1x1 holds only together with two patches:
+      virtual-display-off-root-not-occluded.patch (no occlusion for a window
+      outside the root; and with no window manager a new top-level window is
+      focused at its first VisibilityNotify, as any desktop does)
+      and virtual-display-claimed-screen.patch (an X screen smaller than the
+      claimed one reports the claimed one). Guards: virtual-display-window-visible,
+      popup-window-size, popup-covered-click,
+      startup-size-hold-yields, all at this default.
     expect:
       module: camoufox.virtdisplay
       attribute: DEFAULT_SCREEN
