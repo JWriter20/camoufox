@@ -85,8 +85,10 @@ function geckoTraceSink() {
   let pending = Promise.resolve();
   return record => {
     const line = JSON.stringify(record) + '\n';
-    pending = pending.then(() => IOUtils.writeUTF8(path, line, {mode: 'appendOrCreate'}));
-    return pending;
+    // Lines stay in order, and one failed write does not fail the next.
+    const written = pending.then(() => IOUtils.writeUTF8(path, line, {mode: 'appendOrCreate'}));
+    pending = written.catch(() => {});
+    return written;
   };
 }
 
@@ -116,6 +118,9 @@ export class HumanizeSeam {
     this._streams = new Map();
     const seedText = config.getString('humanize:seed');
     this._seed = seedText ? parseSeed(seedText) : randomSeed();
+    // A separate stream for the delays between a person's input events, so
+    // click/hover timing does not shift a cursor or keyboard plan.
+    this._timing = channelStream(this._seed, 'timing');
   }
 
   _warnOnce(code, detail) {
@@ -123,6 +128,11 @@ export class HumanizeSeam {
       return;
     this._warned.add(code);
     this._warn(`${code}: ${detail}`);
+  }
+
+  /** The seeded stream for inter-event delays (click hold, hover dwell). */
+  timing() {
+    return this._timing;
   }
 
   get manifest() {
@@ -294,7 +304,9 @@ export class HumanizeSeam {
     });
     if (outcome === 'fast_forward')
       this._warnOnce('humanize_fast_forward', `${planned.engine}.${planned.method} ran past ${planned.budgetMs * kDeadlineFactor}ms`);
-    await this._trace?.({
+    // The input has gone out by now, so a trace that cannot be written is
+    // reported, not turned into a failed command.
+    await Promise.resolve(this._trace?.({
       ts: Date.now(),
       page,
       channel: planned.channel,
@@ -305,7 +317,7 @@ export class HumanizeSeam {
       plan: planned.plan.steps,
       dispatched,
       outcome: outcome === 'ok' ? planned.outcome : outcome,
-    });
+    })).catch(e => this._warnOnce('humanize_trace', `could not write the trace: ${e.message}`));
     return outcome;
   }
 }

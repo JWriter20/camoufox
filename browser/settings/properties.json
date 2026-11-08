@@ -96,6 +96,7 @@
   { "property": "certificatePaths", "type": "array" },
   { "property": "certificates", "type": "array" },
   { "property": "debug", "type": "bool" },
+  { "property": "webrtc:proxied", "type": "bool", "removed": "159.0-beta.35" },
   { "property": "webgl2:contextAttributes", "type": "dict", "removed": "130.0.1-beta.12" },
   { "property": "webgl2:parameters", "type": "dict", "removed": "130.0.1-beta.12" },
   { "property": "webgl2:parameters:blockIfNotDefined", "type": "bool", "removed": "130.0.1-beta.12" },

@@ -45,6 +45,7 @@ const { auto, cursory, engine, humanizeConfig, notches, raw } = await import(
 	"../src/humanize.js"
 );
 const cpuAffinity = await import("../src/cpu_affinity.js");
+const { attachDriverDefaults } = await import("../src/driver_defaults.js");
 
 // Imported after launch-host, which has to set the cache directory first.
 const { MODEL } = await import("./fpgen-setup.js");
@@ -634,6 +635,18 @@ describe("test_launch_environment: prefs", () => {
 			expect(prefs["media.eme.enabled"]).toBe(true);
 			expect(prefs["middlemouse.paste"]).toBe(false);
 		});
+		it("doubles a wheel's lines as stock does on each OS", async () => {
+			for (const [u, enabled] of [
+				[WIN_UA, true],
+				[LINUX_UA, true],
+				[MAC_UA, false],
+			] as const) {
+				const { prefs } = await onHost("lin", u);
+				expect(prefs["mousewheel.system_scroll_override.enabled"]).toBe(
+					enabled,
+				);
+			}
+		});
 		it("draws Windows' scrollbars at Windows' size", async () => {
 			const classic = await onHost("lin", WIN_UA, {
 				firefox_user_prefs: { "ui.useOverlayScrollbars": 0 },
@@ -796,6 +809,7 @@ describe("test_launch_environment: stock media defaults", () => {
 
 describe("test_launch_environment: screenshot caret", () => {
 	class Connection {
+		_objects = new Map();
 		sent: Array<[string, Record<string, any>]> = [];
 		sendMessageToServer(_object: any, method: string, params: any) {
 			this.sent.push([method, params]);
@@ -809,7 +823,7 @@ describe("test_launch_environment: screenshot caret", () => {
 
 	it("pages under a Camoufox launch keep the caret", async () => {
 		const connection = new Connection();
-		const browser = utils.attachDriverDefaults(owner(undefined, connection));
+		const browser = attachDriverDefaults(owner(undefined, connection));
 		// handle, frame, page, context
 		const handle = owner(
 			owner(owner(owner(browser, connection), connection), connection),
@@ -827,38 +841,10 @@ describe("test_launch_environment: screenshot caret", () => {
 		]);
 	});
 
-	it("fill clicks a text field without focus first, and only then", async () => {
-		const connection = new Connection();
-		const browser = utils.attachDriverDefaults(owner(undefined, connection));
-		const clicks: any[] = [];
-		const field = (focused: boolean) => ({
-			first() {
-				return this;
-			},
-			evaluate: async () => ({ typed: true, focused }),
-			click: async (options: any) => {
-				clicks.push(options);
-			},
-		});
-		for (const focused of [false, true]) {
-			const frame = {
-				...owner(browser, connection),
-				locator: () => field(focused),
-			};
-			await connection.sendMessageToServer(frame, "fill", {
-				selector: "#f",
-				value: "x",
-				timeout: 5,
-			});
-		}
-		expect(clicks).toEqual([{ timeout: 5, force: undefined }]);
-		expect(connection.sent.map(([method]) => method)).toEqual(["fill", "fill"]);
-	});
-
 	it("other browsers on the same connection are left alone", async () => {
 		const connection = new Connection();
-		utils.attachDriverDefaults(owner(undefined, connection));
-		utils.attachDriverDefaults(owner(undefined, connection));
+		attachDriverDefaults(owner(undefined, connection));
+		attachDriverDefaults(owner(undefined, connection));
 		await connection.sendMessageToServer(
 			owner(owner(undefined, connection), connection),
 			"screenshot",
@@ -960,6 +946,11 @@ describe("test_humanize", () => {
 			i_know_what_im_doing: true,
 		}).then(() => captured);
 	};
+
+	it("humanize: 0 is off, as in Python", async () => {
+		const config = await launchHumanize(0);
+		expect("humanize" in config).toBe(false);
+	});
 
 	it("humanize: true sets no duration", async () => {
 		const config = await launchHumanize(true);

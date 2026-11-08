@@ -480,7 +480,12 @@ the identity claim the host's OS, and does the host render on a GPU?
 | | Identity on the host's OS | Identity on another OS |
 |---|---|---|
 | **GPU rendering** | 🟢 <ins><b>Most stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ No canvas noise: looks like stock Firefox<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ The claimed GPU is the host's, so the pixels agree with it<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Every identity on this machine claims the same GPU, so there is less fingerprint diversity | 🟡 <ins><b>Less stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ Readback is random, so the real OS does not show<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ A GPU is drawn per identity, so identities differ<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Canvas noise: looks like LibreWolf, Tor Browser or Mullvad Browser, which are rarer than stock Firefox |
-| **Software rendering**<br/>(no GPU driver, as on most servers) | 🟢 <ins><b>Stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ No canvas noise: looks like stock Firefox<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ A GPU is drawn per identity, so identities differ<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Looks like a GPU falling back to software rendering, which is rarer than a working GPU | 🟡 <ins><b>Less stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ Readback is random, so the real OS does not show<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ A GPU is drawn per identity, so identities differ<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Canvas noise: looks like LibreWolf, Tor Browser or Mullvad Browser, which are rarer than stock Firefox |
+| **Software rendering**<br/>(no working GPU driver, as on most servers) | 🟡 <ins><b>Less stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ No canvas noise: looks like stock Firefox<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ Claims the software renderer (`llvmpipe` on Linux), so the pixels agree with it<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Reads as a server or a broken driver, and every identity on this machine claims the same renderer | 🟡 <ins><b>Less stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ Readback is random, so the real OS does not show<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ A GPU is drawn per identity, so identities differ<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Canvas noise: looks like LibreWolf, Tor Browser or Mullvad Browser, which are rarer than stock Firefox |
+
+A software-rendering host never claims a GPU. Firefox reads the name and the
+pixels from one GL context, so a GPU name over software pixels never happens on
+a real machine: with a broken GPU driver, Firefox reports `llvmpipe` too. To
+report a GPU, render on one with `headless="virtual-gpu"`.
 
 That is the default. These options override it:
 
@@ -501,7 +506,7 @@ claims the host's OS. Details are in
 | Playwright's `evaluate`, selectors and init scripts run in an isolated world the page cannot see | Juggler |
 | `navigator.webdriver` is `false` | `playwright/1-leak-fixes` patch |
 | `select_option`, `fill` on date and colour inputs, and `set_input_files` fire trusted events | `trusted-automation-events` patch |
-| `fill` and `keyboard.insert_text` type the text, key by key at a person's pace | Juggler |
+| `fill` and `keyboard.insert_text` paste the text as a person does: the paste shortcut and Firefox's own paste, without the system clipboard | Juggler |
 | Screenshots leave the page's DOM alone (no caret-hiding style writes) | Launcher |
 | `fill` clicks a text field without focus first, as a person does | Launcher |
 | Mouse moves coalesce per frame as a real mouse's do, spaced as a 125 Hz mouse's | Juggler, `input-coalescing-parity` patch |
@@ -670,7 +675,7 @@ const browser = await Camoufox({ humanize: {
 
 - `original()` runs Playwright's own behaviour for the call. Calling it is how a function declines.
 - `rng()` returns a float in [0, 1) from the channel's seeded stream. It is the same stream the browser's engines would draw from for that seed, number for number, in Python and TypeScript alike.
-- `play(steps)` dispatches steps at their times, in ms from the start of the call: `("move", x, y, t)`, `("down" | "up", button, t)`, `("wheel", dx, dy, t)`, `("key", key, "down" | "up", t)`, `("text", text, t)`. It waits until each step is due on a monotonic clock rather than sleeping between steps, so a slow round trip delays one step and never adds up. Bad steps raise `ValueError` before anything is sent.
+- `play(steps)` dispatches steps at their times, in ms from the start of the call: `("move", x, y, t)`, `("down" | "up", button, t)`, `("wheel", dx, dy, t)`, `("key", key, "down" | "up", t)`, `("text", text, t)` (pasted, as `keyboard.insert_text` is). It waits until each step is due on a monotonic clock rather than sleeping between steps, so a slow round trip delays one step and never adds up. Bad steps raise `ValueError` before anything is sent.
 - Playwright's actions run inside its own server, so the wrappers act first: they scroll the element into view and move to the click point, and Playwright's own move then has no distance left. A `fill` selects the field's text first, so your keys replace it.
 - With the sync API the functions are plain functions; with the async API they may be `async`. Exceptions reach the caller unchanged.
 - A custom mouse leaves the moves the browser makes itself (the cursor move before a scroll engine wheels) to the build's own mouse engine, so they are paths, not jumps.
