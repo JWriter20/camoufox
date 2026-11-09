@@ -105,6 +105,13 @@ def resolve(option: RenderNodeOption) -> Optional[Dict[str, Any]]:
     return _validate(data, str(path))
 
 
+def from_grant(section: Any) -> Dict[str, Any]:
+    """The render node a lease grants (its gpu section in node mode), checked like a local one."""
+    if not isinstance(section, dict):
+        raise RenderNodeError("the lease's gpu grant names no render node")
+    return _validate(dict(section), "the lease's gpu grant")
+
+
 def _validate(data: Dict[str, Any], where: str) -> Dict[str, Any]:
     unknown = set(data) - {"coordinator", "token", "gpu"}
     if unknown:

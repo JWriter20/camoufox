@@ -377,3 +377,24 @@ def test_a_render_set_no_node_serves_is_named(api, coordinator, pro_build, signe
     coordinator.scripted.append((409, {}, ("render set not served: " + SET_ID).encode()))
     with pytest.raises(render_node.RenderNodeError, match="render set 555555555555"):
         node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+
+
+def test_a_lease_that_grants_a_node_opens_it_like_a_named_one(api, coordinator, pro_build, signed_in, monkeypatch):
+    api.grants = {"gpu": {"mode": "node", "identity_id": "i" * 64, "renderer": GPU, "node": coordinator.config}}
+    opts, config = node_launch(pro_build, monkeypatch)
+
+    (acquire,) = coordinator.calls("POST", "/assignments")
+    assert acquire["auth"] == f"Bearer {TOKEN}" and acquire["body"]["gpu"] == GPU
+    assert render_node.RELAY_ENV in opts["env"] and pro.RENDER_FILE_ENV not in opts["env"]
+    assert config["navigator.platform"] == "Win32"
+    assert not utils.has_canvas_placeholder(opts["firefox_user_prefs"])
+    lease = held_lease(opts)
+    assert lease.render_path is None
+    lease.release()
+    coordinator.wait_for(lambda: coordinator.calls("DELETE", r"/assignments/a+"))
+
+
+def test_a_lease_s_node_grant_is_checked(api, coordinator, pro_build, signed_in, monkeypatch):
+    api.grants = {"gpu": {"mode": "node", "renderer": GPU, "node": {**coordinator.config, "coordinator": "https://x"}}}
+    with pytest.raises(render_node.RenderNodeError, match="lease's gpu grant"):
+        node_launch(pro_build, monkeypatch)
