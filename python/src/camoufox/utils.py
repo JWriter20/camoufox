@@ -2014,7 +2014,11 @@ def launch_options(
         # A profile's bundle leaves timezone and locale to the exit it runs behind.
         if grants.get("profile") and geoip is None:
             geoip = True
-        if grants.get("gpu"):
+        if grants.get("gpu") and grants["gpu"].get("mode") == "node":
+            # The lease placed this identity on a render node: it is opened below like a named one.
+            if relay is None:
+                relay = render_nodes.from_grant(grants["gpu"].get("node"))
+        elif grants.get("gpu"):
             pro_env[pro.RENDER_FILE_ENV] = str(lease.render_path)
             firefox_user_prefs.update(grants["gpu"]["prefs"])
             _user_pref_keys.update(grants["gpu"]["prefs"])
