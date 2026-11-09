@@ -2037,7 +2037,9 @@ def launch_options(
 
     if relay is not None:
         directory = _HELD.lease.path.parent if leased else Path(env[pro.LEASE_FILE_ENV]).parent
-        _HELD.node = render_nodes.Session(relay, _firefox_version(Path(browser_binary)), directory)
+        _HELD.node = render_nodes.Session(
+            relay, _firefox_version(Path(browser_binary)), directory, render_nodes.render_set(browser_binary)
+        )
         if leased:
             _HELD.lease.on_end.append(_HELD.node.release)
         elif _HELD.proxy is not None:
