@@ -340,3 +340,40 @@ def test_contexts_of_a_node_browser_are_windows_and_unmasked():
         utils.context_identity(browser, "linux", None)
     fp = generate_context_fingerprint(os="windows", ff_version="156", webgl=False)
     assert not [k for k in fp["config"] if k.startswith(("webGl:", "webGl2:"))]
+
+
+SET_ID = "5" * 64
+
+
+def test_a_pinned_build_asks_for_its_render_set_and_names_it_to_the_relay(
+    api, coordinator, pro_build, signed_in, monkeypatch
+):
+    (pro_build.parent / render_node.RENDER_SET_FILE).write_text(json.dumps({"set_id": SET_ID, "firefox": "156.0.1"}))
+    opts, _ = node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+
+    (acquire,) = coordinator.calls("POST", "/assignments")
+    assert acquire["body"]["render_set"] == SET_ID
+    assert json.loads(Path(opts["env"][render_node.RELAY_ENV]).read_text())["render_set"] == SET_ID
+
+
+def test_an_unpinned_build_names_no_render_set(api, coordinator, pro_build, signed_in, monkeypatch):
+    opts, _ = node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+
+    (acquire,) = coordinator.calls("POST", "/assignments")
+    assert "render_set" not in acquire["body"]
+    assert "render_set" not in json.loads(Path(opts["env"][render_node.RELAY_ENV]).read_text())
+
+
+@pytest.mark.parametrize("content", ["{", json.dumps({}), json.dumps({"set_id": "ABC"}), json.dumps([SET_ID])])
+def test_a_broken_render_set_file_is_refused(api, coordinator, pro_build, signed_in, monkeypatch, content):
+    (pro_build.parent / render_node.RENDER_SET_FILE).write_text(content)
+    with pytest.raises(render_node.RenderNodeError, match="render set|set_id"):
+        node_launch(pro_build, monkeypatch, render_node=coordinator.config)
+    assert not coordinator.calls("POST", "/assignments")
+
+
+def test_a_render_set_no_node_serves_is_named(api, coordinator, pro_build, signed_in, monkeypatch):
+    (pro_build.parent / render_node.RENDER_SET_FILE).write_text(json.dumps({"set_id": SET_ID}))
+    coordinator.scripted.append((409, {}, ("render set not served: " + SET_ID).encode()))
+    with pytest.raises(render_node.RenderNodeError, match="render set 555555555555"):
+        node_launch(pro_build, monkeypatch, render_node=coordinator.config)

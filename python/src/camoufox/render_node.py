@@ -20,11 +20,17 @@ without it the coordinator picks any free GPU.
 Each browser holds its own assignment on the coordinator, renewed while the
 browser runs and released when its Pro lease ends. WebGPU and text go to the
 node too when its renderer serves those routes (the assignment's angle_routes).
+
+A build that bakes a render set (render-set.json beside the executable: the
+renderpack's Windows fonts and DLLs the build carries, named by its set_id) asks
+for a renderer serving exactly that set, and its relay client names the set on
+every hello; a node drawing from other fonts would end the browser.
 """
 
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -47,6 +53,9 @@ TEXT_ENV = "HOLO_DWRITE_NODE_SOCK"
 # sockaddr_un.sun_path holds 108 bytes on Linux, its terminating NUL included.
 SOCKET_PATH_MAX = 107
 DEFAULT_PATH = Path.home() / ".config" / "camoufox" / "render-node.json"
+# Beside a pinned build's executable (and libxul): the render set it bakes.
+RENDER_SET_FILE = "render-set.json"
+_SET_ID = re.compile(r"[0-9a-f]{64}")
 ROUTE = "/angle-relay"
 # The coordinator's assignment lease is one minute; renewing at a third of it
 # survives one lost renewal.
@@ -115,6 +124,21 @@ def _validate(data: Dict[str, Any], where: str) -> Dict[str, Any]:
     return {"coordinator": coordinator, "token": data["token"], "gpu": gpu}
 
 
+def render_set(executable: Union[str, Path]) -> Optional[str]:
+    """The set_id of the render set the build at `executable` bakes, or None for an unpinned build."""
+    path = Path(executable).parent / RENDER_SET_FILE
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise RenderNodeError(f"Cannot read the build's render set {path}: {error}") from error
+    set_id = data.get("set_id") if isinstance(data, dict) else None
+    if not isinstance(set_id, str) or not _SET_ID.fullmatch(set_id):
+        raise RenderNodeError(f"{path} names no set_id (64 lowercase hex digits).")
+    return set_id
+
+
 _SESSIONS: Dict[str, "Session"] = {}
 
 
@@ -140,10 +164,11 @@ class Session:
 
     grants: Dict[str, Any] = {}
 
-    def __init__(self, config: Dict[str, Any], version: str, directory: Path) -> None:
+    def __init__(self, config: Dict[str, Any], version: str, directory: Path, render_set: Optional[str] = None) -> None:
         self.claimed = False
         self.config = config
         self.version = version
+        self.render_set = render_set
         self.path: Optional[Path] = None
         self.text_socket: Optional[Path] = None
         self.assignment: Dict[str, Any] = {}
@@ -161,6 +186,8 @@ class Session:
             "browser": "firefox",
             "version": version,
         }
+        if render_set:
+            session["render_set"] = render_set
         write_private(self.path, json.dumps(session, separators=(",", ":")).encode())
         if "text" in self.routes:
             # The browser creates it; it only has to be private and short enough to bind.
@@ -207,6 +234,8 @@ class Session:
         }
         if self.config.get("gpu"):
             request["gpu"] = self.config["gpu"]
+        if self.render_set:
+            request["render_set"] = self.render_set
         deadline = time.monotonic() + BUSY_WAIT_S
         while True:
             try:
@@ -222,6 +251,11 @@ class Session:
                         f"No render node serves Firefox {self.version}"
                         + (f" on {self.config['gpu']!r}" if self.config.get("gpu") else "")
                         + ": the farm needs an ANGLE pack for this exact release."
+                    ) from error
+                if error.code == 409 and detail.startswith("render set not served"):
+                    raise RenderNodeError(
+                        f"No render node serves this build's render set {self.render_set[:12]} (Firefox {self.version}):"
+                        " the farm needs that set's node pack."
                     ) from error
                 raise RenderNodeError(f"The coordinator refused a render node: HTTP {error.code} {detail}") from error
             except (OSError, ValueError) as error:
