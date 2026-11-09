@@ -312,8 +312,89 @@ jobs:
           name: CamoufoxBuilds-${{ matrix.target }}-${{ matrix.arch }}
           path: browser/dist/*
 
+  sign-windows:
+    # Authenticode-signs every unsigned .exe and .dll in the Windows packages
+    # with Azure Artifact Signing, so Windows (SmartScreen, Smart App Control,
+    # Defender) sees a known publisher. Azure signs only on a Windows runner.
+    # ci/README.md ("Signing") has the Azure setup and the variables it reads.
+    needs: [plan, build-browser]
+    if: needs.plan.outputs.build_browser == 'true'
+    runs-on: windows-2025
+    # The Azure credential trusts only this environment's OIDC token.
+    environment: release-signing
+    permissions:
+      contents: read
+      id-token: write # Azure login by OIDC; no credential is stored
+    strategy:
+      matrix:
+        arch: [x86_64, i686]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download the build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: CamoufoxBuilds-windows-${{ matrix.arch }}
+          path: pkg
+
+      - name: Extract the files to sign
+        id: unsigned
+        run: |
+          $zip = @(Get-ChildItem pkg -Filter *.zip)
+          if ($zip.Count -ne 1) { throw "expected one package in pkg, found $($zip.Count)" }
+          python -m ci.release pe-extract --zip $zip[0].FullName --dir pe
+          # Files that ship signed already (the Microsoft runtime) keep their signature.
+          $files = Get-ChildItem pe -Recurse -File |
+            Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -eq 'NotSigned' } |
+            ForEach-Object FullName
+          if (-not $files) { throw "nothing in $($zip[0].Name) is unsigned" }
+          "zip=$($zip[0].FullName)" >> $env:GITHUB_OUTPUT
+          "files<<EOF`n$($files -join "`n")`nEOF" >> $env:GITHUB_OUTPUT
+
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ steps.unsigned.outputs.files }}
+          # The certificate lives three days; the timestamp keeps the signature
+          # valid after it expires.
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Check every file is signed
+        run: |
+          $bad = @(Get-ChildItem pe -Recurse -File |
+            Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' })
+          foreach ($f in $bad) { "::error::$($f.FullName) is $((Get-AuthenticodeSignature $f.FullName).Status)" }
+          if ($bad.Count) { exit 1 }
+
+      - name: Put the signed files back in the package
+        run: python -m ci.release pe-replace --zip "${{ steps.unsigned.outputs.zip }}" --dir pe
+
+      - name: Replace the build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: CamoufoxBuilds-windows-${{ matrix.arch }}
+          path: pkg/*
+          overwrite: true
+
   publish-browser:
-    needs: [plan, ubo, build-browser]
+    needs: [plan, ubo, build-browser, sign-windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write # the release and its tag

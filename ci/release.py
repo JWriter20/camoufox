@@ -33,6 +33,8 @@ build's working tree. Rebuilding from the tag with `set-build` reproduces it.
     python3 -m ci.release lib-diff --channel C --wheel W --tarball T --py-version V --npm-version V
     python3 -m ci.release promote                 # paired browser -> stable, latest
     python3 -m ci.release check-promotable --tag vX.Y.Z
+    python3 -m ci.release pe-extract --zip Z --dir D  # a Windows package's .exe/.dll files, to sign
+    python3 -m ci.release pe-replace --zip Z --dir D  # put the signed files back in the package
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ import json
 import os
 import re
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
@@ -313,7 +316,6 @@ def package_files(path: Path, version: str) -> dict:
     wheel's RECORD, which only hashes the other files, is left out.
     """
     import tarfile
-    import zipfile
 
     files: dict = {}
     if path.suffix == ".whl":
@@ -681,6 +683,41 @@ def cmd_promote(_: argparse.Namespace) -> int:
     return 0
 
 
+def pe_entries(z: zipfile.ZipFile) -> List[zipfile.ZipInfo]:
+    """The executables and libraries in a Windows package: what Authenticode signs."""
+    return [i for i in z.infolist() if not i.is_dir() and i.filename.lower().endswith((".exe", ".dll"))]
+
+
+def cmd_pe_extract(args: argparse.Namespace) -> int:
+    with zipfile.ZipFile(args.zip) as z:
+        entries = pe_entries(z)
+        if not entries:
+            die(f"{args.zip} holds no .exe or .dll: not a Windows package")
+        for info in entries:
+            z.extract(info, args.dir)
+    log(f"extracted {len(entries)} files to sign from {args.zip}")
+    return 0
+
+
+def cmd_pe_replace(args: argparse.Namespace) -> int:
+    """Rewrite the package with the signed files, every entry under its original ZipInfo.
+
+    The ZipInfo carries each entry's Unix mode, which the launchers check on
+    install (browser/scripts/package.py, unreadable_entries), and its name,
+    timestamp and compression, so only the signed bytes change.
+    """
+    src = Path(args.zip)
+    tmp = src.with_name(src.name + ".signing")
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(tmp, "w") as zout:
+        signed = {i.filename for i in pe_entries(zin)}
+        for info in zin.infolist():
+            data = (Path(args.dir) / info.filename).read_bytes() if info.filename in signed else zin.read(info)
+            zout.writestr(info, data)
+    tmp.replace(src)
+    log(f"replaced {len(signed)} signed files in {src}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -710,6 +747,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--wheel", required=True); p.add_argument("--tarball", required=True)
     p.add_argument("--py-version", required=True); p.add_argument("--npm-version", required=True)
     p.set_defaults(fn=cmd_lib_diff)
+    for name, fn in (("pe-extract", cmd_pe_extract), ("pe-replace", cmd_pe_replace)):
+        p = sub.add_parser(name); p.add_argument("--zip", required=True); p.add_argument("--dir", required=True)
+        p.set_defaults(fn=fn)
     args = ap.parse_args(argv)
     return args.fn(args)
 

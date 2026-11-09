@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import shutil
+import zipfile
 
 import pytest
 import yaml
@@ -394,3 +395,48 @@ def test_the_manifest_declares_the_interface_both_libraries_speak():
     ts_min = re.search(r"^\s*static readonly MIN_INTERFACE: number = (\d+);$", ts, re.M)
     py_min = re.search(r"^\s*MIN_INTERFACE = (\d+)$", py, re.M)
     assert ts_min and py_min and ts_min[1] == py_min[1], "MIN_INTERFACE differs between the libraries"
+
+
+def _zip_entry(name, mode):
+    info = zipfile.ZipInfo(name, date_time=(2026, 11, 1, 12, 0, 0))
+    info.create_system = 3
+    info.external_attr = mode << 16
+    info.compress_type = zipfile.ZIP_DEFLATED
+    return info
+
+
+def test_signed_executables_replace_theirs_and_every_other_entry_is_kept(tmp_path):
+    package = tmp_path / "camoufox-win.x86_64.zip"
+    with zipfile.ZipFile(package, "w") as z:
+        z.writestr(_zip_entry("camoufox.exe", 0o100755), b"unsigned exe")
+        z.writestr(_zip_entry("gmp-clearkey/0.1/clearkey.dll", 0o100644), b"unsigned dll")
+        z.writestr(_zip_entry("fonts/W/ヒラギノ角ゴシック W3.ttc", 0o100644), b"font")
+        z.writestr(_zip_entry("addons/UBO/", 0o40755), b"")
+    before = {i.filename: i for i in zipfile.ZipFile(package).infolist()}
+
+    out = tmp_path / "pe"
+    release.main(["pe-extract", "--zip", str(package), "--dir", str(out)])
+    assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()) == [
+        "camoufox.exe", "gmp-clearkey/0.1/clearkey.dll"]
+    (out / "camoufox.exe").write_bytes(b"signed exe")
+    (out / "gmp-clearkey/0.1/clearkey.dll").write_bytes(b"signed dll")
+    release.main(["pe-replace", "--zip", str(package), "--dir", str(out)])
+
+    with zipfile.ZipFile(package) as z:
+        assert [i.filename for i in z.infolist()] == list(before)
+        assert z.read("camoufox.exe") == b"signed exe"
+        assert z.read("gmp-clearkey/0.1/clearkey.dll") == b"signed dll"
+        assert z.read("fonts/W/ヒラギノ角ゴシック W3.ttc") == b"font"
+        for info in z.infolist():
+            old = before[info.filename]
+            assert (info.external_attr, info.create_system, info.date_time, info.compress_type) == (
+                old.external_attr, old.create_system, old.date_time, old.compress_type)
+    assert not list(tmp_path.glob("*.zip.*"))
+
+
+def test_a_package_without_executables_is_refused(tmp_path):
+    package = tmp_path / "camoufox-lin.x86_64.zip"
+    with zipfile.ZipFile(package, "w") as z:
+        z.writestr(_zip_entry("camoufox-bin", 0o100755), b"elf")
+    with pytest.raises(SystemExit):
+        release.main(["pe-extract", "--zip", str(package), "--dir", str(tmp_path / "pe")])

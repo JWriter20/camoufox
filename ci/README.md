@@ -245,11 +245,11 @@ exactly one browser build.
                 no open regression)                                                                         │
      ┌──────────────────────────────────────────────────────────────────────────────────────────────────────┘
      ▼
-dispatch on main ─► ubo ─► tests ─► plan ─┬─► build-browser ─► publish-browser ─┐
-                  (AMO's  (tests.yml,     │   (only if its      v156.0.1-beta.N  │
-                   newest) this commit)   │    sources changed)                  ├─► publish-pypi ─► publish-npm ─► tag-library
-                                          └─► build-library ─────────────────────┘   0.5.9bN          0.5.9-beta.N    v0.5.9bN
-                                              (only if what it ships changed)        (pip: --pre)     @next
+dispatch on main ─► ubo ─► tests ─► plan ─┬─► build-browser ─► sign-windows ─► publish-browser ─┐
+                  (AMO's  (tests.yml,     │   (only if its     (Windows)        v156.0.1-beta.N  │
+                   newest) this commit)   │    sources changed)                                  ├─► publish-pypi ─► publish-npm ─► tag-library
+                                          └─► build-library ─────────────────────────────────────┘   0.5.9bN          0.5.9-beta.N    v0.5.9bN
+                                              (only if what it ships changed)                        (pip: --pre)     @next
 
 git tag v0.5.8 <tested main commit> && git push origin v0.5.8
                ─► plan ─► build-library ─► promote-browser ─► publish-pypi ─► publish-npm
@@ -265,14 +265,45 @@ git tag v0.5.8 <tested main commit> && git push origin v0.5.8
 | The browser is built only when its sources changed | `ci.browser_inputs.source_digest()` hashes the browser's sources. Each browser release carries a `manifest.json` with that digest, its commit, and the browser interface it speaks (`CONSTRAINTS.INTERFACE` in `python/src/camoufox/__version__.py`). A matching release is reused; otherwise `plan` takes the next unused `beta.N`. Nothing is committed: `ci.release set-build` writes the number into the build's tree. |
 | uBlock Origin | Every browser package bundles AMO's newest uBO release under `addons/UBO/` ([`browser/scripts/fetch-ubo.py`](../browser/scripts/fetch-ubo.py)), and both launchers load it from there. A cut resolves the release once, in the `ubo` job before `tests`, and hands it to the tests and every build, so the browser ships the uBO it was tested with. Its `manifest.json` (`ubo`) and release notes name it. A reused browser keeps the uBO it was built with. |
 | Builds are attested | `gh attestation verify <file> --repo daijro/camoufox` |
+| Windows builds are signed | `sign-windows` Authenticode-signs every unsigned `.exe` and `.dll` in the Windows packages before they are published, and fails the release if any file is left without a valid signature ([setup](#signing)). |
 | Packages are built once | `publish-pypi` and `publish-npm` upload the files `build-library` made: `0.5.8b2` on PyPI, `0.5.8-beta.2` on npm. `pip install camoufox` skips prereleases without `--pre`; npm installs `latest`, not `next`. |
 | The pairing | `ci.release stamp` writes the paired browser release into `python/src/camoufox/browser-pin.json`, which both launchers read. On `main` the file is `{}`, so a development checkout follows its channel. |
 | Promotion | Refused unless the commit is on `main`, `All tests passed` succeeded on it, X.Y.Z is newer than every release, and a browser release was built from its sources. The paired browser becomes the stable release without a rebuild. |
 | Failed publish | Re-run the failed jobs; every version and tag comes from `plan`. |
-| Credentials | None stored. PyPI and npm use trusted publishing (OIDC) from `release.yml`. |
+| Credentials | None stored. PyPI and npm use trusted publishing (OIDC) from `release.yml`, and Azure signing trusts the `release-signing` environment's OIDC token. |
 
 Releases cut before manifests existed (up to `v156.0.1-beta.32`) pair by the tag
 `upstream.sh` names.
+
+### Signing
+
+`sign-windows` signs with [Azure Artifact
+Signing](https://learn.microsoft.com/azure/artifact-signing/). The certificate
+names the publisher whose identity Microsoft validated. It lives three days, so
+every signature is timestamped. Windows checks the signature when it runs a
+file; no page can see it. One-time setup:
+
+1. In a pay-as-you-go Azure subscription, create an Artifact Signing account
+   and pass its organization identity validation.
+2. Create a **Public Trust** certificate profile on the validated identity.
+3. Register an app in Microsoft Entra ID. Give it a federated credential for
+   GitHub Actions with the subject `repo:daijro/camoufox:environment:release-signing`,
+   and the **Artifact Signing Certificate Profile Signer** role on the
+   certificate profile.
+4. In the repository, create the `release-signing` environment and set these
+   repository variables. They are identifiers, not secrets:
+
+   | Variable | Value |
+   |---|---|
+   | `AZURE_CLIENT_ID` | The app registration's application (client) ID |
+   | `AZURE_TENANT_ID` | The Entra tenant ID |
+   | `AZURE_SUBSCRIPTION_ID` | The subscription holding the signing account |
+   | `ARTIFACT_SIGNING_ENDPOINT` | The account's region endpoint, such as `https://eus.codesigning.azure.net/` |
+   | `ARTIFACT_SIGNING_ACCOUNT` | The signing account's name |
+   | `ARTIFACT_SIGNING_PROFILE` | The certificate profile's name |
+
+`python3 -m ci.release pe-extract` and `pe-replace` take the files out of a
+package and put the signed ones back, keeping every entry's Unix mode.
 
 ## Running a piece by hand
 
