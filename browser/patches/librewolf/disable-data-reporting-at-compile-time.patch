@@ -1,8 +1,8 @@
 diff --git a/browser/moz.configure b/browser/moz.configure
-index e8b401a7df..7b63573c17 100644
+index 8979a2e4e8..dc06e96973 100644
 --- a/browser/moz.configure
 +++ b/browser/moz.configure
-@@ -5,15 +5,16 @@
+@@ -3,15 +3,16 @@
  # file, You can obtain one at http://mozilla.org/MPL/2.0/.
  
  imply_option("MOZ_PLACES", True)
@@ -10,8 +10,9 @@ index e8b401a7df..7b63573c17 100644
 +imply_option("MOZ_SERVICES_HEALTHREPORT", False)
  imply_option("MOZ_SERVICES_SYNC", True)
  imply_option("MOZ_DEDICATED_PROFILES", True)
- imply_option("MOZ_BLOCK_PROFILE_DOWNGRADE", True)
+-imply_option("MOZ_BLOCK_PROFILE_DOWNGRADE", True)
 -imply_option("MOZ_NORMANDY", True)
++imply_option("MOZ_BLOCK_PROFILE_DOWNGRADE", False)
 +imply_option("MOZ_NORMANDY", False)
  imply_option("MOZ_PROFILE_MIGRATOR", True)
  
@@ -23,10 +24,10 @@ index e8b401a7df..7b63573c17 100644
  # Include the DevTools client, not just the server (which is the default)
  imply_option("MOZ_DEVTOOLS", "all")
 diff --git a/python/mach/mach/telemetry.py b/python/mach/mach/telemetry.py
-index bdc3b958b3..1d42c0b927 100644
+index e3eb5f0718..f61cf6400d 100644
 --- a/python/mach/mach/telemetry.py
 +++ b/python/mach/mach/telemetry.py
-@@ -92,10 +92,7 @@ def is_applicable_telemetry_environment():
+@@ -82,10 +82,7 @@ def is_applicable_telemetry_environment():
  
  
  def is_telemetry_enabled(settings):
