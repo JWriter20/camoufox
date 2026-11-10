@@ -170,6 +170,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "windows-keyboard",
         "windows-lazy-cmaps",
         "windows-legacy-family-names",
+        "windows-quoted-generics",
         "windows-lock-keys-claimed-os",
         "windows-menu-key-click-count",
         "windows-start-menu-claimed-os",
