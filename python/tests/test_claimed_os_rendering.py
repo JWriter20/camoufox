@@ -188,6 +188,12 @@ class TestLegacyFontFamilies:
             "Arial", "Calibri", "Franklin Gothic", "Arial Black", "Calibri Light", "Franklin Gothic Medium",
         ]
 
+    def test_segoe_ui_variable_exposes_its_bare_family(self, launch):
+        # Windows 11 25H2 answers the bare `Segoe UI Variable` name; the font
+        # enumerator lists only its three optical-size families.
+        config, _ = launch(WIN_UA, fonts=["Segoe UI Variable Text"])
+        assert config["fonts"] == ["Segoe UI Variable Text", "Segoe UI Variable"]
+
     def test_no_alias_without_its_canonical_family(self, launch):
         config, _ = launch(WIN_UA, fonts=["Times New Roman"])
         assert "Arial Black" not in config["fonts"]
