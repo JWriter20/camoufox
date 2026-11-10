@@ -76,4 +76,7 @@
     "media.eme.enabled": true,
     "dom.geolocation.require_system_permission.enabled": true
   }
+,
+  "x86IntelShare": 0.8136,
+  "cpuVendorEstimatesPref": {"intel": 1, "amd": 2}
 }
