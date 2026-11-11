@@ -344,6 +344,84 @@ def _repair_avail_bounds(config: Dict[str, Any], target_os: str) -> None:
         config['screen.availHeight'] = height
 
 
+# The x86 CPU vendor a GPU implies (cpu:vendor). Firefox reports every Intel
+# integrated GPU as "Intel(R) HD Graphics" or "Intel(R) HD Graphics 400"
+# (SanitizeRenderer.cpp), and only an Intel CPU carries one; Arc, the A750
+# bucket, is a discrete card too. "Radeon HD 3200 Graphics" is the bucket of
+# AMD's integrated GPUs since Zen ("AMD Radeon(TM) Graphics") besides the
+# Radeon HD 2000-4000 cards of 2007-2009, so on Windows and Linux it is taken
+# as an AMD APU. Every x86 Mac has an Intel CPU, whatever GPU it reports.
+# Apple Silicon is ARM: it has no x86 vendor. Any other GPU leaves the vendor
+# open.
+#
+# The core count can decide it too. Every AMD x86 CPU since 2015 runs one or two
+# threads per core, and its one-thread parts have 2 to 8 cores, so it reports
+# an even count with no 10, 14, 18, 22 or 28 (Wikipedia's lists of Ryzen and
+# Athlon processors, Zen 5c hybrids included). Intel's hybrids reach those: the
+# Core Ultra 5 225 reports 10, the 245K 14, the 125H 18, the 155H 22 and the
+# i7-14700K 28.
+CPU_VENDORS = ('intel', 'amd')
+INTEL_ONLY_CORE_COUNTS = frozenset(LAUNCHER_CONSTANTS['intelOnlyCoreCounts'])
+_INTEL_IGPUS = ('Intel(R) HD Graphics, or similar', 'Intel(R) HD Graphics 400, or similar',
+                'Intel(R) HD Graphics Direct3D11', 'Intel(R) HD Graphics 400 Direct3D11')
+_AMD_IGPUS = ('Radeon HD 3200 Graphics',)
+
+
+def gpu_cpu_vendor(renderer: Optional[str], target_os: str) -> Optional[str]:
+    """The CPU vendor this GPU implies, or None when it leaves it open."""
+    renderer = str(renderer or '')
+    if not renderer or 'Apple M' in renderer:
+        return None
+    if target_os == 'mac':
+        return 'intel'
+    if any(igpu in renderer for igpu in _INTEL_IGPUS):
+        return 'intel'
+    if any(igpu in renderer for igpu in _AMD_IGPUS):
+        return 'amd'
+    return None
+
+
+def cores_cpu_vendor(cores: Any) -> Optional[str]:
+    """The CPU vendor this navigator.hardwareConcurrency implies, or None."""
+    return 'intel' if cores in INTEL_ONLY_CORE_COUNTS else None
+
+
+def hardware_cpu_vendor(config: Dict[str, Any], target_os: str) -> Optional[str]:
+    """The CPU vendor the identity's GPU or, failing that, its core count implies."""
+    return gpu_cpu_vendor(_renderer(config), target_os) or cores_cpu_vendor(
+        config.get('navigator.hardwareConcurrency')
+    )
+
+
+def _check_cpu_vendor(config: Dict[str, Any], target_os: str) -> Optional[str]:
+    vendor = config.get('cpu:vendor')
+    if vendor is None:
+        return None
+    if vendor not in CPU_VENDORS:
+        return f'cpu:vendor {vendor!r}; it is one of {", ".join(CPU_VENDORS)}'
+    if _is_apple_silicon(config):
+        return f'cpu:vendor {vendor!r} beside {_renderer(config)!r}, an ARM machine'
+    by_gpu = gpu_cpu_vendor(_renderer(config), target_os)
+    if by_gpu and by_gpu != vendor:
+        which = 'an Intel' if by_gpu == 'intel' else 'an AMD'
+        return f'cpu:vendor {vendor!r} beside {_renderer(config)!r}, which only {which} CPU carries'
+    cores = config.get('navigator.hardwareConcurrency')
+    by_cores = cores_cpu_vendor(cores)
+    if by_cores and by_cores != vendor:
+        return f'cpu:vendor {vendor!r} with hardwareConcurrency {cores}, which only an Intel CPU reports'
+    return None
+
+
+def _repair_cpu_vendor(config: Dict[str, Any], target_os: str) -> None:
+    # An AMD APU's GPU beside an Intel-only core count stays reported: the GPU
+    # decides, and no vendor matches both.
+    implied = hardware_cpu_vendor(config, target_os)
+    if implied:
+        config['cpu:vendor'] = implied
+    elif _is_apple_silicon(config):
+        config.pop('cpu:vendor', None)
+
+
 def _check_arch_agreement(config: Dict[str, Any], target_os: str) -> Optional[str]:
     ua = str(config.get('navigator.userAgent') or '')
     platform = str(config.get('navigator.platform') or '')
@@ -367,6 +445,7 @@ RULES: List[Rule] = [
     Rule('screen-shape', _check_screen_shape, None),
     Rule('avail-bounds', _check_avail_bounds, _repair_avail_bounds),
     Rule('arch-agreement', _check_arch_agreement, None),
+    Rule('cpu-vendor-matches-hardware', _check_cpu_vendor, _repair_cpu_vendor),
 ]
 
 

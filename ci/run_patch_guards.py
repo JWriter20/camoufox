@@ -45,6 +45,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "context-http-user-agent",
         "context-lists-across-processes",
         "context-os-system-font",
+        "cpu-vendor-estimates",
         "decoding-info-claimed-os",
         "detached-window-stock-values",
         "display-scale-resolution",

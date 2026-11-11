@@ -47,6 +47,7 @@ import {
 	raiseScreenToModernFloor,
 	Screen,
 	screenFloor,
+	setCpuVendorDefault,
 	setHostIpv6Default,
 	setLocationSettingDefault,
 	setMediaDevicesDefaults,
@@ -2063,6 +2064,13 @@ export interface LaunchOptions {
 	disable_coop?: boolean;
 	/** Use a specific WebGL vendor/renderer pair, as [vendor, renderer]. */
 	webgl_config?: [string, string];
+	/** The x86 CPU vendor whose RCPPS/RSQRTPS estimates Skia's raster pipeline
+	 * uses, so canvas blend modes, perspective and matrix inversion read back
+	 * as on that vendor's CPU. Drawn with the identity by default: from the GPU
+	 * where only one vendor's CPU carries it (Intel integrated graphics, AMD APU
+	 * graphics, every x86 Mac), otherwise at Firefox's x86 split, about 81%
+	 * Intel. Not set for an Apple Silicon identity, which is ARM. */
+	cpu_vendor?: "intel" | "amd";
 	/** Calculate longitude, latitude, timezone, country, & locale based on the IP
 	 * address. Pass the target IP address to use, or `true` to find it. */
 	geoip?: string | boolean;
@@ -2221,6 +2229,7 @@ async function buildLaunchOptions(
 		block_webgl,
 		disable_coop,
 		webgl_config,
+		cpu_vendor,
 		geoip,
 		geoip_db,
 		humanize,
@@ -2429,6 +2438,14 @@ async function buildLaunchOptions(
 	// Warn the user for manual config settings
 	if (!i_know_what_im_doing) {
 		warnManualConfig(config);
+	}
+	if (cpu_vendor !== undefined && cpu_vendor !== null) {
+		if (!(coherence.CPU_VENDORS as readonly unknown[]).includes(cpu_vendor)) {
+			throw new ValueError(
+				`cpu_vendor must be one of ${coherence.CPU_VENDORS.join(", ")}, not ${String(cpu_vendor)}`,
+			);
+		}
+		config["cpu:vendor"] = cpu_vendor;
 	}
 	const callerKeys: ReadonlySet<string> = new Set(Object.keys(config));
 
@@ -3208,6 +3225,9 @@ async function buildLaunchOptions(
 		});
 	}
 
+	// The CPU vendor follows the GPU, so it is drawn once the GPU is final.
+	setCpuVendorDefault(config, targetOs, salt);
+
 	// Every identity passes the whole-identity checks, whatever built it. The
 	// pools are sampled independently, so a machine that never existed can be
 	// assembled from parts that are each fine on their own. See coherence.ts.
@@ -3219,6 +3239,18 @@ async function buildLaunchOptions(
 				`Incoherent identity (${violation.rule}): ${violation.detail}`,
 			);
 		}
+	}
+
+	// Skia computes RCPPS/RSQRTPS as cpu:vendor's CPU does. A build without
+	// cpu-vendor-estimates.patch ignores the pref and keeps the host's.
+	const cpuVendor = config["cpu:vendor"] as coherence.CpuVendor | undefined;
+	if (
+		cpuVendor &&
+		(coherence.CPU_VENDORS as readonly unknown[]).includes(cpuVendor) &&
+		!("gfx.skia.cpu_vendor_estimates" in firefox_user_prefs)
+	) {
+		firefox_user_prefs["gfx.skia.cpu_vendor_estimates"] =
+			LAUNCHER_CONSTANTS.cpuVendorEstimatesPref[cpuVendor];
 	}
 
 	// Render at the claimed display scale, so (resolution) and the CSS geometry

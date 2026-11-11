@@ -379,6 +379,83 @@ function checkArchAgreement(config: Config, _targetOs: string): string | null {
 	return null;
 }
 
+// The x86 CPU vendor a GPU implies (cpu:vendor); coherence.py explains the
+// buckets. Intel integrated graphics: Intel. "Radeon HD 3200 Graphics", the
+// bucket of AMD's APU graphics: AMD. Every x86 Mac: Intel. Apple Silicon is
+// ARM and has no x86 vendor; any other GPU leaves it open. A core count only
+// Intel's hybrids report (10, 14, 18, 22, 28) implies Intel; coherence.py has
+// the sources.
+export const CPU_VENDORS = ["intel", "amd"] as const;
+const INTEL_ONLY_CORE_COUNTS: ReadonlySet<unknown> = new Set(
+	LAUNCHER_CONSTANTS.intelOnlyCoreCounts,
+);
+export type CpuVendor = (typeof CPU_VENDORS)[number];
+const INTEL_IGPUS = [
+	"Intel(R) HD Graphics, or similar",
+	"Intel(R) HD Graphics 400, or similar",
+	"Intel(R) HD Graphics Direct3D11",
+	"Intel(R) HD Graphics 400 Direct3D11",
+];
+const AMD_IGPUS = ["Radeon HD 3200 Graphics"];
+
+/** The CPU vendor this GPU implies, or null when it leaves it open. */
+export function gpuCpuVendor(
+	gpuRenderer: unknown,
+	targetOs: string,
+): CpuVendor | null {
+	const r = pyTruthy(gpuRenderer) ? pyStr(gpuRenderer) : "";
+	if (!r || r.includes("Apple M")) return null;
+	if (targetOs === "mac") return "intel";
+	if (INTEL_IGPUS.some((igpu) => r.includes(igpu))) return "intel";
+	if (AMD_IGPUS.some((igpu) => r.includes(igpu))) return "amd";
+	return null;
+}
+
+/** The CPU vendor this navigator.hardwareConcurrency implies, or null. */
+export function coresCpuVendor(cores: unknown): CpuVendor | null {
+	return INTEL_ONLY_CORE_COUNTS.has(cores) ? "intel" : null;
+}
+
+/** The CPU vendor the identity's GPU or, failing that, its core count implies. */
+export function hardwareCpuVendor(
+	config: Config,
+	targetOs: string,
+): CpuVendor | null {
+	return (
+		gpuCpuVendor(renderer(config), targetOs) ??
+		coresCpuVendor(config["navigator.hardwareConcurrency"])
+	);
+}
+
+function checkCpuVendor(config: Config, targetOs: string): string | null {
+	const vendor = config["cpu:vendor"];
+	if (isNone(vendor)) return null;
+	if (!(CPU_VENDORS as readonly unknown[]).includes(vendor)) {
+		return `cpu:vendor ${pyRepr(vendor)}; it is one of ${CPU_VENDORS.join(", ")}`;
+	}
+	if (isAppleSilicon(config)) {
+		return `cpu:vendor ${pyRepr(vendor)} beside ${pyRepr(renderer(config))}, an ARM machine`;
+	}
+	const byGpu = gpuCpuVendor(renderer(config), targetOs);
+	if (byGpu && byGpu !== vendor) {
+		return `cpu:vendor ${pyRepr(vendor)} beside ${pyRepr(renderer(config))}, which only ${byGpu === "intel" ? "an Intel" : "an AMD"} CPU carries`;
+	}
+	const cores = config["navigator.hardwareConcurrency"];
+	const byCores = coresCpuVendor(cores);
+	if (byCores && byCores !== vendor) {
+		return `cpu:vendor ${pyRepr(vendor)} with hardwareConcurrency ${pyStr(cores)}, which only an Intel CPU reports`;
+	}
+	return null;
+}
+
+function repairCpuVendor(config: Config, targetOs: string): void {
+	// An AMD APU's GPU beside an Intel-only core count stays reported: the GPU
+	// decides, and no vendor matches both.
+	const implied = hardwareCpuVendor(config, targetOs);
+	if (implied) config["cpu:vendor"] = implied;
+	else if (isAppleSilicon(config)) delete config["cpu:vendor"];
+}
+
 export const RULES: readonly Rule[] = [
 	{
 		name: "apple-silicon-cores",
@@ -403,6 +480,11 @@ export const RULES: readonly Rule[] = [
 	{ name: "screen-shape", check: checkScreenShape, repair: null },
 	{ name: "avail-bounds", check: checkAvailBounds, repair: repairAvailBounds },
 	{ name: "arch-agreement", check: checkArchAgreement, repair: null },
+	{
+		name: "cpu-vendor-matches-hardware",
+		check: checkCpuVendor,
+		repair: repairCpuVendor,
+	},
 ];
 
 /** Whether the screen is one no desktop reports (portrait, or tiny). */
