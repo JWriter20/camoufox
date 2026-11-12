@@ -43,7 +43,6 @@ import type { Managed } from "./managed.js";
 import { OS_NAME, userCacheDir, userConfigDir } from "./paths.js";
 import type { ProxySession } from "./proxy_session.js";
 import { ValueError } from "./pycompat.js";
-import type { Session as RenderNodeSession } from "./render_node.js";
 
 export const API_ENV = "CAMOUFOX_PRO_API";
 export const KEY_ENV = "CAMOUFOX_PRO_KEY";
@@ -640,8 +639,6 @@ export class Lease {
 	stateDirty: boolean | null = null;
 	/** Directories and files that go with the lease: deleted when it ends. */
 	scratch: string[] = [];
-	/** Sessions held for the browser (a render node's assignment): ended with the lease. */
-	onEnd: (() => Promise<void> | void)[] = [];
 	claimed = false;
 	readonly #key: string;
 	readonly #base: string;
@@ -995,16 +992,6 @@ export class Lease {
 			if (this.#timer) clearTimeout(this.#timer);
 			LIVE.delete(this.path);
 			const done = await released();
-			for (const end of this.onEnd) {
-				try {
-					await end();
-				} catch (error) {
-					// One failed hook must not keep the others' resources.
-					console.warn(
-						`camoufox-pro: ending a session held with lease ${this.leaseId} failed: ${(error as Error).message}`,
-					);
-				}
-			}
 			this.#clean();
 			return done;
 		})();
@@ -1085,21 +1072,17 @@ export async function acquire(
 }
 
 /**
- * The lease or named-node session opened for these options, taken by the browser
+ * The lease or managed proxy session opened for these options, taken by the browser
  * about to launch with them on `display`. null for a stock build with no session.
  */
 export async function claim(
 	options: Record<string, any>,
 	display?: unknown,
-): Promise<Lease | RenderNodeSession | ProxySession | null> {
+): Promise<Lease | ProxySession | null> {
 	const lease = LIVE.get(String(options.env?.[LEASE_FILE_ENV]));
 	if (!lease) {
-		// A standard build's managed proxy session holds any render node opened with it.
 		const { claim: claimProxy } = await import("./proxy_session.js");
-		const session = claimProxy(options);
-		if (session) return session;
-		const { claim: claimNode } = await import("./render_node.js");
-		return claimNode(options);
+		return claimProxy(options);
 	}
 	if (lease.claimed) {
 		throw new Error(
@@ -1129,7 +1112,7 @@ export function refusal(error: unknown): string | null {
  * when the browser exited because it refused the lease.
  */
 export async function launchFailed(
-	lease: Lease | RenderNodeSession | ProxySession | null,
+	lease: Lease | ProxySession | null,
 	error: unknown,
 ): Promise<void> {
 	await lease?.release("error");
@@ -1160,7 +1143,7 @@ export function attachLease<
 		close(...args: any[]): Promise<void>;
 	},
 >(
-	lease: Lease | RenderNodeSession | ProxySession,
+	lease: Lease | ProxySession,
 	target: T,
 	event: "disconnected" | "close",
 ): T & { pro: ProSession } {

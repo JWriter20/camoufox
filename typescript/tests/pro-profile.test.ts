@@ -1450,6 +1450,30 @@ describe.runIf(modelReady)("launchOptions with a lease's sections", () => {
 		expect(bare.proxy.bypass).toBe("render.example");
 	});
 
+	it("hands the browser its lease and nothing it opened itself", async () => {
+		// The Pro build reads which farm services it may reach from the lease it verifies. The
+		// launcher once also took a coordinator assignment of its own from a render-node.json
+		// and named it in the environment, beside the lease and outside it.
+		const node = path.join(SCRATCH, "render-node.json");
+		fs.writeFileSync(
+			node,
+			JSON.stringify({ coordinator: cloud.base, token: "client-token" }),
+		);
+		process.env.CAMOUFOX_RENDER_NODE = node;
+		try {
+			const plain = (await launch({ farm_gpu: false })).env;
+			cloud.sections = { gpu: GPU };
+			const farm = (await launch()).env;
+			const added = Object.keys(farm).filter((name) => !(name in plain));
+			expect(added).toEqual([pro.RENDER_FILE_ENV]);
+			expect(
+				cloud.requests.filter((call) => !call.path.startsWith("/api/v1/")),
+			).toEqual([]);
+		} finally {
+			delete process.env.CAMOUFOX_RENDER_NODE;
+		}
+	});
+
 	it("sets none of it without a gpu section", async () => {
 		const opts = await launch({ farm_gpu: false });
 		expect(mint().gpu).toBe(false);

@@ -986,6 +986,20 @@ def test_the_render_farm_is_reached_directly_not_through_the_pages_proxy(cloud, 
     assert launch(proxy={"server": "http://dish:3128"})["proxy"]["bypass"] == "render.example"
 
 
+def test_a_farm_lease_hands_the_browser_its_lease_and_nothing_it_opened_itself(cloud, launch, monkeypatch, tmp_path):
+    """The Pro build reads which farm services it may reach from the lease it verifies. The launcher
+    once also took a coordinator assignment of its own from a render-node.json and named it in the
+    environment, beside the lease and outside it."""
+    node = tmp_path / "render-node.json"
+    node.write_text(json.dumps({"coordinator": cloud.base, "token": "client-token"}))
+    monkeypatch.setenv("CAMOUFOX_RENDER_NODE", str(node))
+    plain = launch(farm_gpu=False)["env"]
+    cloud.sections = {"gpu": GPU}
+    farm = launch()["env"]
+    assert set(farm) - set(plain) == {pro.RENDER_FILE_ENV}
+    assert all(call["path"].startswith("/api/v1/") for call in cloud.requests), cloud.requests
+
+
 def test_none_of_it_is_set_without_a_gpu_section(cloud, launch):
     opts = launch(farm_gpu=False)
     assert launch.mint()["gpu"] is False

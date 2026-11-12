@@ -28,8 +28,6 @@ export class ProxySession {
 	sessionId = "";
 	egress: Record<string, any> = {};
 	notices: Record<string, any>[] = [];
-	/** What ends with this session: a render node opened alongside it. */
-	onEnd: (() => Promise<void>)[] = [];
 	#key = "";
 	#base = "";
 	#heartbeatS = HEARTBEAT_S;
@@ -158,15 +156,6 @@ export class ProxySession {
 				console.warn(
 					`camoufox: releasing managed proxy session ${this.sessionId} failed: ${(error as Error).message}`,
 				);
-			}
-			for (const end of this.onEnd) {
-				try {
-					await end();
-				} catch (error) {
-					console.warn(
-						`camoufox: ending a session held with proxy session ${this.sessionId} failed: ${(error as Error).message}`,
-					);
-				}
 			}
 		})();
 		return this.#released;

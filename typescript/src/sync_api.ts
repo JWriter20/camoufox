@@ -23,7 +23,6 @@ import * as humanizeCustom from "./humanize-custom.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
 import { SELECTOR } from "./locales.js";
 import { attachLease, claim, launchFailed, type ProSession } from "./pro.js";
-import { RELAY_ENV } from "./render_node.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
@@ -246,7 +245,6 @@ async function launchWith(
 	attachDesktopOnlyWarning(browser);
 	attachDriverDefaults(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
-	(browser as any)._camoufoxRenderNode = RELAY_ENV in (fromOptions.env ?? {});
 	return attachVirtualDisplay(browser, virtualDisplay);
 }
 
@@ -340,7 +338,6 @@ export async function NewContext(
 		ff_version: ffVersion,
 		webrtc_ip: webrtcIp,
 		webgl_config: webglConfig,
-		webgl: !(browser as any)._camoufoxRenderNode,
 		screen_bound: contextScreenBound(browser, contextOs, contextOptions),
 	});
 
