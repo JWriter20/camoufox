@@ -1067,6 +1067,35 @@ export function followBaselineProtection(
 	}
 }
 
+/**
+ * Fit a drawn window to a caller's screen, leaving the caller's own keys alone.
+ *
+ * The window was drawn for fpgen's screen, which the caller's replaced, and the
+ * browser grows the screen to hold its window (2560x1408 against a caller's
+ * 1920x1080 read back as a 7680x2160 screen). The window has to fit both the
+ * caller's available screen and the one the browser reports, which baseline
+ * protection derives from the screen whatever the caller's availHeight says
+ * (1080 - 48 on Windows, against a caller's 1040). Only `window.` keys change.
+ */
+export function fitWindowToCallerScreen(
+	config: Config,
+	targetOs: string,
+	positionKeys: ReadonlySet<string>,
+): void {
+	const shown: Config = Object.fromEntries(
+		Object.entries(config).filter(
+			([k]) => k.startsWith("screen.") || k.startsWith("window."),
+		),
+	);
+	clampWindowDimensions(shown);
+	followBaselineProtection(shown, targetOs);
+	clampWindowDimensions(shown);
+	clampWindowPosition(shown, positionKeys);
+	for (const [k, v] of Object.entries(shown)) {
+		if (k.startsWith("window.")) config[k] = v;
+	}
+}
+
 /** Enforce inner <= outer <= avail <= screen on both axes. */
 export function clampWindowDimensions(config: Config): void {
 	for (const axis of ["Width", "Height"]) {

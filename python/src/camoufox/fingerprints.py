@@ -993,6 +993,24 @@ def clamp_window_dimensions(config: Dict[str, Any]) -> None:
             config[f'window.inner{axis}'] = outer_clamped
 
 
+def fit_window_to_caller_screen(config: Dict[str, Any], target_os: str, position_keys: Iterable[str]) -> None:
+    """Fit a drawn window to a caller's screen, leaving the caller's own keys alone.
+
+    The window was drawn for fpgen's screen, which the caller's replaced, and the
+    browser grows the screen to hold its window (2560x1408 against a caller's
+    1920x1080 read back as a 7680x2160 screen). The window has to fit both the
+    caller's available screen and the one the browser reports, which baseline
+    protection derives from the screen whatever the caller's availHeight says
+    (1080 - 48 on Windows, against a caller's 1040). Only `window.` keys change.
+    """
+    shown = {k: v for k, v in config.items() if k.startswith(('screen.', 'window.'))}
+    clamp_window_dimensions(shown)
+    follow_baseline_protection(shown, target_os)
+    clamp_window_dimensions(shown)
+    clamp_window_position(shown, position_keys)
+    config.update({k: v for k, v in shown.items() if k.startswith('window.')})
+
+
 def clamp_screen_to_display(
     config: Dict[str, Any],
     max_width: Optional[int],
