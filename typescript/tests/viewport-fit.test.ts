@@ -328,3 +328,67 @@ describe("setViewportSize", () => {
 		).toEqual([]);
 	});
 });
+
+// fpgen draws the window from its own screen, and a caller's 1920x1080 screen
+// replaced that screen but kept the window (2560x1408 in three of eight draws).
+// The browser grows the screen to hold its window, so the page reported 7680x2160
+// instead of the caller's screen (CamoufoxPro's smoke check).
+describe.skipIf(!MODEL.ok)("a caller's screen holds the drawn window", () => {
+	beforeEach(() => stubHost());
+	const CALLER_SCREEN = {
+		"screen.width": 1920,
+		"screen.height": 1080,
+		"screen.availWidth": 1920,
+		"screen.availHeight": 1040,
+	};
+	it.each([
+		"windows",
+		"macos",
+		"linux",
+	])("%s: the window fits the caller's available screen", async (os) => {
+		for (let i = 0; i < 40; i++) {
+			const config = configOf(
+				await quietly(() =>
+					utils.launchOptions({
+						env: { HOME },
+						headless: true,
+						i_know_what_im_doing: true,
+						executable_path: BUNDLE_EXE,
+						os,
+						config: { ...CALLER_SCREEN },
+					} as any),
+				),
+			);
+			expect(config).toMatchObject(CALLER_SCREEN);
+			expect(config["window.outerWidth"]).toBeLessThanOrEqual(1920);
+			expect(config["window.outerHeight"]).toBeLessThanOrEqual(1040);
+			const x = config["window.screenX"] ?? 0;
+			const y = config["window.screenY"] ?? 0;
+			expect(x).toBeGreaterThanOrEqual(0);
+			expect(y).toBeGreaterThanOrEqual(0);
+			expect(x + config["window.outerWidth"]).toBeLessThanOrEqual(1920);
+			expect(y + config["window.outerHeight"]).toBeLessThanOrEqual(1040);
+		}
+	}, 60_000);
+	it("keeps a caller's window size", async () => {
+		const config = configOf(
+			await quietly(() =>
+				utils.launchOptions({
+					env: { HOME },
+					headless: true,
+					i_know_what_im_doing: true,
+					executable_path: BUNDLE_EXE,
+					os: "windows",
+					config: {
+						...CALLER_SCREEN,
+						"window.outerWidth": 2000,
+						"window.outerHeight": 1100,
+					},
+				} as any),
+			),
+		);
+		expect([config["window.outerWidth"], config["window.outerHeight"]]).toEqual(
+			[2000, 1100],
+		);
+	});
+});

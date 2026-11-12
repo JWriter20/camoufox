@@ -197,3 +197,36 @@ def test_a_zoomed_fpgen_ratio_follows_the_caller_s_render_scale():
     assert config["window.devicePixelRatio"] == 1
     assert opts["firefox_user_prefs"]["layout.css.devPixelsPerPx"] == "1"
     assert config["screen.width"] == round(1760 * drawn)
+
+
+class TestCallerScreenHoldsTheDrawnWindow:
+    """A caller who sets the screen but not the window still gets a window that fits it.
+
+    fpgen draws the window from its own screen, and a caller's 1920x1080 screen
+    replaced that screen but kept the window: 2147x1173, 2560x1408 and 2560x1390
+    in three of eight draws. The browser grows the screen to hold its window, so
+    the page then reported a 7680x2160 or 3638x1919 screen instead of the caller's
+    (CamoufoxPro's smoke check, "screen spoofed with stock Windows available rect").
+    """
+
+    CALLER_SCREEN = {
+        "screen.width": 1920, "screen.height": 1080,
+        "screen.availWidth": 1920, "screen.availHeight": 1040,
+    }
+
+    @pytest.mark.parametrize("os_name", ["windows", "macos", "linux"])
+    def test_the_window_fits_the_caller_s_available_screen(self, os_name):
+        for _ in range(40):
+            config = launch(os=os_name, headless=True, config=dict(self.CALLER_SCREEN))
+
+            for key, value in self.CALLER_SCREEN.items():
+                assert config[key] == value, f"{key} moved off the caller's {value}: {config[key]}"
+            assert config["window.outerWidth"] <= 1920, config["window.outerWidth"]
+            assert config["window.outerHeight"] <= 1040, config["window.outerHeight"]
+            assert 0 <= config.get("window.screenX", 0) <= 1920 - config["window.outerWidth"]
+            assert 0 <= config.get("window.screenY", 0) <= 1040 - config["window.outerHeight"]
+
+    def test_a_caller_s_window_size_is_kept(self):
+        config = launch(headless=True, config={**self.CALLER_SCREEN, "window.outerWidth": 2000, "window.outerHeight": 1100})
+
+        assert (config["window.outerWidth"], config["window.outerHeight"]) == (2000, 1100)

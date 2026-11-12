@@ -1993,6 +1993,9 @@ def launch_options(
     _user_set_arch = is_domain_set(config, 'navigator.platform', 'navigator.oscpu')
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
     _user_window_position = {k for k in ('window.screenX', 'window.screenY') if k in config}
+    _user_set_window_size = is_domain_set(
+        config, 'window.outerWidth', 'window.outerHeight', 'window.innerWidth', 'window.innerHeight'
+    )
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
     _user_set_fonts = bool(fonts) or is_domain_set(config, 'fonts')
     _user_set_voices = is_domain_set(config, 'voices', 'voices:speechd')
@@ -2213,6 +2216,11 @@ def launch_options(
         clamp_window_dimensions(config)
         clamp_window_position(config)
     else:
+        # A caller's screen without a caller's window: the window was drawn for fpgen's own screen
+        # (2560x1408 against a caller's 1920x1080), and the browser grows the screen to hold its
+        # window, so it is fitted to the caller's screen as a real window fits its monitor.
+        if not _user_set_window_size:
+            clamp_window_dimensions(config)
         # The caller drove the screen or the window, not always where the window sits: a position
         # drawn against the generated screen is moved onto the caller's (window 1280 wide at
         # x=206 on a 1382 screen), or every new context drew another screen to hold it.
