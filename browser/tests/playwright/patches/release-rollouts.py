@@ -8,8 +8,10 @@ compression dictionaries for every release profile: a server that sends
 Use-As-Dictionary gets Available-Dictionary and dcb/dcz back from stock, and a
 page reads <link>.relList.supports("compression-dictionary") as true (false
 without it; HTMLLinkElement.cpp keys the supported rel set on
-network.http.dictionaries.enable). camoufox.cfg now sets the rollouts' prefs as
-defaults.
+network.http.dictionaries.enable). fetch-streaming-upload-rollout turns on
+dom.fetch.streaming_upload for release 159: Request.prototype has body and
+duplex ([Pref="dom.fetch.streaming_upload"] in Request.webidl). camoufox.cfg now
+sets the rollouts' prefs as defaults.
 
 The guard also has a dictionary used, over HTTPS: the request for a resource a
 stored dictionary matches must carry Available-Dictionary and end its
@@ -92,7 +94,8 @@ def use_dictionary(config: dict, tmp: Path):
         page.evaluate("fetch('/dict/source.txt').then(r => r.text())")
         time.sleep(1.5)
         page.evaluate("fetch('/dict/target.txt').then(r => r.text())")
-    return supports, targets
+        streaming = page.evaluate("'duplex' in Request.prototype && 'body' in Request.prototype")
+    return supports, targets, streaming
 
 
 def main() -> int:
@@ -100,7 +103,11 @@ def main() -> int:
     for name, config in (("default", {}), ("headers.Accept-Encoding set",
                                            {"headers.Accept-Encoding": "gzip, deflate, br, zstd"})):
         with tempfile.TemporaryDirectory() as tmp:
-            supports, targets = use_dictionary(config, Path(tmp))
+            supports, targets, streaming = use_dictionary(config, Path(tmp))
+        print(f"  {name}: Request body/duplex = {streaming}")
+        if streaming is not True:
+            failures.append(f"{name}: Request has no body/duplex; stock 159 release has "
+                            "dom.fetch.streaming_upload on (fetch-streaming-upload-rollout)")
         print(f"  {name}: <link>.relList.supports('compression-dictionary') = {supports}; target {targets}")
         if supports is not True:
             failures.append(f"{name}: compression dictionaries are off; every stock 158 release profile has "
@@ -114,7 +121,7 @@ def main() -> int:
         print(f"FAIL: {failure}")
     if failures:
         return 1
-    print("PASS: compression dictionaries are on and used, as in stock Firefox's release rollout.")
+    print("PASS: compression dictionaries and streaming upload are on, as in stock Firefox's release rollouts.")
     return 0
 
 
