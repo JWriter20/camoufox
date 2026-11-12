@@ -21,6 +21,7 @@ from ua_parser import user_agent_parser
 from . import driver_defaults
 from .addons import DefaultAddons, add_default_addons, confirm_paths
 from .display import has_display, largest_display
+from .display_profile import DisplayProfileOption, apply_display_profile
 from .exceptions import (
     InvalidOS,
     InvalidPropertyType,
@@ -1660,6 +1661,7 @@ def launch_options(
     farm_gpu: Optional[Literal[False]] = None,
     render_node: render_nodes.RenderNodeOption = None,
     pool_profile: Optional[str] = None,
+    display_profile: DisplayProfileOption = None,
     **launch_options: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
@@ -1803,6 +1805,13 @@ def launch_options(
             Camoufox Pro's own pool warmer only: the pool profile ('prf_<uuid>')
             this launch presents, so its lease draws on the GPU that profile is
             pinned to. Any other account's mint is refused.
+        display_profile (Optional[Union[bytes, str, Path, bool]]):
+            The display's ICC colour profile, which ICC-tagged images are converted to
+            (a page reads it from their decoded pixels): ICC bytes or a path, e.g. one
+            recorded with GetICMProfileW on the machine the identity presents. False
+            keeps the browser's own (built-in sRGB on a host without one). Default: an
+            identity of another OS draws one from display-profiles.json for its OS and
+            screen; an identity of the host's OS uses the host display's, as stock does.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
             The pair must be one fpgen has recorded from Firefox on `os`
@@ -2292,6 +2301,11 @@ def launch_options(
     # The output device's AudioContext.outputLatency, for an identity of
     # another OS (audio-output-latency.json).
     set_output_latency_default(config, _identity_salt, target_os, _host_os_key())
+
+    # The display's ICC profile, which tagged images are converted to
+    # (display_profile.py; display-profiles.json).
+    apply_display_profile(firefox_user_prefs, _user_pref_keys, display_profile, config,
+                          identity_seed(config, _identity_salt), target_os, _host_os_key())
 
     # When the Windows legacy styled-family aliases land (fonts.detect timing).
     set_windows_alias_load_default(config, target_os, _host_os_key())
