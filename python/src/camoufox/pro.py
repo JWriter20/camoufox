@@ -31,8 +31,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlsplit
+from typing import Any, Callable, Dict, FrozenSet, List, Optional
+from urllib.parse import urlencode, urlsplit
 
 import requests
 from platformdirs import user_cache_dir, user_config_dir
@@ -780,6 +780,13 @@ def _release_all() -> None:
 
 
 atexit.register(_release_all)
+
+
+def served_gpus(build: ProBuild, target_os: str, key: Optional[str] = None) -> FrozenSet[str]:
+    """The WebGL renderers the Pro render farm draws on for this build's `target_os` ('win', 'mac', 'lin')
+    identities: the only GPUs such an identity may claim. Empty when the farm draws none for that OS."""
+    query = urlencode({"build_hash": build.build_hash, "os": TARGET_OS[target_os]})
+    return frozenset(call("GET", f"/api/v1/gpus?{query}", key=resolve_key(key), base=api_base(build))["renderers"])
 
 
 def acquire(

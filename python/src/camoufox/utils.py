@@ -2090,6 +2090,22 @@ def launch_options(
             config['window.devicePixelRatio'] = drawn_dpr
             coherence.repair_device_pixel_ratio(config, target_os, caller_scale if caller_scale > 0 else None)
 
+    if leased and _HELD.lease is None and pro_request.get("gpu") is not False and not block_webgl:
+        # The farm draws only the GPUs it has, so the identity claims one of them, and the mint names
+        # it: the lease is drawn on that GPU, never on one the page's WebGL strings do not claim.
+        served = pro.served_gpus(pro_build, target_os, pro_key)
+        if served:
+            if not webgl_config and not (config.get('webGl:vendor') and config.get('webGl:renderer')):
+                drawn = sample_webgl_for_screen(
+                    target_os, config.get('screen.width'), config.get('screen.height'),
+                    seed=identity_seed(config, _identity_salt),
+                    cores=config.get('navigator.hardwareConcurrency'),
+                    cpu=config,
+                    renderers=served,
+                )
+                config['webGl:vendor'], config['webGl:renderer'] = drawn['webGl:vendor'], drawn['webGl:renderer']
+            # A caller's or a preset's pair the farm does not serve is refused by the mint, loudly.
+            pro_request["persona"] = list(webgl_config or (config['webGl:vendor'], config['webGl:renderer']))
     if leased:
         if _HELD.lease is None:
             _HELD.lease = pro.acquire(pro_build, target_os, pro_key, pro_request)

@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -76,6 +77,8 @@ class FakeApi:
         self.changed = threading.Condition()
         self.build_hash = BUILD_HASH
         self.grants = {}
+        # What GET /api/v1/gpus answers: the renderers the farm draws on for the asked OS.
+        self.served = []
 
     def script(self, route, *answers):
         """Answer the next calls to `route` (a regex) with these (status, body) pairs, in order."""
@@ -93,6 +96,9 @@ class FakeApi:
             if re.fullmatch(route, path) and queue:
                 return queue.pop(0)
         now = iso(datetime.now(timezone.utc) + self.clock_offset)
+        if path.startswith("/api/v1/gpus?"):
+            query = parse_qs(urlsplit(path).query)
+            return 200, {"os": query["os"][0], "firefox": "156.0.1", "renderers": self.served}
         if path == "/api/v1/leases":
             lease_id = uuid.uuid4()
             return 201, {
@@ -126,8 +132,11 @@ def api(monkeypatch, tmp_path):
     fake = FakeApi()
 
     class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.do_POST()
+
         def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
             status, answer = fake.answer(self.path, body)
             # Recorded before answering, so a caller that has its answer can already see its request.
             with fake.changed:
@@ -252,8 +261,8 @@ def test_a_pro_build_is_launched_with_a_minted_lease(api, pro_build, monkeypatch
     monkeypatch.setenv(pro.KEY_ENV, KEY)
     opts = launch(pro_build, monkeypatch)
 
-    (mint,) = api.requests
-    assert mint["path"] == "/api/v1/leases" and mint["auth"] == f"Bearer {KEY}"
+    (mint,) = api.calls("/api/v1/leases")
+    assert mint["auth"] == f"Bearer {KEY}"
     path = Path(opts["env"][pro.LEASE_FILE_ENV])
     body = json.loads(path.read_bytes())
     assert path.parent == Path(os.environ["XDG_RUNTIME_DIR"]) / "camoufox-pro"
@@ -742,3 +751,53 @@ def test_activate_says_when_the_release_did_not_reach_the_api(api, pro_build, mo
     result = activate(pro_build)
     assert result.exit_code == 0
     assert result.output.splitlines()[-1] == "[ -- ] lease not released: the API frees it when it expires"
+
+
+FARM_GPUS = [
+    "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar",
+    "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar",
+]
+
+
+def launched_config(build, monkeypatch, **kwargs):
+    """The launch's config as the browser gets it, with what the mint was sent."""
+    seen = []
+    monkeypatch.setattr(utils, "get_env_vars", lambda config, *a, **k: seen.append(dict(config)) or {})
+    monkeypatch.setattr(utils, "resolve_verstr", lambda *a: "156.0.1-beta.32")
+    utils.launch_options(executable_path=build, os="windows", headless=True, **kwargs)
+    return seen[-1]
+
+
+def test_a_farm_rendered_identity_claims_a_gpu_the_farm_serves_and_names_it_to_the_mint(api, pro_build, monkeypatch):
+    # The persona was drawn apart from the farm: a page read one GPU's strings over another GPU's pixels.
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    api.served = FARM_GPUS
+    claimed = set()
+    for _ in range(12):
+        config = launched_config(pro_build, monkeypatch)
+        mint = api.calls("/api/v1/leases")[-1]["body"]
+        assert mint["persona"] == [config["webGl:vendor"], config["webGl:renderer"]]
+        claimed.add(config["webGl:renderer"])
+        pro._release_all()
+    assert claimed <= set(FARM_GPUS)
+    (gpus, *_) = api.calls(r"/api/v1/gpus\?.*")
+    assert parse_qs(urlsplit(gpus["path"]).query) == {"build_hash": [BUILD_HASH], "os": ["windows"]}
+    assert gpus["auth"] == f"Bearer {KEY}"
+
+
+def test_a_caller_s_gpu_is_named_to_the_mint_as_it_is(api, pro_build, monkeypatch):
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    api.served = FARM_GPUS
+    pair = ("Google Inc. (NVIDIA)", FARM_GPUS[1])
+    config = launched_config(pro_build, monkeypatch, webgl_config=pair)
+    assert api.calls("/api/v1/leases")[0]["body"]["persona"] == list(pair)
+    assert config["webGl:renderer"] == pair[1]
+
+
+@pytest.mark.parametrize("served, kwargs", [([], {}), (FARM_GPUS, {"farm_gpu": False})])
+def test_without_the_farm_no_persona_is_sent(api, pro_build, monkeypatch, served, kwargs):
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    api.served = served
+    launched_config(pro_build, monkeypatch, **kwargs)
+    assert "persona" not in api.calls("/api/v1/leases")[0]["body"]
+    assert len(api.calls(r"/api/v1/gpus\?.*")) == (0 if kwargs else 1)
