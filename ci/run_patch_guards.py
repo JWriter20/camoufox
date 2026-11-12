@@ -104,6 +104,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
     ),
     "parity": (
         "audio-output-latency-drawn",
+        "canvas-collection-bold-face",
         "certificate-revocations",
         "chrome-overlay-claimed-os",
         "chrome-system-font-claimed-os",
