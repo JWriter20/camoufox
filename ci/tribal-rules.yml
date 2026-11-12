@@ -271,6 +271,17 @@ rules:
       except_paths: ["python/pyproject.toml"]
       allowed_forms: ["-e ../../../python", "-e ./python", "-e python"]
 
+  - id: ubo-release-pinned
+    title: The bundled uBlock Origin is a committed pin, never AMO's newest
+    check: manual   # ci/tests/test_fetch_ubo.py, browser/tests/playwright/patches/main-world-eval-globals.py
+    evidence:
+      - "2026-11-09: uBO 1.76.0 (AMO's newest mid-sync) put RegExp after URL in the global order of every tab after the first; stock 158, no uBO and uBO 1.75.4 keep it after Number in every tab and window"
+    rationale: >-
+      uBO runs in every page, so a uBO release can change what a page observes.
+      fetch-ubo.py resolve reads browser/scripts/data/ubo.json; `newest` prints
+      AMO's latest as a candidate. A bump is a commit, made after the stock
+      parity and automation guards pass with it.
+
   # -------------------------------------------------------------------------
   # Measurement
   # -------------------------------------------------------------------------
@@ -411,13 +422,14 @@ rules:
       audio-matches-stock guard checks the build against the recorded values.
 
   - id: canvas-follows-the-claimed-cpu-vendor
-    title: Skia's and libopus's RCPPS/RSQRTPS give the claimed x86 vendor's bits, Intel or AMD, drawn at Firefox's x86 share
+    title: A page computes as the claimed CPU does, Intel, AMD or ARM64; the x86 vendor is drawn at Firefox's x86 share
     check: manual   # ci/tests/test_cpu_estimates.py, browser/tests/cpu-estimates/check.py, guard cpu-vendor-estimates
     evidence:
       - "2026-11-10, all 2^32 inputs: Core i7-12700H (Linux) and i9-11900H (Windows 11) give identical RCPPS/RSQRTPS bits; Ryzen 7 9850X3D (Zen 5) and Threadripper 7970X (Zen 4) give identical bits; the two vendors differ (browser/tests/cpu-estimates/provenance.json)"
-      - "stock Firefox 159.0, gradient over gradient, getImageData FNV-1a: i9-11900H on Windows and Ryzen 9850X3D on Linux agree for source-over, multiply, screen and soft-light and differ for color-dodge, color-burn, hue, saturation, color and luminosity; the build with gfx.skia.cpu_vendor_estimates 1 on the Ryzen gives the i9's hashes for all ten (guard cpu-vendor-estimates)"
-      - "stock Firefox 159.0, WebCodecs AudioEncoder Opus 64 kbit/s mono, one second of a fixed signal: one byte stream on the i7-12700H (Linux) and i9-11900H (Windows), another on the Ryzen 9850X3D (Linux) and the Threadripper 7970X (Firefox 158, Linux); libopus celt/x86/vq_sse2.c calls _mm_rcp_ps and _mm_rsqrt_ps; the build with gfx.skia.cpu_vendor_estimates 1 on the Ryzen gives the Intel stream byte for byte (guard cpu-vendor-estimates)"
+      - "stock Firefox 159.0, gradient over gradient, getImageData FNV-1a: i9-11900H on Windows and Ryzen 9850X3D on Linux agree for source-over, multiply, screen and soft-light and differ for color-dodge, color-burn, hue, saturation, color and luminosity; the build with general.cpu_identity 1 on the Ryzen gives the i9's hashes for all ten (guard cpu-vendor-estimates)"
+      - "stock Firefox 159.0, WebCodecs AudioEncoder Opus 64 kbit/s mono, one second of a fixed signal: one byte stream on the i7-12700H (Linux) and i9-11900H (Windows), another on the Ryzen 9850X3D (Linux) and the Threadripper 7970X (Firefox 158, Linux); libopus celt/x86/vq_sse2.c calls _mm_rcp_ps and _mm_rsqrt_ps; the build with general.cpu_identity 1 on the Ryzen gives the Intel stream byte for byte (guard cpu-vendor-estimates)"
       - "stock Firefox 159.0 on the same four x86 CPUs: Web Audio nodes, NaN bits, the 11 WebAssembly relaxed SIMD operations, WebGL shaders, flac/vorbis/AAC and the video encoders gave one value per OS, none per vendor; an Apple M4 differs in all of Web Audio, nearly all canvas operations, Opus, NaN sign and 9 relaxed SIMD operations"
+      - "2026-11-11, the build with general.cpu_identity 3 on the Ryzen 9850X3D, launched through the Python launcher under Xvfb: all 45 cpu-probe keys on which stock 159.0 x86-64 and ARM64 Linux differ (canvas text aside, which follows devicePixelRatio) equal the Apple M4 container's (guard cpu-vendor-estimates)"
       - "Firefox Public Data Report, hardware, week of 2026-11-02: Intel 76.86%, AMD 17.61%, Apple 5.04%, so Intel is 81.4% of x86; no per-OS split is published"
     rationale: >-
       The two estimate instructions are specified only to a relative error, and
@@ -431,8 +443,11 @@ rules:
       with the identity: from the GPU where only one vendor's CPU carries it
       (Intel integrated graphics, Radeon APU graphics, every x86 Mac), else at
       Firefox's x86 share, which Steam's survey would put far lower for Intel.
-      Audio is not part of it: the offline render splits x86-64 from ARM64, not
-      Intel from AMD (audio-is-not-noised).
+      Audio is not part of the vendor split: the offline render splits x86-64
+      from ARM64, not Intel from AMD (audio-is-not-noised). An ARM64 identity
+      on x86-64 runs Firefox's aarch64 code paths emulated in C (Skia, Web
+      Audio, ffvpx, libopus) and ARM's NaN and relaxed SIMD rules in the JIT;
+      nothing emulates x86 on an ARM64 build.
 
   - id: cross-os-canvas-is-the-rfp-placeholder
     title: On the host's OS the identity claims the host's GPU or software renderer; on another OS or GPU canvas readback is RFP's random placeholder
@@ -504,6 +519,7 @@ rules:
       - "Windows: 156 exposes EXT_depth_clamp in WebGL1 and WebGL2 on both GPUs, 146 on neither, and no fpgen Windows record has it. third_party/angle/src/libANGLE/renderer/d3d/d3d11/renderer11_utils.cpp:1334 (156, ANGLE chromium/7778) sets depthClampEXT = true on every D3D11 feature level; 146's ANGLE (chromium/5359) never sets it"
       - "Linux: WebGL1 ALIASED_LINE_WIDTH_RANGE is [1, 2048] on 146 and [1, 1] on 156, WebGL2 [1, 1] on both. 146's dom/canvas/WebGLContext.cpp:324 forced REQUIRE_COMPAT_PROFILE on WebGL1 unless webgl.1.allow-core-profiles, which 146's StaticPrefList.yaml set on macOS only; 156 removed both, and WebGLContextValidate.cpp:211 reads the driver's range only off a core profile, leaving WebGLTypes.h:654's {1, 1}"
       - "fpgen Linux WebGL2 records: [1, 1] on 97%, the driver's range on the 3% without EXT_depth_clamp (GLES drivers, where Firefox reads it)"
+      - "fpgen Linux records for the GeForce GTX 480 and 980 also differ in WebGL1 and WebGL2 ALIASED_POINT_SIZE_RANGE, a 146 compatibility-profile value; CreepJS flags any mirrored non-string WebGL1/WebGL2 parameter that differs"
       - "browser/tests/playwright/patches/stock-gpu-parity.py fails on the 146-style WebGL1 range on Linux, on a hardware GPU and on llvmpipe, and passes with the fix"
       - "Firefox 159 (bug 1735401) exposes EXT_texture_norm16 on WebGL2, no longer behind webgl.enable-draft-extensions: stock 159.0 on M1 (headless) and on Linux llvmpipe (Xvfb) list it on WebGL2 and not WebGL1; stock 158.0.1 on the same Linux and 146.0 on the same M1 list it on neither. dom/canvas/WebGLExtensions.cpp's IsSupported needs GLFeature::texture_norm16, core in desktop GL 3.1"
       - "Firefox 159 caps WebGL2 MAX_UNIFORM_BLOCK_SIZE at 64 KiB (WebGL2ContextState.cpp, kMaxUniformBlockSize): on one Linux AMD machine, stock 146 reports 4294967292 and stock 159.0 65536, and stock-gpu-parity.py failed on the recording's 4120744960 until the launchers applied the cap"
@@ -516,9 +532,10 @@ rules:
       corrected where the launchers convert a recording (to_config). ANGLE's
       D3D11 backend gives every Windows GPU EXT_depth_clamp, which takes its
       place in Firefox's alphabetical extension order. WebGL1 now shares
-      WebGL2's GL profile, so it reports the line width range the same device
-      recorded for WebGL2, which is right for core profiles and GLES drivers
-      alike. Live state that also changed (the stencil masks) is answered by
+      WebGL2's GL profile, so it reports the value the same device recorded
+      for WebGL2 for every parameter both contexts report (the line width
+      range, the point size range...), which is right for core profiles and
+      GLES drivers alike. Live state that also changed (the stencil masks) is answered by
       the real context and needs nothing. stock-gpu-parity finds the next
       drift: it fails where stock Firefox of the recorded release and of the
       shipped one differ on the same machine and Camoufox does not follow the

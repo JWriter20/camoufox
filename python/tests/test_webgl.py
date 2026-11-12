@@ -219,8 +219,8 @@ def test_draft_extensions_filtered_on_every_os():
         )
         assert config["webGl:supportedExtensions"] == ["ANGLE_instanced_arrays", *backend]
         # The recorded EXT_texture_norm16 is dropped; Firefox 159 exposes it on
-        # every macOS and Linux WebGL2 context (test_texture_norm16_follows_the_backend).
-        webgl2_exts = backend + ["OVR_multiview2"] if target_os == "win" else ["EXT_texture_norm16"]
+        # every WebGL2 context (test_texture_norm16_follows_the_backend).
+        webgl2_exts = backend + ["EXT_texture_norm16", "OVR_multiview2"] if target_os == "win" else ["EXT_texture_norm16"]
         assert config["webGl2:supportedExtensions"] == webgl2_exts
 
 
@@ -250,14 +250,16 @@ def test_texture_norm16_follows_the_backend():
     """Firefox 159 exposes EXT_texture_norm16 on WebGL2 wherever the GL has
     16-bit normalized textures (core in desktop GL 3.1): every macOS and Linux
     device with WebGL2, never WebGL1. Measured on stock 159.0 on macOS (Apple
-    M1) and Linux (llvmpipe); 158.0.1 and fpgen's Firefox 146 records lack it."""
+    M1) and Linux (llvmpipe); 158.0.1 and fpgen's Firefox 146 records lack it.
+    On Windows ANGLE derives it from 16-bit normalized format support, which
+    D3D11 feature level 10_0 (WebGL2's minimum) requires: stock 159.0 on a
+    GeForce GTX 980 (ANGLE D3D11) lists it on WebGL2 and not WebGL1."""
     for target_os in OSES:
         for s in range(100):
             config = sample_webgl_for_screen(target_os, 1920, 1080, s)
             assert "EXT_texture_norm16" not in config["webGl:supportedExtensions"], (target_os, s)
             if config["webGl2Enabled"]:
-                want = target_os in ("mac", "lin")
-                assert ("EXT_texture_norm16" in config["webGl2:supportedExtensions"]) == want, (target_os, s)
+                assert "EXT_texture_norm16" in config["webGl2:supportedExtensions"], (target_os, s)
 
 
 def test_clip_control_and_mirror_clamp_follow_the_backend():
@@ -319,12 +321,18 @@ def test_a_uniform_block_is_at_most_what_firefox_allows():
     assert block_size(16384) == 16384
 
 
-def test_webgl1_line_width_range_is_webgl2s():
-    """Firefox 156 creates WebGL1 on the same GL profile as WebGL2. 146 forced
-    a compatibility profile for WebGL1, where fpgen recorded the driver's
-    wide-line range (Linux: [1, 2048], [1, 7.375], [1, 10] ...)."""
-    for target_os in OSES:
-        for s in range(100):
-            config = sample_webgl_for_screen(target_os, 1920, 1080, s)
-            if config["webGl2Enabled"]:
-                assert config["webGl:parameters"]["33902"] == config["webGl2:parameters"]["33902"], (target_os, s)
+@pytest.mark.parametrize('target_os', ['win', 'mac', 'lin'])
+def test_webgl1_reports_webgl2s_values_for_every_shared_parameter(target_os):
+    # Firefox 156+ creates WebGL1 on WebGL2's GL profile, so every parameter
+    # both report is one driver value. fpgen recorded Firefox 146, which put
+    # WebGL1 on a compatibility profile: two Linux devices carry a different
+    # ALIASED_POINT_SIZE_RANGE there. CreepJS flags any mismatch except the
+    # version strings and the line width range.
+    for vendor, renderer in webgl.firefox_gpus(target_os):
+        for config in webgl.recorded_devices(target_os, vendor, renderer):
+            if not config['webGl2Enabled']:
+                continue
+            p1, p2 = config['webGl:parameters'], config['webGl2:parameters']
+            mismatch = {k: (p1[k], p2[k]) for k in p2
+                        if k in p1 and not isinstance(p1[k], str) and p1[k] != p2[k]}
+            assert not mismatch, (renderer, mismatch)
