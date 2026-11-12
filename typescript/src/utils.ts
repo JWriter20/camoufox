@@ -47,7 +47,7 @@ import {
 	raiseScreenToModernFloor,
 	Screen,
 	screenFloor,
-	setCpuVendorDefault,
+	setCpuDefault,
 	setHostIpv6Default,
 	setLocationSettingDefault,
 	setMediaDevicesDefaults,
@@ -1060,6 +1060,95 @@ function parseUaFamily(userAgent: string): string {
 }
 
 /**
+ * general.cpu_identity for the identity's CPU: 0 compute as the host, 1 Intel
+ * x86, 2 AMD x86, 3 ARM64 (every ARM64 CPU computes alike).
+ */
+export function cpuIdentityPref(config: Record<string, any>): number {
+	const arch = config["cpu:arch"] ?? null;
+	const maker = config["cpu:manufacturer"] ?? null;
+	const table: Record<string, number> = LAUNCHER_CONSTANTS.cpuIdentityPref;
+	if (arch === "arm") return table.arm;
+	if (arch !== "x86" && arch !== null) return 0;
+	const key = `x86/${pyStr(maker)}`;
+	return Object.hasOwn(table, key) ? table[key] : 0;
+}
+
+/**
+ * media.libvpx.realtime_only: Firefox builds libvpx realtime-only for Windows
+ * and Linux on ARM64 (not macOS), which changes the WebCodecs VP8/VP9 encoders'
+ * output and rejects quality-mode VP8 outright.
+ */
+export function vpxRealtimeOnly(
+	config: Record<string, any>,
+	targetOs: string,
+): boolean {
+	return (
+		config["cpu:arch"] === "arm" && (targetOs === "win" || targetOs === "lin")
+	);
+}
+
+const CPU_OS_NAMES: Record<string, string> = {
+	windows: "win",
+	macos: "mac",
+	linux: "lin",
+};
+
+/**
+ * The OSes a machine with this CPU can run, among those asked for, as
+ * utils._os_for_cpu. Throws ValueError when the CPU is malformed or none of
+ * them can. With no OS asked for, only OSes with a GPU fpgen recorded beside
+ * such a CPU are drawn: an ARM identity is a Mac, or Linux rendering with
+ * llvmpipe, until Windows-on-ARM or Linux-on-ARM GPUs are recorded.
+ */
+export async function osForCpu(
+	cpu: unknown,
+	osValue: ListOrString | null | undefined,
+): Promise<ListOrString> {
+	const asked =
+		typeof osValue === "string"
+			? [osValue]
+			: osValue?.length
+				? [...osValue]
+				: Object.keys(CPU_OS_NAMES);
+	checkValidOs(asked);
+	const errors: string[] = [];
+	const fits: string[] = [];
+	for (const name of asked) {
+		let resolved: Record<string, string>;
+		try {
+			resolved = coherence.resolveCpu(cpu, CPU_OS_NAMES[name]);
+		} catch (e) {
+			if (!(e instanceof ValueError)) throw e;
+			errors.push(e.message);
+			continue;
+		}
+		if (osValue === null || osValue === undefined) {
+			const gpus = await utilsDeps.firefoxGpus(CPU_OS_NAMES[name]);
+			if (
+				!gpus.some(([, r]) =>
+					coherence.gpuFitsCpu(
+						r,
+						CPU_OS_NAMES[name],
+						resolved["cpu:arch"],
+						resolved["cpu:manufacturer"],
+					),
+				)
+			) {
+				errors.push(`fpgen has recorded no ${name} GPU beside that CPU`);
+				continue;
+			}
+		}
+		fits.push(name);
+	}
+	if (!fits.length) {
+		throw new ValueError(
+			`cpu=${pyRepr(cpu)}: ${[...new Set(errors)].join("; ")}`,
+		);
+	}
+	return fits.length === 1 ? fits[0] : fits;
+}
+
+/**
  * Checks if the target OS is valid.
  */
 export function checkValidOs(osValue: ListOrString): void {
@@ -2064,13 +2153,22 @@ export interface LaunchOptions {
 	disable_coop?: boolean;
 	/** Use a specific WebGL vendor/renderer pair, as [vendor, renderer]. */
 	webgl_config?: [string, string];
-	/** The x86 CPU vendor whose RCPPS/RSQRTPS estimates Skia's raster pipeline
-	 * uses, so canvas blend modes, perspective and matrix inversion read back
-	 * as on that vendor's CPU. Drawn with the identity by default: from the GPU
-	 * where only one vendor's CPU carries it (Intel integrated graphics, AMD APU
-	 * graphics, every x86 Mac), otherwise at Firefox's x86 split, about 81%
-	 * Intel. Not set for an Apple Silicon identity, which is ARM. */
-	cpu_vendor?: "intel" | "amd";
+	/** The CPU the identity computes as: { arch: "x86" or "arm", manufacturer },
+	 * either key optional (a manufacturer implies its arch). Firefox never
+	 * reports it, but canvas pixels, Web Audio samples, encoded Opus,
+	 * relaxed-SIMD wasm and NaN signs differ between x86-64 and ARM64, and
+	 * canvas and Opus between Intel and AMD; the browser computes them as the
+	 * claimed CPU does. Manufacturers per OS: macos x86 intel, arm apple;
+	 * windows x86 intel or amd, arm qualcomm; linux x86 intel or amd, arm
+	 * apple, qualcomm, broadcom, nvidia, ampere, rockchip, mediatek, amlogic or
+	 * allwinner. A pair no machine on the OS has (an AMD Mac, an Apple x86 CPU),
+	 * or one the GPU contradicts (an Apple GPU on x86, an Intel iGPU on AMD),
+	 * throws ValueError. Without `os`, the OS is drawn among those with a
+	 * recorded GPU for the CPU. By default the CPU follows the GPU (Apple GPU:
+	 * Apple ARM; Intel iGPU or Intel Mac: Intel; Radeon iGPU: AMD) and a core
+	 * count only Intel ships, otherwise x86 drawn 81% Intel, as among
+	 * Firefox's x86 users. */
+	cpu?: { arch?: "x86" | "arm"; manufacturer?: string };
 	/** Calculate longitude, latitude, timezone, country, & locale based on the IP
 	 * address. Pass the target IP address to use, or `true` to find it. */
 	geoip?: string | boolean;
@@ -2229,7 +2327,7 @@ async function buildLaunchOptions(
 		block_webgl,
 		disable_coop,
 		webgl_config,
-		cpu_vendor,
+		cpu,
 		geoip,
 		geoip_db,
 		humanize,
@@ -2439,13 +2537,8 @@ async function buildLaunchOptions(
 	if (!i_know_what_im_doing) {
 		warnManualConfig(config);
 	}
-	if (cpu_vendor !== undefined && cpu_vendor !== null) {
-		if (!(coherence.CPU_VENDORS as readonly unknown[]).includes(cpu_vendor)) {
-			throw new ValueError(
-				`cpu_vendor must be one of ${coherence.CPU_VENDORS.join(", ")}, not ${String(cpu_vendor)}`,
-			);
-		}
-		config["cpu:vendor"] = cpu_vendor;
+	if (cpu !== undefined && cpu !== null) {
+		targetOsOption = await osForCpu(cpu, targetOsOption);
 	}
 	const callerKeys: ReadonlySet<string> = new Set(Object.keys(config));
 
@@ -2596,6 +2689,43 @@ async function buildLaunchOptions(
 	}
 
 	const targetOs = getTargetOs(config);
+	if (cpu !== undefined && cpu !== null) {
+		Object.assign(config, coherence.resolveCpu(cpu, targetOs));
+	}
+
+	// fpgen.yml leaves devicePixelRatio unmapped, so the page reports the
+	// rendering scale while the screen keeps fpgen's CSS sizes. A drawn ratio no
+	// display offers is a browser zoom that shrank those sizes (1760x990 at
+	// 1.0909 is a 1920x1080 monitor at 110%): it moves to the display's scale
+	// with the geometry rescaled, so the screen is the display it was recorded
+	// on. Here, before the display clamp and the available area are derived
+	// from it.
+	if (
+		!usedPreset &&
+		fingerprint != null &&
+		typeof fingerprint === "object" &&
+		!userSetScreenWindow
+	) {
+		const drawnDpr = (fingerprint as Record<string, any>).window
+			?.devicePixelRatio;
+		if (
+			!("window.devicePixelRatio" in config) &&
+			coherence.isZoomedRatio(drawnDpr, targetOs)
+		) {
+			// A caller's layout.css.devPixelsPerPx is the scale the page renders
+			// at, so the ratio moves to that: otherwise the page reports one
+			// devicePixelRatio and matches another in matchMedia('(resolution)').
+			const callerScale = Number(
+				firefox_user_prefs["layout.css.devPixelsPerPx"] ?? -1,
+			);
+			config["window.devicePixelRatio"] = drawnDpr;
+			coherence.repairDevicePixelRatio(
+				config,
+				targetOs,
+				callerScale > 0 ? callerScale : undefined,
+			);
+		}
+	}
 
 	if (leased) {
 		held.lease ??= await pro.acquire(
@@ -3211,6 +3341,7 @@ async function buildLaunchOptions(
 				config["screen.height"],
 				seed(),
 				config["navigator.hardwareConcurrency"],
+				config,
 			);
 		}
 		const enableWebgl2 = webglFp.webGl2Enabled;
@@ -3225,8 +3356,14 @@ async function buildLaunchOptions(
 		});
 	}
 
-	// The CPU vendor follows the GPU, so it is drawn once the GPU is final.
-	setCpuVendorDefault(config, targetOs, salt);
+	// The CPU follows the GPU, so it is drawn once the GPU is final. A CPU the
+	// caller named that the GPU contradicts (a preset's, webgl_config's, the
+	// host's) is no machine at all.
+	if (cpu !== undefined && cpu !== null) {
+		const conflict = coherence.cpuConflict(config, targetOs);
+		if (conflict) throw new ValueError(`cpu=${pyRepr(cpu)}: ${conflict}`);
+	}
+	setCpuDefault(config, targetOs, salt);
 
 	// Every identity passes the whole-identity checks, whatever built it. The
 	// pools are sampled independently, so a machine that never existed can be
@@ -3241,16 +3378,18 @@ async function buildLaunchOptions(
 		}
 	}
 
-	// Skia computes RCPPS/RSQRTPS as cpu:vendor's CPU does. A build without
-	// cpu-vendor-estimates.patch ignores the pref and keeps the host's.
-	const cpuVendor = config["cpu:vendor"] as coherence.CpuVendor | undefined;
+	// The browser computes canvas, audio, Opus, wasm and NaNs as the claimed
+	// CPU does (cpu-identity.patch). A build without the patch ignores the pref
+	// and computes as the host does.
+	const cpuPref = cpuIdentityPref(config);
+	if (cpuPref && !("general.cpu_identity" in firefox_user_prefs)) {
+		firefox_user_prefs["general.cpu_identity"] = cpuPref;
+	}
 	if (
-		cpuVendor &&
-		(coherence.CPU_VENDORS as readonly unknown[]).includes(cpuVendor) &&
-		!("gfx.skia.cpu_vendor_estimates" in firefox_user_prefs)
+		vpxRealtimeOnly(config, targetOs) &&
+		!("media.libvpx.realtime_only" in firefox_user_prefs)
 	) {
-		firefox_user_prefs["gfx.skia.cpu_vendor_estimates"] =
-			LAUNCHER_CONSTANTS.cpuVendorEstimatesPref[cpuVendor];
+		firefox_user_prefs["media.libvpx.realtime_only"] = true;
 	}
 
 	// Render at the claimed display scale, so (resolution) and the CSS geometry

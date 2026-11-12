@@ -21,6 +21,7 @@ import { attachDriverDefaults } from "./driver_defaults.js";
 import { generateContextFingerprint } from "./fingerprints.js";
 import * as humanizeCustom from "./humanize-custom.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
+import { SELECTOR } from "./locales.js";
 import { attachLease, claim, launchFailed, type ProSession } from "./pro.js";
 import { RELAY_ENV } from "./render_node.js";
 import {
@@ -307,13 +308,29 @@ export async function NewContext(
 	// the browser the page is actually talking to.
 	const ffVersion = ff_version || browser.version().split(".", 1)[0];
 
-	// Auto-derive the WebRTC IP and timezone from the proxy's exit IP when they
-	// aren't explicitly provided.
+	// Put a context behind a proxy where the proxy exits, as geoip places a
+	// launch: its WebRTC IP, clock, locale and position. A value the caller
+	// gave is kept.
 	let webrtcIp = webrtc_ip;
-	if (proxy && (!webrtcIp || !("timezoneId" in contextOptions))) {
-		const [exitIp, timezone] = await proxyExitGeo(ProxyHelper.asString(proxy));
-		webrtcIp ||= exitIp;
-		if (!("timezoneId" in contextOptions)) contextOptions.timezoneId = timezone;
+	let position = geolocation;
+	if (
+		proxy &&
+		!(
+			webrtcIp &&
+			position &&
+			"timezoneId" in contextOptions &&
+			"locale" in contextOptions
+		)
+	) {
+		const exit = await proxyExitGeo(ProxyHelper.asString(proxy));
+		webrtcIp ||= exit.ip;
+		position ||= { latitude: exit.latitude, longitude: exit.longitude };
+		if (!("timezoneId" in contextOptions))
+			contextOptions.timezoneId = exit.timezone;
+		if (!("locale" in contextOptions))
+			contextOptions.locale = (
+				await SELECTOR.fromRegion(exit.country)
+			).asString;
 	}
 
 	const [contextOs, webglConfig] = contextIdentity(browser, os, preset);
@@ -336,8 +353,8 @@ export async function NewContext(
 		...contextOptions,
 	};
 	if (proxy) opts.proxy = proxy;
-	if (geolocation) {
-		opts.geolocation = geolocation;
+	if (position) {
+		opts.geolocation = position;
 		opts.permissions ??= ["geolocation"];
 	}
 
