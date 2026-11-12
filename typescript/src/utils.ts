@@ -30,6 +30,7 @@ import {
 	drawScreen,
 	drawVoiceConfig,
 	dropAudioSeed,
+	fitWindowToCallerScreen,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
 	followBaselineProtection,
@@ -374,6 +375,7 @@ export const utilsDeps = {
 	followBaselineProtection,
 	clampScreenToDisplay,
 	clampWindowDimensions,
+	fitWindowToCallerScreen,
 	clampWindowPosition,
 	raiseScreenToModernFloor,
 	generateRandomFontSubset,
@@ -2837,11 +2839,19 @@ async function buildLaunchOptions(
 		utilsDeps.clampWindowDimensions(config);
 		utilsDeps.clampWindowPosition(config);
 	} else {
-		// A caller's screen without a caller's window: the window was drawn for
-		// fpgen's own screen (2560x1408 against a caller's 1920x1080), and the
-		// browser grows the screen to hold its window, so it is fitted to the
-		// caller's screen as a real window fits its monitor.
-		if (!userSetWindowSize) utilsDeps.clampWindowDimensions(config);
+		// A caller's screen without a caller's window: the drawn window is fitted
+		// to it, as a real window fits its monitor.
+		if (!userSetWindowSize) {
+			utilsDeps.fitWindowToCallerScreen(
+				config,
+				targetOs,
+				new Set(
+					["window.screenX", "window.screenY"].filter(
+						(k) => !userWindowPosition.has(k),
+					),
+				),
+			);
+		}
 		// The caller drove the screen or the window, not always where the window
 		// sits: a position drawn against the generated screen is moved onto the
 		// caller's (window 1280 wide at x=206 on a 1382 screen), or every new

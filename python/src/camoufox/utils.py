@@ -27,7 +27,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, fit_window_to_caller_screen, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence, pro, render_node as render_nodes
 from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
@@ -2216,11 +2216,10 @@ def launch_options(
         clamp_window_dimensions(config)
         clamp_window_position(config)
     else:
-        # A caller's screen without a caller's window: the window was drawn for fpgen's own screen
-        # (2560x1408 against a caller's 1920x1080), and the browser grows the screen to hold its
-        # window, so it is fitted to the caller's screen as a real window fits its monitor.
+        # A caller's screen without a caller's window: the drawn window is fitted to it, as a real
+        # window fits its monitor.
         if not _user_set_window_size:
-            clamp_window_dimensions(config)
+            fit_window_to_caller_screen(config, target_os, {'window.screenX', 'window.screenY'} - _user_window_position)
         # The caller drove the screen or the window, not always where the window sits: a position
         # drawn against the generated screen is moved onto the caller's (window 1280 wide at
         # x=206 on a 1382 screen), or every new context drew another screen to hold it.
