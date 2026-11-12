@@ -83,6 +83,7 @@ export const INSTALL_DIR: string = userCacheDir("camoufox");
 export const DATA_FILES: readonly string[] = [
 	"audio-output-latency.json",
 	"browser-pin.json",
+	"display-profiles.json",
 	"essential-fonts.json",
 	"fingerprint-presets.json",
 	"fingerprint-presets-v150.json",

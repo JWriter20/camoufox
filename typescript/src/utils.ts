@@ -16,6 +16,10 @@ import * as coherence from "./coherence.js";
 import * as cpuAffinity from "./cpu_affinity.js";
 import { hasDisplay, largestDisplay } from "./display.js";
 import {
+	applyDisplayProfile,
+	type DisplayProfileOption,
+} from "./display_profile.js";
+import {
 	InvalidOS,
 	InvalidPropertyType,
 	NonFirefoxFingerprint,
@@ -2277,6 +2281,14 @@ export interface LaunchOptions {
 	 * locally. The identity is Windows: `os` defaults to it, and another OS
 	 * throws when the node was named here and draws locally otherwise. */
 	render_node?: renderNodes.RenderNodeOption;
+	/** The display's ICC colour profile, which ICC-tagged images are converted
+	 * to (a page reads it from their decoded pixels): ICC bytes or a path, e.g.
+	 * one recorded with GetICMProfileW on the machine the identity presents.
+	 * `false` keeps the browser's own (built-in sRGB on a host without one).
+	 * Default: an identity of another OS draws one from display-profiles.json
+	 * for its OS and screen; an identity of the host's OS uses the host
+	 * display's, as stock does. */
+	display_profile?: DisplayProfileOption;
 	/** Additional Firefox launch options, passed straight through to Playwright. */
 	[key: string]: any;
 }
@@ -2364,6 +2376,7 @@ async function buildLaunchOptions(
 		managed,
 		farm_gpu,
 		render_node,
+		display_profile,
 		...passthrough
 	}: LaunchOptions,
 	held: Held,
@@ -2938,6 +2951,19 @@ async function buildLaunchOptions(
 	// The output device's AudioContext.outputLatency, for an identity of
 	// another OS (audio-output-latency.json).
 	setOutputLatencyDefault(config, salt, targetOs, utilsDeps.hostOsKey());
+
+	// The display's ICC profile, which tagged images are converted to
+	// (display_profile.ts; display-profiles.json).
+	applyDisplayProfile(
+		firefox_user_prefs,
+		userPrefKeys,
+		display_profile,
+		config,
+		utilsDeps.identitySeed(config, salt),
+		targetOs,
+		utilsDeps.hostOsKey(),
+		utilsDeps.installDir(),
+	);
 
 	// When the Windows legacy styled-family aliases land (fonts.detect timing).
 	setWindowsAliasLoadDefault(config, targetOs, utilsDeps.hostOsKey());
