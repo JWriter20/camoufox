@@ -7,7 +7,8 @@
   "windowsLegacyFontFamilies": {
     "Arial": ["Arial Black"],
     "Calibri": ["Calibri Light"],
-    "Franklin Gothic": ["Franklin Gothic Medium"]
+    "Franklin Gothic": ["Franklin Gothic Medium"],
+    "Segoe UI Variable Text": ["Segoe UI Variable"]
   },
   "windows11MarkerFonts": [
     "Sans Serif Collection", "Segoe Fluent Icons", "Segoe UI Variable",
