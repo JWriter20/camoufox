@@ -124,7 +124,6 @@ import {
 	pyTypeName,
 	ValueError,
 } from "./pycompat.js";
-import * as renderNodes from "./render_node.js";
 import { VirtualDisplay } from "./virtdisplay.js";
 import {
 	FallbackWarning,
@@ -1891,13 +1890,12 @@ export async function hostIdentity(
 	canvasNoise: boolean | undefined,
 ): Promise<HostIdentity | null> {
 	const prefs = fromOptions.firefoxUserPrefs ?? {};
-	// A farm- or node-rendered browser draws there, not on this host.
+	// A farm-rendered browser draws there, not on this host.
 	const env = fromOptions.env ?? {};
 	if (
 		canvasNoise != null ||
 		hasCanvasPlaceholder(prefs) ||
-		pro.RENDER_FILE_ENV in env ||
-		renderNodes.RELAY_ENV in env
+		pro.RENDER_FILE_ENV in env
 	)
 		return null;
 	// Without the placeholder, the launch claimed the host's OS and no named GPU.
@@ -1929,20 +1927,6 @@ export function contextIdentity(
 	os: string | undefined,
 	preset: Record<string, any> | undefined,
 ): [string | undefined, Gpu | null] {
-	if (browser._camoufoxRenderNode) {
-		const presetOs = pyTruthy(preset)
-			? targetOsFromPlatform(preset?.navigator?.platform ?? "")
-			: null;
-		if (
-			(os || "windows") !== "windows" ||
-			(presetOs || "windows") !== "windows"
-		) {
-			throw new ValueError(
-				"This browser draws WebGL on a Windows render node, so its contexts are Windows.",
-			);
-		}
-		return ["windows", null];
-	}
 	const hostIdentity: [TargetOS, Gpu | null] | undefined =
 		browser._camoufoxHostIdentity;
 	if (!hostIdentity) return [os, null];
@@ -2273,14 +2257,6 @@ export interface LaunchOptions {
 	/** `false` renders WebGL, WebGPU and canvas on this machine's GPU for a
 	 * Camoufox Pro Windows identity, instead of on a remote GPU. */
 	farm_gpu?: false;
-	/** Camoufox Pro: draw WebGL on a render node, a Windows machine that runs
-	 * every WebGL call on Windows Firefox's own ANGLE and GPU (see
-	 * docs/pro.md). A path or object names the node's coordinator; undefined
-	 * (the default) uses CAMOUFOX_RENDER_NODE or
-	 * ~/.config/camoufox/render-node.json when either exists; `false` draws
-	 * locally. The identity is Windows: `os` defaults to it, and another OS
-	 * throws when the node was named here and draws locally otherwise. */
-	render_node?: renderNodes.RenderNodeOption;
 	/** The display's ICC colour profile, which ICC-tagged images are converted
 	 * to (a page reads it from their decoded pixels): ICC bytes or a path, e.g.
 	 * one recorded with GetICMProfileW on the machine the identity presents.
@@ -2299,24 +2275,22 @@ export interface LaunchOptions {
  * Accepts all Playwright Firefox launch options, along with the Camoufox ones
  * documented on {@link LaunchOptions}.
  */
-/** What a launch opened along the way: a Pro lease, a managed proxy session, a render node. */
+/** What a launch opened along the way: a Pro lease, a managed proxy session. */
 interface Held {
 	lease: pro.Lease | null;
-	node: renderNodes.Session | null;
 	proxy: ProxySession | null;
 }
 
 export async function launchOptions(
 	options: LaunchOptions = {},
 ): Promise<Record<string, any>> {
-	// A Camoufox Pro lease or node session opened along the way goes back if the build fails.
-	const held: Held = { lease: null, node: null, proxy: null };
+	// A Camoufox Pro lease or proxy session opened along the way goes back if the build fails.
+	const held: Held = { lease: null, proxy: null };
 	try {
 		return await buildLaunchOptions(options, held);
 	} catch (error) {
 		await held.lease?.release("error");
 		await held.proxy?.release("error");
-		await held.node?.release();
 		throw error;
 	}
 }
@@ -2375,7 +2349,6 @@ async function buildLaunchOptions(
 		warm_plan,
 		managed,
 		farm_gpu,
-		render_node,
 		display_profile,
 		...passthrough
 	}: LaunchOptions,
@@ -2467,31 +2440,6 @@ async function buildLaunchOptions(
 				: "profile, warm_plan and farm_gpu need a Camoufox Pro build (see docs/pro.md).",
 		);
 	}
-	// A render node runs Windows Firefox's ANGLE, so it serves Windows identities of a Pro build.
-	const namedNode = render_node != null && typeof render_node !== "boolean";
-	let relay = proBuild || namedNode ? renderNodes.resolve(render_node) : null;
-	if (relay) {
-		const oses =
-			typeof targetOsOption === "string"
-				? [targetOsOption]
-				: [...(targetOsOption ?? ["windows"])];
-		const refusal = !proBuild
-			? "render_node needs a Camoufox Pro build (see docs/pro.md)."
-			: !leased && !namedNode
-				? `render_node is a lease option, and this launch carries its own ${pro.LEASE_FILE_ENV}.`
-				: !oses.includes("windows")
-					? `render_node draws a Windows identity's WebGL, and os=${JSON.stringify(targetOsOption)} has no Windows.`
-					: null;
-		if (refusal === null) {
-			targetOsOption = "windows";
-			if (leased) proRequest.gpu = false;
-		} else if (namedNode) {
-			throw new ValueError(refusal);
-		} else {
-			relay = null;
-		}
-	}
-	let node: renderNodes.Session | null = null;
 	// What the lease adds to the environment, after every launch rule.
 	const proEnv: EnvVars = {};
 
@@ -2790,31 +2738,6 @@ async function buildLaunchOptions(
 		held.proxy ??= await ProxySession.open(proxyWire, pro_key);
 		proxy = held.proxy.proxy();
 		geoip ??= held.proxy.egress.exit_ip ?? true;
-	}
-
-	if (relay) {
-		const directory = path.dirname(
-			held.lease?.path ?? String(env[pro.LEASE_FILE_ENV]),
-		);
-		node = await renderNodes.Session.open(
-			relay,
-			firefoxVersion(resolvedExecutable),
-			directory,
-		);
-		held.node = node;
-		if (held.lease) {
-			const opened = node;
-			held.lease.onEnd.push(() => opened.release());
-		} else if (held.proxy) {
-			const opened = node;
-			held.proxy.onEnd.push(() => opened.release());
-		} else {
-			renderNodes.track(node);
-		}
-		proEnv[renderNodes.RELAY_ENV] = node.path;
-		if (node.textSocket) proEnv[renderNodes.TEXT_ENV] = node.textSocket;
-		// The node draws on the identity's own OS and GPU, so there is nothing to cover.
-		canvas_noise ??= false;
 	}
 
 	// A preset whose screen is a phone viewport is not a real desktop device.
@@ -3331,31 +3254,6 @@ async function buildLaunchOptions(
 	if (block_webgl) {
 		firefox_user_prefs["webgl.disabled"] = true;
 		LeakWarning.warn("block_webgl", i_know_what_im_doing);
-	} else if (node) {
-		if (pyTruthy(webgl_config)) {
-			throw new ValueError(
-				"webgl_config names a GPU, but a render node reports its own: pass render_node: false.",
-			);
-		}
-		// Every WebGL value is the node's own, as Windows Firefox reports it there.
-		for (const key of Object.keys(config)) {
-			if (key.startsWith("webGl:") || key.startsWith("webGl2:"))
-				delete config[key];
-		}
-		mergeInto(firefox_user_prefs, {
-			"webgl.enable-webgl2": true,
-			"webgl.force-enabled": true,
-			// Windows Firefox draws large canvases with WebGL on its ANGLE; here
-			// that ANGLE is the node's.
-			"gfx.canvas.accelerated": true,
-			"gfx.canvas.accelerated.force-enabled": true,
-		});
-		if (
-			node.routes.has("webgpu") &&
-			!("dom.webgpu.renderfarm.node" in firefox_user_prefs)
-		) {
-			firefox_user_prefs["dom.webgpu.renderfarm.node"] = true;
-		}
 	} else {
 		let webglFp: Record<string, any>;
 		const seed = () =>
@@ -3489,18 +3387,6 @@ async function buildLaunchOptions(
 		env,
 		executable_path,
 	);
-	if (node) {
-		// The holo prefs make local GL draw like Windows ANGLE; on a node, Windows ANGLE draws.
-		for (const name of Object.keys(firefox_user_prefs)) {
-			if (name.startsWith("webgl.holo-")) firefox_user_prefs[name] = false;
-		}
-		if (firefox_user_prefs["dom.webgpu.renderfarm.node"]) {
-			// Likewise WebGPU's D3D12 limit table and NVIDIA emulation: the node reports its own.
-			delete config["webGPU:d3d12Limits"];
-			delete env.HOLO_WEBGPU_NV_ARCH;
-		}
-	}
-
 	// Validate the config
 	warnIfExecutablePredatesPlaywright(executable_path);
 	utilsDeps.validateConfig(config, executable_path);

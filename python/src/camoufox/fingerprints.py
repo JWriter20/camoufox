@@ -1790,7 +1790,6 @@ def generate_context_fingerprint(
     locale: Optional[str] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
     webgl_config: Optional[Tuple[str, str]] = None,
-    webgl: bool = True,
     screen_bound: Optional[Screen] = None,
 ) -> Dict[str, Any]:
     """
@@ -1811,8 +1810,6 @@ def generate_context_fingerprint(
             is built but before init_script is rendered (e.g. {'timezone': 'UTC'}).
         webgl_config: The (vendor, renderer) a drawn identity claims, instead of
             drawing one.
-        webgl: False claims no WebGL values, for a browser whose render node
-            reports its own (camoufox.render_node).
         screen_bound: A bound on the drawn screen (screen_floor: one that holds the
             window the context's pages report). A preset keeps its own.
     """
@@ -1860,10 +1857,7 @@ def generate_context_fingerprint(
                 config['navigator.oscpu'] = oscpu
 
         # Draw the GPU and its WebGL data (fpgen.yml does not map these)
-        if not webgl:
-            for key in [k for k in config if k.startswith(('webGl:', 'webGl2:'))]:
-                del config[key]
-        elif not config.get('webGl:vendor') or not config.get('webGl:renderer'):
+        if not config.get('webGl:vendor') or not config.get('webGl:renderer'):
             # Not at the top: camoufox.webgl imports this module.
             from .webgl import sample_webgl_for_screen, webgl_for_gpu
 

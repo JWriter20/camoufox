@@ -12,7 +12,7 @@ import atexit
 import logging
 import random
 import threading
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from . import pro
 from .exceptions import ProError
@@ -59,8 +59,6 @@ class ProxySession:
         self.notices: List[Dict[str, Any]] = list(answer.get("notices") or [])
         log_notices(self.notices)
         self._heartbeat_s = float(answer.get("heartbeat_s") or HEARTBEAT_S)
-        # Sessions held for the browser (a render node's assignment): ended with this one.
-        self.on_end: List[Callable[[], None]] = []
         self.claimed = False
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -149,11 +147,6 @@ class ProxySession:
                     # It lapses by itself once its heartbeats stop.
                     log.warning("camoufox: releasing managed proxy session %s failed: %s", self.session_id, error)
                     break
-        for end in self.on_end:
-            try:
-                end()
-            except Exception as error:  # one failed hook must not keep the others' resources
-                log.warning("camoufox: ending a session held with proxy session %s failed: %s", self.session_id, error)
         return done
 
     def close(self) -> None:

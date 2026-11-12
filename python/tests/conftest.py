@@ -17,16 +17,6 @@ def no_host_gpu_probe(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_render_node(monkeypatch, tmp_path):
-    """A Pro launch uses the render node this machine configured; the suite's
-    must not, so no configuration is found. Render-node tests write their own."""
-    from camoufox import render_node
-
-    monkeypatch.delenv(render_node.CONFIG_ENV, raising=False)
-    monkeypatch.setattr(render_node, 'DEFAULT_PATH', tmp_path / 'render-node.json')
-
-
-@pytest.fixture(autouse=True)
 def properties_of_this_checkout(monkeypatch):
     """launch_options reads properties.json from the installed build, and CI
     installs the last published one. This suite tests the checkout, whose

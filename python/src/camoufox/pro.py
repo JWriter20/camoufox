@@ -510,8 +510,6 @@ class Lease:
         self.state_dirty: Optional[bool] = None
         # Directories and files that go with the lease: deleted when it ends.
         self.scratch: List[Path] = []
-        # Sessions held for the browser (a render node's assignment): ended with the lease.
-        self.on_end: List[Callable[[], None]] = []
         self._close_lock = threading.Lock()
         self._closed = False
         self._close_error: Optional[BaseException] = None
@@ -738,11 +736,6 @@ class Lease:
                 self._released = True
             _LIVE.pop(str(self.path), None)
             done = released()
-            for end in self.on_end:
-                try:
-                    end()
-                except Exception as error:  # one failed hook must not keep the others' resources
-                    log.warning("camoufox-pro: ending a session held with lease %s failed: %s", self.lease_id, error)
             for path in (self.path, self.render_path):
                 if path is not None:
                     path.unlink(missing_ok=True)
@@ -800,19 +793,14 @@ def acquire(
 
 def claim(options: Dict[str, Any], display: Any = None) -> Optional[Any]:
     """
-    The lease, managed proxy session or named-node session opened for these options,
+    The lease or managed proxy session opened for these options,
     taken by the browser about to launch with them on `display`. None for a stock
     build with no session.
     """
     lease = _LIVE.get(str(options.get("env", {}).get(LEASE_FILE_ENV)))
     if lease is None:
-        # A standard build's managed proxy session holds any render node opened with it.
         from .proxy_session import claim as claim_proxy
-        session = claim_proxy(options)
-        if session is not None:
-            return session
-        from .render_node import claim as claim_node
-        return claim_node(options)
+        return claim_proxy(options)
     if lease.claimed:
         raise ValueError(
             "These launch options' Camoufox Pro lease is already held by another browser. "

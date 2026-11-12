@@ -95,7 +95,7 @@ describe("a proxy session", () => {
 		await session.release();
 	});
 
-	it("is renewed while it lives and released once, ending what it holds", async () => {
+	it("is renewed while it lives and released once", async () => {
 		vi.useFakeTimers();
 		const calls = fakeApi();
 		const session = await ProxySession.open(true);
@@ -103,13 +103,10 @@ describe("a proxy session", () => {
 		expect(
 			calls.some((c) => c.url.endsWith(`${SESSION.session_id}/heartbeat`)),
 		).toBe(true);
-		const ended = vi.fn(async () => {});
-		session.onEnd.push(ended);
 		await Promise.all([session.release(), session.release()]);
 		const releases = calls.filter((c) => c.url.endsWith("/release"));
 		expect(releases).toHaveLength(1);
 		expect(releases[0].body).toEqual({ reason: "clean_exit" });
-		expect(ended).toHaveBeenCalledOnce();
 		expect(claim({ proxy: { username: SESSION.username } })).toBeNull();
 	});
 

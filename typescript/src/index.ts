@@ -88,7 +88,6 @@ export {
 	releaseStatic,
 	type Targeting,
 } from "./proxies.js";
-export { RenderNodeError, type RenderNodeOption } from "./render_node.js";
 export { type LaunchServerOptions, launchServer } from "./server.js";
 export {
 	Camoufox,

@@ -1,7 +1,7 @@
 /**
  * A local fake of the Camoufox Pro API, answering in the server's own shapes,
- * shared by the tests of the lease and of what a lease carries (pro.test.ts,
- * render-node.test.ts). No test reaches the network.
+ * shared by the tests of the lease and of what a lease carries (pro.test.ts).
+ * No test reaches the network.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import * as http from "node:http";

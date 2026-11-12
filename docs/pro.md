@@ -157,11 +157,9 @@ set it:
 | `warm_plan` | `"none"`, `"standard"`, `"continuous"` | the plan a new profile is created with (with `profile` only) |
 | `managed` | `False`, `True`, or a `Managed` | no [managed proxy](#managed-proxies), the defaults, or the proxy wanted |
 | `farm_gpu` | `false` | no [remote GPU](#remote-rendering): render on this machine |
-| `render_node` | `false`, a path, or `{coordinator, token, gpu}` | WebGL on [your own render node](#your-own-render-node) |
 
 They need a Pro build; on a stock build, or with a `CAMOU_LEASE_FILE` of your
-own, they raise `ValueError`. An explicitly named `render_node` path or object
-is the exception: it uses your lease without trying to replace it.
+own, they raise `ValueError`.
 
 ### Managed proxies
 
@@ -346,56 +344,6 @@ option that picks the card for `headless: "virtual-gpu"`; that display renders
 on this machine, so a lease that grants a remote GPU with it raises
 `ValueError`: pass `farm_gpu: false` to render locally, or `headless: "virtual"`
 to let the remote GPU draw.
-
-### Your own render node
-
-A Pro build on Linux x86-64 can draw WebGL on a render node you run: a Windows
-machine with a renderfarm renderer serving an ANGLE pack for the build's exact
-Firefox release. Every WebGL call runs there, on that release's own ANGLE
-(Direct3D 11) and the node's GPU, so the page reads the parameters and pixels
-Windows Firefox on that GPU gives it. Nothing is masked and the canvas is not
-covered.
-
-Name the node's coordinator in `~/.config/camoufox/render-node.json`, or in a
-file `CAMOUFOX_RENDER_NODE` names:
-
-```json
-{"coordinator": "http://192.168.1.20:9471", "token": "<client token>",
- "gpu": "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar"}
-```
-
-`gpu` is optional: the WebGL renderer Windows Firefox reports for the GPU you
-want, as the pack's profile records it. Without it the coordinator picks any
-free GPU. The coordinator must be on your private network, over `http`.
-
-With the file in place every Pro launch uses the node, with no option to pass.
-The identity is Windows (`os` defaults to it); a launch with another `os` draws
-locally. Pass `render_node=False` (TypeScript: `render_node: false`) to draw
-locally, or a path or a dict (an object) to name a node for one launch, in
-which case a launch that cannot use it raises `ValueError`. A path or dict also
-works with a caller-managed `CAMOU_LEASE_FILE`. The launcher takes an assignment from the coordinator for each
-browser, renews it while the browser runs, and releases it when the lease ends.
-When no node serves the build's release, or every GPU stays busy for 30
-seconds, the launch raises `RenderNodeError`.
-
-Canvas 2D is accelerated as on Windows Firefox: a canvas of at least 128x128
-pixels draws through WebGL on the node's ANGLE, while smaller canvases and
-`willReadFrequently` ones draw on this machine.
-
-WebGPU runs on the node too when its renderer serves it (the coordinator lists
-`webgpu` in the assignment's `angle_routes`): there it executes on Direct3D 12,
-through the same release's own WebGPU implementation. On a node without it,
-WebGPU is blocked, as on Windows Firefox with a blocklisted GPU, so
-`navigator.gpu.requestAdapter()` returns `null`. Contexts of the browser are
-Windows and claim no WebGL values of their own.
-
-Text is rasterized on the node too when its renderer serves it (`text` in
-`angle_routes`): every glyph goes through the node's own DirectWrite instead of
-the build's bundled copy, so canvas and page text match that Windows machine.
-The browser talks to the node through a socket beside the lease file
-(`$XDG_RUNTIME_DIR/camoufox-pro` when that is set); a launch whose socket path
-would exceed 107 bytes raises `RenderNodeError`. On a node without the route, text is
-rasterized locally as before.
 
 ### Profiles
 
