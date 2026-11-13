@@ -30,6 +30,7 @@ from camoufox.exceptions import (
     BuildNotAllowlisted,
     CapabilityMismatch,
     GpuLimitReached,
+    GpuUnavailable,
     LeaseLimitReached,
     LeaseRefused,
     NotSignedIn,
@@ -801,3 +802,15 @@ def test_without_the_farm_no_persona_is_sent(api, pro_build, monkeypatch, served
     launched_config(pro_build, monkeypatch, **kwargs)
     assert "persona" not in api.calls("/api/v1/leases")[0]["body"]
     assert len(api.calls(r"/api/v1/gpus\?.*")) == (0 if kwargs else 1)
+
+
+def test_a_caller_s_gpu_the_farm_lacks_fails_the_launch_loudly(api, pro_build, monkeypatch):
+    # Never a launch whose WebGL quietly claims one GPU and is drawn on another, or not drawn at all.
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    api.served = FARM_GPUS
+    pair = ("Google Inc. (AMD)", "ANGLE (AMD, Radeon R9 200 Series Direct3D11 vs_5_0 ps_5_0), or similar")
+    refusal = (503, {"error": "gpu_unavailable", "message": "no node presents it", "details": {"reason": "persona"}})
+    api.script("/api/v1/leases", *[refusal] * 4)
+    with pytest.raises(GpuUnavailable, match="no node presents it"):
+        launched_config(pro_build, monkeypatch, webgl_config=pair)
+    assert {tuple(call["body"]["persona"]) for call in api.calls("/api/v1/leases")} == {pair}
