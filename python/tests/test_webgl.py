@@ -123,6 +123,28 @@ def test_no_coherent_gpu_raises(monkeypatch):
         sample_webgl_for_screen("lin", 1920, 1080, seed=0)
 
 
+FARM = frozenset({
+    "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar",
+    "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar",
+})
+
+
+def test_a_farm_drawn_gpu_is_one_the_farm_serves_with_its_own_vendor():
+    drawn = {
+        (gpu["webGl:vendor"], gpu["webGl:renderer"])
+        for gpu in (sample_webgl_for_screen("win", 1920, 1080, s, renderers=FARM) for s in SEEDS)
+    }
+    assert {renderer for _, renderer in drawn} == FARM
+    assert drawn <= webgl.firefox_gpus("win")
+
+
+def test_a_farm_gpu_that_fits_nothing_raises():
+    # A discrete GTX 980 behind a netbook panel is no machine; drawing a GPU the farm lacks instead would
+    # be claimed on the page and drawn elsewhere.
+    with pytest.raises(ValueError, match="No GPU the render farm draws on"):
+        sample_webgl_for_screen("win", 1024, 600, 0, renderers={max(FARM)})
+
+
 @pytest.mark.parametrize("target_os", OSES)
 def test_webgl2_comes_from_the_same_device_as_webgl1(target_os):
     # webgl2 is pinned to the drawn webgl; drawn on the GPU alone, a Linux

@@ -338,6 +338,13 @@ rewrites the file at each renewal and deletes it when the lease ends. When the
 API cannot serve a remote GPU the launch fails with `GpuUnavailable`; retry
 after its `retry_after`, or pass `farm_gpu: false`.
 
+The identity claims a GPU the remote side has. Before the mint the launcher
+asks `GET /api/v1/gpus` which WebGL renderers it draws on for the build and
+OS, draws the identity's GPU from those, and names it to the mint as
+`persona`, which is drawn on that GPU. A GPU you name (`webgl_config`, or
+`webGl:vendor`/`webGl:renderer` in `config`) is sent as it is, and the mint
+refuses one the remote side does not have.
+
 A farm-rendered browser draws its canvas on the identity's own OS, so the
 launcher does not cover it, and its contexts may claim that OS. `gpu` stays the
 option that picks the card for `headless: "virtual-gpu"`; that display renders

@@ -86,6 +86,8 @@ class FakeCloud:
         self.key_class = "account"
         self.transport = "direct"
         self.served = {}
+        # What GET /api/v1/gpus answers: the renderers the farm draws on.
+        self.renderers = []
         self.archive_commits = []
         self.objects = {}
         self.head = 0
@@ -153,6 +155,8 @@ class FakeCloud:
         for route, queue in self.scripted.items():
             if re.fullmatch(route, path) and queue:
                 return queue.pop(0)
+        if method == "GET" and path.startswith("/api/v1/gpus?"):
+            return 200, {"os": parse_qs(urlparse(path).query)["os"][0], "firefox": "156.0.1", "renderers": self.renderers}
         if path == "/api/v1/leases":
             lease_id = uuid.uuid4()
             profile = None
