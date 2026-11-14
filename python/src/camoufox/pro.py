@@ -420,12 +420,19 @@ def token_fields(token: str) -> Dict[str, Any]:
     }
 
 
-def lease_file_bytes(token: str, target_os: str, fidelity: str, written_at: int) -> bytes:
-    """SPEC-LEASE § 8.2. Byte for byte what the TypeScript launcher writes for the same inputs."""
+def lease_file_bytes(
+    token: str, target_os: str, fidelity: str, written_at: int, humanize: Optional[str] = None
+) -> bytes:
+    """
+    SPEC-LEASE § 8.2. Byte for byte what the TypeScript launcher writes for the same inputs.
+
+    `humanize` is the server's sealed token for the browser, left out when the server sent none.
+    """
     body = {
         "v": 1,
         **token_fields(token),
         "token": token,
+        **({} if humanize is None else {"humanize": humanize}),
         "os": target_os,
         "fidelity": fidelity,
         "paths": {"identity_bundle": None, "font_metrics": None, "scene_cache_dir": None, "gpu_bundle": None},
@@ -517,6 +524,7 @@ class Lease:
         self._seq = 0
         self._heartbeat_s = 60.0
         self._fidelity = "native"
+        self._humanize: Optional[str] = None
         self._stop = threading.Event()
         self._write_lock = threading.Lock()
         self._release_lock = threading.Lock()
@@ -618,6 +626,7 @@ class Lease:
         if abs(skew) > SKEW_REFUSE_S:
             self._post_release("error")
             raise ProClockSkew(skew)
+        self._humanize = lease.get("humanize")
         self._write(lease["token"])
         self._write_render(self.grants.get("gpu"))
 
@@ -625,7 +634,10 @@ class Lease:
         with self._write_lock:
             if self._released:
                 return
-            write_private(self.path, lease_file_bytes(token, self.target_os, self._fidelity, int(time.time())))
+            write_private(
+                self.path,
+                lease_file_bytes(token, self.target_os, self._fidelity, int(time.time()), self._humanize),
+            )
 
     def _write_render(self, gpu: Optional[Dict[str, Any]]) -> None:
         """Write the remote-rendering file verbatim, as the browser reads it, when `gpu` carries one."""
@@ -691,6 +703,8 @@ class Lease:
                 return
             self._seq += 1
             _check_skew(answer["server_time"])
+            # A heartbeat that sends no `humanize` leaves the lease's last one standing.
+            self._humanize = answer.get("humanize") or self._humanize
             self._write(answer["token"])
             self._write_render(answer.get("gpu"))
             if answer.get("gpu") is None and self.grants.get("gpu"):

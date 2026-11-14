@@ -67,6 +67,11 @@ def token_for(lease_id, build_hash, expires_in=1800):
     return "cfl1_" + base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
+def humanize_token():
+    """Sealed for the browser: the launcher carries it into the lease file unread."""
+    return "cfh1_" + base64.urlsafe_b64encode(os.urandom(48)).rstrip(b"=").decode()
+
+
 class FakeApi:
     """The routes the launcher calls, answering as the control plane does unless a test scripts otherwise."""
 
@@ -80,6 +85,8 @@ class FakeApi:
         self.grants = {}
         # What GET /api/v1/gpus answers: the renderers the farm draws on for the asked OS.
         self.served = []
+        # False answers as a server that does not send `humanize` yet.
+        self.humanize = True
 
     def script(self, route, *answers):
         """Answer the next calls to `route` (a regex) with these (status, body) pairs, in order."""
@@ -91,6 +98,9 @@ class FakeApi:
     def wait_for(self, predicate, timeout=5):
         with self.changed:
             assert self.changed.wait_for(predicate, timeout), self.requests
+
+    def sealed(self):
+        return {"humanize": humanize_token()} if self.humanize else {}
 
     def answer(self, path, body):
         for route, queue in self.scripted.items():
@@ -108,6 +118,7 @@ class FakeApi:
                 "server_time": now,
                 "expires_at": now,
                 "token": token_for(lease_id, body["build_hash"]),
+                **self.sealed(),
                 "limits": {"ttl_s": 1800, "heartbeat_s": self.heartbeat_s, "grace_s": 180, "degrade_drain_s": 900},
                 "host": {"fingerprint": body["host"]["fingerprint"], "fidelity": "layout", "capability_hash": ""},
                 "notices": [],
@@ -120,6 +131,7 @@ class FakeApi:
                 "server_time": now,
                 "expires_at": now,
                 "token": token_for(uuid.UUID(match.group(1)), self.build_hash),
+                **self.sealed(),
                 "token_kid": 0,
                 "notices": [],
             }
@@ -142,7 +154,13 @@ def api(monkeypatch, tmp_path):
             # Recorded before answering, so a caller that has its answer can already see its request.
             with fake.changed:
                 fake.requests.append(
-                    {"path": self.path, "body": body, "auth": self.headers.get("Authorization"), "status": status}
+                    {
+                        "path": self.path,
+                        "body": body,
+                        "auth": self.headers.get("Authorization"),
+                        "status": status,
+                        "answer": answer,
+                    }
                 )
                 fake.changed.notify_all()
             payload = json.dumps(answer).encode()
@@ -204,14 +222,17 @@ def mode(path):
 # ── the file the browser reads ───────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("case", GOLDEN["lease_files"], ids=lambda c: c["os"])
+@pytest.mark.parametrize("case", GOLDEN["lease_files"], ids=lambda c: c["name"])
 def test_lease_file_is_byte_identical_to_the_shared_golden(case):
-    written = pro.lease_file_bytes(case["token"], case["os"], case["fidelity"], case["written_at"])
+    written = pro.lease_file_bytes(
+        case["token"], case["os"], case["fidelity"], case["written_at"], case.get("humanize")
+    )
     assert written.decode() == case["file"]
     body = json.loads(written)
+    # `humanize` is left out, never null, when the server sent none.
     assert list(body) == [
         "v", "lease_id", "account_id", "profile_id", "build_hash", "issued_at", "expires_at",
-        "token", "os", "fidelity", "paths", "written_at",
+        "token", *(["humanize"] if "humanize" in case else []), "os", "fidelity", "paths", "written_at",
     ]
     assert body["v"] == 1 and body["account_id"] == 42 and len(body["build_hash"]) == 64
 
@@ -495,6 +516,33 @@ def test_heartbeat_rewrites_the_file_with_each_token(api):
     assert beats[0]["body"]["host"]["fingerprint"] == api.requests[0]["body"]["host"]["fingerprint"]
     assert json.loads(after)["lease_id"] == json.loads(before)["lease_id"]
     assert json.loads(after)["token"] != json.loads(before)["token"]
+    assert json.loads(before)["humanize"] == api.requests[0]["answer"]["humanize"]
+    assert json.loads(after)["humanize"] in [b["answer"]["humanize"] for b in beats]
+
+
+def test_a_heartbeat_without_humanize_keeps_the_one_the_lease_was_minted_with(api):
+    api.heartbeat_s = 0.05
+    lease = acquire()
+    api.humanize = False
+    seen = len(api.calls(r".*/heartbeat"))
+    api.wait_for(lambda: len(api.calls(r".*/heartbeat")) >= seen + 3)
+    after = json.loads(lease.path.read_bytes())
+    lease.release()
+    sent = [r["answer"] for r in api.requests if "humanize" in r["answer"]]
+    assert after["token"] != sent[-1]["token"]
+    assert after["humanize"] == sent[-1]["humanize"]
+
+
+def test_a_server_that_sends_no_humanize_still_leases(api):
+    api.humanize = False
+    api.heartbeat_s = 0.05
+    lease = acquire()
+    before = json.loads(lease.path.read_bytes())
+    api.wait_for(lambda: len(api.calls(r".*/heartbeat")) >= 2)
+    after = json.loads(lease.path.read_bytes())
+    lease.release()
+    assert "humanize" not in before and "humanize" not in after
+    assert after["token"] != before["token"]
 
 
 def test_heartbeat_backs_off_and_recovers(api):
