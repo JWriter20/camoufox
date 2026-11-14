@@ -322,6 +322,12 @@ function loadFontGroups(): Record<string, FontUnit[]> {
 	return fontGroupsCache;
 }
 
+/** The families of one addition unit (font-groups.json), e.g. ("win", "office"). */
+export function fontUnitFamilies(osKey: string, unitId: string): Set<string> {
+	const unit = (loadFontGroups()[osKey] ?? []).find((u) => u.id === unitId);
+	return new Set(unit?.fonts ?? []);
+}
+
 let fontBasesCache: Record<string, FontBase[]> | null = null;
 
 /** The OS-version bases per OS (font-bases.json), drawn entire by weight. */

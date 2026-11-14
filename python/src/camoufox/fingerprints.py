@@ -138,9 +138,8 @@ def _load_os_fonts() -> Dict[str, List[str]]:
 # Each OS's base font set: every family a stock install ships, intersected with
 # the bundle, so it is always reported in full and never subsetted. Regenerate
 # essential-fonts.json with fonts.json (`browser/scripts/gen-fonts-json.py
-# --print-bases`). On Windows it includes the GDI-substitution and Light /
-# Semilight names fonts.conf rewrites unconditionally: they render, so they
-# must be reported.
+# --print-bases`). On Windows it includes the GDI-substitution names fonts.conf
+# rewrites unconditionally: they render, so they must be reported.
 with open(os.path.join(os.path.dirname(__file__), 'essential-fonts.json'), 'rb') as _f:
     _ESSENTIAL = json.loads(_f.read())
 _ESSENTIAL_FONTS_WINDOWS: List[str] = _ESSENTIAL['win']
@@ -257,6 +256,11 @@ def _load_font_groups() -> Dict[str, List[Dict[str, Any]]]:
             )
             _FONT_GROUPS_CACHE = {}
     return _FONT_GROUPS_CACHE
+
+
+def font_unit_families(os_key: str, unit_id: str) -> Set[str]:
+    """The families of one addition unit (font-groups.json), e.g. ('win', 'office')."""
+    return set(next((u['fonts'] for u in _load_font_groups().get(os_key, []) if u.get('id') == unit_id), ()))
 
 
 _FONT_BASES_CACHE: Optional[Dict[str, List[Dict[str, Any]]]] = None
