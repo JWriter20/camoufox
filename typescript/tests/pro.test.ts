@@ -95,10 +95,10 @@ const mode = (file: string) => fs.statSync(file).mode & 0o777;
 describe("the lease file", () => {
 	it.each(
 		GOLDEN.lease_files,
-	)("is byte-identical to the shared golden ($os)", (c: any) => {
-		expect(pro.leaseFileBytes(c.token, c.os, c.fidelity, c.written_at)).toBe(
-			c.file,
-		);
+	)("is byte-identical to the shared golden ($name)", (c: any) => {
+		expect(
+			pro.leaseFileBytes(c.token, c.os, c.fidelity, c.written_at, c.humanize),
+		).toBe(c.file);
 	});
 
 	it.each(
@@ -506,6 +506,36 @@ describe("the heartbeat", () => {
 			api.requests[0].body.host.fingerprint,
 		);
 		expect(after.lease_id).toBe(before.lease_id);
+		expect(after.token).not.toBe(before.token);
+		expect(before.humanize).toBe(api.requests[0].answer.humanize);
+		expect(beats.map((b) => b.answer.humanize)).toContain(after.humanize);
+	});
+
+	it("keeps the humanize the lease was minted with when a beat sends none", async () => {
+		api.heartbeatS = 0.05;
+		const lease = await acquire();
+		api.humanize = false;
+		const seen = api.calls(".*/heartbeat").length;
+		await api.waitFor(() => api.calls(".*/heartbeat").length >= seen + 3);
+		const after = JSON.parse(fs.readFileSync(lease.path, "utf-8"));
+		await lease.release();
+		const sent = api.requests
+			.map((r) => r.answer)
+			.filter((a) => "humanize" in a);
+		expect(after.token).not.toBe(sent.at(-1)?.token);
+		expect(after.humanize).toBe(sent.at(-1)?.humanize);
+	});
+
+	it("still leases from a server that sends no humanize", async () => {
+		api.humanize = false;
+		api.heartbeatS = 0.05;
+		const lease = await acquire();
+		const before = JSON.parse(fs.readFileSync(lease.path, "utf-8"));
+		await api.waitFor(() => api.calls(".*/heartbeat").length >= 2);
+		const after = JSON.parse(fs.readFileSync(lease.path, "utf-8"));
+		await lease.release();
+		expect(before).not.toHaveProperty("humanize");
+		expect(after).not.toHaveProperty("humanize");
 		expect(after.token).not.toBe(before.token);
 	});
 

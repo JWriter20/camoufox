@@ -547,17 +547,23 @@ export function tokenFields(token: string): Record<string, any> {
 	};
 }
 
-/** SPEC-LEASE § 8.2. Byte for byte what the Python launcher writes for the same inputs. */
+/**
+ * SPEC-LEASE § 8.2. Byte for byte what the Python launcher writes for the same inputs.
+ *
+ * `humanize` is the server's sealed token for the browser, left out when the server sent none.
+ */
 export function leaseFileBytes(
 	token: string,
 	targetOs: string,
 	fidelity: string,
 	writtenAt: number,
+	humanize?: string | null,
 ): string {
 	return JSON.stringify({
 		v: 1,
 		...tokenFields(token),
 		token,
+		...(humanize == null ? {} : { humanize }),
 		os: targetOs,
 		fidelity,
 		paths: {
@@ -646,6 +652,7 @@ export class Lease {
 	#seq = 0;
 	#heartbeatS = 60;
 	#fidelity = "native";
+	#humanize: string | null = null;
 	#timer: NodeJS.Timeout | null = null;
 	#released: Promise<boolean> | null = null;
 	#closed: Promise<void> | null = null;
@@ -808,6 +815,7 @@ export class Lease {
 			await this.#postRelease("error");
 			throw new ProClockSkew(skew);
 		}
+		this.#humanize = minted.humanize ?? null;
 		this.#write(minted.token);
 		this.#writeRender(this.grants.gpu);
 	}
@@ -844,6 +852,7 @@ export class Lease {
 				this.targetOs,
 				this.#fidelity,
 				Math.floor(Date.now() / 1000),
+				this.#humanize,
 			),
 		);
 	}
@@ -926,6 +935,8 @@ export class Lease {
 		if (this.#released) return;
 		this.#seq += 1;
 		checkSkew(answer.server_time);
+		// A heartbeat that sends no `humanize` leaves the lease's last one standing.
+		this.#humanize = answer.humanize || this.#humanize;
 		this.#write(answer.token);
 		this.#writeRender(answer.gpu);
 		if (answer.gpu === null && this.grants.gpu) {

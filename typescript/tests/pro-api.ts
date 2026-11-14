@@ -36,11 +36,17 @@ export function tokenFor(leaseId: string, buildHash: string, expiresIn = 1800) {
 	return `cfl1_${raw.toString("base64url")}`;
 }
 
+/** Sealed for the browser: the launcher carries it into the lease file unread. */
+export function humanizeToken() {
+	return `cfh1_${randomBytes(48).toString("base64url")}`;
+}
+
 interface Recorded {
 	path: string;
 	body: Record<string, any>;
 	auth: string | undefined;
 	status: number;
+	answer: Record<string, any>;
 }
 
 /** The routes the launcher calls, answering as the control plane does unless a test scripts otherwise. */
@@ -50,6 +56,8 @@ export class FakeApi {
 	clockOffsetMs = 0;
 	heartbeatS = 60;
 	grants: Record<string, any> = {};
+	/** False answers as a server that does not send `humanize` yet. */
+	humanize = true;
 	#waiters: (() => void)[] = [];
 	server = http.createServer((req, res) => {
 		let data = "";
@@ -65,6 +73,7 @@ export class FakeApi {
 				body,
 				auth: req.headers.authorization,
 				status,
+				answer,
 			});
 			for (const wake of this.#waiters) wake();
 			res.writeHead(status, { "Content-Type": "application/json" });
@@ -98,6 +107,10 @@ export class FakeApi {
 		});
 	}
 
+	sealed(): Record<string, any> {
+		return this.humanize ? { humanize: humanizeToken() } : {};
+	}
+
 	answer(
 		url: string,
 		body: Record<string, any>,
@@ -116,6 +129,7 @@ export class FakeApi {
 					server_time: now,
 					expires_at: now,
 					token: tokenFor(leaseId, body.build_hash),
+					...this.sealed(),
 					limits: {
 						ttl_s: 1800,
 						heartbeat_s: this.heartbeatS,
@@ -142,6 +156,7 @@ export class FakeApi {
 					server_time: now,
 					expires_at: now,
 					token: tokenFor(match[1], BUILD_HASH),
+					...this.sealed(),
 					token_kid: 0,
 					notices: [],
 				},
