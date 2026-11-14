@@ -1,0 +1,73 @@
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -2446,6 +2446,8 @@ void nsWindow::OnDeleteEvent() {
+   }
+ }
+ 
++static bool ClaimsWindowsMouseMoves();
++
+ void nsWindow::OnEnterNotifyEvent(GdkEventCrossing* aEvent) {
+   LOG("enter notify (win=%p, sub=%p): %.2f, %.2f mode %d, detail %d\n",
+       aEvent->window, aEvent->subwindow, aEvent->x, aEvent->y, aEvent->mode,
+@@ -2464,6 +2466,15 @@ void nsWindow::OnEnterNotifyEvent(GdkEve
+   DispatchMissedButtonReleases(aEvent);
+   mLastMouseCoordinates.Set(aEvent);
+ 
++  // Camoufox: a Windows identity enters the widget with the first mouse move
++  // Windows dispatches, as Windows Firefox does (it synthesizes the enter from
++  // WM_MOUSEMOVE): a pointer that comes back to the point it left from
++  // produces no move, so no enter, until it moves.
++  if (ClaimsWindowsMouseMoves()) {
++    mClaimedOSEnterPending = true;
++    return;
++  }
++
+   WidgetMouseEvent event(true, eMouseEnterIntoWidget, this,
+                          WidgetMouseEvent::eReal);
+ 
+@@ -2547,6 +2558,12 @@ void nsWindow::OnLeaveNotifyEvent(GdkEve
+     return;
+   }
+ 
++  if (mClaimedOSEnterPending) {
++    // Camoufox: never entered (see OnEnterNotifyEvent), so nothing to leave.
++    mClaimedOSEnterPending = false;
++    return;
++  }
++
+   WidgetMouseEvent event(true, eMouseExitFromWidget, this,
+                          WidgetMouseEvent::eReal);
+ 
+@@ -2759,6 +2776,18 @@ void nsWindow::OnMotionNotifyEvent(GdkEv
+       return;
+     }
+     last = Some(screenPoint);
++    if (mClaimedOSEnterPending) {
++      mClaimedOSEnterPending = false;
++      WidgetMouseEvent enter(true, eMouseEnterIntoWidget, this,
++                             WidgetMouseEvent::eReal);
++      enter.mRefPoint = refPoint;
++      enter.AssignEventTime(GetWidgetEventTime(aEvent->time));
++      KeymapWrapper::InitInputEvent(enter, aEvent->state);
++      DispatchInputEvent(&enter);
++      if (mIsDestroyed) {
++        return;
++      }
++    }
+   }
+ 
+   WidgetMouseEvent event(true, eMouseMove, this, WidgetMouseEvent::eReal);
+diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
+--- a/widget/gtk/nsWindow.h
++++ b/widget/gtk/nsWindow.h
+@@ -779,6 +779,9 @@ class nsWindow : public nsIWidget {
+ 
+   float mLastMotionPressure = 0.0f;
+ 
++  // Camoufox: a Windows identity's enter waits for the next dispatched move.
++  bool mClaimedOSEnterPending = false;
++
+   // Input region margin is stored in layout (scaled) coordinates.
+   InputRegion mInputRegion;
+ 

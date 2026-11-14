@@ -115,14 +115,30 @@ await browser.close();
 | `os` | `"windows"`, `"macos"` or `"linux"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else throws `ValueError`. |
 | `ff_version` | Firefox major version claimed in the User-Agent. Defaults to the browser's own. |
 | `webrtc_ip` | IPv4 or IPv6 address WebRTC reports. |
-| `proxy` | Per-context proxy, in Playwright's format. Unless `webrtc_ip` and `timezoneId` are both given, they are looked up from the proxy's exit IP, and `InvalidIP` is thrown if the lookup fails. |
+| `proxy` | Per-context proxy, in Playwright's format. The context is placed where the proxy exits: `webrtc_ip`, `timezoneId`, `locale` and `geolocation` each default to the exit IP's, looked up through the proxy unless all four are given, and `InvalidIP` is thrown if the lookup fails. |
 | `geolocation` | `{ latitude, longitude }`; also grants the `geolocation` permission. |
 | anything else | Passed to Playwright's `browser.newContext()` (camelCase, e.g. `timezoneId`), overriding the generated value. |
+
+A context's pages are the browser's window unless you pass `viewport`, and its
+screen is drawn to hold that window. A `viewport` here, in `newContext()` or
+`newPage()`, or in a persistent launch, is kept as given, and the context
+claims a recorded screen that holds it with a real Firefox window's toolbars
+around it. Only the browser's window cannot follow a context: a viewport larger
+than it, or a `page.setViewportSize()` the screen cannot hold, emits a
+`LeakWarning`.
 
 Canvas noise belongs to the browser, not the context (see
 [The canvas on another OS](#the-canvas-on-another-os)). On a browser without it,
 every context claims the host's OS and GPU too, since its canvas renders there.
 Contexts with other OSes, like the ones above, need `canvas_noise: true`.
+
+Text rendering belongs to the browser as well. On a Linux host, a Windows or
+macOS launch identity sets that OS's font defaults and per-script fallback,
+and for Windows its line metrics, codec answers and system
+colours ([docs/FONTS.md](https://github.com/daijro/camoufox/blob/main/docs/FONTS.md#another-oss-identity-on-a-linux-host)).
+They are read once per process, so every context gets the launch's, and a
+context claiming another OS lays text out as the launch's OS does. Launch one
+browser per OS your contexts claim, with `os` set to it.
 
 The browser's own OS also decides some things for all its contexts. A browser
 launched as Windows on a Linux or macOS host (`os: "windows"`, or drawn so)
@@ -142,8 +158,10 @@ come from the real OS, driver and GPU, whatever the identity claims.
 - **On the host's OS**, the launcher starts the browser once, unspoofed and with
   the same display, reads the GPU Firefox reports, and the identity claims it.
   The pixels then agree with the identity. A host that renders in software (no
-  GPU driver, as on most servers) keeps a drawn GPU: it reads as a machine
-  whose driver failed to load.
+  working GPU driver, as on most servers) claims its software renderer, such as
+  `llvmpipe` on Linux. Firefox reads the name and the pixels from one GL context,
+  so a machine with a broken driver reports the software renderer too, and a GPU
+  name over software pixels never happens on a real machine.
 - **On another OS, or with another GPU** (`webgl_config`, a preset's GPU, or a
   host GPU fpgen never recorded), the pixels would show the real one. Camoufox
   then turns on the canvas protection of `privacy.resistFingerprinting`, and
@@ -239,7 +257,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first is used for `Intl`. |
-| `humanize` | `boolean \| number` | off | Human cursor movement. A number caps one movement at that many seconds (default cap 1.5). |
+| `humanize` | `boolean \| number \| object` | off | Humanized input. A number caps one cursor movement at that many seconds (default cap 1.5); an object picks an engine per channel ([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)). |
 | `screen` | `Screen \| { max_width?, max_height?, min_width?, min_height? }` | the real display when headed | Bounds the generated screen. |
 | `window` | `[number, number]` | generated | Fixed outer window size. |
 | `fonts` | `string[]` | none | Extra font families on top of the OS's own. |
@@ -250,6 +268,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `block_webrtc` | `boolean` | `false` | Disable WebRTC entirely. |
 | `block_webgl` | `boolean` | `false` | Disable WebGL. Warns: many WAFs check for it. |
 | `webgl_config` | `[vendor, renderer]` | drawn | Use one GPU fpgen has recorded for Firefox on `os`; any other pair throws. Needs `os`. |
+| `cpu` | `{ arch?: "x86" \| "arm", manufacturer?: string }` | follows the GPU and cores, else x86 drawn | The CPU the identity computes as: canvas, Web Audio, Opus, relaxed-SIMD wasm and NaN signs differ between x86-64 and ARM64, and canvas and Opus between Intel and AMD. A manufacturer alone implies its arch. Per OS: macos x86 `intel`, arm `apple`; windows x86 `intel`/`amd`, arm `qualcomm`; linux x86 `intel`/`amd`, arm `apple`, `qualcomm`, `broadcom`, `nvidia`, `ampere`, `rockchip`, `mediatek`, `amlogic`, `allwinner`. A pair no machine on the OS has, or one the GPU contradicts, throws `ValueError`; without `os`, the OS is drawn among those with a recorded GPU for the CPU. By default an Apple GPU is Apple ARM, an Intel iGPU or Intel Mac Intel, a Radeon iGPU AMD, and 10, 14, 18, 22 or 28 logical cores Intel; otherwise x86, 81% Intel. ARM is emulated on an x86-64 host; an ARM64 host cannot compute as x86. |
 | `canvas_noise` | `boolean` | on for another OS or GPU | Random canvas and WebGL readback, as in LibreWolf. Warns. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `disable_coop` | `boolean` | `false` | Turn off Cross-Origin-Opener-Policy so elements in cross-origin iframes (such as the Turnstile checkbox) can be clicked. Warns. |
 | `main_world_eval` | `boolean` | `false` | Allow `page.evaluate("mw:...")` and `mw:` init scripts to run in the page's own world. |
@@ -268,10 +287,55 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `virtual_display` | `string` | none | Use an existing X display, e.g. `":99"`. |
 | `i_know_what_im_doing` | `boolean` | `false` | Silence the leak warnings above. |
 | `debug` | `boolean` | `false` | Print the config sent to the browser. |
+| `pro_key` | `string` | `CAMOUFOX_PRO_KEY`, then the `camoufox login` key | Camoufox Pro key for a Pro build, which launches with a lease ([docs/pro.md](https://github.com/daijro/camoufox/blob/main/docs/pro.md)). |
+| `profile`, `warm_plan`, `managed`, `farm_gpu` | see docs/pro.md | none | `managed` is a managed proxy on any build (pay-as-you-go with a Camoufox key); `profile`, `warm_plan` and `farm_gpu: false` are Camoufox Pro lease options: a stored profile, its warm plan, and rendering on this machine instead of a remote GPU. |
 
 `Camoufox()` and `NewBrowser()` also take `persistent_context`, `user_data_dir`
 and `from_options` (an object from `launchOptions()` to use as is).
 `launchServer()` also takes `port` and `ws_path`.
+
+`humanize` takes one engine per input channel, built with the factories the
+package exports (`auto`, `raw`, `cursory`, `notches`, and `engine(name,
+options)` for any engine a build lists in its `humanize-engines.json`), which
+take their options in camelCase:
+
+```ts
+import { Camoufox, cursory, raw } from "camoufox";
+
+const browser = await Camoufox({
+	humanize: { mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 },
+});
+```
+
+A `seed` above `Number.MAX_SAFE_INTEGER` must be passed as a `bigint`.
+
+`custom(fn)` runs a channel with a function of yours in this process (see the
+repository README, "Writing your own engine"). The function receives its
+extras as one object, and `play()` takes arrays:
+
+```ts
+import { Camoufox, custom } from "camoufox";
+
+const browser = await Camoufox({
+	humanize: {
+		keyboard: custom(async (page, text, { original, rng, play, kind }) => {
+			if (kind === "press") return original();
+			let t = 0;
+			const steps = [];
+			for (const ch of text) {
+				steps.push(["key", ch, "down", t]);
+				t += 40 + rng() * 60;
+				steps.push(["key", ch, "up", t]);
+			}
+			return play(steps);
+		}),
+		seed: 1234,
+	},
+});
+```
+
+A scroll function gets `[dx, dy]` for a wheel call, and a `Locator` otherwise.
+The same seed and function give the same events as the Python launcher.
 
 ## CLI
 
@@ -291,6 +355,9 @@ and `from_options` (an object from `launchOptions()` to use as is).
 | `server` | | Start a Playwright server and print its websocket endpoint. |
 | `gpu-setup [gpu]` | | Print the root script that sets this machine up for `headless: "virtual-gpu"` on the card `gpu` names (or `CAMOUFOX_GPU`). Run it with `\| sudo sh`. |
 | `gpu-xorg-config [gpu]` | | Print the Xorg config `headless: "virtual-gpu"` needs for the card `gpu` names (or `CAMOUFOX_GPU`). |
+| `login` | | Sign in to Camoufox Pro on this machine and store its key. |
+| `logout` | | Delete the stored Camoufox Pro key. |
+| `pro` | `--activate`, `--executable-path <path>`, `--os` | `--activate` mints a lease for the local Pro build, prints what it grants, and releases it; exits 0 only when granted. |
 
 Each release is paired with the one browser build it was built and tested with,
 the same build as the Python release of the same version, and every launch uses

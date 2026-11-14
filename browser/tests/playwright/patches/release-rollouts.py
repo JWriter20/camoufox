@@ -2,23 +2,25 @@ r"""
 Firefox's 100% release rollouts are on, as in stock Firefox.
 
 Stock Firefox on the release channel gets its rollouts from Nimbus; Camoufox's
-update channel is "default", which no rollout targets, so it ran without them
-(LEAKS 611). compression-dictionaries-rollout-153-release turns on HTTP
+update channel is "default", which no rollout targets, so it ran without them.
+compression-dictionaries-rollout-153-release turns on HTTP
 compression dictionaries for every release profile: a server that sends
 Use-As-Dictionary gets Available-Dictionary and dcb/dcz back from stock, and a
 page reads <link>.relList.supports("compression-dictionary") as true (false
 without it; HTMLLinkElement.cpp keys the supported rel set on
-network.http.dictionaries.enable). camoufox.cfg now sets the rollouts' prefs as
-defaults.
+network.http.dictionaries.enable). fetch-streaming-upload-rollout turns on
+dom.fetch.streaming_upload for release 159: Request.prototype has body and
+duplex ([Pref="dom.fetch.streaming_upload"] in Request.webidl). camoufox.cfg now
+sets the rollouts' prefs as defaults.
 
 The guard also has a dictionary used, over HTTPS: the request for a resource a
 stored dictionary matches must carry Available-Dictionary and end its
 Accept-Encoding in "dcb, dcz", as stock's does. A launch that sets
-headers.Accept-Encoding (a caller's own header, or cfparity's mirror of stock)
+headers.Accept-Encoding (a caller's own header, or one copied from stock's)
 used to lose them: the override replaced the dictionary list
 (nsHttpHandler::SetAcceptEncodings, network-patches.patch), which stock builds
-as the secure list plus network.http.accept-encoding.dictionary (LEAKS 611,
-p1 run 2: dictionaryEncodings [] beside stock's ["dcb", "dcz"]).
+as the secure list plus network.http.accept-encoding.dictionary
+(dictionaryEncodings [] beside stock's ["dcb", "dcz"]).
 
     python browser/tests/playwright/patches/release-rollouts.py
 """
@@ -92,7 +94,8 @@ def use_dictionary(config: dict, tmp: Path):
         page.evaluate("fetch('/dict/source.txt').then(r => r.text())")
         time.sleep(1.5)
         page.evaluate("fetch('/dict/target.txt').then(r => r.text())")
-    return supports, targets
+        streaming = page.evaluate("'duplex' in Request.prototype && 'body' in Request.prototype")
+    return supports, targets, streaming
 
 
 def main() -> int:
@@ -100,7 +103,11 @@ def main() -> int:
     for name, config in (("default", {}), ("headers.Accept-Encoding set",
                                            {"headers.Accept-Encoding": "gzip, deflate, br, zstd"})):
         with tempfile.TemporaryDirectory() as tmp:
-            supports, targets = use_dictionary(config, Path(tmp))
+            supports, targets, streaming = use_dictionary(config, Path(tmp))
+        print(f"  {name}: Request body/duplex = {streaming}")
+        if streaming is not True:
+            failures.append(f"{name}: Request has no body/duplex; stock 159 release has "
+                            "dom.fetch.streaming_upload on (fetch-streaming-upload-rollout)")
         print(f"  {name}: <link>.relList.supports('compression-dictionary') = {supports}; target {targets}")
         if supports is not True:
             failures.append(f"{name}: compression dictionaries are off; every stock 158 release profile has "
@@ -114,7 +121,7 @@ def main() -> int:
         print(f"FAIL: {failure}")
     if failures:
         return 1
-    print("PASS: compression dictionaries are on and used, as in stock Firefox's release rollout.")
+    print("PASS: compression dictionaries and streaming upload are on, as in stock Firefox's release rollouts.")
     return 0
 
 

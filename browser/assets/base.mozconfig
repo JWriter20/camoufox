@@ -59,7 +59,8 @@ ac_add_options --enable-rust-simd
 # build/unix/mozconfig.unix -> mozconfig.stdcxx: MOZ_STDCXX_COMPAT=1, so
 # -D_GLIBCXX_USE_CXX11_ABI=0). Its std::string has no small-string buffer, so
 # every string a getter builds (WebGL VENDOR/VERSION, and many more) allocates;
-# without the flag Camoufox answered those at half stock's cost (LEAKS 637), and
+# without the flag Camoufox answered those at half stock's cost
+# (getter-cost-parity.py), and
 # Mozilla's PGO profile was trained on the old-ABI code.
 case "$CAMOUFOX_TARGET" in
   *-linux-gnu) ac_add_options --enable-stdcxx-compat ;;

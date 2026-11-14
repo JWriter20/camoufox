@@ -49,9 +49,14 @@ language-tags = "*"
 pysocks = "*"
 inquirer = "*"
 maxminddb = {version = "*", optional = true}
+# Camoufox Pro profile state sync: XChaCha20-Poly1305, zstd, FastCDC.
+pynacl = {version = ">=1.5", optional = true}
+zstandard = {version = ">=0.22", optional = true}
+pyfastcdc = {version = ">=0.3", optional = true}
 
 [tool.poetry.extras]
 geoip = ["maxminddb"]
+pro = ["pynacl", "zstandard", "pyfastcdc"]
 
 [tool.poetry.scripts]
 camoufox = "camoufox.__main__:cli"

@@ -13,7 +13,8 @@ an invariant stock Firefox 152 holds:
                       prompt
   storage-partition   a cross-site iframe's document.hasStorageAccess() is false
   wheel-default       page.mouse.wheel(0, 300) arrives as a physical wheel's
-                      3 notches, each wheelDeltaY -120 (docs/input-dispatch.md)
+                      3 notches, each wheelDeltaY -120 (docs/input-dispatch.md);
+                      on Linux, as macOS's differs (driven-wheel-notches)
   wheel-notches       the same with humanize=True, which does not change it
   wheel-scaled        wheel-default again at layout.css.devPixelsPerPx 2:
                       still 3 notches, not a count halved by the scale
@@ -135,7 +136,10 @@ PROBES = """async (port) => {
     const f = document.createElement('iframe');
     f.src = `http://127.0.0.1:${port}/frame`;
     document.body.appendChild(f);
-    setTimeout(() => r('timeout'), 5000);
+    // The bundled uBO holds every request until its filter lists are compiled,
+    // which in a fresh profile takes 2.7 s on a 16-core host and past 5 s on a
+    // CI runner. The value is what is checked; this only bounds a hang.
+    setTimeout(() => r('timeout'), 30000);
   });
 
   // The result of every read is accumulated into `sink`, and `sink` is returned.
@@ -185,7 +189,8 @@ def run_probes(binary, port):
     from camoufox.sync_api import Camoufox
 
     config = {"webrtc:ipv4": "203.0.113.7", "timezone": "Asia/Tokyo"}
-    with Camoufox(headless=True, executable_path=str(binary), config=config, i_know_what_im_doing=True) as b:
+    with Camoufox(headless=True, executable_path=str(binary), os="linux", config=config,
+                  i_know_what_im_doing=True) as b:
         page = b.new_page()
         page.goto(f"http://localhost:{port}/")
         page.wait_for_function("() => document.body.dataset.result", timeout=60000)
@@ -207,7 +212,7 @@ def probe_wheel(binary, port, humanize, prefs=None):
     """
     from camoufox.sync_api import Camoufox
 
-    with Camoufox(headless=True, executable_path=str(binary), humanize=humanize,
+    with Camoufox(headless=True, executable_path=str(binary), os="linux", humanize=humanize,
                   firefox_user_prefs=prefs or {}, i_know_what_im_doing=True) as b:
         page = b.new_page()
         page.goto(f"http://localhost:{port}/")

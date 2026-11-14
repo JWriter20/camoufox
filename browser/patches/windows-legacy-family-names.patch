@@ -1,0 +1,369 @@
+diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFontList.cpp
+--- a/gfx/thebes/gfxFcPlatformFontList.cpp
++++ b/gfx/thebes/gfxFcPlatformFontList.cpp
+@@ -6,6 +6,7 @@
+ #include "FontVisibilityProvider.h"
+ #include "MaskConfig.hpp"
+ #include "mozilla/dom/Document.h"
++#include "mozilla/dom/FontListManager.h"
+ #include "mozilla/dom/NavigatorManager.h"
+ #include "mozilla/dom/RoverfoxStorageManager.h"
+ 
+@@ -18,6 +19,8 @@
+ #include "mozilla/Logging.h"
+ #include "mozilla/Preferences.h"
+ #include "mozilla/Sprintf.h"
++#include "mozilla/TimeStamp.h"
++#include "nsThreadUtils.h"
+ #include "mozilla/StaticPrefs_gfx.h"
+ #include "mozilla/StaticPrefs_mathml.h"
+ #include "mozilla/dom/ContentChild.h"
+@@ -37,6 +40,10 @@
+ #include "StandardFonts-linux.inc"
+ #undef StandardFonts
+ #include <cairo-ft.h>
++#include <atomic>
++#include <string_view>
++#include <iterator>
++#include <algorithm>
+ #include <dirent.h>
+ #include <dlfcn.h>
+ #include <fontconfig/fcfreetype.h>
+@@ -2519,6 +2526,291 @@
+          aLocale.Script().EqualTo("Arab");
+ }
+ 
++// Camoufox: Windows legacy styled-family names (LEAKS #168).
++//
++// DirectWrite groups faces into weight/width/slope families, so on Windows
++// "Arial Black" is not a family: it is the GDI name of Arial's Black face, a
++// legacy name that stock Firefox learns only from the name tables its
++// deferred font-info loader reads (gfx.font_loader.delay is 60 s on Windows,
++// or sooner once a legacy name is asked for). Until those aliases land, its
++// lookup goes through FontList::FindFamily's XP_WIN fallback
++// (SharedFontList.cpp:1234-1316): the first time, it reads the base family's
++// face names into the per-process mAliasTable and answers with the BASE
++// family, so "Arial Black" renders as Arial Regular; every later lookup of a
++// name of that base hits mAliasTable and calls FindFamily(mBaseFamily, true)
++// with the base's display name ("Arial"), which never matches the lowercase
++// keys, so the name is missing and the next family in the list is used. On
++// stock win-i9 the fonts.detect probe sees exactly this: the first column
++// measures the base family, the next two the generic fallback.
++//
++// fontconfig has no such names: "Arial Black" is an ordinary family here, so
++// an identity claiming Windows on this host answered with the real Black face
++// every time. These are the bundle's fonts that are legacy names on Windows:
++// a static face whose typographic family (nameID 16) is its nameID 1 minus
++// the last word, plus the faces without nameID 16 that stock win-i9 measured
++// as legacy (2026-10-31): Franklin Gothic Medium and Demi, which DirectWrite's
++// family-name parsing folds into "Franklin Gothic", and Gill Sans MT Condensed
++// and Tw Cen MT Condensed (Franklin Gothic Book, also without nameID 16, is a
++// family there). The nameID 16 rule is kept for names win-i9 did not measure:
++// it picks out all 15 nameID 16 names the win-i9 probe saw act as legacy and
++// none it saw act as families. Variable fonts are left out. Sorted
++// (LC_ALL=C) for the binary search.
++static constexpr std::string_view kWindowsLegacyFamilyNames[] = {
++    "arial black",
++    "arial narrow",
++    "arial nova cond",
++    "arial nova light",
++    "barlow black",
++    "barlow extrabold",
++    "barlow extralight",
++    "barlow light",
++    "barlow medium",
++    "barlow semibold",
++    "barlow thin",
++    "bodoni mt black",
++    "bodoni mt condensed",
++    "calibri light",
++    "candara light",
++    "corbel light",
++    "david libre medium",
++    "dejavu sans condensed",
++    "dejavu sans light",
++    "dejavu serif condensed",
++    "fira mono medium",
++    "fira sans black",
++    "fira sans extrabold",
++    "fira sans extralight",
++    "fira sans light",
++    "fira sans medium",
++    "fira sans semibold",
++    "fira sans thin",
++    "franklin gothic demi",
++    "franklin gothic medium",
++    "georgia pro black",
++    "georgia pro cond",
++    "georgia pro light",
++    "georgia pro semibold",
++    "gill sans mt condensed",
++    "gill sans nova cond",
++    "gill sans nova light",
++    "ibm plex mono extralight",
++    "ibm plex mono light",
++    "ibm plex mono medium",
++    "ibm plex mono semibold",
++    "ibm plex mono thin",
++    "inconsolata black",
++    "inconsolata bold",
++    "inconsolata condensed",
++    "inconsolata expanded",
++    "inconsolata extrabold",
++    "inconsolata extracondensed",
++    "inconsolata extraexpanded",
++    "inconsolata extralight",
++    "inconsolata light",
++    "inconsolata medium",
++    "inconsolata semibold",
++    "inconsolata semicondensed",
++    "inconsolata semiexpanded",
++    "inconsolata ultracondensed",
++    "inconsolata ultraexpanded",
++    "iosevka extended",
++    "iosevka extrabold",
++    "iosevka extralight",
++    "iosevka heavy",
++    "iosevka light",
++    "iosevka medium",
++    "iosevka oblique",
++    "iosevka semibold",
++    "iosevka thin",
++    "lato black",
++    "lato extrabold",
++    "lato extralight",
++    "lato light",
++    "lato medium",
++    "lato semibold",
++    "lato thin",
++    "leelawadee ui semilight",
++    "malgun gothic semilight",
++    "microsoft jhenghei light",
++    "microsoft jhenghei ui light",
++    "microsoft yahei light",
++    "microsoft yahei ui light",
++    "mukta extrabold",
++    "mukta extralight",
++    "mukta light",
++    "mukta medium",
++    "mukta semibold",
++    "nirmala text semilight",
++    "nirmala ui semilight",
++    "noto sans armenian blk",
++    "noto sans armenian extbd",
++    "noto sans armenian extlt",
++    "noto sans armenian light",
++    "noto sans armenian med",
++    "noto sans armenian sembd",
++    "noto sans armenian thin",
++    "poppins black",
++    "poppins extrabold",
++    "poppins extralight",
++    "poppins light",
++    "poppins medium",
++    "poppins semibold",
++    "poppins thin",
++    "rockwell nova cond",
++    "rockwell nova light",
++    "segoe ui black",
++    "segoe ui light",
++    "segoe ui semibold",
++    "segoe ui semilight",
++    "titillium web black",
++    "titillium web extralight",
++    "titillium web light",
++    "titillium web semibold",
++    "tw cen mt condensed",
++    "verdana pro black",
++    "verdana pro cond",
++    "verdana pro light",
++    "verdana pro semibold",
++    "yu gothic light",
++    "yu gothic medium",
++    "yu gothic ui light",
++    "yu gothic ui semibold",
++    "yu gothic ui semilight",
++};
++
++// Legacy names stock win-i9 never resolves before the aliases load, even as
++// the first name asked for (2026-10-31): Rockwell Extra Bold's stripped base
++// "rockwell extra" is no family, and Rockwell Condensed's base read does not
++// list it (inferred: a nameID 1 family of its own, without nameID 16). Whether
++// such a lookup starts the loader was not measured; it is taken not to.
++static constexpr std::string_view kWindowsLegacyMissingNames[] = {
++    "rockwell condensed",
++    "rockwell extra bold",
++};
++
++// The base of a legacy name: what Gecko strips it to (up to the last space).
++static std::string_view WindowsLegacyBase(std::string_view aName) {
++  size_t space = aName.rfind(' ');
++  return space == std::string_view::npos ? aName : aName.substr(0, space);
++}
++
++// Per content process, as stock's mAliasTable is: which bases have had their
++// face names read (one flag per table entry, set for every entry sharing the
++// base), and when the deferred loader's aliases are in place.
++static bool sWindowsLegacyBaseRead[std::size(kWindowsLegacyFamilyNames)];
++static mozilla::TimeStamp sWindowsLegacyAliasesAt;
++
++enum class WindowsLegacyLookup { NotLegacy, UseBase, Missing };
++
++// When the loader's aliases land, stock reflows: the parent's
++// gfxPlatformFontList::CancelInitOtherFamilyNamesTask calls ForceGlobalReflow
++// (FontsChanged, to every content process), whose "font-info-updated" makes
++// each pres context flush its font cache (nsPresContext::
++// ForceReflowForFontInfoUpdate), so text and canvas fonts that took a legacy
++// name's early answer resolve it again, to the real face. Without that, the
++// early answer stayed in the font cache for good: the same font measured
++// Times New Roman long after the aliases had landed, a font never asked for
++// before measured the Black face. A process that gave an early answer does
++// the same at the moment the aliases land. Guarded by the font list's lock.
++static mozilla::TimeStamp sWindowsLegacyReflowAt;
++// Only the latest schedule reflows (an earlier landing replaces a later one).
++static std::atomic<uint32_t> sWindowsLegacyReflowSchedule{0};
++
++static void WindowsLegacyAliasReflowAt(mozilla::TimeStamp aAt,
++                                       uint32_t aSchedule) {
++  if (aSchedule != sWindowsLegacyReflowSchedule) {
++    return;
++  }
++  const mozilla::TimeDuration wait = aAt - mozilla::TimeStamp::Now();
++  if (wait > mozilla::TimeDuration()) {
++    // A timer may fire a little early; the aliases must have landed by then.
++    NS_DelayedDispatchToCurrentThread(
++        NS_NewRunnableFunction(
++            "WindowsLegacyAliasReflow",
++            [aAt, aSchedule] { WindowsLegacyAliasReflowAt(aAt, aSchedule); }),
++        uint32_t(wait.ToMilliseconds()) + 1);
++    return;
++  }
++  gfxPlatform::ForceGlobalReflow(gfxPlatform::GlobalReflowFlags::FontsChanged);
++}
++
++static void ScheduleWindowsLegacyAliasReflow(mozilla::TimeStamp aAt) {
++  if (!sWindowsLegacyReflowAt.IsNull() && sWindowsLegacyReflowAt <= aAt) {
++    return;
++  }
++  sWindowsLegacyReflowAt = aAt;
++  const uint32_t schedule = ++sWindowsLegacyReflowSchedule;
++  NS_DispatchToMainThread(NS_NewRunnableFunction(
++      "WindowsLegacyAliasReflow",
++      [aAt, schedule] { WindowsLegacyAliasReflowAt(aAt, schedule); }));
++}
++
++// Called with the platform font list's lock held.
++static WindowsLegacyLookup ClassifyWindowsLegacyName(
++    const nsACString& aLowercaseName) {
++  std::string_view name(aLowercaseName.BeginReading(),
++                        aLowercaseName.Length());
++  const auto* begin = std::begin(kWindowsLegacyFamilyNames);
++  const auto* end = std::end(kWindowsLegacyFamilyNames);
++  const auto* it = std::lower_bound(begin, end, name);
++  const bool alwaysMissing =
++      std::binary_search(std::begin(kWindowsLegacyMissingNames),
++                         std::end(kWindowsLegacyMissingNames), name);
++  if (!alwaysMissing && (it == end || *it != name)) {
++    return WindowsLegacyLookup::NotLegacy;
++  }
++
++  // The loader's run: how long reading every family's names takes once it
++  // starts. Windows starts it 60 s after the font list is built (the content
++  // process's creation stands in for that), or at the first legacy lookup.
++  // Stock win-i9 landed them 1727-1832 ms after the first lookup (100 ms
++  // poll); the launcher draws a value per launch.
++  const auto loadMs =
++      MaskConfig::GetUint32("fonts:windowsAliasLoadMs").value_or(1780);
++  const auto now = mozilla::TimeStamp::Now();
++  const auto natural =
++      mozilla::TimeStamp::ProcessCreation() +
++      mozilla::TimeDuration::FromMilliseconds(60000 + loadMs);
++  if (now >= natural ||
++      (!sWindowsLegacyAliasesAt.IsNull() && now >= sWindowsLegacyAliasesAt)) {
++    // The aliases are loaded: the name is a family of its legacy faces, which
++    // is what fontconfig's family of that name already is.
++    return WindowsLegacyLookup::NotLegacy;
++  }
++
++  // An early answer holds until the aliases land: at the end of the loader
++  // a legacy lookup started, else of the one started 60 s in.
++  const auto landing = [&] {
++    ScheduleWindowsLegacyAliasReflow(
++        sWindowsLegacyAliasesAt.IsNull() || natural < sWindowsLegacyAliasesAt
++            ? natural
++            : sWindowsLegacyAliasesAt);
++  };
++  if (alwaysMissing) {
++    landing();
++    return WindowsLegacyLookup::Missing;
++  }
++  const size_t index = it - begin;
++  if (sWindowsLegacyBaseRead[index]) {
++    landing();
++    return WindowsLegacyLookup::Missing;
++  }
++  const std::string_view base = WindowsLegacyBase(name);
++  for (size_t i = 0; i < std::size(kWindowsLegacyFamilyNames); i++) {
++    if (WindowsLegacyBase(kWindowsLegacyFamilyNames[i]) == base) {
++      sWindowsLegacyBaseRead[i] = true;
++    }
++  }
++  if (sWindowsLegacyAliasesAt.IsNull()) {
++    // The alias family has fewer faces than its base, so stock kicks off the
++    // loader now (SharedFontList.cpp:1305-1312).
++    sWindowsLegacyAliasesAt =
++        now + mozilla::TimeDuration::FromMilliseconds(loadMs);
++  }
++  landing();
++  return WindowsLegacyLookup::UseBase;
++}
++
+ bool gfxFcPlatformFontList::FindAndAddFamiliesLocked(
+     FontVisibilityProvider* aFontVisibilityProvider,
+     StyleGenericFontFamily aGeneric, const nsACString& aFamily,
+@@ -2552,6 +2844,45 @@
+     }
+   }
+ 
++  // Camoufox: a Windows identity's legacy styled-family names resolve as they
++  // do on Windows before its font-info loader has run (see
++  // ClassifyWindowsLegacyName). This is ahead of the substitution cache, which
++  // would replay the first answer for every later lookup. A name the identity
++  // does not have is left to the normal path, which blocks it.
++  if (aFontVisibilityProvider && !aFontVisibilityProvider->IsChrome() &&
++      mozilla::dom::NavigatorManager::GetSpoofedOS(
++          mozilla::dom::RoverfoxStorageManager::UserContextId(
++              aFontVisibilityProvider->GetDocument())) ==
++          MaskConfig::SpoofedOS::Windows &&
++      !MaskedFontListBlocks(aFontVisibilityProvider, familyName)) {
++    const uint32_t ctx = mozilla::dom::FontListManager::GetCurrentContext();
++    const bool allowed =
++        ctx == 0 || !mozilla::dom::FontListManager::HasFontList(ctx) ||
++        mozilla::dom::FontListManager::IsFontAllowed(ctx, familyName);
++    switch (allowed ? ClassifyWindowsLegacyName(familyName)
++                    : WindowsLegacyLookup::NotLegacy) {
++      case WindowsLegacyLookup::Missing:
++        return false;
++      case WindowsLegacyLookup::UseBase: {
++        const nsAutoCString base(Substring(
++            familyName, 0, WindowsLegacyBase(std::string_view(
++                               familyName.BeginReading(), familyName.Length()))
++                               .size()));
++        if (gfxPlatformFontList::FindAndAddFamiliesLocked(
++                aFontVisibilityProvider, aGeneric, base, aOutput, aFlags,
++                aStyle, aLanguage, aDevToCssSize)) {
++          return true;
++        }
++        // No family of the base's name here: on Windows it exists only as
++        // DirectWrite's parse of this face's name (Franklin Gothic), so this
++        // face is what the base's regular match is.
++        break;
++      }
++      case WindowsLegacyLookup::NotLegacy:
++        break;
++    }
++  }
++
+   // fontconfig allows conditional substitutions in such a way that it's
+   // difficult to distinguish an explicit substitution from other suggested
+   // choices. To sniff out explicit substitutions, compare the substitutions

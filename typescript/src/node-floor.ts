@@ -1,7 +1,7 @@
 /**
  * The Node.js floor (package.json `engines.node`), checked when the package
- * loads. fpgen-js reads its model archive with node:zlib's zstd;
- * Node.js added zstd in 22.15. Below that the first
+ * loads. fpgen-js reads its model archive with node:zlib's zstd, and so does
+ * the Pro state store; Node.js added zstd in 22.15. Below that the first
  * fingerprint draw died with "zlib.zstdDecompressSync is not a function" from
  * inside fpgen-js; npm only warns on `engines`, so the package says it here.
  */

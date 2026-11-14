@@ -1,0 +1,99 @@
+Camoufox: a Windows identity's requestMediaKeySystemAccess() knows PlayReady.
+
+Stock Windows Firefox supports com.microsoft.playready.recommendation through
+the Media Foundation CDM (MOZ_WMF_CDM), which a Linux build is compiled
+without, so a Windows identity was told "Key system is unsupported" at the
+first step. Stock Firefox 158.0.1 on win-i9 gets past that step and rejects the
+configuration instead: "Key system configuration is not supported" for the
+cfparity media.eme request (cenc, avc1.42E01E, mp4a.40.2, robustness ''), 6/6
+launches. The hardware names (.3000, .3000.clearlead) were not measured and
+keep the Linux answer. The launcher turns media.eme.enabled on for a Windows
+identity (Linux builds default it off), so the "EME has been preffed off" check
+before this one answers as Windows too.
+
+diff --git a/dom/media/eme/moz.build b/dom/media/eme/moz.build
+--- a/dom/media/eme/moz.build
++++ b/dom/media/eme/moz.build
+@@ -50,6 +50,8 @@
+ 
+ DIRS += ["clearkey"]
+ 
++LOCAL_INCLUDES += ["/camoucfg"]
++
+ include("/ipc/chromium/chromium-config.mozbuild")
+ 
+ FINAL_LIBRARY = "xul"
+diff --git a/dom/media/eme/MediaKeySystemAccessManager.cpp b/dom/media/eme/MediaKeySystemAccessManager.cpp
+--- a/dom/media/eme/MediaKeySystemAccessManager.cpp
++++ b/dom/media/eme/MediaKeySystemAccessManager.cpp
+@@ -5,6 +5,7 @@
+ #include "MediaKeySystemAccessManager.h"
+ 
+ #include "DecoderDoctorDiagnostics.h"
++#include "MaskConfig.hpp"
+ #include "MediaKeySystemAccessPermissionRequest.h"
+ #include "VideoUtils.h"
+ #include "mozilla/DetailedPromise.h"
+@@ -15,6 +16,8 @@
+ #include "mozilla/dom/BrowserChild.h"
+ #include "mozilla/dom/Document.h"
+ #include "mozilla/dom/KeySystemNames.h"
++#include "mozilla/dom/NavigatorManager.h"
++#include "mozilla/dom/RoverfoxStorageManager.h"
+ #include "nsComponentManagerUtils.h"
+ #include "nsContentUtils.h"
+ #include "nsIObserverService.h"
+@@ -25,6 +28,25 @@
+ 
+ namespace mozilla::dom {
+ 
++#ifndef MOZ_WMF_CDM
++// Camoufox: stock Windows Firefox knows PlayReady through the Media Foundation
++// CDM, which a Linux build does not have, so a Windows identity answered the
++// first step's "Key system is unsupported" for it. Stock Firefox 158.0.1 on
++// win-i9 accepts the key system and rejects the configuration ("Key system
++// configuration is not supported", 6/6 cfparity launches of the probe's
++// cenc/avc1/mp4a request). Only that key system name was measured; the
++// hardware names keep the Linux answer.
++static bool IsClaimedWindowsPlayReady(nsPIDOMWindowInner* aWindow,
++                                      const nsAString& aKeySystem) {
++  // kPlayReadyKeySystemName, which KeySystemNames.h defines with MOZ_WMF_CDM.
++  return aKeySystem.EqualsLiteral("com.microsoft.playready.recommendation") &&
++         aWindow &&
++         NavigatorManager::GetSpoofedOS(
++             RoverfoxStorageManager::UserContextId(aWindow)) ==
++             MaskConfig::SpoofedOS::Windows;
++}
++#endif
++
+ MediaKeySystemAccessManager::PendingRequest::PendingRequest(
+     DetailedPromise* aPromise, const nsAString& aKeySystem,
+     const Sequence<MediaKeySystemConfiguration>& aConfigs)
+@@ -410,6 +432,8 @@
+ #ifdef MOZ_WMF_CDM
+       !IsPlayReadyKeySystemAndSupported(aRequest->mKeySystem) &&
+       !IsWidevineExperimentKeySystemAndSupported(aRequest->mKeySystem) &&
++#else
++      !IsClaimedWindowsPlayReady(mWindow, aRequest->mKeySystem) &&
+ #endif
+       !IsClearkeyKeySystem(aRequest->mKeySystem)) {
+     // Not to inform user, because nothing to do if the keySystem is not
+@@ -437,6 +461,18 @@
+     return;
+   }
+ 
++#ifndef MOZ_WMF_CDM
++  if (IsClaimedWindowsPlayReady(mWindow, aRequest->mKeySystem)) {
++    // Where stock's GetSupportedConfig, asking the Media Foundation CDM,
++    // rejects.
++    aRequest->RejectPromiseWithNotSupportedError(
++        "Key system configuration is not supported"_ns);
++    aRequest->mDiagnostics.StoreMediaKeySystemAccess(
++        mWindow->GetExtantDoc(), aRequest->mKeySystem, false, __func__);
++    return;
++  }
++#endif
++
+   nsAutoCString message;
+   MediaKeySystemStatus status =
+       MediaKeySystemAccess::GetKeySystemStatus(*aRequest, message);

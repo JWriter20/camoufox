@@ -1,0 +1,40 @@
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -3383,6 +3383,20 @@ gboolean nsWindow::OnKeyReleaseEvent(Gdk
+   return TRUE;
+ }
+ 
++// Camoufox: the lines one horizontal wheel notch scrolls. GTK's discrete
++// left/right scroll is one line, but Windows Firefox scrolls
++// SPI_GETWHEELSCROLLCHARS per WM_MOUSEHWHEEL notch, 3 by default
++// (widget/windows/WinMouseScrollHandler.cpp), as many as a vertical notch
++// scrolls lines. cfparity's input.scroll.wheel on win-i9: stock deltaX 6
++// (3, doubled by mousewheel.system_scroll_override) per notch, a Linux build
++// claiming Windows 2. GTK's smooth scroll already scales both axes by 3.
++static int32_t ClaimedHorizontalWheelLines() {
++  return MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
++                 MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows
++             ? 3
++             : 1;
++}
++
+ void nsWindow::OnScrollEvent(GdkEventScroll* aEvent) {
+   LOG("OnScrollEvent time %d", aEvent->time);
+ 
+@@ -3521,11 +3535,13 @@ void nsWindow::OnScrollEvent(GdkEventScr
+       wheelEvent.mWheelTicksY = 1;
+       break;
+     case GDK_SCROLL_LEFT:
+-      wheelEvent.mDeltaX = wheelEvent.mLineOrPageDeltaX = -1;
++      wheelEvent.mDeltaX = wheelEvent.mLineOrPageDeltaX =
++          -ClaimedHorizontalWheelLines();
+       wheelEvent.mWheelTicksX = -1;
+       break;
+     case GDK_SCROLL_RIGHT:
+-      wheelEvent.mDeltaX = wheelEvent.mLineOrPageDeltaX = 1;
++      wheelEvent.mDeltaX = wheelEvent.mLineOrPageDeltaX =
++          ClaimedHorizontalWheelLines();
+       wheelEvent.mWheelTicksX = 1;
+       break;
+   }

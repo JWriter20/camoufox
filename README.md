@@ -443,6 +443,7 @@ right.
 | Screen and window sizes, color depth, CSS media features | The drawn device's display, the same in JS and CSS | Screen size is among the most identifying values, and CSS media queries read it without script | `screen-spoofing`, `fingerprint-injection` patches |
 | WebGL and WebGL2: vendor, renderer, parameters, extensions, shader precision, context attributes | One GPU fpgen recorded for Firefox on that OS. Values Firefox decides rather than the GPU follow the shipped Firefox ([`webgl-browser-owned-values-follow-firefox`](ci/tribal-rules.yml)) | The renderer string names the host's GPU, and its limits must agree with it | `webgl-spoofing` patch, `webgl.py` |
 | WebGPU: `navigator.gpu` and its adapter | `navigator.gpu` only where Firefox on the claimed device has it: Windows and Apple Silicon Macs. The adapter is the host's only when the identity claims the host's GPU; otherwise `requestAdapter()` returns `null`, as for a blocked or software GPU | The adapter's limits and features come from the real GPU | launcher, `host_rendering.py` |
+| Canvas, Web Audio, Opus, VP9, relaxed-SIMD wasm and NaN bits | The claimed CPU's arithmetic. Intel and AMD implement Skia's and Opus's estimate instructions RCPPS/RSQRTPS with different tables, so on an AMD host a canvas drawn with `color-dodge`, `color-burn`, `hue`, `saturation`, `color` or `luminosity` reads back other pixels than on Intel; an ARM64 CPU differs in far more (every Web Audio node and composite operation, Opus, VP9, NaN signs, relaxed SIMD). An x86-64 build computes as Intel, AMD or ARM64. `cpu` picks one; by default it follows the GPU (an Apple GPU is ARM, an Intel iGPU or Intel Mac is Intel, a Radeon iGPU is AMD) and otherwise is x86, 81% Intel as among Firefox's x86 users | The results split by CPU, not by OS or CPU generation, so they show the host's CPU | `cpu-vendor-estimates` patch, launcher |
 | Audio: sample rate, output latency, max channels | The identity's values | They follow the claimed device's audio hardware | `audio-context-spoofing` patch |
 | Fonts: installed list, `system-ui`, CSS2 system fonts | The claimed OS's fonts, from a bundled set; see [docs/FONTS.md](docs/FONTS.md) | Installed fonts reveal the OS and the software on it | `font-list-spoofing`, `font-hijacker`, `system-ui-font-spoofing` patches |
 | Speech voices | The claimed OS's voices, which actually speak | The voice list is specific to each OS, and a voice that cannot speak is a tell | `voice-spoofing`, `speech-voices-spoofing` patches |
@@ -451,6 +452,13 @@ right.
 | Timezone, locale and `Intl` | The identity's, per realm, workers included | They must agree with the IP's country | `timezone-spoofing`, `locale-spoofing` patches |
 | Geolocation | Coordinates from GeoIP, permission granted | They must agree with the IP | `geolocation-spoofing` patch, launcher |
 | WebRTC IP | ICE candidates, SDP and `getStats()` rewritten to the proxy IP | WebRTC otherwise reveals the real IP behind a proxy | `webrtc-ip-spoofing` patch |
+| Pointer lock with unadjusted movement | The claimed OS's answer: Windows supports it, Linux does not, so a request without a gesture fails with that OS's error | Firefox checks the widget's support before the gesture, so the error names the real windowing system | `pointer-lock-unadjusted-claimed-os` patch |
+| WebRTC UDP behind a SOCKS5 proxy | STUN, TURN and peer-to-peer UDP go through the proxy's UDP relay (UDP ASSOCIATE), so the srflx candidate is the address the page's STUN server really saw; the local network gets no exception, and mDNS names stay in the browser (no multicast). Without a relay (an HTTP proxy, or a SOCKS5 proxy that refuses UDP), no UDP leaves the host and the srflx carries the proxy IP. Only a page's own loopback connection stays direct, on this host | Stock Firefox on the exit machine gathers a real srflx and connects peer to peer | `webrtc-socks5-udp` patch |
+| WebRTC host addresses | The claimed machine's: with `webrtc:hostipv6`, an IPv6 host address on the primary interface beside the IPv4 one, as a dual-stack machine gathers them (IPv6 first), on a host that has none | The count and local preferences of host candidates, and which one the srflx belongs to, describe the host's interfaces | `webrtc-topology-host-ipv6` patch |
+| Window frame | The claimed OS's frame: a Windows identity's window carries Windows' invisible resize border on the left, right and bottom, and no titlebar above its tabs | outerWidth/outerHeight, screenX/screenY and mozInnerScreenX/Y answer with the window manager's decorations (none on a bare X server, a border and a titlebar under openbox) | `window-frame-claimed-os` patch |
+| WebAuthn client capabilities | The claimed OS's table: largeBlob, hybridTransport and the two platform-authenticator keys true on Windows and macOS, credential protection false on macOS | Firefox fixes these when it is compiled, so `getClientCapabilities()` named the build's OS | `webauthn-capabilities-claimed-os` patch |
+| EME (Widevine, PlayReady) | A Windows identity has EME on, as Windows builds do, and knows PlayReady: its request gets past the key-system check and is refused for its configuration, as on a machine whose CDM declines it | Linux builds default EME off ("EME has been preffed off") and have no Media Foundation, so PlayReady was "unsupported" | launcher `media.eme.enabled`, `eme-playready-claimed-os` patch |
+| Mouse moves to the same point | A Windows identity drops a native move to the screen point the last one went to, as Windows does, so a click after a hover sends no second mousemove with no movement | X sends a motion event for a move to where the pointer already is and GTK dispatched each one; Windows Firefox ignores them (`LastMouseMoveData`) |
 | Touchscreen | A touchscreen laptop, not a phone | Touch points and pointer media must agree with the claimed device | `touchscreen-fingerprint-spoofing`, `force-default-pointer` patches |
 
 Left as stock Firefox has it, on purpose:
@@ -473,7 +481,12 @@ the identity claim the host's OS, and does the host render on a GPU?
 | | Identity on the host's OS | Identity on another OS |
 |---|---|---|
 | **GPU rendering** | 🟢 <ins><b>Most stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ No canvas noise: looks like stock Firefox<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ The claimed GPU is the host's, so the pixels agree with it<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Every identity on this machine claims the same GPU, so there is less fingerprint diversity | 🟡 <ins><b>Less stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ Readback is random, so the real OS does not show<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ A GPU is drawn per identity, so identities differ<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Canvas noise: looks like LibreWolf, Tor Browser or Mullvad Browser, which are rarer than stock Firefox |
-| **Software rendering**<br/>(no GPU driver, as on most servers) | 🟢 <ins><b>Stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ No canvas noise: looks like stock Firefox<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ A GPU is drawn per identity, so identities differ<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Looks like a GPU falling back to software rendering, which is rarer than a working GPU | 🟡 <ins><b>Less stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ Readback is random, so the real OS does not show<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ A GPU is drawn per identity, so identities differ<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Canvas noise: looks like LibreWolf, Tor Browser or Mullvad Browser, which are rarer than stock Firefox |
+| **Software rendering**<br/>(no working GPU driver, as on most servers) | 🟡 <ins><b>Less stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ No canvas noise: looks like stock Firefox<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ Claims the software renderer (`llvmpipe` on Linux), so the pixels agree with it<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Reads as a server or a broken driver, and every identity on this machine claims the same renderer | 🟡 <ins><b>Less stealthy</b></ins><br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ Readback is random, so the real OS does not show<br/>&nbsp;&nbsp;&nbsp;&nbsp;✅ A GPU is drawn per identity, so identities differ<br/>&nbsp;&nbsp;&nbsp;&nbsp;⛔ Canvas noise: looks like LibreWolf, Tor Browser or Mullvad Browser, which are rarer than stock Firefox |
+
+A software-rendering host never claims a GPU. Firefox reads the name and the
+pixels from one GL context, so a GPU name over software pixels never happens on
+a real machine: with a broken GPU driver, Firefox reports `llvmpipe` too. To
+report a GPU, render on one with `headless="virtual-gpu"`.
 
 That is the default. These options override it:
 
@@ -494,8 +507,9 @@ claims the host's OS. Details are in
 | Playwright's `evaluate`, selectors and init scripts run in an isolated world the page cannot see | Juggler |
 | `navigator.webdriver` is `false` | `playwright/1-leak-fixes` patch |
 | `select_option`, `fill` on date and colour inputs, and `set_input_files` fire trusted events | `trusted-automation-events` patch |
-| `fill` and `keyboard.insert_text` type the text, key by key at a person's pace | Juggler |
+| `fill` and `keyboard.insert_text` paste the text as a person does: the paste shortcut and Firefox's own paste, without the system clipboard | Juggler |
 | Screenshots leave the page's DOM alone (no caret-hiding style writes) | Launcher |
+| `fill` clicks a text field without focus first, as a person does | Launcher |
 | Mouse moves coalesce per frame as a real mouse's do, spaced as a 125 Hz mouse's | Juggler, `input-coalescing-parity` patch |
 | A drag fires `drag` at its source with each motion, as GTK does | Juggler, `drag-source-events` patch |
 | Driver calls define no interfaces on the page's window | `isolated-world-global-order` patch |
@@ -524,7 +538,7 @@ claims the host's OS. Details are in
 | Feature | Where |
 |---|---|
 | Load extracted addons without a debug server: `addons=["/path/to/addon"]` | launcher, `camoufox-window-module` patch |
-| uBlock Origin installed by default: each browser release bundles the newest uBO release on AMO when it is built (`browser/scripts/fetch-ubo.py`), blocking with the default filter lists packaged in it, never downloaded at launch (`exclude_addons=[DefaultAddons.UBO]` to drop it) | packaging (`fetch-ubo.py` freeze_lists), launcher |
+| uBlock Origin installed by default: each browser release bundles the uBO release pinned in `browser/scripts/data/ubo.json` (`browser/scripts/fetch-ubo.py`), blocking with the default filter lists packaged in it, never downloaded at launch (`exclude_addons=[DefaultAddons.UBO]` to drop it) | packaging (`fetch-ubo.py` freeze_lists), launcher |
 | Addons cannot open tabs unless `allow_addon_new_tab=True` | `disable-extension-newtab` patch |
 | Addons run in private browsing | `all-addons-private-mode` patch |
 
@@ -605,16 +619,22 @@ MPL-2.0 like the rest of the browser**; see
 
 ```python
 from camoufox import Camoufox
-from camoufox.humanize import cursory, raw
+from camoufox.humanize import cursory, notches, raw
 
 with Camoufox(humanize={"mouse": cursory(max_time=1.0), "scroll": raw(), "seed": 1234}) as browser:
     ...
 ```
 
+```ts
+import { Camoufox, cursory, raw } from "camoufox";
+
+const browser = await Camoufox({ humanize: { mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 } });
+```
+
 | Channel | Engines | `auto()` means |
 |---|---|---|
 | `mouse` | `raw()`, `cursory(max_time=, min_time=)` | `cursory()` |
-| `scroll` | `raw()`, `cursory()`: a wheel turn arrives as 3-line notches, tens of ms apart | `cursory()` |
+| `scroll` | `raw()`, `notches()`: a wheel turn arrives as 3-line notches, tens of ms apart | `notches()` |
 | `keyboard` | `raw()` | `raw()` |
 
 An omitted channel is `auto()`. `humanize=True` is `auto()` on every channel, and a number is `{"mouse": cursory(max_time=<number>)}`, as before. `seed` (an integer below 2^64) makes the humanized input repeatable: the same seed and the same actions give the same cursor paths and wheel timing, and each channel has its own random stream, so typing does not change the mouse paths. Without a seed, every launch draws a new one.
@@ -623,7 +643,7 @@ The table is what this repository's build ships. A build lists its engines, and 
 
 ### Writing your own engine: `custom(fn)`
 
-A channel can also run a Python function of yours in your own process. The function plans the input and plays it through Playwright's own input methods, so the page sees the same trusted events as from any Playwright call. The browser runs that channel raw, and your code never runs inside the browser. The other channels keep the build's engines.
+A channel can also run a function of yours, in your own process and language. The function plans the input and plays it through Playwright's own input methods, so the page sees the same trusted events as from any Playwright call. The browser runs that channel raw, and your code never runs inside the browser. The other channels keep the build's engines.
 
 ```python
 from camoufox.async_api import AsyncCamoufox
@@ -638,6 +658,16 @@ async with AsyncCamoufox(humanize={"mouse": custom(my_move), "scroll": auto(), "
     await page.locator("#submit").click()             # my_move plans the move, Playwright clicks
 ```
 
+```ts
+import { Camoufox, auto, custom } from "camoufox";
+
+const browser = await Camoufox({ humanize: {
+  mouse: custom(async (page, x, y, { original, rng, play }) => play(myModel([x, y], rng))),
+  scroll: auto(),
+  seed: 1234,
+} });
+```
+
 | Channel | Called as | For |
 |---|---|---|
 | `mouse` | `fn(page, x, y, *, original, rng, play)` | `Mouse.move`/`click`/`dblclick`, and the move to the point of `click`, `dblclick` and `hover` on a `Page` or `Locator` |
@@ -645,12 +675,12 @@ async with AsyncCamoufox(humanize={"mouse": custom(my_move), "scroll": auto(), "
 | `scroll` | `fn(page, target, *, original, rng, play)` with `target` a `Locator` or `(dx, dy)` | `Mouse.wheel`, `Locator.scroll_into_view_if_needed`, and bringing an element that is not in view into view before a click, hover or fill |
 
 - `original()` runs Playwright's own behaviour for the call. Calling it is how a function declines.
-- `rng()` returns a float in [0, 1) from the channel's seeded stream. It is the same stream the browser's engines would draw from for that seed, number for number.
-- `play(steps)` dispatches steps at their times, in ms from the start of the call: `("move", x, y, t)`, `("down" | "up", button, t)`, `("wheel", dx, dy, t)`, `("key", key, "down" | "up", t)`, `("text", text, t)`. It waits until each step is due on a monotonic clock rather than sleeping between steps, so a slow round trip delays one step and never adds up. Bad steps raise `ValueError` before anything is sent.
+- `rng()` returns a float in [0, 1) from the channel's seeded stream. It is the same stream the browser's engines would draw from for that seed, number for number, in Python and TypeScript alike.
+- `play(steps)` dispatches steps at their times, in ms from the start of the call: `("move", x, y, t)`, `("down" | "up", button, t)`, `("wheel", dx, dy, t)`, `("key", key, "down" | "up", t)`, `("text", text, t)` (pasted, as `keyboard.insert_text` is). It waits until each step is due on a monotonic clock rather than sleeping between steps, so a slow round trip delays one step and never adds up. Bad steps raise `ValueError` before anything is sent.
 - Playwright's actions run inside its own server, so the wrappers act first: they scroll the element into view and move to the click point, and Playwright's own move then has no distance left. A `fill` selects the field's text first, so your keys replace it.
 - With the sync API the functions are plain functions; with the async API they may be `async`. Exceptions reach the caller unchanged.
 - A custom mouse leaves the moves the browser makes itself (the cursor move before a scroll engine wheels) to the build's own mouse engine, so they are paths, not jumps.
-- The wrappers belong to the browser `Camoufox()` launched: other browsers in the same process are untouched. For a browser from `connect()`, launch it with `raw()` on those channels and call `camoufox.humanize.attach_custom(browser, humanize)`. Over a network each event is a round trip, so the launcher warns (`humanize_custom_remote`). `launch_server()` refuses `custom()`.
+- The wrappers belong to the browser `Camoufox()` launched: other browsers in the same process are untouched. For a browser from `connect()`, launch it with `raw()` on those channels and call `camoufox.humanize.attach_custom(browser, humanize)` (`attachCustom` in TypeScript). Over a network each event is a round trip, so the launcher warns (`humanize_custom_remote`). `launch_server()` refuses `custom()`.
 
 # Building the browser
 

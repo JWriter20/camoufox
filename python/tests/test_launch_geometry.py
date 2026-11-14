@@ -11,7 +11,7 @@ from unittest import mock
 
 import orjson
 import pytest
-from camoufox.fingerprints import Screen
+from camoufox.fingerprints import BASELINE_TASKBAR_HEIGHT, Screen
 
 from camoufox import utils
 
@@ -143,3 +143,94 @@ class TestViewportOperationsDoNotDeadlock:
                 config = launch(os=os_name)
                 assert "window.innerWidth" not in config, os_name
                 assert "window.innerHeight" not in config, os_name
+
+
+def _zoomed_windows_fingerprint(dpr):
+    """fpgen's 1920x1080 monitor recorded at a 110% browser zoom: every CSS size
+    shrunk by the zoom folded into the ratio."""
+    from camoufox.fingerprints import generate_fingerprint
+
+    fp = generate_fingerprint(os="windows")
+    fp["screen"].update(width=1760, height=990, availWidth=1760, availHeight=946, availLeft=0, availTop=0)
+    fp["window"].update(devicePixelRatio=dpr, outerWidth=1760, outerHeight=953, screenX=-7, screenY=-7)
+    return fp
+
+
+def test_a_zoomed_fpgen_ratio_claims_the_display_it_was_recorded_on():
+    # fpgen.yml leaves the ratio unmapped, so the page saw 1 while the screen
+    # kept the zoomed 1760x990: a 1760x990 monitor that, rendered at 1 on the
+    # real 1920x1080 one, made a fullscreen window 1920x1080 against
+    # screen.width 1760 (cg.13 on WSLg). A ratio no display offers is a zoom,
+    # so it is repaired to the display's scale with the geometry rescaled.
+    with host(Screen(max_width=1920, max_height=1080)):
+        config = config_of(utils.launch_options(
+            headless=True, os="windows", fingerprint=_zoomed_windows_fingerprint(1.0909090909090908),
+            i_know_what_im_doing=True))
+    assert config["window.devicePixelRatio"] == 1
+    assert (config["screen.width"], config["screen.height"]) == (1920, 1080)
+    assert config["screen.availHeight"] == 1032
+
+
+def test_a_real_display_scale_from_fpgen_stays_unmapped():
+    # 1.25 is a scale Windows offers: the identity is left as fpgen.yml maps it.
+    with host(Screen(max_width=1920, max_height=1080)):
+        config = config_of(utils.launch_options(
+            headless=True, os="windows", fingerprint=_zoomed_windows_fingerprint(1.25),
+            i_know_what_im_doing=True))
+    assert "window.devicePixelRatio" not in config
+    assert config["screen.width"] == 1760
+
+
+def test_a_zoomed_fpgen_ratio_follows_the_caller_s_render_scale():
+    # A caller who sets layout.css.devPixelsPerPx decides the scale the page
+    # renders at. The zoom repair moved 1.818 (175% with a zoom folded in) to
+    # 1.75 regardless, so the page reported devicePixelRatio 1.75 while
+    # matchMedia('(resolution: 1dppx)') matched: a pairing no Firefox has
+    # (font-fallback-windows.py, pinned to 1, failed on such a draw). The
+    # repair now targets the caller's scale, rescaling the geometry to it.
+    drawn = 1.8181818181818181
+    with host(Screen(max_width=3840, max_height=2160)):
+        opts = utils.launch_options(
+            headless=True, os="windows", fingerprint=_zoomed_windows_fingerprint(drawn),
+            firefox_user_prefs={"layout.css.devPixelsPerPx": "1"}, i_know_what_im_doing=True)
+    config = config_of(opts)
+    assert config["window.devicePixelRatio"] == 1
+    assert opts["firefox_user_prefs"]["layout.css.devPixelsPerPx"] == "1"
+    assert config["screen.width"] == round(1760 * drawn)
+
+
+class TestCallerScreenHoldsTheDrawnWindow:
+    """A caller who sets the screen but not the window still gets a window that fits it.
+
+    fpgen draws the window from its own screen, and a caller's 1920x1080 screen
+    replaced that screen but kept the window: 2147x1173, 2560x1408 and 2560x1390
+    in three of eight draws. The browser grows the screen to hold its window, so
+    the page then reported a 7680x2160 or 3638x1919 screen instead of the caller's
+    (CamoufoxPro's smoke check, "screen spoofed with stock Windows available rect").
+    The room is what the browser reports as well as what the caller claimed:
+    baseline protection takes the taskbar out of the screen (1080 - 48 on Windows)
+    whatever the caller's availHeight, and a 1040-tall window grew it to 2560x1440.
+    """
+
+    CALLER_SCREEN = {
+        "screen.width": 1920, "screen.height": 1080,
+        "screen.availWidth": 1920, "screen.availHeight": 1040,
+    }
+
+    @pytest.mark.parametrize("os_name,os_key", [("windows", "win"), ("macos", "mac"), ("linux", "lin")])
+    def test_the_window_fits_the_screen_the_browser_reports(self, os_name, os_key):
+        room_h = min(1040, 1080 - BASELINE_TASKBAR_HEIGHT[os_key])
+        for _ in range(40):
+            config = launch(os=os_name, headless=True, config=dict(self.CALLER_SCREEN))
+
+            for key, value in self.CALLER_SCREEN.items():
+                assert config[key] == value, f"{key} moved off the caller's {value}: {config[key]}"
+            assert config["window.outerWidth"] <= 1920, config["window.outerWidth"]
+            assert config["window.outerHeight"] <= room_h, (config["window.outerHeight"], room_h)
+            assert 0 <= config.get("window.screenX", 0) <= 1920 - config["window.outerWidth"]
+            assert 0 <= config.get("window.screenY", 0) <= room_h - config["window.outerHeight"]
+
+    def test_a_caller_s_window_size_is_kept(self):
+        config = launch(headless=True, config={**self.CALLER_SCREEN, "window.outerWidth": 2000, "window.outerHeight": 1100})
+
+        assert (config["window.outerWidth"], config["window.outerHeight"]) == (2000, 1100)

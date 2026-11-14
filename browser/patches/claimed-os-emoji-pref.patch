@@ -1,0 +1,49 @@
+diff --git a/gfx/thebes/gfxTextRun.cpp b/gfx/thebes/gfxTextRun.cpp
+--- a/gfx/thebes/gfxTextRun.cpp
++++ b/gfx/thebes/gfxTextRun.cpp
+@@ -3,6 +3,7 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "gfxTextRun.h"
++#include "MaskConfig.hpp"
+ 
+ #include "SharedFontList-impl.h"
+ #include "TextDrawTarget.h"
+@@ -48,6 +49,20 @@
+ using namespace mozilla::unicode;
+ using mozilla::services::GetObserverService;
+ 
++// Camoufox: whether the launch identity claims another OS than this build's.
++// The launcher then writes that OS's font.name-list.* defaults (font-prefs.json)
++// as user prefs, since a launcher has no default branch to write to.
++static bool CamouClaimsForeignOS() {
++  const auto os = MaskConfig::GetSpoofedOS();
++#if defined(XP_WIN)
++  return os == MaskConfig::SpoofedOS::MacOS || os == MaskConfig::SpoofedOS::Linux;
++#elif defined(XP_MACOSX)
++  return os == MaskConfig::SpoofedOS::Windows || os == MaskConfig::SpoofedOS::Linux;
++#else
++  return os == MaskConfig::SpoofedOS::Windows || os == MaskConfig::SpoofedOS::MacOS;
++#endif
++}
++
+ static const char16_t kEllipsisChar[] = {0x2026, 0x0};
+ static const char16_t kASCIIPeriodsChar[] = {'.', '.', '.', 0x0};
+ 
+@@ -3554,7 +3569,15 @@
+   // 2. search pref fonts
+   RefPtr<gfxFont> font = WhichPrefFontSupportsChar(aCh, aNextCh, presentation);
+   if (font) {
+-    if (PrefersColor(presentation) && pfl->EmojiPrefHasUserValue()) {
++    // Camoufox: this branch keys off "a user picked the emoji font". A claimed
++    // OS's font.name-list.emoji arrives as a user pref (see above), but on that
++    // OS it is a built-in default, so the colour check below runs there. It
++    // matters: Segoe UI Emoji covers the regional indicators but has no COLR
++    // glyph for them, so Windows rejects it here and falls through to Twemoji
++    // Mozilla, which ligates "US" into one 1em flag. Accepted as a user choice,
++    // the four indicators measured 27.483px against Windows' 32px.
++    if (PrefersColor(presentation) && pfl->EmojiPrefHasUserValue() &&
++        !CamouClaimsForeignOS()) {
+       // For emoji, always accept the font from preferences if it's explicitly
+       // user-set, even if it isn't actually a color-emoji font, as some users
+       // may want to set their emoji font preference to a monochrome font like

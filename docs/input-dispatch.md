@@ -107,6 +107,18 @@ fingerprint immune to `#751`.
 `browser/tests/playwright/patches/input-ack-backstop.py` covers the bounded waits
 themselves: a late renderer ack, and a drag whose page answers late.
 
+## Focus
+
+A driven page stays focused and active, deliberately not stock. Upstream
+Playwright's Juggler set `docShell.overrideHasFocus` and `forceActiveState` on
+every top-level document so parallel pages behave as if each is in front;
+Camoufox keeps that for the product (`content/main.js`). Stock gives a page
+behind another window `hasFocus()` false, a window `blur`, and a hidden,
+throttled state behind a foreground tab. The difference is page-visible
+(`ci/tribal-rules.yml`, `driven-pages-stay-focused`).
+Keyboard input therefore does not raise the page first; `Page.bringToFront`
+still does that when a caller asks.
+
 ## The input gate
 
 Firefox's content process drops user input that reaches a document before its
@@ -131,8 +143,11 @@ many `pointermove`s as `pointerrawupdate`s.
 `input-coalescing-parity.patch` queues juggler moves the way real ones are
 queued, and `BrowserChild::RecvRealMouseMoveEvent` acks each one with
 `mousequeued <id>` when the renderer has it. A move returns at that ack
-(`MouseDispatch.sendQueuedMove`). Moves are spaced at least 8 ms apart, the
-reports of a 125 Hz mouse, the common rate. A path given as steps
+(`MouseDispatch.sendQueuedMove`). Sends are spaced at least 8 ms apart, the
+reports of a 125 Hz mouse, the common rate. The clock starts when the move is
+sent, not when its ack returns: the next move cannot start until this one
+returns, so counting the ack into the gap stretched a 125 Hz path out to about
+one move per frame. A path given as steps
 (`page.mouse.move(x, y, steps=n)`, which Playwright sends as n moves) then
 reaches the page as a real mouse's motion does. Measured with a 125 Hz XTest
 sweep on Xvfb against stock 158.0.1: one
@@ -171,58 +186,87 @@ A mouse wheel turns in notches, and stock Firefox delivers each one as its own
 `wheel` event. On Linux (GTK, X11) stock 158.0.1 gives every notch
 `deltaMode` 1, `deltaY` 6, `wheelDeltaY` -120, a `DOMMouseScroll` with
 `detail` 3 and a `MozMousePixelScroll` of three lines, and scrolls 120 px
-(measured with XTest button 5). `Page.dispatchWheelEvent` sends the same: one
-event of three lines per notch, flagged as a native tick
-(`wheel-native-ticks.patch`), so Gecko applies the same system scroll speed.
+(measured with XTest button 5). On Windows, stock 159.0 has the same shape
+(measured with `SendInput` at a device pixel ratio of 2.5, 45 runs identical):
+`deltaMode` 1, `deltaY` 6, `wheelDeltaY` -120, `detail` 3, one event per notch
+with no acceleration. Its pixels differ only because line height does, so three
+native lines need no per-OS constant. A physical wheel, other line settings and
+a ratio of 1 are not measured there. macOS differs: with a person turning a
+notched USB mouse on stock 159.0, a slow notch is `deltaMode` 1, `deltaY` 1,
+`wheelDeltaY` -48, `detail` 1 and a `MozMousePixelScroll` of 16, and the OS
+accelerates a faster turn to as many as 6 lines an event.
+
+On a Linux or Windows identity, `Page.dispatchWheelEvent` sends one event of three
+lines per notch, flagged as a native tick (`wheel-native-ticks.patch`), so Gecko
+applies the same system scroll speed. On a macOS identity it sends lines without
+that flag and the launcher turns `mousewheel.system_scroll_override.enabled` off,
+as stock has it on macOS, which gives the shape above in proportion. Every one of
+the 78 recorded macOS bursts starts at one line, so a call starts there too and
+grows by 1 to 3 lines an event up to 12.
 
 A Playwright caller asks for pixels, so `mouse.wheel(dx, dy)` maps each axis to
 notches: 100 px is one notch, rounded to the nearest, at least one on an axis
-that moves. The notches of one call are 18 to 60 ms apart, drawn per notch;
-no recording of a person's wheel backs that range yet. The page therefore scrolls a
-notch's distance (120 px here), not the exact pixels asked for, and
+that moves. On a macOS identity it maps to lines instead, at 16 px a line. The
+events of one call are 18 to 60 ms apart, drawn per event; the
+one recording of a person's wheel, on macOS, has bursts 20 to 80 ms apart (10th
+to 90th percentile), and nothing backs the range on Linux or Windows. The page therefore scrolls a
+notch's distance (120 px here) or a whole number of lines, not the exact pixels asked for, and
 `mouse.wheel(0, 0)` sends nothing. Humanize does not change this: `raw()`
 and a `custom()` scroll engine's wheel steps are rounded the same way, each
-step at least one notch, so a custom engine should plan in notches (100 px)
-to land where it means to.
+step at least one notch (a line on a macOS identity), so a custom engine should
+plan in notches (100 px) to land where it means to. The `notches` scroll engine
+plans the same events, a macOS identity's lines included. Without a scroll engine
+each notch takes the activation slot alone, so a long wheel does not hold up input
+in other contexts; an engine's plan keeps the slot for as long as it plays.
 `browser/tests/playwright/patches/driven-wheel-notches.py` compares the result
 with stock's.
 
-## Typed text
+## Pasted text
 
-Playwright's `fill()` and `keyboard.insert_text()` send `Page.insertText`.
-Typing cannot put text in a field without key events, so Juggler types it: in
-stock Firefox 158.0.1 each character arrives as `keydown`, `keypress`,
-`beforeinput` and `input` (`insertText`, that one character) and `keyup`,
-with Shift pressed around a capital (measured with XTest keys). A character
-with a key on the US layout is pressed through the same path as
-`keyboard.type()`, so its `key`, `code` and `keyCode` are that layout's; a line
-break is Enter in a textarea or an editable element. A character the layout
-has no key for (é, 嗨) is inserted as before, with `beforeinput`/`input` and no
-key events.
+Playwright's `fill()` and `keyboard.insert_text()` send `Page.insertText`. A
+person enters a whole string by pasting it, so Juggler pastes: the paste
+shortcut goes down (Ctrl+V, or Cmd+V when the page's `navigator.platform` is
+a Mac), Firefox's own paste runs with the text (`nsIEditor.pasteTransferable`:
+a trusted `paste` event whose `clipboardData` holds the text as `text/plain`,
+then `beforeinput` and `input` with `insertFromPaste`), and the shortcut comes
+up. The shortcut's `keypress`, where Firefox would paste from the system
+clipboard, is cancelled in the system group; content never receives a
+`keypress` for a shortcut, so that is not observable. The text never goes
+through the system clipboard. The modifier leads V by about 60 ms and trails
+it by about 40 ms, as Shift does a key, and V is held 116.25 ms (SD 23.88;
+Dhakal et al., "Observations on Typing from 136 Million Keystrokes", CHI 2018).
+Every delay between a person's input events comes from `input/HumanDelay.js`,
+with the figures its caller cites: a normal draw for a key or modifier hold
+(`normalDelay(mean, sd, min, max)`) and a right-skewed log-normal for a click
+hold, hover dwell or double-click gap (`logNormalDelay(median, sigma, min, max)`),
+as human timing is. The click delays draw from the launch's `humanize:seed` on a
+separate `timing` stream, so a seeded session reproduces them without shifting a
+cursor or keyboard plan. The key and modifier delays of a paste run in the
+content process, which has no such stream, and a seed does not reproduce them.
 
-The pace is a person's, drawn per call from Dhakal et al., "Observations on
-Typing from 136 Million Keystrokes" (CHI 2018): the typist's mean interval
-between key presses from the population's (238.66 ms, SD 111.6, at least
-60 ms), keys held 116.25 ms (SD 23.88). A key goes up after the next one goes
-down when the interval is shorter than the hold; that rollover is rarer here
-than the quarter of keystrokes the paper reports, which an interval model
-cannot produce without the per-key data. How far one typist's
-intervals spread around their own mean is not in the paper; it is taken as
-35%. A fill takes about a quarter of a second per character, so a long one
-needs a longer `timeout`.
+A page that cancels the paste, or the shortcut's `keydown`, and leaves the field
+as it was gets the text typed instead, as a person types what they cannot paste:
+key by key on a US keyboard, 238.66 ms press to press (SD 111.60, the same study).
+A character with no US key arrives as an input method commits it. Typing stops
+with an error if the focus leaves the field, and a read-only field takes nothing,
+without error. A page that writes the pasted text in later than the shortcut's
+release (about 160 ms) has it typed as well. A page that
+handled the paste itself keeps what it wrote, and `fill()` fails only if the keys
+change nothing either. Nothing focused that takes text gets the shortcut and no
+paste. Playwright documents `insert_text()` as sending no key events; here it
+sends the shortcut's.
 
-A person clicks a field before typing into it, while Playwright's `fill()`
+A person clicks a field before pasting into it, while Playwright's `fill()`
 focuses it from script: the page would get `focus` with no pointer or mouse
-event before it. The launchers click a text field that does not have focus
-before the fill (`camoufox/driver_defaults.py`, `attachDriverDefaults` in
-`utils.ts`). The click is Playwright's own, so the mouse moves there and
-presses through the OS-path dispatch. A field that has focus is typed into as
-it is. Fields `fill()` sets without typing (date, color, range and the like)
-are not clicked. A field the click cannot reach, such as one covered by
-another element, now fails the way `click()` does, unless `force` is passed.
+event before it. The Python launcher clicks a text field that does not have
+focus before the fill (`camoufox/driver_defaults.py`), and so does the TypeScript
+launcher (`driver_defaults.ts`). The click is Playwright's own, so the mouse moves
+there and presses through the OS-path dispatch. A field that has focus is pasted
+into as it is. Fields `fill()` sets without pasting (date, color, range and the
+like) are not clicked, and neither is a field another element covers, which a
+person could not click either: `fill()` works on it as Playwright's does.
 `fill()` still selects the field's text with `select()` first.
-`browser/tests/playwright/patches/driven-fill-keys.py` compares the result
-with stock's.
+`browser/tests/playwright/patches/driven-fill-paste.py` checks the events.
 
 ## Screenshots
 
@@ -240,7 +284,7 @@ it changes no pixel. The launchers therefore default screenshots of pages they
 launched to `caret: "initial"`. Page, element and locator screenshots all get
 it. Python wraps the client's `Page.screenshot` and `ElementHandle.screenshot`
 (`camoufox/driver_defaults.py`). TypeScript fills the option in where the client
-sends the request (`attachScreenshotDefaults` in `utils.ts`). Each checks that
+sends the request (`attachDriverDefaults` in `driver_defaults.ts`). Each checks that
 the page belongs to a Camoufox launch, so other browsers in the same process
 keep Playwright's behaviour. A caller who passes `caret` gets what they ask
 for, and `caret: "hide"` writes the page's style attributes as before. A

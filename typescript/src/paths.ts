@@ -39,7 +39,7 @@ export const OS_NAME: "mac" | "win" | "lin" = OS_MAP[process.platform];
  * launchers share one install directory. Hardcoding ~/.cache would diverge on
  * hosts that set XDG_CACHE_HOME, and on macOS/Windows entirely.
  */
-function userCacheDir(appName: string): string {
+export function userCacheDir(appName: string): string {
 	if (OS_NAME === "win") {
 		const localAppData = process.env.LOCALAPPDATA;
 		const base =
@@ -57,6 +57,22 @@ function userCacheDir(appName: string): string {
 	return path.join(base, appName);
 }
 
+/**
+ * platformdirs' user_config_dir(appName), so both launchers read one stored
+ * Camoufox Pro key.
+ */
+export function userConfigDir(appName: string): string {
+	if (OS_NAME === "win") {
+		return path.dirname(userCacheDir(appName));
+	}
+	if (OS_NAME === "mac") {
+		return path.join(os.homedir(), "Library", "Application Support", appName);
+	}
+	const xdg = process.env.XDG_CONFIG_HOME ?? "";
+	const base = xdg.trim() ? xdg : path.join(os.homedir(), ".config");
+	return path.join(base, appName);
+}
+
 export const INSTALL_DIR: string = userCacheDir("camoufox");
 
 /**
@@ -65,12 +81,15 @@ export const INSTALL_DIR: string = userCacheDir("camoufox");
  * tarball, so one seed draws one identity in either launcher.
  */
 export const DATA_FILES: readonly string[] = [
+	"audio-output-latency.json",
 	"browser-pin.json",
+	"display-profiles.json",
 	"essential-fonts.json",
 	"fingerprint-presets.json",
 	"fingerprint-presets-v150.json",
 	"font-bases.json",
 	"font-groups.json",
+	"font-prefs.json",
 	"fonts.json",
 	"fpgen.yml",
 	"launcher-constants.json",
@@ -101,9 +120,17 @@ export function loadDataFile<T = any>(file: string): T {
 /** Values both launchers use, kept in one file (python/src/camoufox/launcher-constants.json). */
 export interface LauncherConstants {
 	markerFonts: Record<"win" | "mac" | "lin", string[]>;
+	windowsLegacyFontFamilies: Record<string, string[]>;
 	windows11MarkerFonts: string[];
 	plausibleCoreCounts: number[];
 	appleSiliconCores: number[];
+	x86IntelShare: number;
+	cpuIdentityPref: Record<"x86/intel" | "x86/amd" | "arm", number>;
+	cpuManufacturers: Record<
+		"mac" | "windows" | "linux",
+		Record<"x86" | "arm", string[]>
+	>;
+	intelOnlyCoreCounts: number[];
 	appleSiliconPanels: Record<string, [number, number][]>;
 	intelMacIgpCores: number[];
 	intelMacDgpuExtraCores: number[];
@@ -112,6 +139,8 @@ export interface LauncherConstants {
 	macEloquenceVoices: string[];
 	baselineTaskbarHeight: Record<"win" | "mac" | "lin", number>;
 	baselineMultiTouchPoints: number;
+	recordedWindowChrome: Record<"win" | "mac" | "lin", [number, number]>;
+	windowsUiColors: Record<string, string>;
 	cachePrefs: Record<string, any>;
 	windowsBehaviourPrefs: Record<string, any>;
 }

@@ -3,7 +3,7 @@ import platform
 import warnings
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Optional, Type
+from typing import Any, Optional, Type
 
 from camoufox.pkgman import load_yaml
 
@@ -38,11 +38,14 @@ class LeakWarning(RuntimeWarning):
     """
 
     @staticmethod
-    def warn(warning_key: str, i_know_what_im_doing: Optional[bool] = None) -> None:
+    def warn(warning_key: str, i_know_what_im_doing: Optional[bool] = None, **values: Any) -> None:
         """
-        Warns the user if a passed parameter can cause leaks.
+        Warns the user if a passed parameter can cause leaks. `values` fill the
+        message's {name} fields.
         """
         warning = WARNINGS_DATA[warning_key]
+        if values:
+            warning = warning.format(**values)
         if i_know_what_im_doing:
             return
         if i_know_what_im_doing is not None:
