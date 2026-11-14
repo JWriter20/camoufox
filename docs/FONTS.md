@@ -153,12 +153,29 @@ python3 browser/scripts/verify-fonts.py             # must pass before committin
 
 Deliberate choices:
 
-- **Windows aliases are unconditional and always reported.** The 13
-  GDI-substitution / Light-Semilight rules (`Courier -> Courier New`,
-  `Helvetica -> Arial`, `Calibri Light -> Calibri`, ...) are unconditional in
+- **Windows aliases are unconditional and always reported.** The 7
+  GDI-substitution rules (`Courier -> Courier New`, `Helvetica -> Arial`,
+  `Times -> Times New Roman`, ...) are unconditional in
   `browser/bundle/fontconfig/windows/fonts.conf` because there is no per-launch
   fontconfig hook, and the names are in `essential-fonts.json`'s Windows list. That matches
   reality: every Windows install resolves all of them.
+- **The names of a Windows family's faces are not rewritten; the launcher
+  lists them.** DirectWrite enumerates `Calibri`, `Rockwell`, `Sitka Text`;
+  once Windows' deferred font-info loader has landed, a page can also ask for
+  `Calibri Light`, `Rockwell Extra Bold` or the bare `Sitka`, and gets that
+  face (stock 159 on win-i9, in frames: `Calibri Light` 944.917 where `Calibri`
+  is 951.000). The bundle's fontconfig already publishes each of those names
+  as a family holding only its own faces, so `fonts.conf` must not rewrite
+  them (the six Light / Semilight rules it had drew the regular face for
+  good), and the allowlist must hold them: `utils.py` / `utils.ts` add, to
+  whatever list the launch ends with (drawn or the caller's `fonts`), the
+  names in `launcher-constants.json` `windowsLegacyFontFamilies` whose
+  canonical family is listed. `windowsOfficeLegacyFontFamilies` is the same
+  for faces Office adds to a family Windows ships (`Arial Narrow`, the
+  Franklin Gothic weights): they are added only when the list holds a family
+  of the `office` unit (`font-groups.json`), as on a real machine. Before the
+  loader lands, `windows-legacy-family-names.patch` answers these names as
+  Windows does (the folded face, the base family, or nothing).
 - **macOS TTC weight names are reported.** The confs rewrite `American
   Typewriter Semibold`, `Futura Bold`, `STIX Two Math Regular`, ... to their base
   family. A real Mac registers those as families but `fc-scan` cannot see them,

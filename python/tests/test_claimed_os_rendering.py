@@ -194,6 +194,51 @@ class TestLegacyFontFamilies:
         config, _ = launch(WIN_UA, fonts=["Segoe UI Variable Text"])
         assert config["fonts"] == ["Segoe UI Variable Text", "Segoe UI Variable"]
 
+    def test_faces_named_by_their_own_family_are_exposed(self, launch):
+        # A list in DirectWrite's namespace (a captured Windows enumeration) names Rockwell and
+        # Sitka Text; once Windows' font-info loader has landed, stock also answers the nameID 1/16
+        # names of their faces. Stock 159 on win-i9 found Rockwell Extra Bold and Sitka in every
+        # frame, and a list without those names blocked them.
+        config, _ = launch(WIN_UA, fonts=["Rockwell", "Sitka Text", "Sitka Small"])
+        assert config["fonts"] == [
+            "Rockwell", "Sitka Text", "Sitka Small", "Rockwell Condensed", "Rockwell Extra Bold", "Sitka",
+        ]
+
+    def test_light_faces_are_exposed_with_their_family(self, launch):
+        # The Light and Semilight names are families of their own faces (fonts.conf no longer
+        # rewrites them to the regular family), so the list has to hold them.
+        config, _ = launch(WIN_UA, fonts=["Candara", "Corbel", "Leelawadee UI", "Nirmala UI", "Nirmala Text"])
+        assert config["fonts"][5:] == [
+            "Candara Light", "Corbel Light", "Leelawadee UI Semilight", "Nirmala Text Semilight",
+            "Nirmala UI Semilight",
+        ]
+
+    def test_office_faces_of_os_families_need_an_office_family(self, launch):
+        # Arial Narrow and Franklin Gothic Demi/Heavy are faces Office installs into families
+        # Windows ships (win-i9: ARIALN.TTF is in Office's own font folder). A list shows that
+        # Office is installed only by holding an Office family.
+        config, _ = launch(WIN_UA, fonts=["Arial", "Franklin Gothic", "Agency FB"])
+        assert config["fonts"] == [
+            "Arial", "Franklin Gothic", "Agency FB", "Arial Black", "Franklin Gothic Medium",
+            "Arial Narrow", "Franklin Gothic Demi", "Franklin Gothic Demi Cond", "Franklin Gothic Heavy",
+            "Franklin Gothic Medium Cond",
+        ]
+        config, _ = launch(WIN_UA, fonts=["Arial", "Franklin Gothic"])
+        assert config["fonts"] == ["Arial", "Franklin Gothic", "Arial Black", "Franklin Gothic Medium"]
+
+    def test_a_drawn_list_is_expanded_too(self, launch, monkeypatch):
+        # The launcher's own Windows 11 list names the six Sitka sizes and not the bare family,
+        # which has to come with them as it does for a list the caller passes.
+        monkeypatch.setattr(utils, "_generate_random_font_subset", lambda *args, **kwargs: ["Arial", "Sitka Text"])
+        config, _ = launch(WIN_UA)
+        assert config["fonts"] == ["Arial", "Sitka Text", "Arial Black", "Sitka"]
+
+    def test_the_launcher_base_lists_do_not_hide_the_bare_sitka(self):
+        # The data the draw reads: every Windows base with a Sitka size maps to the bare name.
+        table = utils.LAUNCHER_CONSTANTS["windowsLegacyFontFamilies"]
+        for size in ("Banner", "Display", "Heading", "Small", "Subheading", "Text"):
+            assert table[f"Sitka {size}"] == ["Sitka"]
+
     def test_no_alias_without_its_canonical_family(self, launch):
         config, _ = launch(WIN_UA, fonts=["Times New Roman"])
         assert "Arial Black" not in config["fonts"]

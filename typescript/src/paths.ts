@@ -121,6 +121,7 @@ export function loadDataFile<T = any>(file: string): T {
 export interface LauncherConstants {
 	markerFonts: Record<"win" | "mac" | "lin", string[]>;
 	windowsLegacyFontFamilies: Record<string, string[]>;
+	windowsOfficeLegacyFontFamilies: Record<string, string[]>;
 	windows11MarkerFonts: string[];
 	plausibleCoreCounts: number[];
 	appleSiliconCores: number[];

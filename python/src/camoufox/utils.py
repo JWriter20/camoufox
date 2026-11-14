@@ -28,7 +28,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, fit_window_to_caller_screen, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, font_unit_families, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, fit_window_to_caller_screen, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence, pro
 from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
@@ -2209,17 +2209,6 @@ def launch_options(
     if fonts:
         config['fonts'] = fonts
 
-    if target_os == 'win':
-        expanded = list(config.get('fonts', []))
-        presented = set(expanded)
-        for canonical, aliases in LAUNCHER_CONSTANTS['windowsLegacyFontFamilies'].items():
-            if canonical in presented:
-                for alias in aliases:
-                    if alias not in presented:
-                        expanded.append(alias)
-                        presented.add(alias)
-        config['fonts'] = expanded
-
     if custom_fonts_only:
         firefox_user_prefs['gfx.bundled-fonts.activate'] = 0
         if fonts:
@@ -2247,6 +2236,30 @@ def launch_options(
                 config.get('navigator.userAgent'),
             )
             update_fonts(config, target_os)
+
+    # After the draw, so a drawn list and a list the caller passes (a captured
+    # enumeration, a profile's bundle) expand alike.
+    if target_os == 'win':
+        # Windows enumerates DirectWrite's families ("Arial", "Rockwell", "Sitka Text"), and once
+        # its deferred font-info loader has landed a page can also ask for the nameID 1/16 names
+        # of their faces (Arial Black, Rockwell Extra Bold, the bare Sitka). The allowlist has to
+        # hold those names or it blocks them for good: windowsLegacyFontFamilies maps each
+        # family to them. Arial and Franklin Gothic ship with Windows, but Arial Narrow and
+        # Franklin Gothic Demi/Heavy are faces Office adds to them, so
+        # windowsOfficeLegacyFontFamilies applies only to a list that holds an Office family.
+        expanded = list(config.get('fonts', []))
+        presented = set(expanded)
+        tables = [LAUNCHER_CONSTANTS['windowsLegacyFontFamilies']]
+        if presented & font_unit_families('win', 'office'):
+            tables.append(LAUNCHER_CONSTANTS['windowsOfficeLegacyFontFamilies'])
+        for table in tables:
+            for canonical, aliases in table.items():
+                if canonical in presented:
+                    for alias in aliases:
+                        if alias not in presented:
+                            expanded.append(alias)
+                            presented.add(alias)
+        config['fonts'] = expanded
 
     # Draw the identity's media devices (counts + OS-style labels/groups from
     # media-devices.json, seeded by the identity) unless the caller set any

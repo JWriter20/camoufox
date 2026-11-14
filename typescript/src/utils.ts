@@ -38,6 +38,7 @@ import {
 	fixHardwareConcurrency,
 	fixNavigatorArch,
 	followBaselineProtection,
+	fontUnitFamilies,
 	fromFpgen,
 	fromPreset,
 	generateFingerprint,
@@ -2811,23 +2812,6 @@ async function buildLaunchOptions(
 		config.fonts = fonts;
 	}
 
-	if (targetOs === "win") {
-		const expanded = [...(config.fonts || [])];
-		const presented = new Set(expanded);
-		for (const [canonical, aliases] of Object.entries(
-			LAUNCHER_CONSTANTS.windowsLegacyFontFamilies,
-		)) {
-			if (!presented.has(canonical)) continue;
-			for (const alias of aliases) {
-				if (!presented.has(alias)) {
-					expanded.push(alias);
-					presented.add(alias);
-				}
-			}
-		}
-		config.fonts = expanded;
-	}
-
 	if (custom_fonts_only) {
 		firefox_user_prefs["gfx.bundled-fonts.activate"] = 0;
 		if (fonts?.length) {
@@ -2862,6 +2846,39 @@ async function buildLaunchOptions(
 			);
 			updateFonts(config, targetOs);
 		}
+	}
+
+	// After the draw, so a drawn list and a list the caller passes (a captured
+	// enumeration, a profile's bundle) expand alike.
+	if (targetOs === "win") {
+		// Windows enumerates DirectWrite's families ("Arial", "Rockwell", "Sitka
+		// Text"), and once its deferred font-info loader has landed a page can also
+		// ask for the nameID 1/16 names of their faces (Arial Black, Rockwell Extra
+		// Bold, the bare Sitka). The allowlist has to hold those names or it blocks
+		// them for good: windowsLegacyFontFamilies maps each family to them. Arial
+		// and Franklin Gothic ship with Windows, but Arial Narrow and Franklin
+		// Gothic Demi/Heavy are faces Office adds to them, so
+		// windowsOfficeLegacyFontFamilies applies only to a list that holds an
+		// Office family.
+		const expanded: string[] = [...(config.fonts || [])];
+		const presented = new Set(expanded);
+		const tables = [LAUNCHER_CONSTANTS.windowsLegacyFontFamilies];
+		const office = fontUnitFamilies("win", "office");
+		if (expanded.some((name) => office.has(name))) {
+			tables.push(LAUNCHER_CONSTANTS.windowsOfficeLegacyFontFamilies);
+		}
+		for (const table of tables) {
+			for (const [canonical, aliases] of Object.entries(table)) {
+				if (!presented.has(canonical)) continue;
+				for (const alias of aliases) {
+					if (!presented.has(alias)) {
+						expanded.push(alias);
+						presented.add(alias);
+					}
+				}
+			}
+		}
+		config.fonts = expanded;
 	}
 
 	// Draw the identity's media devices unless the caller set any mediaDevices:

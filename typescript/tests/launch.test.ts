@@ -601,6 +601,40 @@ describe("test_launch_environment: prefs", () => {
 				"Franklin Gothic Medium",
 			]);
 		});
+		it("exposes the faces a family names on their own", async () => {
+			expect(await fontsFor(["Rockwell", "Sitka Text", "Sitka Small"])).toEqual(
+				[
+					"Rockwell",
+					"Sitka Text",
+					"Sitka Small",
+					"Rockwell Condensed",
+					"Rockwell Extra Bold",
+					"Sitka",
+				],
+			);
+		});
+		it("exposes Office faces of OS families only with an Office family", async () => {
+			expect(await fontsFor(["Arial", "Franklin Gothic", "Agency FB"])).toEqual(
+				[
+					"Arial",
+					"Franklin Gothic",
+					"Agency FB",
+					"Arial Black",
+					"Franklin Gothic Medium",
+					"Arial Narrow",
+					"Franklin Gothic Demi",
+					"Franklin Gothic Demi Cond",
+					"Franklin Gothic Heavy",
+					"Franklin Gothic Medium Cond",
+				],
+			);
+			expect(await fontsFor(["Arial", "Franklin Gothic"])).toEqual([
+				"Arial",
+				"Franklin Gothic",
+				"Arial Black",
+				"Franklin Gothic Medium",
+			]);
+		});
 		it("adds no alias without its canonical family", async () => {
 			const fonts = await fontsFor(["Times New Roman"]);
 			expect(fonts).not.toContain("Arial Black");
