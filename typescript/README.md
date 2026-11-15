@@ -257,7 +257,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first is used for `Intl`. |
-| `humanize` | `boolean \| number \| object` | off | Humanized input. A number caps one cursor movement at that many seconds (default cap 1.5); an object picks an engine per channel ([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)). |
+| `humanize` | `boolean \| number \| object` | off | Input shaped by your own `custom(fn)` per channel, in the driver. The browser does not humanize input: `true`, a number or a named engine is refused on this build ([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)). |
 | `screen` | `Screen \| { max_width?, max_height?, min_width?, min_height? }` | the real display when headed | Bounds the generated screen. |
 | `window` | `[number, number]` | generated | Fixed outer window size. |
 | `fonts` | `string[]` | none | Extra font families on top of the OS's own. |
@@ -294,18 +294,10 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 and `from_options` (an object from `launchOptions()` to use as is).
 `launchServer()` also takes `port` and `ws_path`.
 
-`humanize` takes one engine per input channel, built with the factories the
-package exports (`auto`, `raw`, `cursory`, `custom`, and `engine(name,
-options)` for any engine a build lists in its `humanize-engines.json`), which
-take their options in camelCase:
-
-```ts
-import { Camoufox, cursory, raw } from "camoufox";
-
-const browser = await Camoufox({
-	humanize: { mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 },
-});
-```
+`humanize` takes a function of yours per input channel, wrapped with
+`custom(fn)`. The browser itself does not humanize input: `humanize: true`, a
+number or a named engine throws `HumanizeEngineUnavailable` on this build
+([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)).
 
 A `seed` above `Number.MAX_SAFE_INTEGER` must be passed as a `bigint`.
 

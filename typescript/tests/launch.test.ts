@@ -41,7 +41,7 @@ const { OSError, PyFloat, ValueError } = await import("../src/pycompat.js");
 const { Version } = await import("../src/pkgman.js");
 const { InvalidPropertyType, UnknownIPLocation, HumanizeEngineUnavailable } =
 	await import("../src/exceptions.js");
-const { auto, cursory, engine, humanizeConfig, raw } = await import(
+const { auto, cursory, custom, engine, humanizeConfig, raw } = await import(
 	"../src/humanize.js"
 );
 const cpuAffinity = await import("../src/cpu_affinity.js");
@@ -65,6 +65,21 @@ const SHIPPED_MANIFEST = JSON.parse(
 		"utf-8",
 	),
 );
+// What a build that plans cursor paths in the browser ships.
+const OLD_MANIFEST = {
+	version: 1,
+	mouse: ["raw", "cursory"],
+	auto: { mouse: ["cursory"] },
+	engines: {
+		cursory: {
+			module: "resource://gre/modules/juggler/input/CursorTrajectory.js",
+			options: {
+				maxTime: { key: "humanize:maxTime", min: 0 },
+				minTime: { key: "humanize:minTime", min: 0 },
+			},
+		},
+	},
+};
 // The real disk probe, captured before any test stubs it.
 const realQuotaProbe = deps.stockProfileDiskCapacityKb;
 const LINUX_UA =
@@ -1007,7 +1022,7 @@ describe("test_humanize", () => {
 	it("launchOptions writes the channel keys", async () => {
 		const config = await launchHumanize(
 			{ mouse: cursory({ maxTime: 0.8 }), scroll: raw(), seed: 9 },
-			SHIPPED_MANIFEST,
+			OLD_MANIFEST,
 		);
 		expect(config.humanize).toBe(true);
 		expect(config["humanize:mouse"]).toBe("cursory");
@@ -1019,25 +1034,19 @@ describe("test_humanize", () => {
 
 	it("launchOptions refuses an engine the build lacks", async () => {
 		await expect(
-			launchHumanize({ scroll: engine("fancy") }, SHIPPED_MANIFEST),
+			launchHumanize({ scroll: engine("fancy") }, OLD_MANIFEST),
 		).rejects.toThrow(HumanizeEngineUnavailable);
+	});
+
+	it("launchOptions refuses humanize: true on this build", async () => {
+		await expect(launchHumanize(true, SHIPPED_MANIFEST)).rejects.toThrow(
+			/custom/,
+		);
 	});
 });
 
 describe("test_humanize: per-channel engines (test_humanize.py)", () => {
-	const BASE_MANIFEST = JSON.parse(
-		fs.readFileSync(
-			path.join(
-				path.dirname(fileURLToPath(import.meta.url)),
-				"..",
-				"..",
-				"browser",
-				"settings",
-				"humanize-engines.json",
-			),
-			"utf-8",
-		),
-	);
+	const BASE_MANIFEST = OLD_MANIFEST;
 	// A build that lists keyboard and scroll channels too, with one more
 	// engine, `fancy`, on every channel: its options, their config keys and
 	// ranges come from the manifest alone.
@@ -1126,6 +1135,44 @@ describe("test_humanize: per-channel engines (test_humanize.py)", () => {
 		const config = plain(humanizeConfig(humanize, BASE_MANIFEST));
 		expect(config).toEqual(expected);
 		expect(Object.keys(config)).toEqual(Object.keys(expected));
+	});
+
+	it("this build lists no engine", () => {
+		expect(SHIPPED_MANIFEST).toEqual({ version: 2, auto: {}, engines: {} });
+	});
+
+	// The browser delivers input as sent and reads no humanize key: nothing
+	// is written, and asking it to humanize is refused, not ignored.
+	it.each<[HumanizeSetting]>([
+		[undefined],
+		[false],
+		[0],
+		[{}],
+		[{ mouse: raw() }],
+		[{ mouse: auto(), seed: 7 }],
+		[{ keyboard: custom(() => undefined) }],
+	])("a build with no engine gets no humanize key (case %#)", (humanize) => {
+		expect(humanizeConfig(humanize, SHIPPED_MANIFEST)).toEqual({});
+	});
+
+	it.each<[HumanizeSetting, string]>([
+		[true, "auto"],
+		[1.5, "cursory"],
+		[{ mouse: cursory() }, "cursory"],
+		[{ mouse: "cursory" }, "cursory"],
+	])("a build with no engine refuses to humanize (case %#)", (humanize, name) => {
+		try {
+			humanizeConfig(humanize, SHIPPED_MANIFEST);
+			expect.unreachable();
+		} catch (e) {
+			const error = e as InstanceType<typeof HumanizeEngineUnavailable>;
+			expect(error).toBeInstanceOf(HumanizeEngineUnavailable);
+			expect([error.channel, error.engine, error.available]).toEqual([
+				"mouse",
+				name,
+				[],
+			]);
+		}
 	});
 
 	it("an engine needs a build that ships it", () => {

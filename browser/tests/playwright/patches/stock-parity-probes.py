@@ -12,12 +12,8 @@ an invariant stock Firefox 152 holds:
   gum-fake            getUserMedia({audio: true, fake: true}) resolves without a
                       prompt
   storage-partition   a cross-site iframe's document.hasStorageAccess() is false
-  wheel-default       page.mouse.wheel(0, 300) arrives as a physical wheel's
-                      3 notches, each wheelDeltaY -120 (docs/input-dispatch.md);
-                      on Linux, as macOS's differs (driven-wheel-notches)
-  wheel-notches       the same with humanize=True, which does not change it
-  wheel-scaled        wheel-default again at layout.css.devPixelsPerPx 2:
-                      still 3 notches, not a count halved by the scale
+  wheel-default       page.mouse.wheel(0, 300) arrives as the one pixel-mode
+                      event the driver sent, deltaY 300
   query-cost          matchMedia('(color: 8)') and navigator.hardwareConcurrency
                       cost about what matchMedia('(min-width: 1px)') and
                       navigator.userAgent do (no sync IPC per read)
@@ -204,30 +200,6 @@ def run_probes(binary, port):
         return out
 
 
-def probe_wheel(binary, port, humanize, prefs=None):
-    """One scroll of 300px, with humanize on or off.
-
-    Either way the scroll is quantised into the notches a physical wheel
-    produces; both settings are checked so neither drifts from the other.
-    """
-    from camoufox.sync_api import Camoufox
-
-    with Camoufox(headless=True, executable_path=str(binary), os="linux", humanize=humanize,
-                  firefox_user_prefs=prefs or {}, i_know_what_im_doing=True) as b:
-        page = b.new_page()
-        page.goto(f"http://localhost:{port}/")
-        # The notches come 18-60 ms apart, and a content process still busy with the
-        # load when they arrive gets two in its queue at once and fires them as one
-        # wheel event (BrowserChild::RecvMouseWheelEvent coalescing): stock Linux
-        # 158.0.1 does the same with XTest notches 30 ms apart and a 150 ms busy page
-        # (deltaY [6, 12]). The page is idle first, so the notches are what is compared.
-        page.evaluate("() => new Promise((r) => requestIdleCallback(() => r(), {timeout: 2000}))")
-        page.mouse.move(200, 200)
-        page.mouse.wheel(0, 300)
-        page.wait_for_timeout(1500)
-        return json.loads(page.evaluate("() => document.body.dataset.wheel || '[]'"))
-
-
 def relaunch_timezones(binary, port):
     from camoufox.sync_api import Camoufox
 
@@ -256,9 +228,6 @@ def main() -> int:
     server, port = serve()
     try:
         out = run_probes(binary, port)
-        out["wheelHumanized"] = probe_wheel(binary, port, humanize=True)
-        out["wheelScaled"] = probe_wheel(binary, port, humanize=False,
-                                         prefs={"layout.css.devPixelsPerPx": "2"})
         relaunch = relaunch_timezones(binary, port)
     finally:
         server.shutdown()
@@ -290,11 +259,8 @@ def main() -> int:
         failures.append(f"gum-fake: getUserMedia({{fake: true}}) {out['gumFake']}")
     if out["storageAccess"] is not False:
         failures.append(f"storage-partition: cross-site iframe hasStorageAccess() = {out['storageAccess']}")
-    # 300 px is three notches, each one native tick, humanized or not.
-    for name, events in (("wheel-default", out["wheel"]), ("wheel-notches", out["wheelHumanized"]),
-                         ("wheel-scaled", out["wheelScaled"])):
-        if [e["wd"] for e in events] != [-120, -120, -120]:
-            failures.append(f"{name}: wheel(0, 300) gave {events}")
+    if [(e["dy"], e["mode"]) for e in out["wheel"]] != [(300, 0)]:
+        failures.append(f"wheel-default: wheel(0, 300) gave {out['wheel']}")
     # 20000 reads of a value that lives in the config cost ~20 ms here, i.e.
     # ~1 us each: a hash lookup, no IPC. The state this guards against is a sync
     # IPC per read, measured at ~12 us each when it regressed -- 240 ms over the

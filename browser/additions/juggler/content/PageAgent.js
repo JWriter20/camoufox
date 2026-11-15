@@ -11,7 +11,6 @@ const Cu = Components.utils;
 const {Helper} = ChromeUtils.importESModule('resource://gre/modules/juggler/Helper.js');
 const {NetUtil} = ChromeUtils.importESModule('resource://gre/modules/NetUtil.sys.mjs');
 const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
-const {normalDelay} = ChromeUtils.importESModule('resource://gre/modules/juggler/input/HumanDelay.js');
 
 const dragService = Cc["@mozilla.org/widget/dragservice;1"].getService(
   Ci.nsIDragService
@@ -519,9 +518,6 @@ export class PageAgent {
     if (autoShift) {
       tip.keydown(new KeyboardEvent("", { key: 'Shift', code: 'ShiftLeft', location: 1, keyCode: 16, shiftKey: true }), 0);
       this._autoShiftKey = key;
-      // A person presses Shift tens of ms before the key it modifies; 0 ms
-      // between the two keydowns is a scripted-typing tell.
-      await pause(modifierLead());
     }
     const shiftKey = this._realShiftDown || !!this._autoShiftKey;
     let keyEvent = new KeyboardEvent("", {
@@ -555,7 +551,6 @@ export class PageAgent {
       tip.keyup(keyEvent, flags);
       if (this._autoShiftKey === key) {
         this._autoShiftKey = null;
-        await pause(modifierTrail());
         tip.keyup(new KeyboardEvent("", { key: 'Shift', code: 'ShiftLeft', location: 1, keyCode: 16 }), 0);
       }
     } else {
@@ -703,13 +698,9 @@ export class PageAgent {
     };
     events.addEventListener('keypress', onKeypress, {capture: true, mozSystemGroup: true});
     try {
-      // The modifier leads and trails V as Shift does a key (_dispatchKeyEvent).
       await this._dispatchKeyEvent({type: 'keydown', ...modifier});
-      await pause(modifierLead());
       await this._dispatchKeyEvent({type: 'keydown', ...v});
-      await pause(keyHold());
       await this._dispatchKeyEvent({type: 'keyup', ...v});
-      await pause(modifierTrail());
       await this._dispatchKeyEvent({type: 'keyup', ...modifier});
     } finally {
       events.removeEventListener('keypress', onKeypress, {capture: true, mozSystemGroup: true});
@@ -727,7 +718,7 @@ export class PageAgent {
       throw new Error('Cannot insert text: the page refused the paste and the keys');
   }
 
-  // Key by key on a US keyboard, at a person's rate. A character it has no key
+  // Key by key on a US keyboard. A character it has no key
   // for arrives as an input method commits it.
   async _typeText(text, field) {
     for (const character of text) {
@@ -735,12 +726,8 @@ export class PageAgent {
       if (focusedField(this._frameTree.mainFrame().domWindow()) !== field)
         throw new Error('Cannot insert text: the field lost focus while it was being typed into');
       const key = {...(usKey(character) ?? {key: 'Process', code: '', keyCode: 229}), location: 0, repeat: false};
-      const started = ChromeUtils.now();
       await this._dispatchKeyEvent({type: 'keydown', ...key, text: character});
-      await pause(keyHold());
       await this._dispatchKeyEvent({type: 'keyup', ...key});
-      // Timer.sys.mjs reads a negative delay as a huge unsigned one.
-      await pause(Math.max(0, started + keyInterval() - ChromeUtils.now()));
     }
   }
 
@@ -883,22 +870,6 @@ export class PageAgent {
     };
   }
 }
-
-function pause(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// How long a person holds a key: 116.25 ms (SD 23.88; Dhakal et al.,
-// "Observations on Typing from 136 Million Keystrokes", CHI 2018), never under
-// 50 ms.
-const keyHold = () => normalDelay(116.25, 23.88, 50);
-// Press to press while typing, from the same study: 238.66 ms, SD 111.60.
-const keyInterval = () => normalDelay(238.66, 111.6, 80);
-// How far a modifier leads the key it modifies, and trails its release: tens
-// of ms. No recorded figure; these keep the mean and spread of the uniform
-// 35-90 ms and 20-65 ms draws they replaced, with those floors.
-const modifierLead = () => normalDelay(62.5, 16, 35);
-const modifierTrail = () => normalDelay(42.5, 13, 20);
 
 // What has focus in this page, frames included. Services.focus.focusedElement
 // is the active window's: in a process shared with another page, that page's.

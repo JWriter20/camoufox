@@ -2,7 +2,7 @@ r"""
 A viewport the caller asks for must fit on the screen the page sees.
 
 Playwright's viewport= sizes the page, not the window, and nothing checked it
-against the screen the identity claims. humanize-seam.py asked for a 1000x700
+against the screen the identity claims. A guard asked for a 1000x700
 viewport on a launch that drew a 1366x768 screen: the page read innerHeight
 700 with screen.availHeight 768, while a real Firefox window draws its toolbars
 (86 px here) above the page. innerHeight + chrome > availHeight is a machine

@@ -39,7 +39,7 @@ a callback that never returns. One unbounded `await` for an ack that will never
 arrive wedges every later input event, in every tab, permanently — at 0% CPU,
 with nothing in flight and no diagnostic.
 
-`#677` is why review is not enough: restoring the humanize trajectory meant
+`#677` is why review is not enough: a change to the move path meant
 writing a bounds check, and the one written was a copy of the pre-`#225` form,
 reintroducing a fixed deadlock one day before it was re-fixed.
 
@@ -58,32 +58,18 @@ content: the event reached the renderer as an exit event at client `y == -1`,
 produced no ack, and the page saw no mousemove (~1 in 25 runs of
 `near-edge-mouse-deadlock.py`). Both dispatch sites (`Page.dispatchMouseEvent`,
 `Page.dispatchWheelEvent`) measure synchronously before dispatching.
-`MouseDispatch.sendAcked()` measures again before every event it sends, so each
-step of a humanized move, dispatched over hundreds of ms, goes out against
-where the browser is then; a step in a band of the viewport the window does
-not show is skipped, and a destination there is scrolled into view first.
-Measured 2026-10-31: in a window too small for the chrome plus the viewport
-(a 1366x768 screen draw), Juggler's `.browserStack` scrolled the browser on a
-wheel turn, and a move that kept its starting rect landed every later point,
-the destination included, 13-84 px off (`humanize-seam.py`, run d). The stack
-is `overflow: hidden` since, so only Juggler's own `scrollRectIntoViewIfNeeded`
-scrolls it.
+`MouseDispatch.sendAcked()` measures again before every event it sends.
+Juggler's `.browserStack` is `overflow: hidden`, so only Juggler's own
+`scrollRectIntoViewIfNeeded` scrolls the browser inside its window.
 
 **Bounded waits.** `sendAcked()` waits at most `kAckDeadlineMs` (5s) and then
 drops the event with a warning naming the type, coordinate and browser rect. The
 deadline is sized above the slowest *legitimate* ack, not near the typical one:
 acks are p99 1ms on an idle page, but they are delivered from the content main
 thread and inherit any block on it — a 3s synchronous script delayed one by
-2849ms. `sendTrajectoryAcked()` abandons the rest of a curve after the first
-undelivered point and goes straight to the destination, so the ~90 bounded waits
-a curve can hold — the 1.5s default humanize ceiling at 60Hz — cannot add up to
-an unbounded slot. The humanize seam (`input/HumanizeSeam.js`) paces every plan
-on its own schedule (`input/Pacer.js`) and fast-forwards one that runs past 1.5x
-its time budget. It also refuses
-to dispatch a point on the pixel the previous dispatch left the cursor on: a
-zero-displacement move produces no `eMouseMove`, so it is never acked, and
-that is the same deadlock reached from inside a curve rather than from
-`Page.dispatchMouseEvent`.
+2849ms. `Page.dispatchMouseEvent` refuses to dispatch a move to the pixel the
+cursor is already on: a zero-displacement move produces no `eMouseMove`, so it
+is never acked.
 `apz-repaints-flushed` waits at most `kAckDeadlineMs` too: a flush sent to a
 GPU process that dies never comes back, and stalled every such dispatch until
 the backstop. So does the drag path's `juggler-drag-finalized`, per input
@@ -99,11 +85,9 @@ and `FrameTree.js` (the ack *producer*).
 
 **Boundary coverage.**
 `browser/tests/playwright/patches/mouse-boundary-sweep.py` sweeps the whole
-viewport ring across every spoofed OS with humanize on and off, asserting each
+viewport ring across every spoofed OS, asserting each
 point is acked *and observed by the page*. Hand-picked coordinate lists are what
-let each of the four bugs through: `humanize-edge-deadlock.py` probed only the
-far edges, and `humanize-mouse-trajectory.py` pins `os="linux"` — the one
-fingerprint immune to `#751`.
+let each of the four bugs through.
 `browser/tests/playwright/patches/input-ack-backstop.py` covers the bounded waits
 themselves: a late renderer ack, and a drag whose page answers late.
 
@@ -127,7 +111,7 @@ input gate opens: `dom.input_events.security.minTimeElapsedInMS` (100 ms) after
 (`PresShell::CanHandleUserInputEvents`). Juggler's mouse and key events are
 synthesized for tests, which the gate exempts, so they reached a page earlier
 than any person's could; its wheel is not exempt, so a wheel straight after
-`goto` lost notches. Every input command now waits for the gate once per
+`goto` was dropped. Every input command now waits for the gate once per
 document (`PageHandler._awaitUserInputGate`). Guard: `juggler-input-gate.py`.
 
 ## Move coalescing
@@ -143,16 +127,12 @@ many `pointermove`s as `pointerrawupdate`s.
 `input-coalescing-parity.patch` queues juggler moves the way real ones are
 queued, and `BrowserChild::RecvRealMouseMoveEvent` acks each one with
 `mousequeued <id>` when the renderer has it. A move returns at that ack
-(`MouseDispatch.sendQueuedMove`). Sends are spaced at least 8 ms apart, the
-reports of a 125 Hz mouse, the common rate. The clock starts when the move is
-sent, not when its ack returns: the next move cannot start until this one
-returns, so counting the ack into the gap stretched a 125 Hz path out to about
-one move per frame. A path given as steps
-(`page.mouse.move(x, y, steps=n)`, which Playwright sends as n moves) then
-reaches the page as a real mouse's motion does. Measured with a 125 Hz XTest
-sweep on Xvfb against stock 158.0.1: one
-`pointermove` per frame carrying 2 to 4 moves, and a `pointerrawupdate` for
-every move.
+(`MouseDispatch.sendQueuedMove`). Juggler adds no spacing between moves: how
+many share a frame is decided by when the driver sends them. A path given as
+steps (`page.mouse.move(x, y, steps=n)`, which Playwright sends as n moves)
+then reaches the page as queued moves do. For reference, a 125 Hz XTest sweep
+on Xvfb against stock 158.0.1 gives one `pointermove` per frame carrying 2 to
+4 moves, and a `pointerrawupdate` for every move.
 
 The coalesced move reaches the page at the refresh tick and is acked as
 `mousemove <id>`, with the id of the newest move it carries. Any command of the
@@ -180,44 +160,21 @@ started the drag, now that the move reaches the page coalesced.
 `browser/tests/playwright/patches/driven-drag-gtk.py` compares the stream
 with stock's.
 
-## Wheel notches
+## Input as sent
 
-A mouse wheel turns in notches, and stock Firefox delivers each one as its own
-`wheel` event. On Linux (GTK, X11) stock 158.0.1 gives every notch
-`deltaMode` 1, `deltaY` 6, `wheelDeltaY` -120, a `DOMMouseScroll` with
-`detail` 3 and a `MozMousePixelScroll` of three lines, and scrolls 120 px
-(measured with XTest button 5). On Windows, stock 159.0 has the same shape
-(measured with `SendInput` at a device pixel ratio of 2.5, 45 runs identical):
-`deltaMode` 1, `deltaY` 6, `wheelDeltaY` -120, `detail` 3, one event per notch
-with no acceleration. Its pixels differ only because line height does, so three
-native lines need no per-OS constant. A physical wheel, other line settings and
-a ratio of 1 are not measured there. macOS differs: with a person turning a
-notched USB mouse on stock 159.0, a slow notch is `deltaMode` 1, `deltaY` 1,
-`wheelDeltaY` -48, `detail` 1 and a `MozMousePixelScroll` of 16, and the OS
-accelerates a faster turn to as many as 6 lines an event.
+Juggler delivers driven input as the driver sends it. It holds no key or
+button, waits no dwell between a move and a press, and adds no gap between
+clicks; the timing a page sees between events is the timing of the driver's
+commands. Pacing and shaping input is the driver's job (`custom(fn)` in the
+launchers, docs/humanize.md).
 
-On a Linux or Windows identity, `Page.dispatchWheelEvent` sends one event of three
-lines per notch, flagged as a native tick (`wheel-native-ticks.patch`), so Gecko
-applies the same system scroll speed. On a macOS identity it sends lines without
-that flag and the launcher turns `mousewheel.system_scroll_override.enabled` off,
-as stock has it on macOS, which gives the shape above in proportion. Every one of
-the 78 recorded macOS bursts starts at one line, so a call starts there too and
-grows by 1 to 3 lines an event up to 12.
-
-A Playwright caller asks for pixels, so `mouse.wheel(dx, dy)` maps each axis to
-notches: 100 px is one notch, rounded to the nearest, at least one on an axis
-that moves. On a macOS identity it maps to lines instead, at 16 px a line. The
-events of one call are 18 to 60 ms apart, drawn per event; the
-one recording of a person's wheel, on macOS, has bursts 20 to 80 ms apart (10th
-to 90th percentile), and nothing backs the range on Linux or Windows. The page therefore scrolls a
-notch's distance (120 px here) or a whole number of lines, not the exact pixels asked for, and
-`mouse.wheel(0, 0)` sends nothing. Humanize does not change this: `raw()`
-and a `custom()` scroll engine's wheel steps are rounded the same way, each
-step at least one notch (a line on a macOS identity), so a custom engine should
-plan in notches (100 px) to land where it means to. Each notch takes the
-activation slot alone, so a long wheel does not hold up input in other contexts.
-`browser/tests/playwright/patches/driven-wheel-notches.py` compares the result
-with stock's.
+`Page.dispatchWheelEvent` sends one `wheel` event with the pixels asked for
+(`deltaMode` 0), as upstream Juggler does: `mouse.wheel(0, 100)` is one event
+of `deltaY` 100. A physical wheel on Linux or Windows gives line-mode events
+(`deltaMode` 1, `deltaY` 6, `wheelDeltaY` -120 a notch on stock 158.0.1 and
+159.0), which a driven wheel does not imitate. On a macOS identity the
+launcher turns `mousewheel.system_scroll_override.enabled` off, as stock has
+it on macOS.
 
 ## Pasted text
 
@@ -230,41 +187,30 @@ then `beforeinput` and `input` with `insertFromPaste`), and the shortcut comes
 up. The shortcut's `keypress`, where Firefox would paste from the system
 clipboard, is cancelled in the system group; content never receives a
 `keypress` for a shortcut, so that is not observable. The text never goes
-through the system clipboard. The modifier leads V by about 60 ms and trails
-it by about 40 ms, as Shift does a key, and V is held 116.25 ms (SD 23.88;
-Dhakal et al., "Observations on Typing from 136 Million Keystrokes", CHI 2018).
-Every delay between a person's input events comes from `input/HumanDelay.js`,
-with the figures its caller cites: a normal draw for a key or modifier hold
-(`normalDelay(mean, sd, min, max)`) and a right-skewed log-normal for a click
-hold, hover dwell or double-click gap (`logNormalDelay(median, sigma, min, max)`),
-as human timing is. The click delays draw from the launch's `humanize:seed` on a
-separate `timing` stream, so a seeded session reproduces them without shifting a
-cursor or keyboard plan. The key and modifier delays of a paste run in the
-content process, which has no such stream, and a seed does not reproduce them.
+through the system clipboard. The four key events are sent one after another,
+with no pause between them.
 
 A page that cancels the paste, or the shortcut's `keydown`, and leaves the field
-as it was gets the text typed instead, as a person types what they cannot paste:
-key by key on a US keyboard, 238.66 ms press to press (SD 111.60, the same study).
-A character with no US key arrives as an input method commits it. Typing stops
-with an error if the focus leaves the field, and a read-only field takes nothing,
-without error. A page that writes the pasted text in later than the shortcut's
-release (about 160 ms) has it typed as well. A page that
-handled the paste itself keeps what it wrote, and `fill()` fails only if the keys
-change nothing either. Nothing focused that takes text gets the shortcut and no
-paste. Playwright documents `insert_text()` as sending no key events; here it
-sends the shortcut's.
+as it was gets the text typed instead: key by key on a US keyboard, each key
+down and up with no pause. A character with no US key arrives as an input
+method commits it. Typing stops with an error if the focus leaves the field,
+and a read-only field takes nothing, without error. A page that writes the
+pasted text in later than the shortcut's release has it typed as well. A page
+that handled the paste itself keeps what it wrote, and `fill()` fails only if
+the keys change nothing either. Nothing focused that takes text gets the
+shortcut and no paste. Playwright documents `insert_text()` as sending no key
+events; here it sends the shortcut's.
 
 A person clicks a field before pasting into it, while Playwright's `fill()`
 focuses it from script: the page would get `focus` with no pointer or mouse
 event before it. The Python launcher clicks a text field that does not have
 focus before the fill (`camoufox/driver_defaults.py`), and so does the TypeScript
-launcher (`driver_defaults.ts`). The click is Playwright's own, so the mouse moves
-there and presses through the OS-path dispatch. A field that has focus is pasted
-into as it is. Fields `fill()` sets without pasting (date, color, range and the
-like) are not clicked, and neither is a field another element covers, which a
-person could not click either: `fill()` works on it as Playwright's does.
-`fill()` still selects the field's text with `select()` first.
-`browser/tests/playwright/patches/driven-fill-paste.py` checks the events.
+launcher (`driver_defaults.ts`). The click is Playwright's own. Fields `fill()`
+sets without text input (date, color, range and the like) are not clicked, and
+neither is a field another element covers: `fill()` works on it as
+Playwright's does.
+
+`browser/tests/playwright/patches/driven-input-as-sent.py` checks all of this.
 
 ## Screenshots
 

@@ -1681,11 +1681,11 @@ def launch_options(
             Name of the GeoIP database to use (e.g., "GeoIP AIO by daijro").
             If not specified, uses the one chosen with `camoufox set --geoip`, or the default.
         humanize (Optional[Union[bool, float, dict]]):
-            Humanize mouse, keyboard and scroll input, per channel.
-            `True` uses the best engine the build offers on every channel; a number is the
-            MAX duration in seconds of a cursor movement (typically up to 1.5 seconds across
-            the window); a dict picks an engine per channel with the factories in
-            `camoufox.humanize`, e.g. `{"mouse": cursory(max_time=1.0), "scroll": raw(), "seed": 1234}`.
+            Plan mouse, keyboard and scroll input, per channel. The browser delivers input
+            as the driver sends it; a dict gives a channel a client-side engine with
+            `camoufox.humanize.custom`, e.g. `{"mouse": custom(fn), "seed": 1234}`.
+            `True`, a number and the in-browser engines (`cursory()`) work only on an older build
+            that lists them, and raise HumanizeEngineUnavailable on this one.
         locale (Optional[Union[str, List[str]]]):
             Locale(s) to use in Camoufox. The first listed locale will be used for the Intl API.
         addons (Optional[List[str]]):

@@ -83,7 +83,6 @@ NON_NATIVE_SCRIPTS = frozenset(
         "browser/scripts/_chrome_view.py",
         "browser/scripts/_font_bundle.py",
         "browser/scripts/check-input-dispatch.py",
-        "browser/scripts/cursor-demo.py",
         "browser/scripts/gen-contentaccessible-manifest.py",
         "browser/scripts/gen-font-groups.py",
         "browser/scripts/gen-os-overlay.py",

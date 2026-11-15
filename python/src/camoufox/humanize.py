@@ -1,32 +1,31 @@
 """
-Per-channel humanized input: the engine factories and the launch-time config.
+Per-channel input planning: the engine factories and the launch-time config.
 
-    from camoufox.humanize import cursory, raw
+    from camoufox.humanize import custom
 
     Camoufox(humanize={
-        "mouse": cursory(max_time=1.0),
-        "scroll": raw(),
+        "mouse": custom(my_mouse),
         "seed": 1234,
     })
 
-The browser intercepts the Juggler input commands Playwright already sends, so
-the same Playwright script drives every build. Each channel (mouse, keyboard,
-scroll) names the engine that plans its input. Which engines exist, and which
-options each takes, is the build's humanize-engines.json (docs/humanize.md);
-`engine(name, **options)` names any of them. The browser plans the mouse
-channel only: keyboard and scroll take raw(), auto() (raw) or custom(fn). A
+The browser delivers the input a driver sends as it was sent: it plans no
+cursor path, no typing and no scrolling. A channel (mouse, keyboard, scroll)
+is raw(), Playwright's own dispatch, or a client-side engine, `custom(fn)`: a
+function in this process plans the channel's input and plays it through
+Playwright's own input methods, with schedule pacing and a seeded stream
+(camoufox._humanize_custom).
+
+A build from before that still plans input in the browser. Which engines it
+has, and which options each takes, is its humanize-engines.json
+(docs/humanize.md); `engine(name, **options)` names any of them, and asking a
+build for an engine it does not list raises HumanizeEngineUnavailable. A
 factory returns plain data, never behaviour, so a humanize setting can also
 come from JSON.
-
-A channel may also run a client-side engine, `custom(fn)`: a function in this
-process plans the channel's input and plays it through Playwright's own input
-methods, with schedule pacing and a seeded stream (camoufox._humanize_custom).
-The browser then runs that channel raw, so input is never humanized twice.
 
 `humanize` itself may also be:
 
     None / False    every channel raw(): Playwright's own dispatch
-    True            every channel auto()
+    True            every channel auto(): raises on a build with no engines
     a number        {"mouse": cursory(max_time=<number>)}, the rest auto()
     a dict          per channel; an omitted channel is auto()
 """
@@ -68,7 +67,7 @@ def engine(name: str, **options: float) -> Engine:
 
 
 def auto() -> Engine:
-    """The first engine the build lists for the channel that is available."""
+    """The first engine the build lists for the channel; raw() when it lists none."""
     return engine('auto')
 
 
@@ -78,8 +77,8 @@ def raw() -> Engine:
 
 
 def cursory(max_time: Optional[float] = None, min_time: Optional[float] = None) -> Engine:
-    """Mouse: replayed human cursor paths (Cursory), scaled into
-    [min_time, max_time] seconds. Defaults: 0 and 1.5."""
+    """Mouse, on a build that lists the engine: replayed human cursor paths
+    (Cursory), scaled into [min_time, max_time] seconds. Defaults: 0 and 1.5."""
     options = {'maxTime': max_time, 'minTime': min_time}
     return engine('cursory', **{k: v for k, v in options.items() if v is not None})
 
@@ -94,11 +93,8 @@ def custom(fn: Callable[..., Any]) -> Engine:
         scroll    fn(page, target, *, original, rng, play)       target: a Locator or (dx, dy)
 
     `original` runs Playwright's own behaviour for the call, `rng` is the
-    channel's seeded stream (the browser's own derivation), and `play(steps)`
-    dispatches steps on a schedule. With the async API `fn` may be async.
-
-    Every wheel step turns in whole notches, as a physical wheel does: 100 px
-    asked is one notch, rounded, at least one per step (docs/input-dispatch.md).
+    channel's seeded stream, and `play(steps)` dispatches steps on a schedule.
+    With the async API `fn` may be async.
     """
     if not callable(fn):
         raise ValueError(f'custom() takes the function that plans the input, got {fn!r}')
@@ -169,7 +165,8 @@ def humanize_config(
     The camoucfg keys for a `humanize` setting on a build whose
     humanize-engines.json is `manifest` (None for a build without one).
 
-    Raises HumanizeEngineUnavailable for an engine the build does not ship.
+    Raises HumanizeEngineUnavailable for an engine the build does not ship,
+    and for `humanize=True` on a build that ships none.
     """
     engines, seed = normalize(humanize)
     # A custom channel runs client-side, so the browser runs it raw.
@@ -180,6 +177,17 @@ def humanize_config(
     for channel in CHANNELS:
         if names[channel] not in ('auto', 'raw') and names[channel] not in available.get(channel, ()):
             raise HumanizeEngineUnavailable(channel, names[channel], list(available.get(channel, ())))
+
+    if not any(channel in available for channel in CHANNELS):
+        # The build plans no input and reads no humanize key.
+        if humanize is True:
+            raise HumanizeEngineUnavailable(
+                'mouse',
+                'auto',
+                [],
+                'this build delivers input as the driver sends it; plan a channel with custom(fn)',
+            )
+        return {}
 
     options: Dict[str, float] = {}
     for channel in CHANNELS:
@@ -242,9 +250,7 @@ def custom_engines(humanize: HumanizeSetting) -> Dict[str, Callable[..., Any]]:
     return {channel: engines[channel]['fn'] for channel in CHANNELS if engines[channel]['engine'] == 'custom'}
 
 
-# The seeded streams. The browser draws its engines' randomness from the same
-# derivation (browser/additions/juggler/input/HumanizeRng.js), so a custom engine gets
-# the stream a built-in engine on that channel would:
+# The seeded streams, one per channel (vectors: browser/tests/humanize/rng-vectors.json):
 #
 #   stream(channel) = Mulberry32(splitmix64(seed ^ TAG[channel]) & 0xffffffff)
 
