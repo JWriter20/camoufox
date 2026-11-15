@@ -1,11 +1,11 @@
 """
-Verify per-channel humanize engines take effect, and that a seeded launch
+Verify the mouse humanize engines take effect, and that a seeded launch
 replays the same input.
 
 `humanize` is a per-channel setting (python/src/camoufox/humanize.py). The
-browser resolves an engine for each input channel at every action
+browser resolves the mouse engine at every move
 (browser/additions/juggler/input/HumanizeSeam.js) and draws its randomness from a
-stream seeded by `humanize:seed`, one stream per channel. With
+stream seeded by `humanize:seed`. With
 CAMOU_HUMANIZE_TRACE set, every humanized action is written to that file with
 its plan.
 
@@ -14,12 +14,11 @@ Run against a specific build:
 Against an unpackaged objdir build, run `make stage-fonts` first.
 
 What PASS means:
-    * mouse raw() with scroll notches(): a long move is one mousemove, and a
-      wheel turn of 300px arrives as 3 line-mode notches;
-    * mouse cursory() with scroll raw(): a long move is a trajectory, and a
-      wheel turn still arrives in line-mode notches: no wheel produces a pixel
-      delta (docs/input-dispatch.md), raw() only drops the engine's pacing;
-    * two launches with the same seed plan the same moves and wheel turns, and
+    * mouse raw(): a long move is one mousemove;
+    * mouse cursory(): a long move is a trajectory;
+    * either way a wheel turn of 300px arrives as 3 line-mode notches: no
+      wheel produces a pixel delta (docs/input-dispatch.md), humanized or not;
+    * two launches with the same seed plan the same moves, and
       every mousemove the page receives is a planned point, each move ending on
       its target (Firefox coalesces moves within a frame, as with a real mouse,
       so which points arrive depends on frame timing); a different seed plans
@@ -37,7 +36,7 @@ import sys
 import tempfile
 
 from camoufox.async_api import AsyncCamoufox
-from camoufox.humanize import cursory, notches, raw
+from camoufox.humanize import cursory, raw
 
 EXECUTABLE_PATH = os.environ.get("CAMOUFOX_EXECUTABLE_PATH")
 
@@ -85,19 +84,19 @@ def planned(trace):
 async def main() -> int:
     failures = []
 
-    moves, wheels = await session({"mouse": raw(), "scroll": notches()})
+    moves, wheels = await session({"mouse": raw()})
     if any(len(m) != 1 for m in moves):
         failures.append(f"mouse raw(): expected one mousemove per move, got {[len(m) for m in moves]}")
     # A notch is 3 lines; how many lines the page reports per notch is the
     # platform's wheel multiplier, so only the shape is checked.
     if len(wheels) != 3 * len(TARGETS) or len({tuple(w) for w in wheels}) != 1 or wheels[0][0] != 1:
-        failures.append(f"scroll notches(): expected 3 equal line-mode notches per turn, got {wheels}")
+        failures.append(f"mouse raw(): expected 3 equal line-mode notches per turn, got {wheels}")
 
-    moves, wheels = await session({"mouse": cursory(), "scroll": raw()})
+    moves, wheels = await session({"mouse": cursory()})
     if any(len(m) < 5 for m in moves):
         failures.append(f"mouse cursory(): expected a trajectory per move, got {[len(m) for m in moves]}")
     if len(wheels) != 3 * len(TARGETS) or any(w[0] != 1 for w in wheels):
-        failures.append(f"scroll raw(): expected 3 line-mode notches per turn, as a wheel, got {wheels}")
+        failures.append(f"mouse cursory(): expected 3 line-mode notches per turn, as a wheel, got {wheels}")
 
     with tempfile.TemporaryDirectory() as tmp:
         runs = {}
@@ -105,7 +104,7 @@ async def main() -> int:
         for name, seed, window in (("a", 1234, None), ("b", 1234, None), ("c", 1235, None),
                                    ("d", 1234, (1366, 720))):
             trace = os.path.join(tmp, f"{name}.jsonl")
-            moves, wheels = await session({"mouse": cursory(), "scroll": notches(), "seed": seed}, trace, window)
+            moves, wheels = await session({"mouse": cursory(), "seed": seed}, trace, window)
             runs[name] = (planned(trace), moves, wheels)
         plans_a, moves_a, _ = runs["a"]
         plans_b, moves_b, _ = runs["b"]
@@ -114,8 +113,8 @@ async def main() -> int:
         print(f"seed 1234: {len(plans_a)} planned actions {channels}; "
               f"{sum(len(p) for *_, p in plans_a)} planned steps; "
               f"{sum(len(m) for m in moves_a)} mousemoves seen by the page")
-        if channels != [("mouse", "cursory"), ("scroll", "notches")] or len(plans_a) != 2 * len(TARGETS) + 1:
-            failures.append(f"trace: expected {2 * len(TARGETS) + 1} mouse and scroll plans, got {len(plans_a)} {channels}")
+        if channels != [("mouse", "cursory")] or len(plans_a) != len(TARGETS) + 1:
+            failures.append(f"trace: expected {len(TARGETS) + 1} mouse plans, got {len(plans_a)} {channels}")
         if plans_a != plans_b:
             failures.append("same seed: the planned input differs between launches")
         for name in ("a", "b", "d"):
@@ -126,14 +125,14 @@ async def main() -> int:
                 failures.append(f"seed 1234 ({name}): the page saw unplanned mousemoves {stray[:5]}")
             if [tuple(m[-1]) if m else None for m in moves] != TARGETS:
                 failures.append(f"seed 1234 ({name}): moves did not end on their targets")
-        if [p for p in plans_a if p[0] == "mouse"] == [p for p in plans_c if p[0] == "mouse"]:
+        if plans_a == plans_c:
             failures.append("a different seed planned the same moves")
 
     for failure in failures:
         print(f"FAIL: {failure}")
     if failures:
         return 1
-    print("PASS: per-channel engines take effect, and a seeded launch replays the same input")
+    print("PASS: the mouse engines take effect, and a seeded launch replays the same input")
     return 0
 
 

@@ -10,20 +10,17 @@ import {JUGGLER, load} from './gecko.mjs';
 const {HumanizeSeam} = await load('input/HumanizeSeam.js');
 const modules = {
   'resource://gre/modules/juggler/input/CursorTrajectory.js': await load('input/CursorTrajectory.js'),
-  'resource://gre/modules/juggler/input/WheelNotches.js': await load('input/WheelNotches.js'),
 };
 const BASE_MANIFEST = JSON.parse(fs.readFileSync(path.join(JUGGLER, '../../settings/humanize-engines.json'), 'utf-8'));
 
 /**
- * The base manifest plus a test engine, `fancy`, on every channel and first in
- * `auto`: what a build that ships an extra engine declares.
+ * The base manifest plus a test engine, `fancy`, first in `auto`: what a build
+ * that ships an extra engine declares.
  */
 function withFancy(fancy) {
   const manifest = structuredClone(BASE_MANIFEST);
-  for (const channel of ['mouse', 'keyboard', 'scroll']) {
-    manifest[channel].push('fancy');
-    manifest.auto[channel].unshift('fancy');
-  }
+  manifest.mouse.push('fancy');
+  manifest.auto.mouse.unshift('fancy');
   manifest.engines.fancy = {
     module: 'test:fancy',
     options: {
@@ -62,28 +59,24 @@ const page = {cursor: {x: 40, y: 40}, viewport: {width: 1280, height: 720}};
 const TARGETS = [[900, 500], [120, 650], [1200, 30], [640, 360], [5, 700], [700, 710]];
 const moveTo = (x, y) => ({kind: 'move', x, y});
 
-/** A session: moves between targets, with wheel turns in between. */
-function session(s, {wheels = true} = {}) {
+/** A session: moves between targets. */
+function session(s) {
   const plans = [];
   let cursor = page.cursor;
   for (const [x, y] of TARGETS) {
     plans.push(s.plan('mouse', 'planMove', {...page, cursor}, {x, y}).plan.steps);
     cursor = {x, y};
-    if (wheels)
-      plans.push(s.plan('scroll', 'planWheel', {}, {x, y}, {deltaX: 0, deltaY: 450, deltaZ: 0}).plan.steps);
   }
   return plans;
 }
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
 
-test('resolution: channel keys, the legacy humanize flag, and auto', () => {
-  const legacyOn = seam({humanize: true});
-  assert.deepEqual(['mouse', 'keyboard', 'scroll'].map(c => legacyOn.resolve(c)), ['cursory', 'raw', 'notches']);
-  const legacyOff = seam({});
-  assert.deepEqual(['mouse', 'keyboard', 'scroll'].map(c => legacyOff.resolve(c)), ['raw', 'raw', 'raw']);
-  const perChannel = seam({'humanize': true, 'humanize:mouse': 'raw', 'humanize:keyboard': 'auto', 'humanize:scroll': 'notches'});
-  assert.deepEqual(['mouse', 'keyboard', 'scroll'].map(c => perChannel.resolve(c)), ['raw', 'raw', 'notches']);
+test('resolution: the channel key, the legacy humanize flag, and auto', () => {
+  assert.equal(seam({humanize: true}).resolve('mouse'), 'cursory');
+  assert.equal(seam({}).resolve('mouse'), 'raw');
+  assert.equal(seam({'humanize': true, 'humanize:mouse': 'raw'}).resolve('mouse'), 'raw');
+  assert.equal(seam({'humanize': false, 'humanize:mouse': 'auto'}).resolve('mouse'), 'cursory');
 });
 
 test('humanize off never reads the manifest; humanize on requires it', () => {
@@ -93,20 +86,13 @@ test('humanize off never reads the manifest; humanize on requires it', () => {
 });
 
 test('an engine the manifest does not list for the channel fails loudly', () => {
-  assert.throws(() => seam({'humanize:mouse': 'notches'}).resolve('mouse'), /does not list for mouse/);
-  assert.throws(() => seam({'humanize:scroll': 'smooth'}).resolve('scroll'), /humanize:scroll names "smooth"/);
-});
-
-test('mouse:internal defaults to the resolved mouse engine', () => {
-  assert.equal(seam({'humanize:mouse': 'cursory'}).resolve('mouse:internal'), 'cursory');
-  assert.equal(seam({'humanize:mouse': 'raw'}).resolve('mouse:internal'), 'raw');
-  assert.equal(seam({'humanize:mouse': 'raw', 'humanize:mouse:internal': 'auto'}).resolve('mouse:internal'), 'cursory');
+  assert.throws(() => seam({'humanize:mouse': 'smooth'}).resolve('mouse'), /humanize:mouse names "smooth", which humanize-engines.json does not list for mouse/);
 });
 
 test('an engine that is not available warns once and runs the last auto choice', () => {
-  const s = seam({'humanize:mouse': 'fancy', 'humanize:scroll': 'fancy'}, {manifest: withFancy({available: () => false})});
+  const s = seam({'humanize:mouse': 'fancy'}, {manifest: withFancy({available: () => false})});
   assert.equal(s.resolve('mouse'), 'cursory');
-  assert.equal(s.resolve('scroll'), 'notches');
+  assert.equal(s.resolve('mouse'), 'cursory');
   assert.equal(s.warnings.length, 1);
   assert.match(s.warnings[0], /^humanize_engine_unavailable/);
 });
@@ -120,65 +106,30 @@ test('auto takes the first available engine the manifest lists, per action', () 
   assert.equal(s.plan('mouse', 'planMove', page, {x: 3, y: 4}).engine, 'cursory');
 });
 
-test('availability is per channel: an engine can be ready on one channel only', () => {
-  const asked = [];
-  const planKey = () => ({steps: [{t: 0, kind: 'key', type: 'keydown', key: 'a'}], endState: {}});
-  const s = seam({'humanize': true, 'humanize:mouse': 'auto', 'humanize:mouse:internal': 'auto', 'humanize:keyboard': 'auto', 'humanize:scroll': 'fancy'},
-      {manifest: withFancy({planKey, available: channel => (asked.push(channel), channel === 'keyboard')})});
-  assert.equal(s.resolve('keyboard'), 'fancy');
-  assert.equal(s.resolve('mouse'), 'cursory');
-  assert.equal(s.resolve('mouse:internal'), 'cursory');
-  assert.equal(s.resolve('scroll'), 'notches');
-  assert.deepEqual([...new Set(asked)].sort(), ['keyboard', 'mouse', 'scroll']);
-  assert.equal(s.active('keyboard'), true);
-  assert.equal(seam({'humanize:keyboard': 'raw'}).active('keyboard'), false);
-});
-
 test('ctx.now is the seam clock at planning time, and absent without one', () => {
   let seen;
-  const planKey = ctx => (seen = ctx.now, null);
+  const planMove = ctx => (seen = ctx.now, null);
   const clock = () => 1000;
-  seam({'humanize:keyboard': 'fancy'}, {manifest: withFancy({planKey}), clock})
-      .plan('keyboard', 'planKey', {keyboardState: {}}, {type: 'keydown', key: 'a'});
+  seam({'humanize:mouse': 'fancy'}, {manifest: withFancy({planMove}), clock}).plan('mouse', 'planMove', page, {x: 1, y: 1});
   assert.equal(seen, 1000);
-  seam({'humanize:keyboard': 'fancy'}, {manifest: withFancy({planKey})})
-      .plan('keyboard', 'planKey', {keyboardState: {}}, {type: 'keydown', key: 'a'});
+  seam({'humanize:mouse': 'fancy'}, {manifest: withFancy({planMove})}).plan('mouse', 'planMove', page, {x: 1, y: 1});
   assert.equal(seen, undefined);
 });
-
 test('raw and engines without the command leave the stock dispatch in charge', () => {
-  const s = seam({'humanize:mouse': 'raw', 'humanize:keyboard': 'raw', 'humanize:scroll': 'notches'});
-  assert.equal(s.plan('mouse', 'planMove', page, {x: 5, y: 5}), null);
-  assert.equal(s.plan('keyboard', 'planKey', {keyboardState: {}}, {type: 'keydown', key: 'a'}), null);
-  assert.equal(s.plan('keyboard', 'planInsert', {keyboardState: {}}, 'hello'), null);
+  assert.equal(seam({'humanize:mouse': 'raw'}).plan('mouse', 'planMove', page, {x: 5, y: 5}), null);
+  assert.equal(seam({'humanize:mouse': 'fancy'}, {manifest: withFancy({})}).plan('mouse', 'planMove', page, {x: 5, y: 5}), null);
 });
-
-test('handles: whether the resolved engine plans a command, so a site can skip its probe', () => {
-  assert.equal(seam({humanize: false}).handles('scroll', 'planIntoView'), false);
-  assert.equal(seam({humanize: true}).handles('scroll', 'planWheel'), true);
-  assert.equal(seam({humanize: true}).handles('scroll', 'planIntoView'), false, 'notches does not plan into-view');
-  const manifest = withFancy({planIntoView: () => null});
-  assert.equal(seam({'humanize': true, 'humanize:scroll': 'fancy'}, {manifest}).handles('scroll', 'planIntoView'), true);
-  assert.equal(seam({'humanize': true, 'humanize:scroll': 'raw'}, {manifest}).handles('scroll', 'planIntoView'), false);
-});
-
 test('same seed, same plans; a different seed, different plans', () => {
-  const values = {'humanize': true, 'humanize:mouse': 'cursory', 'humanize:scroll': 'notches', 'humanize:seed': '1234'};
+  const values = {'humanize': true, 'humanize:mouse': 'cursory', 'humanize:seed': '1234'};
   const first = session(seam(values));
   assert.deepEqual(session(seam(values)), first);
   assert.notDeepEqual(session(seam({...values, 'humanize:seed': '1235'})), first);
   // Pinned, so a change to the derivation or to a base planner shows up here.
-  assert.equal(digest(first), '67efcf3d3ed1951c');
-});
-
-test('each channel has its own stream: scrolling does not change the mouse paths', () => {
-  const values = {'humanize:mouse': 'cursory', 'humanize:scroll': 'notches', 'humanize:seed': '99'};
-  const moves = plans => plans.filter(steps => steps[0].kind === 'move');
-  assert.deepEqual(moves(session(seam(values), {wheels: true})), moves(session(seam(values), {wheels: false})));
+  assert.equal(digest(first), '0dd0b009cc95b388');
 });
 
 test('an unseeded launch draws a random seed, as before', () => {
-  const values = {'humanize:mouse': 'cursory', 'humanize:scroll': 'notches'};
+  const values = {'humanize:mouse': 'cursory'};
   assert.notDeepEqual(session(seam(values)), session(seam(values)));
 });
 
@@ -186,7 +137,7 @@ test('planners use no randomness but the channel stream', () => {
   const random = Math.random;
   Math.random = () => { throw new Error('Math.random called by a planner'); };
   try {
-    session(seam({'humanize:mouse': 'cursory', 'humanize:scroll': 'notches', 'humanize:seed': '7'}));
+    session(seam({'humanize:mouse': 'cursory', 'humanize:seed': '7'}));
   } finally {
     Math.random = random;
   }
@@ -213,32 +164,15 @@ test('an untracked cursor moves straight to the target', () => {
   assert.deepEqual(plan.steps, [{...moveTo(10, 20), t: 0}]);
 });
 
-test('notches carry the whole requested distance, one essential step per notch', () => {
-  const s = seam({'humanize:scroll': 'notches', 'humanize:seed': '3'});
-  for (const [deltaX, deltaY, count] of [[0, 100, 1], [0, 449, 4], [0, -250, 3], [120, 0, 1], [0, 30, 1], [300, -500, 5]]) {
-    const {plan} = s.plan('scroll', 'planWheel', {}, {x: 1, y: 2}, {deltaX, deltaY, deltaZ: 0});
-    assert.equal(plan.steps.length, count);
-    assert.ok(plan.steps.every(step => step.essential && step.mode === 1));
-    const lines = axis => plan.steps.reduce((sum, step) => sum + step[axis], 0);
-    const expected = d => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / 100)) * 3);
-    assert.deepEqual([lines('dx'), lines('dy')], [expected(deltaX), expected(deltaY)]);
-    for (let i = 1; i < plan.steps.length; i++) {
-      const gap = plan.steps[i].t - plan.steps[i - 1].t;
-      assert.ok(gap >= 18 && gap < 60, `notch gap ${gap}`);
-    }
-  }
-});
-
 test('a plan over its budget is compressed to fit, and says so', () => {
-  const slow = {planWheel: () => ({steps: [{t: 0}, {t: 30000}], endState: {}})};
-  const s = seam({'humanize:scroll': 'fancy', 'humanize:fancy:budgetSeconds': 4}, {manifest: withFancy(slow)});
-  const planned = s.plan('scroll', 'planWheel', {}, {x: 0, y: 0}, {deltaX: 0, deltaY: 100, deltaZ: 0});
+  const slow = {planMove: () => ({steps: [{t: 0}, {t: 30000}], endState: {}})};
+  const s = seam({'humanize:mouse': 'fancy', 'humanize:fancy:budgetSeconds': 4}, {manifest: withFancy(slow)});
+  const planned = s.plan('mouse', 'planMove', page, {x: 0, y: 0});
   assert.equal(planned.budgetMs, 4000);
   assert.equal(planned.plan.steps.at(-1).t, 4000);
   assert.equal(planned.outcome, 'compressed');
   assert.match(s.warnings[0], /^humanize_plan_over_budget/);
 });
-
 test('an engine that throws falls back to the last auto choice for that action', () => {
   const broken = {planMove: () => { throw new Error('boom'); }};
   const s = seam({'humanize:mouse': 'fancy'}, {manifest: withFancy(broken)});
@@ -250,9 +184,9 @@ test('an engine that throws falls back to the last auto choice for that action',
 
 test('an engine gets the options its manifest entry declares, from their config keys', () => {
   let seen = null;
-  const fancy = {planKey: ctx => { seen = ctx.options; return null; }};
-  seam({'humanize:keyboard': 'fancy', 'humanize:fancy:speed': 1.5, 'humanize:maxTime': 9}, {manifest: withFancy(fancy)})
-      .plan('keyboard', 'planKey', {keyboardState: {}}, {type: 'keydown', key: 'a'});
+  const fancy = {planMove: ctx => { seen = ctx.options; return null; }};
+  seam({'humanize:mouse': 'fancy', 'humanize:fancy:speed': 1.5, 'humanize:maxTime': 9}, {manifest: withFancy(fancy)})
+      .plan('mouse', 'planMove', page, {x: 1, y: 1});
   assert.deepEqual(seen, {speed: 1.5});
 });
 

@@ -214,10 +214,8 @@ notch's distance (120 px here) or a whole number of lines, not the exact pixels 
 `mouse.wheel(0, 0)` sends nothing. Humanize does not change this: `raw()`
 and a `custom()` scroll engine's wheel steps are rounded the same way, each
 step at least one notch (a line on a macOS identity), so a custom engine should
-plan in notches (100 px) to land where it means to. The `notches` scroll engine
-plans the same events, a macOS identity's lines included. Without a scroll engine
-each notch takes the activation slot alone, so a long wheel does not hold up input
-in other contexts; an engine's plan keeps the slot for as long as it plays.
+plan in notches (100 px) to land where it means to. Each notch takes the
+activation slot alone, so a long wheel does not hold up input in other contexts.
 `browser/tests/playwright/patches/driven-wheel-notches.py` compares the result
 with stock's.
 

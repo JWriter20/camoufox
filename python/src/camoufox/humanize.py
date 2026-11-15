@@ -13,8 +13,10 @@ The browser intercepts the Juggler input commands Playwright already sends, so
 the same Playwright script drives every build. Each channel (mouse, keyboard,
 scroll) names the engine that plans its input. Which engines exist, and which
 options each takes, is the build's humanize-engines.json (docs/humanize.md);
-`engine(name, **options)` names any of them. A factory returns plain data,
-never behaviour, so a humanize setting can also come from JSON.
+`engine(name, **options)` names any of them. The browser plans the mouse
+channel only: keyboard and scroll take raw(), auto() (raw) or custom(fn). A
+factory returns plain data, never behaviour, so a humanize setting can also
+come from JSON.
 
 A channel may also run a client-side engine, `custom(fn)`: a function in this
 process plans the channel's input and plays it through Playwright's own input
@@ -31,7 +33,6 @@ The browser then runs that channel raw, so input is never humanized twice.
 
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
 
-from ._warnings import LeakWarning
 from .exceptions import HumanizeEngineUnavailable
 
 CHANNELS = ('mouse', 'keyboard', 'scroll')
@@ -81,11 +82,6 @@ def cursory(max_time: Optional[float] = None, min_time: Optional[float] = None) 
     [min_time, max_time] seconds. Defaults: 0 and 1.5."""
     options = {'maxTime': max_time, 'minTime': min_time}
     return engine('cursory', **{k: v for k, v in options.items() if v is not None})
-
-
-def notches() -> Engine:
-    """Scroll: a wheel call arrives as native notches of 3 lines, tens of ms apart."""
-    return engine('notches')
 
 
 def custom(fn: Callable[..., Any]) -> Engine:
@@ -168,7 +164,6 @@ def _option_keys(name: str, options: Mapping[str, float], manifest: Mapping[str,
 def humanize_config(
     humanize: HumanizeSetting,
     manifest: Optional[Mapping[str, Any]],
-    i_know_what_im_doing: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     The camoucfg keys for a `humanize` setting on a build whose
@@ -186,11 +181,6 @@ def humanize_config(
         if names[channel] not in ('auto', 'raw') and names[channel] not in available.get(channel, ()):
             raise HumanizeEngineUnavailable(channel, names[channel], list(available.get(channel, ())))
 
-    scroll = available.get('engines', {}).get(names['scroll']) or {}
-    # A custom mouse leaves the browser's own cursor moves to mouse:internal.
-    if scroll.get('movesCursor') and engines['mouse']['engine'] == 'raw':
-        LeakWarning.warn('humanize_scroll_teleports', i_know_what_im_doing)
-
     options: Dict[str, float] = {}
     for channel in CHANNELS:
         for key, value in _option_keys(names[channel], engines[channel]['options'], available).items():
@@ -198,7 +188,8 @@ def humanize_config(
                 raise ValueError(f'humanize sets {key} twice, to {options[key]} and {value}')
             options[key] = value
 
-    enabled = any(name != 'raw' for name in names.values())
+    # A channel the build has no engines for runs raw whatever it is set to.
+    enabled = any(names[channel] != 'raw' for channel in CHANNELS if channel in available)
     if legacy:
         on = {channel: available['auto'][channel][0] for channel in CHANNELS}
         unsupported = [c for c in CHANNELS if names[c] not in ('auto', on[c])]
@@ -219,11 +210,8 @@ def humanize_config(
     # Every key on every launch, so nothing depends on what an earlier launch set.
     config: Dict[str, Any] = {'humanize': enabled}
     for channel in CHANNELS:
-        config[f'humanize:{channel}'] = names[channel]
-    if engines['mouse']['engine'] == 'custom':
-        # Moves the browser originates (the cursor move before a planned
-        # scroll) still get a humanized path, not a jump.
-        config['humanize:mouse:internal'] = 'auto'
+        if channel in available:
+            config[f'humanize:{channel}'] = names[channel]
     config.update(options)
     if seed is not None:
         # A string: Juggler reads config numbers as doubles, which cannot hold

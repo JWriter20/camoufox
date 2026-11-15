@@ -2,30 +2,29 @@
 and the check against the engines a build ships."""
 
 import json
-import warnings
 from pathlib import Path
 
 import pytest
 
 from camoufox import utils
 from camoufox.exceptions import HumanizeEngineUnavailable
-from camoufox.humanize import auto, cursory, engine, humanize_config, normalize, notches, raw
+from camoufox.humanize import auto, cursory, engine, humanize_config, normalize, raw
 
 REPO = Path(__file__).resolve().parents[2]
 BASE_MANIFEST = json.loads((REPO / "browser" / "settings" / "humanize-engines.json").read_text())
 
-# A build that ships one more engine, `fancy`, on every channel: its options,
-# their config keys and ranges come from the manifest alone.
+# A build that lists keyboard and scroll channels too, with one more engine,
+# `fancy`, on every channel: its options, their config keys and ranges come
+# from the manifest alone.
 FANCY_MANIFEST = {
     **BASE_MANIFEST,
     "mouse": [*BASE_MANIFEST["mouse"], "fancy"],
-    "keyboard": [*BASE_MANIFEST["keyboard"], "fancy"],
-    "scroll": [*BASE_MANIFEST["scroll"], "fancy"],
+    "keyboard": ["raw", "fancy"],
+    "scroll": ["raw", "fancy"],
     "engines": {
         **BASE_MANIFEST["engines"],
         "fancy": {
             "module": "chrome://example/fancy.js",
-            "movesCursor": True,
             "options": {
                 "budgetSeconds": {"key": "humanize:fancy:budgetSeconds", "min": 1, "max": 20},
                 "speed": {"key": "humanize:fancy:speed", "min": 0.5, "max": 2},
@@ -135,44 +134,22 @@ def test_a_build_without_the_manifest_refuses_what_it_cannot_do(humanize, channe
 @pytest.mark.parametrize(
     "humanize, expected",
     [
-        (
-            False,
-            {"humanize": False, "humanize:mouse": "raw", "humanize:keyboard": "raw", "humanize:scroll": "raw"},
-        ),
-        (
-            True,
-            {"humanize": True, "humanize:mouse": "auto", "humanize:keyboard": "auto", "humanize:scroll": "auto"},
-        ),
-        (
-            1.5,
-            {
-                "humanize": True,
-                "humanize:mouse": "cursory",
-                "humanize:keyboard": "auto",
-                "humanize:scroll": "auto",
-                "humanize:maxTime": 1.5,
-            },
-        ),
+        (False, {"humanize": False, "humanize:mouse": "raw"}),
+        (True, {"humanize": True, "humanize:mouse": "auto"}),
+        (1.5, {"humanize": True, "humanize:mouse": "cursory", "humanize:maxTime": 1.5}),
         (
             {"mouse": cursory(max_time=1, min_time=0.2), "scroll": "raw", "seed": 2**64 - 1},
             {
                 "humanize": True,
                 "humanize:mouse": "cursory",
-                "humanize:keyboard": "auto",
-                "humanize:scroll": "raw",
                 "humanize:maxTime": 1.0,
                 "humanize:minTime": 0.2,
                 "humanize:seed": "18446744073709551615",
             },
         ),
-        (
-            {"mouse": raw(), "scroll": notches()},
-            {"humanize": True, "humanize:mouse": "raw", "humanize:keyboard": "auto", "humanize:scroll": "notches"},
-        ),
-        (
-            {},
-            {"humanize": True, "humanize:mouse": "auto", "humanize:keyboard": "auto", "humanize:scroll": "auto"},
-        ),
+        # Keyboard and scroll have no browser engine: only the mouse turns humanize on.
+        ({"mouse": raw()}, {"humanize": False, "humanize:mouse": "raw"}),
+        ({}, {"humanize": True, "humanize:mouse": "auto"}),
     ],
 )
 def test_every_humanize_key_is_written_on_every_launch(humanize, expected) -> None:
@@ -184,7 +161,7 @@ def test_every_humanize_key_is_written_on_every_launch(humanize, expected) -> No
 def test_an_engine_needs_a_build_that_ships_it() -> None:
     with pytest.raises(HumanizeEngineUnavailable) as raised:
         humanize_config({"keyboard": engine("fancy")}, BASE_MANIFEST)
-    assert (raised.value.channel, raised.value.engine, raised.value.available) == ("keyboard", "fancy", ["raw"])
+    assert (raised.value.channel, raised.value.engine, raised.value.available) == ("keyboard", "fancy", [])
 
 
 def test_engine_options_are_written_to_the_keys_the_manifest_declares() -> None:
@@ -216,7 +193,6 @@ def test_one_option_key_cannot_take_two_values() -> None:
         ({"keyboard": engine("fancy", speed=0.1)}, r"speed must be in \[0.5, 2\]"),
         ({"keyboard": engine("fancy", wpm=60)}, "has no option 'wpm'"),
         ({"mouse": cursory(max_time=-1)}, "maxTime must be at least 0"),
-        ({"scroll": engine("notches", speed=2)}, "has no option 'speed'"),
     ],
 )
 def test_engine_options_are_checked_against_the_manifest(humanize, message) -> None:
@@ -227,7 +203,7 @@ def test_engine_options_are_checked_against_the_manifest(humanize, message) -> N
 @pytest.mark.parametrize(
     "humanize, message",
     [
-        ({"mouse": notches()}, "mouse: notches is not available"),
+        ({"scroll": engine("notches")}, "scroll: notches is not available"),
         ({"keyboard": cursory()}, "keyboard: cursory is not available"),
         ({"mouse": "fast"}, "mouse: fast is not available"),
     ],
@@ -261,18 +237,11 @@ def test_factories_return_plain_data() -> None:
     assert json.loads(json.dumps(auto())) == auto()
 
 
-def test_a_cursor_moving_scroll_engine_with_a_raw_mouse_warns() -> None:
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        humanize_config({"mouse": raw(), "scroll": engine("fancy")}, FANCY_MANIFEST)
-    assert any("single jump" in str(w.message) for w in caught)
-
-
 def test_launch_options_writes_the_channel_keys(captured_launch_config) -> None:
     config = captured_launch_config({"mouse": cursory(max_time=0.8), "scroll": raw(), "seed": 9}, BASE_MANIFEST)
     assert config["humanize"] is True
     assert config["humanize:mouse"] == "cursory"
-    assert config["humanize:scroll"] == "raw"
+    assert "humanize:scroll" not in config and "humanize:keyboard" not in config
     assert config["humanize:maxTime"] == 0.8
     assert config["humanize:seed"] == "9"
 

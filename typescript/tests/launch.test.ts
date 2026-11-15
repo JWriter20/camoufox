@@ -41,7 +41,7 @@ const { OSError, PyFloat, ValueError } = await import("../src/pycompat.js");
 const { Version } = await import("../src/pkgman.js");
 const { InvalidPropertyType, UnknownIPLocation, HumanizeEngineUnavailable } =
 	await import("../src/exceptions.js");
-const { auto, cursory, engine, humanizeConfig, notches, raw } = await import(
+const { auto, cursory, engine, humanizeConfig, raw } = await import(
 	"../src/humanize.js"
 );
 const cpuAffinity = await import("../src/cpu_affinity.js");
@@ -1011,7 +1011,8 @@ describe("test_humanize", () => {
 		);
 		expect(config.humanize).toBe(true);
 		expect(config["humanize:mouse"]).toBe("cursory");
-		expect(config["humanize:scroll"]).toBe("raw");
+		expect(config).not.toHaveProperty("humanize:scroll");
+		expect(config).not.toHaveProperty("humanize:keyboard");
 		expect(Number(config["humanize:maxTime"])).toBe(0.8);
 		expect(config["humanize:seed"]).toBe("9");
 	});
@@ -1037,18 +1038,18 @@ describe("test_humanize: per-channel engines (test_humanize.py)", () => {
 			"utf-8",
 		),
 	);
-	// A build that ships one more engine, `fancy`, on every channel: its
-	// options, their config keys and ranges come from the manifest alone.
+	// A build that lists keyboard and scroll channels too, with one more
+	// engine, `fancy`, on every channel: its options, their config keys and
+	// ranges come from the manifest alone.
 	const FANCY_MANIFEST = {
 		...BASE_MANIFEST,
 		mouse: [...BASE_MANIFEST.mouse, "fancy"],
-		keyboard: [...BASE_MANIFEST.keyboard, "fancy"],
-		scroll: [...BASE_MANIFEST.scroll, "fancy"],
+		keyboard: ["raw", "fancy"],
+		scroll: ["raw", "fancy"],
 		engines: {
 			...BASE_MANIFEST.engines,
 			fancy: {
 				module: "chrome://example/fancy.js",
-				movesCursor: true,
 				options: {
 					budgetSeconds: {
 						key: "humanize:fancy:budgetSeconds",
@@ -1098,33 +1099,11 @@ describe("test_humanize: per-channel engines (test_humanize.py)", () => {
 	});
 
 	it.each<[HumanizeSetting, Record<string, unknown>]>([
-		[
-			false,
-			{
-				humanize: false,
-				"humanize:mouse": "raw",
-				"humanize:keyboard": "raw",
-				"humanize:scroll": "raw",
-			},
-		],
-		[
-			true,
-			{
-				humanize: true,
-				"humanize:mouse": "auto",
-				"humanize:keyboard": "auto",
-				"humanize:scroll": "auto",
-			},
-		],
+		[false, { humanize: false, "humanize:mouse": "raw" }],
+		[true, { humanize: true, "humanize:mouse": "auto" }],
 		[
 			1.5,
-			{
-				humanize: true,
-				"humanize:mouse": "cursory",
-				"humanize:keyboard": "auto",
-				"humanize:scroll": "auto",
-				"humanize:maxTime": 1.5,
-			},
+			{ humanize: true, "humanize:mouse": "cursory", "humanize:maxTime": 1.5 },
 		],
 		[
 			{
@@ -1135,31 +1114,14 @@ describe("test_humanize: per-channel engines (test_humanize.py)", () => {
 			{
 				humanize: true,
 				"humanize:mouse": "cursory",
-				"humanize:keyboard": "auto",
-				"humanize:scroll": "raw",
 				"humanize:maxTime": 1,
 				"humanize:minTime": 0.2,
 				"humanize:seed": "18446744073709551615",
 			},
 		],
-		[
-			{ mouse: raw(), scroll: notches() },
-			{
-				humanize: true,
-				"humanize:mouse": "raw",
-				"humanize:keyboard": "auto",
-				"humanize:scroll": "notches",
-			},
-		],
-		[
-			{},
-			{
-				humanize: true,
-				"humanize:mouse": "auto",
-				"humanize:keyboard": "auto",
-				"humanize:scroll": "auto",
-			},
-		],
+		// Keyboard and scroll have no browser engine: only the mouse turns humanize on.
+		[{ mouse: raw() }, { humanize: false, "humanize:mouse": "raw" }],
+		[{}, { humanize: true, "humanize:mouse": "auto" }],
 	])("every humanize key is written on every launch (case %#)", (humanize, expected) => {
 		const config = plain(humanizeConfig(humanize, BASE_MANIFEST));
 		expect(config).toEqual(expected);
@@ -1170,7 +1132,7 @@ describe("test_humanize: per-channel engines (test_humanize.py)", () => {
 		expect(() =>
 			humanizeConfig({ keyboard: engine("fancy") }, BASE_MANIFEST),
 		).toThrow(
-			"humanize keyboard: fancy is not available in this build; available: ['raw']",
+			"humanize keyboard: fancy is not available in this build; available: []",
 		);
 	});
 
@@ -1211,13 +1173,12 @@ describe("test_humanize: per-channel engines (test_humanize.py)", () => {
 		],
 		[{ keyboard: engine("fancy", { wpm: 60 }) }, "has no option 'wpm'"],
 		[{ mouse: cursory({ maxTime: -1 }) }, "maxTime must be at least 0"],
-		[{ scroll: engine("notches", { speed: 2 }) }, "has no option 'speed'"],
 	])("engine options are checked against the manifest (case %#)", (humanize, message) => {
 		expect(() => humanizeConfig(humanize, FANCY_MANIFEST)).toThrow(message);
 	});
 
 	it.each<[HumanizeSetting, string]>([
-		[{ mouse: notches() }, "mouse: notches is not available"],
+		[{ scroll: engine("notches") }, "scroll: notches is not available"],
 		[{ keyboard: cursory() }, "keyboard: cursory is not available"],
 		[{ mouse: "fast" }, "mouse: fast is not available"],
 	])("an engine the channel does not list is refused (%j)", (humanize, message) => {
@@ -1253,13 +1214,6 @@ describe("test_humanize: per-channel engines (test_humanize.py)", () => {
 			options: { speed: 2 },
 		});
 		expect(JSON.parse(JSON.stringify(auto()))).toEqual(auto());
-	});
-
-	it("a cursor-moving scroll engine with a raw mouse warns", async () => {
-		const { warnings: seen } = await warnings.recordWarnings(() =>
-			humanizeConfig({ mouse: raw(), scroll: engine("fancy") }, FANCY_MANIFEST),
-		);
-		expect(seen.some((w) => w.message.includes("single jump"))).toBe(true);
 	});
 
 	it("the manifest is read beside the executable", () => {
