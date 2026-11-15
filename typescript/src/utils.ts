@@ -2922,6 +2922,14 @@ async function buildLaunchOptions(
 		setInto(firefox_user_prefs, "ui.useOverlayScrollbars", 1);
 	}
 
+	// Colour scheme: on its own OS the browser follows the desktop like stock
+	// Firefox. An identity of another OS has no desktop to follow (a window reads
+	// the host's theme, headless reads none), so it gets the claimed OS's
+	// out-of-the-box setting, light. colorScheme or the pref overrides it.
+	if (targetOs !== utilsDeps.hostOsKey()) {
+		setInto(firefox_user_prefs, "ui.systemUsesDarkTheme", 0);
+	}
+
 	// Stock doubles a wheel's lines on Windows and Linux and never on macOS, and
 	// a page reads the result in deltaY (docs/input-dispatch.md).
 	setInto(

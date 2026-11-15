@@ -591,6 +591,25 @@ describe("test_launch_environment: prefs", () => {
 		});
 	});
 
+	describe("colour scheme of an identity of another OS", () => {
+		const PREF = "ui.systemUsesDarkTheme";
+		const onHost = async (host: "mac" | "win" | "lin") => {
+			const before = deps.hostOsKey;
+			deps.hostOsKey = () => host;
+			try {
+				return await prefsFor(ua(WIN_UA));
+			} finally {
+				deps.hostOsKey = before;
+			}
+		};
+		it("another OS is light", async () => {
+			expect((await onHost("lin"))[PREF]).toBe(0);
+		});
+		it("its own OS follows the desktop", async () => {
+			expect(PREF in (await onHost("win"))).toBe(false);
+		});
+	});
+
 	describe("Windows legacy font families", () => {
 		const fontsFor = async (fonts: string[]) => {
 			let config: Record<string, any> = {};

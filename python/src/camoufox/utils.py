@@ -2309,6 +2309,15 @@ def launch_options(
     else:
         firefox_user_prefs.setdefault('ui.useOverlayScrollbars', 1)
 
+    # Colour scheme: on its own OS the browser follows the desktop like stock
+    # Firefox. An identity of another OS has no desktop to follow -- a window
+    # reads the host's theme and headless reads none, so the two modes disagree
+    # on a dark desktop -- so it gets the claimed OS's out-of-the-box setting,
+    # light on Windows, macOS and GNOME alike. color_scheme= or the pref
+    # overrides it.
+    if target_os != _host_os_key():
+        firefox_user_prefs.setdefault('ui.systemUsesDarkTheme', 0)
+
     # Stock doubles a wheel's lines on Windows and Linux and never on macOS, and
     # a page reads the result in deltaY (docs/input-dispatch.md).
     firefox_user_prefs.setdefault('mousewheel.system_scroll_override.enabled', target_os != 'mac')
