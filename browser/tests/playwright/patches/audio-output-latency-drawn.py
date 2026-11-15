@@ -37,8 +37,9 @@ Checks:
     run, baseLatency 0, and
     getOutputTimestamp().contextTime == max(0, currentTime - outputLatency);
     a context that ran and was suspended unread reads 0, and one read while
-    running keeps that value once suspended. The host needs an audio output
-    device (CI starts a PulseAudio null sink).
+    running keeps that value once suspended. CI starts a PulseAudio null sink,
+    so this runs on a real backend; audio-runs-without-sound-server covers a
+    host with none.
 
     python browser/tests/playwright/patches/audio-output-latency-drawn.py
 """
@@ -170,8 +171,8 @@ def check_browser(latency: float) -> list:
         r = got[str(rate)]
         want = cubeb_rounded(latency, rate)
         if r["state"] != "running":
-            errors.append(f"{rate} Hz: the context is {r['state']} 2 s after a user click; the host "
-                          "needs an audio output device (a PulseAudio null sink will do)")
+            errors.append(f"{rate} Hz: the context is {r['state']} 2 s after a user click; no "
+                          "output stream opened")
             continue
         if r["atCreate"] != 0:
             errors.append(f"{rate} Hz: outputLatency is {r['atCreate']} as the context is made; stock's is 0 "
