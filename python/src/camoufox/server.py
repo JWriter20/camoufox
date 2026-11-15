@@ -11,6 +11,7 @@ import base64
 import orjson
 from playwright._impl._driver import compute_driver_executable
 
+from camoufox import pro
 from camoufox.pkgman import LOCAL_DATA
 from camoufox.gpudisplay import GpuDisplay, prove_gpu
 from camoufox.humanize import custom_engines
@@ -59,12 +60,13 @@ def launch_server(**kwargs) -> NoReturn:
     `BrowserContext` over a websocket endpoint. Reject those options up front
     rather than accepting them and silently launching a throwaway profile.
     """
-    for unsupported in ('persistent_context', 'user_data_dir'):
+    # A Camoufox Pro profile launches as a persistent context too.
+    for unsupported in ('persistent_context', 'user_data_dir', 'profile'):
         if kwargs.get(unsupported):
             raise ValueError(
                 f"launch_server() does not support {unsupported!r}: Playwright cannot "
                 "serve a persistent context over a websocket endpoint. Use "
-                f"Camoufox(persistent_context=True, ...) in-process instead."
+                "Camoufox(...) in-process instead."
             )
         kwargs.pop(unsupported, None)
 
@@ -78,9 +80,14 @@ def launch_server(**kwargs) -> NoReturn:
     virtual_display, kwargs['headless'] = start_virtual_display(
         kwargs.get('headless'), kwargs.get('debug'), kwargs
     )
+    lease = None
     try:
-        _serve(launch_options(**kwargs), virtual_display)
+        config = launch_options(**kwargs)
+        lease = pro.claim(config, virtual_display)
+        _serve(config, virtual_display)
     finally:
+        if lease:
+            lease.release()
         if virtual_display:
             virtual_display.kill()
 

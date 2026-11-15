@@ -12,11 +12,11 @@ webgl2), so a seeded identity always presents the same device.
 
 from functools import lru_cache
 from random import Random
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import AbstractSet, Any, Dict, FrozenSet, List, Optional, Tuple
 
 import orjson
 
-from .coherence import gpu_fits_machine, gpu_fits_os
+from .coherence import gpu_fits_cpu, gpu_fits_machine, gpu_fits_os
 from .fingerprints import _FPGEN_OS, gpu_screen_is_plausible, is_software_renderer
 from .fpgen_model import load_fpgen
 
@@ -62,10 +62,12 @@ _POLYGON_OFFSET_CLAMP = 'EXT_polygon_offset_clamp'
 # Firefox 159 (bug 1735401) exposes EXT_texture_norm16 on WebGL2 wherever the
 # GL has 16-bit normalized textures, core in desktop GL 3.1: every WebGL2
 # context on macOS (CGL's GL 4.1) and x86_64 Linux (desktop GL). On Windows,
-# ANGLE decides per device from its D3D11 format support, which no recording
-# carries, so it stays filtered there.
+# ANGLE derives it from 16-bit normalized format support (Caps.cpp
+# DetermineTextureNorm16Support), which D3D11 feature level 10_0, the minimum
+# for WebGL2, requires: stock 159.0 on a GeForce GTX 980 (ANGLE D3D11) lists it
+# on WebGL2 and not WebGL1.
 _TEXTURE_NORM16 = 'EXT_texture_norm16'
-_TEXTURE_NORM16_OSES = ('mac', 'lin')
+_TEXTURE_NORM16_OSES = ('mac', 'lin', 'win')
 
 # Firefox 159 adds EXT_clip_control (core in GL 4.5) and
 # EXT_texture_mirror_clamp_to_edge (core in GL 4.4) to WebGL1 and WebGL2. ANGLE's
@@ -76,7 +78,10 @@ _TEXTURE_NORM16_OSES = ('mac', 'lin')
 _CLIP_CONTROL = 'EXT_clip_control'
 _TEXTURE_MIRROR_CLAMP_TO_EDGE = 'EXT_texture_mirror_clamp_to_edge'
 
-_ALIASED_LINE_WIDTH_RANGE = '33902'
+# Firefox 159 caps this at 64 KiB (WebGL2ContextState.cpp, kMaxUniformBlockSize);
+# fpgen recorded the drivers' own limit, up to 4 GiB.
+_MAX_UNIFORM_BLOCK_SIZE = '35376'
+_MAX_UNIFORM_BLOCK_SIZE_CAP = 64 * 1024
 
 # What Firefox reports under privacy.resistFingerprinting. A Camoufox identity
 # presents none of RFP's other changes (UTC, rounded windows), so "Mozilla"
@@ -183,10 +188,18 @@ def to_config(webgl: Dict[str, Any], webgl2: Any, target_os: str) -> Dict[str, A
         if target_os in _TEXTURE_NORM16_OSES:
             backend += (_TEXTURE_NORM16,)
         config.update(_context_config('webGl2', webgl2, target_os, backend))
-        # Firefox 156 creates WebGL1 on the same GL profile as WebGL2, so both
-        # report one line width range. 146 forced WebGL1 onto a compatibility
-        # profile, and fpgen recorded that profile's driver range.
-        config['webGl:parameters'][_ALIASED_LINE_WIDTH_RANGE] = config['webGl2:parameters'][_ALIASED_LINE_WIDTH_RANGE]
+        # Firefox 156 creates WebGL1 on the same GL profile as WebGL2, so every
+        # parameter both report is one driver value (the line width range, the
+        # point size range...). 146 forced WebGL1 onto a compatibility profile,
+        # and fpgen recorded that profile's values. Only the version strings
+        # differ between the two.
+        webgl1_parameters = config['webGl:parameters']
+        for key, value in config['webGl2:parameters'].items():
+            if key in webgl1_parameters and not isinstance(value, str):
+                webgl1_parameters[key] = value
+        parameters = config['webGl2:parameters']
+        if _MAX_UNIFORM_BLOCK_SIZE in parameters:
+            parameters[_MAX_UNIFORM_BLOCK_SIZE] = min(parameters[_MAX_UNIFORM_BLOCK_SIZE], _MAX_UNIFORM_BLOCK_SIZE_CAP)
     # The values are fpgen's cached objects; the caller gets its own copy.
     return orjson.loads(orjson.dumps(config))
 
@@ -224,27 +237,38 @@ def webgl_for_gpu(target_os: str, vendor: str, renderer: str, seed: Optional[int
     return _webgl_config(target_os, {'vendor': vendor, 'renderer': renderer}, Random(seed))
 
 
+def _cpu_pair(cpu: Optional[Dict[str, str]]) -> Tuple[Optional[str], Optional[str]]:
+    cpu = cpu or {}
+    return cpu.get('cpu:arch'), cpu.get('cpu:manufacturer')
+
+
 def sample_webgl_for_screen(
     target_os: str,
     width: Optional[int] = None,
     height: Optional[int] = None,
     seed: Optional[int] = None,
     cores: Optional[int] = None,
+    cpu: Optional[Dict[str, str]] = None,
+    renderers: Optional[AbstractSet[str]] = None,
 ) -> Dict[str, Any]:
     """Draw a GPU for a synthetic identity, weighted as fpgen records Firefox
-    on `target_os`, and its WebGL config.
+    on `target_os`, and its WebGL config. With `renderers`, only those GPUs
+    are drawn: the ones a Camoufox Pro render farm draws on.
 
     Only GPUs the rest of the identity can stand beside are drawn: never a
     software rasteriser, a GPU the OS cannot report, the resistFingerprinting
     mask, a discrete GPU behind a netbook panel (see gpu_screen_is_plausible),
     or an Intel Mac GPU beside cores or a panel no Intel Mac has
-    (coherence.gpu_fits_machine).
+    (coherence.gpu_fits_machine), or a GPU the claimed CPU cannot sit beside
+    (cpu: cpu:arch and cpu:manufacturer, coherence.gpu_fits_cpu).
     The screen is left alone: it has already been reconciled with the real
     display and the window (#499).
 
     Software rasterisers cost fidelity -- real users do run without working
     drivers -- but "no consumer machine reports llvmpipe" is a live, standard
     check on a string every fingerprint script reads (sundial, 2026-09-14).
+    A host that really renders in software claims its renderer instead
+    (plan_rendering).
     """
     candidates = tuple(
         result
@@ -254,8 +278,22 @@ def sample_webgl_for_screen(
         and gpu_fits_os(result.value['renderer'], target_os)
         and gpu_fits_machine(result.value['renderer'], target_os, cores, width, height)
         and gpu_screen_is_plausible(result.value['renderer'], width, height)
+        and gpu_fits_cpu(result.value['renderer'], target_os, *_cpu_pair(cpu))
+        and (renderers is None or result.value['renderer'] in renderers)
     )
     if not candidates:
+        if renderers is not None:
+            raise ValueError(
+                f"No GPU the render farm draws on ({', '.join(sorted(renderers))}) fits this "
+                f"{target_os} identity's {width}x{height} screen, {cores} cores and CPU"
+            )
+        if cpu and not any(
+            gpu_fits_cpu(r.value['renderer'], target_os, *_cpu_pair(cpu)) for r in _trace('gpu', target_os)
+        ):
+            raise ValueError(
+                f"No GPU fpgen has recorded from Firefox on {target_os} sits beside a "
+                f"{' '.join(v for v in _cpu_pair(cpu)[::-1] if v)} CPU"
+            )
         raise ValueError(f'No recorded {target_os} GPU fits a {width}x{height} screen')
     rng = Random(seed)
     return _webgl_config(target_os, _choose(rng, candidates), rng)

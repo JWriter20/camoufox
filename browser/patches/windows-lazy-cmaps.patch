@@ -1,0 +1,156 @@
+diff --git a/gfx/thebes/gfxTextRun.cpp b/gfx/thebes/gfxTextRun.cpp
+--- a/gfx/thebes/gfxTextRun.cpp
++++ b/gfx/thebes/gfxTextRun.cpp
+@@ -35,6 +35,10 @@
+ #include "nsStyleUtil.h"
+ #include "nsUnicodeProperties.h"
+ #include "mozilla/dom/FontListManager.h"
++#include "mozilla/dom/NavigatorManager.h"
++#include "mozilla/StaticMutex.h"
++#include "nsThreadUtils.h"
++#include <atomic>
+ #include "mozilla/dom/Document.h"
+ #include "mozilla/dom/RoverfoxStorageManager.h"
+ #include "mozilla/dom/WorkerPrivate.h"
+@@ -3135,12 +3139,141 @@
+   return fe->FindOrMakeFont(&mStyle);
+ }
+ 
++// Camoufox: a Windows identity's intra-family fallback waits for character
++// maps as Windows' does. DirectWrite families get their faces on demand but no
++// cmaps (gfxDWriteFontList::GetFacesInitDataForFamily, aLoadCmaps false), so
++// in a content process the first fallback within such a family finds it not
++// fully initialized: stock starts the parent's LoadCmapsRunnable from that
++// family to the end of the list and returns nothing (below), the character
++// goes to the next family -- the generic -- and when the pass ends the parent's
++// NotifyUpdatedFonts reflows, and the family's own face answers. Stock win-i9
++// (2026-10-31, 3 launches): "Microsoft JhengHei" (∑ж only in its Light face)
++// measured as the generics for 80-182 ms after its first lookup, then once and
++// for good as the Light face. Linux has the answer at once: the launcher turns
++// async fallback off there (fontconfig families would otherwise skip in the
++// global fallback). So under a Windows claim a family is answered only once a
++// pass covering it has landed; families before the pass's start stay unloaded,
++// and a lookup there rewinds a running pass (LoadCmapsRunnable::
++// MaybeResetIndex). As stock's shared font list, a landed pass holds for every
++// content process (a cross-origin frame opened later measured the Light face
++// at once on win-i9); a running pass is this process's. The launcher draws the
++// pass time (fonts:windowsCmapLoadMs) per launch.
++static mozilla::StaticMutex sWindowsCmapMutex MOZ_UNANNOTATED;
++// Families at or after this index have landed (this process's view).
++static uint32_t sWindowsCmapLoadedFrom = UINT32_MAX;
++// The running pass: its start, and when it lands (null: none running).
++static uint32_t sWindowsCmapPassFrom = UINT32_MAX;
++static mozilla::TimeStamp sWindowsCmapPassLandsAt;
++static std::atomic<uint32_t> sWindowsCmapReflowSchedule{0};
++// The browser-wide landed index, in the cross-process storage.
++static constexpr const char* kWindowsCmapLoadedKey = "wcmap_loaded_from_";
++
++// The pass runs on stock's clock: the time this process's main thread spends
++// blocked on an out-of-process text service, which stock does not have, does
++// not age it. Otherwise a page loop measuring text (a font probe walking a
++// family list) reaches a family later than stock does by the service's round
++// trips, and finds a pass started early in the loop already landed where
++// stock still has the family unloaded (gate 10: a fonts.detect loop 20x
++// stock's length measured "Microsoft JhengHei" as the Light face at once).
++static std::atomic<uint64_t> sWindowsCmapStalledUs{0};
++
++extern "C" void camoufox_text_service_waited(unsigned long long aMicros) {
++  if (NS_IsMainThread()) {
++    sWindowsCmapStalledUs += aMicros;
++  }
++}
++
++static mozilla::TimeStamp WindowsCmapNow() {
++  return mozilla::TimeStamp::Now() -
++         mozilla::TimeDuration::FromMicroseconds(double(sWindowsCmapStalledUs));
++}
++
++// Called with sWindowsCmapMutex held: retire a pass whose time has come.
++static void WindowsCmapLandLocked(mozilla::TimeStamp aNow) {
++  if (!sWindowsCmapPassLandsAt.IsNull() && aNow >= sWindowsCmapPassLandsAt) {
++    sWindowsCmapLoadedFrom =
++        std::min(sWindowsCmapLoadedFrom, sWindowsCmapPassFrom);
++    sWindowsCmapPassLandsAt = mozilla::TimeStamp();
++    sWindowsCmapPassFrom = UINT32_MAX;
++  }
++}
++
++static void WindowsCmapReflowAt(mozilla::TimeStamp aAt, uint32_t aSchedule) {
++  if (aSchedule != sWindowsCmapReflowSchedule) {
++    return;
++  }
++  const mozilla::TimeDuration wait = aAt - WindowsCmapNow();
++  if (wait > mozilla::TimeDuration()) {
++    NS_DelayedDispatchToCurrentThread(
++        NS_NewRunnableFunction(
++            "WindowsCmapReflow",
++            [aAt, aSchedule] { WindowsCmapReflowAt(aAt, aSchedule); }),
++        uint32_t(wait.ToMilliseconds()) + 1);
++    return;
++  }
++  uint32_t landed;
++  {
++    mozilla::StaticMutexAutoLock lock(sWindowsCmapMutex);
++    WindowsCmapLandLocked(WindowsCmapNow());
++    landed = sWindowsCmapLoadedFrom;
++  }
++  uint32_t shared = UINT32_MAX;
++  mozilla::dom::RoverfoxStorageManager::GetUint(kWindowsCmapLoadedKey, 0,
++                                                shared);
++  if (landed < shared) {
++    mozilla::dom::RoverfoxStorageManager::PutUint(u"wcmap_loaded_from_0"_ns,
++                                                  landed);
++  }
++  // As the content process does on the parent's RebuildFontList(false)
++  // (gfxPlatformFontList::UpdateFontList).
++  gfxPlatform::ForceGlobalReflow(gfxPlatform::GlobalReflowFlags::FontsChanged);
++}
++
++static bool WindowsCmapsPending(uint32_t aFamilyIndex,
++                                uint32_t aUserContextId) {
++  if (MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows ||
++      XRE_IsParentProcess() ||
++      mozilla::dom::NavigatorManager::GetSpoofedOS(aUserContextId) !=
++          MaskConfig::SpoofedOS::Windows) {
++    return false;
++  }
++  uint32_t shared = UINT32_MAX;
++  mozilla::dom::RoverfoxStorageManager::GetUint(kWindowsCmapLoadedKey, 0,
++                                                shared);
++  mozilla::StaticMutexAutoLock lock(sWindowsCmapMutex);
++  const auto now = WindowsCmapNow();
++  WindowsCmapLandLocked(now);
++  if (aFamilyIndex >= std::min(sWindowsCmapLoadedFrom, shared)) {
++    return false;
++  }
++  if (sWindowsCmapPassLandsAt.IsNull() || aFamilyIndex < sWindowsCmapPassFrom) {
++    // A new pass, or a running one rewound to load this family too.
++    const auto loadMs =
++        MaskConfig::GetUint32("fonts:windowsCmapLoadMs").value_or(130);
++    const auto landsAt = now + mozilla::TimeDuration::FromMilliseconds(loadMs);
++    if (sWindowsCmapPassLandsAt.IsNull() || landsAt > sWindowsCmapPassLandsAt) {
++      sWindowsCmapPassLandsAt = landsAt;
++    }
++    sWindowsCmapPassFrom = std::min(sWindowsCmapPassFrom, aFamilyIndex);
++    const uint32_t schedule = ++sWindowsCmapReflowSchedule;
++    NS_DispatchToMainThread(NS_NewRunnableFunction(
++        "WindowsCmapReflow", [at = sWindowsCmapPassLandsAt, schedule] {
++          WindowsCmapReflowAt(at, schedule);
++        }));
++  }
++  return true;
++}
++
+ already_AddRefed<gfxFont> gfxFontGroup::FindFallbackFaceForChar(
+     fontlist::Family* aFamily, uint32_t aCh, uint32_t aNextCh,
+     FontPresentation aPresentation) {
+   auto* pfl = gfxPlatformFontList::PlatformFontList();
+   auto* list = pfl->SharedFontList();
+ 
++  if (WindowsCmapsPending(aFamily - list->Families(), mUserContextId)) {
++    return nullptr;
++  }
++
+   // If async fallback is enabled, and the family isn't fully initialized yet,
+   // just start the async cmap loading and return.
+   if (!aFamily->IsFullyInitialized() &&

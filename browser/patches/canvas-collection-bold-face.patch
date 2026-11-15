@@ -1,0 +1,31 @@
+diff --git a/gfx/2d/ScaledFontFontconfig.cpp b/gfx/2d/ScaledFontFontconfig.cpp
+--- a/gfx/2d/ScaledFontFontconfig.cpp
++++ b/gfx/2d/ScaledFontFontconfig.cpp
+@@ -537,6 +537,27 @@ already_AddRefed<UnscaledFont> UnscaledFontFontconfig::CreateFromFontDescriptor(
+   }
+   nsCString path((const char*)aData, aDataLength);
+ 
++  // A font fontconfig lists at exactly this file and index is known as is.
++  // FcFontMatch does not match on FC_INDEX, and FcDefaultSubstitute asks for
++  // regular weight, so below a collection's bold face came back as the same
++  // file's regular one: a replayed (accelerated) canvas drew bold text thin.
++  for (FcSetName setName : {FcSetSystem, FcSetApplication}) {
++    FcFontSet* set = FcConfigGetFonts(nullptr, setName);
++    for (int i = 0; set && i < set->nfont; i++) {
++      FcChar8* file = nullptr;
++      int index = 0;
++      if (FcPatternGetInteger(set->fonts[i], FC_INDEX, 0, &index) ==
++              FcResultMatch &&
++          (uint32_t)index == aIndex &&
++          FcPatternGetString(set->fonts[i], FC_FILE, 0, &file) ==
++              FcResultMatch &&
++          path.Equals((const char*)file)) {
++        return MakeAndAddRef<UnscaledFontFontconfig>(path.BeginReading(),
++                                                     aIndex);
++      }
++    }
++  }
++
+   // Use the given pathname/index in a fontconfig lookup to confirm this is a
+   // known font; if not, we'll use whatever fallback it provides instead.
+   FcPattern* pattern = FcPatternCreate();

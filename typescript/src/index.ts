@@ -3,6 +3,7 @@
  * NewContext, their Async* twins, DefaultAddons, launch_options), plus the
  * package-management and server helpers the TS port has always exported.
  */
+// First: fail with the Node.js floor before any module needs it.
 import "./node-floor.js";
 
 export type { DefaultAddon } from "./addons.js";
@@ -13,11 +14,62 @@ export {
 	AsyncNewContext,
 } from "./async_api.js";
 export {
+	AccountSuspended,
+	BuildNotAllowlisted,
+	CapabilityMismatch,
+	EgressUnavailable,
+	GpuLimitReached,
+	GpuUnavailable,
+	InvalidRequest,
+	LeaseLimitReached,
+	LeaseRefused,
+	NotSignedIn,
+	PlanRequired,
+	ProClockSkew,
+	ProError,
+	ProfileMismatch,
+	ProUnavailable,
+	RateLimited,
+	StatePoolSealed,
+	TargetUnavailable,
+	TopupRequired,
+	WalletEmpty,
+} from "./exceptions.js";
+export {
 	generateContextFingerprint,
 	getRandomPreset,
 	loadPresets,
 	Screen,
 } from "./fingerprints.js";
+export {
+	auto,
+	type CustomEngineFn,
+	channelStream,
+	cursory,
+	custom,
+	type Engine,
+	engine,
+	type HumanizeSetting,
+	notches,
+	raw,
+	type SeededRng,
+	seededRng,
+	splitmix64,
+} from "./humanize.js";
+export {
+	attach as attachCustom,
+	type CustomEngineContext,
+	type Play,
+	type PlayRecord,
+	type PlayStep,
+} from "./humanize-custom.js";
+export {
+	type Managed,
+	ProxyDimension,
+	ProxyNetwork,
+	ProxyProvider,
+	ProxyType,
+} from "./managed.js";
 export {
 	findInstalledVersion,
 	listInstalled,
@@ -25,6 +77,17 @@ export {
 } from "./multiversion.js";
 export { INSTALL_DIR, OS_NAME } from "./paths.js";
 export { CamoufoxFetcher, installedVerStr, RepoConfig } from "./pkgman.js";
+export type { LeaseRequest, ProSession } from "./pro.js";
+export {
+	listProxies,
+	listStatics,
+	type NamedStatic,
+	type ProxyOption,
+	type ProxyProduct,
+	proxyTargets,
+	releaseStatic,
+	type Targeting,
+} from "./proxies.js";
 export { type LaunchServerOptions, launchServer } from "./server.js";
 export {
 	Camoufox,

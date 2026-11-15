@@ -1,0 +1,61 @@
+diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFontList.cpp
+--- a/gfx/thebes/gfxFcPlatformFontList.cpp
++++ b/gfx/thebes/gfxFcPlatformFontList.cpp
+@@ -2781,7 +2781,21 @@
+   nsAutoCString familyName(aFamily);
+   ToLowerCase(familyName);
+ 
+-  if (!(aFlags & FindFamiliesFlags::eQuotedFamilyName)) {
++  const bool windowsIdentity =
++      aFontVisibilityProvider && !aFontVisibilityProvider->IsChrome() &&
++      mozilla::dom::NavigatorManager::GetSpoofedOS(
++          mozilla::dom::RoverfoxStorageManager::UserContextId(
++              aFontVisibilityProvider->GetDocument())) ==
++          MaskConfig::SpoofedOS::Windows;
++  const bool cssGeneric =
++      mozilla::StyleSingleFontFamily::Parse(familyName).IsGeneric();
++  const bool fcGenericName = cssGeneric || familyName.EqualsLiteral("sans") ||
++                             familyName.EqualsLiteral("sans serif") ||
++                             familyName.EqualsLiteral("mono");
++
++  // Windows has no deprecated generics: there 'sans' is just a family name.
++  if (!(aFlags & FindFamiliesFlags::eQuotedFamilyName) &&
++      (cssGeneric || !windowsIdentity)) {
+     // deprecated generic names are explicitly converted to standard generics
+     bool isDeprecatedGeneric = false;
+     if (familyName.EqualsLiteral("sans") ||
+@@ -2794,8 +2808,7 @@
+     }
+ 
+     // fontconfig generics? use fontconfig to determine the family for lang
+-    if (isDeprecatedGeneric ||
+-        mozilla::StyleSingleFontFamily::Parse(familyName).IsGeneric()) {
++    if (isDeprecatedGeneric || cssGeneric) {
+       PrefFontList* prefFonts =
+           FindGenericFamilies(aFontVisibilityProvider, familyName, aLanguage);
+       if (prefFonts && !prefFonts->IsEmpty()) {
+@@ -2806,16 +2819,19 @@
+     }
+   }
+ 
++  // Camoufox: on Windows a quoted generic keyword, and fontconfig's own
++  // 'sans', 'sans serif' and 'mono', are family names no font has -- the text
++  // falls back to the default font. Only fontconfig's aliases would answer them.
++  if (windowsIdentity && fcGenericName) {
++    return false;
++  }
++
+   // Camoufox: a Windows identity's legacy styled-family names resolve as they
+   // do on Windows before its font-info loader has run (see
+   // ClassifyWindowsLegacyName). This is ahead of the substitution cache, which
+   // would replay the first answer for every later lookup. A name the identity
+   // does not have is left to the normal path, which blocks it.
+-  if (aFontVisibilityProvider && !aFontVisibilityProvider->IsChrome() &&
+-      mozilla::dom::NavigatorManager::GetSpoofedOS(
+-          mozilla::dom::RoverfoxStorageManager::UserContextId(
+-              aFontVisibilityProvider->GetDocument())) ==
+-          MaskConfig::SpoofedOS::Windows &&
++  if (windowsIdentity &&
+       !MaskedFontListBlocks(aFontVisibilityProvider, familyName)) {
+     const uint32_t ctx = mozilla::dom::FontListManager::GetCurrentContext();
+     const bool allowed =

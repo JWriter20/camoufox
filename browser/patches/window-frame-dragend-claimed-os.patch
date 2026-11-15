@@ -1,0 +1,57 @@
+diff --git a/widget/gtk/nsDragServiceGtk.cpp b/widget/gtk/nsDragServiceGtk.cpp
+--- a/widget/gtk/nsDragServiceGtk.cpp
++++ b/widget/gtk/nsDragServiceGtk.cpp
+@@ -213,7 +213,11 @@ gboolean nsDragSessionGtk::ScheduleDropE
+     return FALSE;
+   }
+ 
+-  SetDragEndPoint(aWindowPoint.x, aWindowPoint.y);
++  // Camoufox: a Windows identity ends the drag where Windows Firefox reports
++  // it (nsWindow::ClaimedDragEndOffset).
++  const LayoutDeviceIntPoint endPoint =
++      aWindowPoint + aWindow->ClaimedDragEndOffset();
++  SetDragEndPoint(endPoint.x, endPoint.y);
+ 
+   // We'll reply with gtk_drag_finish().
+   return TRUE;
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -993,6 +993,23 @@ DesktopIntMargin nsWindow::ClaimedClient
+   return DesktopIntMargin(0, border, border, border);
+ }
+ 
++// Camoufox: stock Firefox on Windows reports a drag's end (the dragend
++// event's point) offset by the window's client-area origin on the screen: the
++// point arrives in screen pixels where client pixels are expected (GetMessagePos,
++// widget/windows/nsDragService.cpp). Measured on win-i9, Firefox 158.0.1, dpr
++// 2.5: a drag dropped at clientX 320 ended at 328 with mozInnerScreenX 8 and at
++// 326 with mozInnerScreenX 6.4 (normal windows at the screen's top, so no
++// vertical offset), and at 320 maximized (client area at the screen's origin).
++// A Windows identity reports its drag end the same way.
++LayoutDeviceIntPoint nsWindow::ClaimedDragEndOffset() {
++  if (MaskConfig::GetSpoofedOS() != MaskConfig::SpoofedOS::Windows ||
++      MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows) {
++    return {};
++  }
++  nsIWidget* toplevel = GetTopLevelWidget();
++  return toplevel ? toplevel->WidgetToScreenOffset() : LayoutDeviceIntPoint();
++}
++
+ bool nsWindow::DrawsToCSDTitlebar() const {
+   return mGtkWindowDecoration == GTK_DECORATION_CLIENT && mDrawInTitlebar;
+ }
+diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
+--- a/widget/gtk/nsWindow.h
++++ b/widget/gtk/nsWindow.h
+@@ -454,6 +454,10 @@ class nsWindow : public nsIWidget {
+   void SetDBusMenuBar(RefPtr<mozilla::widget::DBusMenuBar> aDbusMenuBar);
+ #endif
+ 
++  // Camoufox: where a Windows identity reports a drag's end, relative to
++  // the pointer (nsDragSessionGtk::ScheduleDropEvent).
++  LayoutDeviceIntPoint ClaimedDragEndOffset();
++
+   // HiDPI scale conversion
+   gint GdkCeiledScaleFactor();
+   double FractionalScaleFactor() const;

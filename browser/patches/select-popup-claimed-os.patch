@@ -1,0 +1,43 @@
+diff --git a/toolkit/actors/SelectParent.sys.mjs b/toolkit/actors/SelectParent.sys.mjs
+--- a/toolkit/actors/SelectParent.sys.mjs
++++ b/toolkit/actors/SelectParent.sys.mjs
+@@ -5,6 +5,21 @@
+ import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
+ import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
+ 
++// Camoufox: a Windows identity's drop-down behaves as Windows Firefox's: a click
++// outside the open list closes it and still reaches the page (stock Firefox
++// 158.0.1 on win-i9: the outside click's mousedown/mouseup hit the page; on
++// Linux the list consumes it), and keys other than shortcuts go to the list.
++function claimsWindows() {
++  try {
++    return (ChromeUtils.camouGetString("navigator.platform") || "").startsWith(
++      "Win"
++    );
++  } catch (e) {
++    return false;
++  }
++}
++const DROPDOWN_AS_WINDOWS = AppConstants.platform == "win" || claimsWindows();
++
+ const lazy = {};
+ 
+ let prefsChanged = false;
+@@ -788,7 +803,7 @@ export var SelectParentHelper = {
+     let menupopup = event.target.closest("menupopup");
+     menupopup.setAttribute(
+       "ignorekeys",
+-      AppConstants.platform == "win" ? "shortcuts" : "false"
++      DROPDOWN_AS_WINDOWS ? "shortcuts" : "false"
+     );
+   },
+ };
+@@ -819,7 +834,7 @@ export class SelectParent extends JSWind
+     popup.setAttribute("position", "after_start");
+     popup.setAttribute("tabspecific", "true");
+     popup.setAttribute("level", "parent");
+-    if (AppConstants.platform == "win") {
++    if (DROPDOWN_AS_WINDOWS) {
+       popup.setAttribute("consumeoutsideclicks", "false");
+       popup.setAttribute("ignorekeys", "shortcuts");
+     } else if (SelectParentHelper.disableMacNativeMenu()) {

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Tuple, Union, overload
+from typing import Any, Dict, Optional, Union, overload
 
 from playwright.sync_api import (
     Browser,
@@ -10,20 +10,28 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from . import _humanize_custom, driver_defaults
+from . import _humanize_custom, driver_defaults, pro
 from .fingerprints import generate_context_fingerprint
-from .ip import Proxy, proxy_exit_geo
+from .ip import ExitGeo, Proxy, proxy_exit_geo
 from .utils import (
     attach_context_defaults,
+    attach_persistent_geometry,
     attach_socks5_auth,
+    attach_viewport_fit,
+    context_screen_bound,
     context_identity,
+    hand_over_context_geometry,
     host_identity,
+    launch_geometry,
     launch_options,
+    needs_exit_geo,
     new_context_options,
     persistent_context_options,
+    place_at_exit,
     spoofs_window_dimensions,
     start_virtual_display,
     sync_attach_vd,
+    take_back_context_geometry,
 )
 
 
@@ -160,6 +168,9 @@ def _launch(
     from . import cpu_affinity
     from .utils import driver_pid, pinned_core_count
 
+    lease = pro.claim(from_options, virtual_display)
+    # A Camoufox Pro profile runs in its own user-data directory.
+    persistent_context = persistent_context or bool(lease and lease.grants.get('profile'))
     pin_to = pinned_core_count(from_options)
     pid = driver_pid(playwright) if pin_to else None
     previous = cpu_affinity.pin(pid, pin_to) if pid else None
@@ -169,20 +180,28 @@ def _launch(
                 **persistent_context_options(from_options, no_viewport_default)
             )
             driver_defaults.mark(context)
+            attach_persistent_geometry(context, from_options)
+            if lease:
+                pro.attach_lease(lease, context, 'close')
             return sync_attach_vd(context, virtual_display)
 
         identity = host_identity(from_options, canvas_noise)
         browser = playwright.firefox.launch(**from_options)
-        attach_context_defaults(browser, no_viewport_default)
+        if lease:
+            pro.attach_lease(lease, browser, 'disconnected')
+        attach_context_defaults(browser, no_viewport_default, launch_geometry(from_options))
         browser._camoufox_host_identity = identity
         return sync_attach_vd(browser, virtual_display)
+    except Exception as error:
+        pro.launch_failed(lease, error)
+        raise
     finally:
         if pid:
             cpu_affinity.restore(pid, previous)
 
 
-def _resolve_proxy_geo(proxy: Dict[str, str]) -> Tuple[str, str]:
-    """The proxy's exit IP and timezone."""
+def _resolve_proxy_geo(proxy: Dict[str, str]) -> ExitGeo:
+    """Where the proxy exits."""
     return proxy_exit_geo(Proxy(**proxy).as_string())
 
 
@@ -213,8 +232,9 @@ def NewContext(
         ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
         webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
-            Unless webrtc_ip and timezone_id are both given, they are looked up from the
-            proxy's exit IP; InvalidIP is raised if that lookup fails.
+            The context is placed where the proxy exits: webrtc_ip, timezone_id, locale and
+            geolocation each default to the exit IP's, looked up through the proxy unless all
+            four are given; InvalidIP is raised if that lookup fails.
         geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
         **context_kwargs: Additional Playwright new_context() options.
     """
@@ -222,19 +242,25 @@ def NewContext(
     # the browser the page is actually talking to.
     ff_version = ff_version or browser.version.split('.', 1)[0]
 
-    # Auto-derive WebRTC IP and timezone from proxy's exit IP when not explicitly provided
-    if proxy and (not webrtc_ip or "timezone_id" not in context_kwargs):
-        exit_ip, timezone = _resolve_proxy_geo(proxy)
-        webrtc_ip = webrtc_ip or exit_ip
-        context_kwargs.setdefault("timezone_id", timezone)
+    if proxy and needs_exit_geo(webrtc_ip, geolocation, context_kwargs):
+        webrtc_ip, geolocation = place_at_exit(
+            _resolve_proxy_geo(proxy), webrtc_ip, geolocation, context_kwargs
+        )
 
     os, webgl_config = context_identity(browser, os, preset)
     fp = generate_context_fingerprint(
-        preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config
+        preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config,
+        screen_bound=context_screen_bound(browser, os, context_kwargs),
     )
 
-    # A browser launched elsewhere takes SOCKS5 credentials too.
+    # A browser launched elsewhere takes SOCKS5 credentials too, and its
+    # contexts are fitted to their screens as well.
     attach_socks5_auth(browser)
-    context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
+    attach_viewport_fit(browser)
+    hand_over_context_geometry(browser, fp)
+    try:
+        context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
+    finally:
+        take_back_context_geometry(browser)
     context.add_init_script(fp['init_script'])
     return context

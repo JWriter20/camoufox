@@ -2,15 +2,13 @@
 A driver's double click leaves the button up between its clicks as long as a person does.
 
 Playwright's dblclick() sends both clicks back to back, so the page saw the
-second press under 10 ms after the first release (cfparity driven.dblclick,
-every Playwright variant; stock 158.0.1 Linux by OS input: tens of
-milliseconds). Juggler now holds the second press a person's gap after the
+second press under 10 ms after the first release (every Playwright variant;
+stock 158.0.1 Linux by OS input: tens of milliseconds). Juggler now holds the second press a person's gap after the
 release (PageHandler.js clickGap, 70-180 ms), with clickHold() before it, so
 press to press stays inside the OS double-click time and dblclick still fires.
 
 The first press came under 10 ms after the move that brought the pointer
-onto the button (cfparity driven.dblclick timing/overDown; stock under
-250 ms): a press after a move now waits a person's dwell on the target
+onto the button (stock: under 250 ms): a press after a move now waits a person's dwell on the target
 (PageHandler.js hoverDwell, 60-240 ms). A double click at the point the
 pointer already rests on has no move before it and waits for nothing.
 

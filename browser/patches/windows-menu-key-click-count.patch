@@ -1,0 +1,156 @@
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -2989,6 +2989,7 @@
+     FetchAndAdjustPenData(event, (GdkEvent*)aEvent);
+   }
+ 
++  NoteWindowsClickCount(eMouseMove, refPoint, -1, aEvent->time);
+   DispatchInputEvent(&event);
+ }
+ 
+@@ -3088,6 +3089,82 @@
+   return GDK_BUTTON1_MASK << (button - 1);
+ }
+ 
++// Camoufox: Windows' click counter, which a Windows identity's ContextMenu key
++// reports (KeymapWrapper::MaybeDispatchContextMenuEvent). Windows Firefox gives
++// every mouse event, eContextMenu from WM_CONTEXTMENU included, one static
++// count (widget/windows/nsWindow.cpp, nsWindow::DispatchMouseEvent): a press
++// within the double-click time of the last press, inside SM_C[XY]DOUBLECLK of
++// the last release and with the same button, counts on; any other press
++// counts 1; WM_LBUTTONDBLCLK (Windows' own double click: the press after a
++// press that was not one, within the time and the double-click rectangle
++// around it) makes it 2; a move outside SM_C[XY]DOUBLECLK of the last release
++// makes it 0. Measured on win-i9, Firefox 158.0.1: the Menu key's contextmenu
++// has detail 0 fresh, 1 after a click, 2 after a double click, 3 after a
++// triple click and 0 after a click and a move away. GTK sets 1.
++namespace {
++struct WindowsClickCounter {
++  LayoutDeviceIntPoint mLastUpPoint;
++  LayoutDeviceIntPoint mLastDownPoint;
++  guint32 mLastDownTime = 0;
++  bool mHadDown = false;
++  bool mLastDownWasDouble = false;
++  int16_t mLastButton = -1;
++  int32_t mCount = 0;
++};
++WindowsClickCounter sWindowsClicks;
++}  // namespace
++
++// GetDoubleClickTime() and SM_CXDOUBLECLK/SM_CYDOUBLECLK on a stock Windows
++// install: 500 ms and 4 px at 96 dpi, which Windows scales with the display.
++static constexpr guint32 kWindowsDoubleClickMS = 500;
++
++void nsWindow::NoteWindowsClickCount(EventMessage aMessage,
++                                     const LayoutDeviceIntPoint& aPoint,
++                                     int16_t aButton, guint32 aTime) {
++  WindowsClickCounter& c = sWindowsClicks;
++  const int32_t slop =
++      std::max(1, int32_t(4 * GetDefaultScale().scale + 0.5f));
++  const bool insideUp = std::abs(c.mLastUpPoint.x - aPoint.x) < slop &&
++                        std::abs(c.mLastUpPoint.y - aPoint.y) < slop;
++  switch (aMessage) {
++    case eMouseDown: {
++      const bool inTime =
++          c.mHadDown && guint32(aTime - c.mLastDownTime) < kWindowsDoubleClickMS;
++      const bool systemDouble =
++          inTime && !c.mLastDownWasDouble && aButton == c.mLastButton &&
++          std::abs(c.mLastDownPoint.x - aPoint.x) <= slop / 2 &&
++          std::abs(c.mLastDownPoint.y - aPoint.y) <= slop / 2;
++      if (systemDouble) {
++        c.mCount = 2;
++      } else if (inTime && insideUp && aButton == c.mLastButton) {
++        c.mCount++;
++      } else {
++        c.mCount = 1;
++      }
++      c.mLastDownWasDouble = systemDouble;
++      c.mLastDownPoint = aPoint;
++      c.mLastDownTime = aTime;
++      c.mHadDown = true;
++      c.mLastButton = aButton;
++      break;
++    }
++    case eMouseUp:
++      c.mLastUpPoint = aPoint;
++      c.mLastButton = aButton;
++      break;
++    case eMouseMove:
++      if (!insideUp) {
++        c.mCount = 0;
++      }
++      break;
++    default:
++      break;
++  }
++}
++
++/* static */
++int32_t nsWindow::WindowsClickCount() { return sWindowsClicks.mCount; }
++
+ void nsWindow::DispatchContextMenuEventFromMouseEvent(
+     uint16_t domButton, GdkEventButton* aEvent,
+     const LayoutDeviceIntPoint& aRefPoint) {
+@@ -3285,6 +3362,7 @@
+     FetchAndAdjustPenData(event, (GdkEvent*)aEvent);
+   }
+ 
++  NoteWindowsClickCount(eMouseDown, refPoint, domButton, aEvent->time);
+   nsIWidget::ContentAndAPZEventStatus eventStatus = DispatchInputEvent(&event);
+ 
+   const bool defaultPrevented =
+@@ -3362,6 +3440,7 @@
+     FetchAndAdjustPenData(event, (GdkEvent*)aEvent);
+   }
+ 
++  NoteWindowsClickCount(eMouseUp, refPoint, domButton, aEvent->time);
+   nsIWidget::ContentAndAPZEventStatus eventStatus = DispatchInputEvent(&event);
+ 
+   const bool defaultPrevented =
+diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
+--- a/widget/gtk/nsWindow.h
++++ b/widget/gtk/nsWindow.h
+@@ -458,6 +458,13 @@
+   // the pointer (nsDragSessionGtk::ScheduleDropEvent).
+   LayoutDeviceIntPoint ClaimedDragEndOffset();
+ 
++  // Camoufox: Windows' click count, kept from this toolkit's mouse input for
++  // the ContextMenu key of a Windows identity (WindowsClickCount).
++  void NoteWindowsClickCount(mozilla::EventMessage aMessage,
++                             const LayoutDeviceIntPoint& aPoint,
++                             int16_t aButton, guint32 aTime);
++  static int32_t WindowsClickCount();
++
+   // HiDPI scale conversion
+   gint GdkCeiledScaleFactor();
+   double FractionalScaleFactor() const;
+diff --git a/widget/gtk/nsGtkKeyUtils.cpp b/widget/gtk/nsGtkKeyUtils.cpp
+--- a/widget/gtk/nsGtkKeyUtils.cpp
++++ b/widget/gtk/nsGtkKeyUtils.cpp
+@@ -1541,6 +1541,12 @@
+   return dispatched;
+ }
+ 
++// Camoufox: whether this Linux build claims Windows.
++static bool ClaimsWindowsIdentity() {
++  return MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
++         MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows;
++}
++
+ // Camoufox: whether the ContextMenu key opens the context menu on its release,
+ // as on Windows. GTK dispatches eContextMenu with the key's press, so the menu
+ // takes the keyboard before the key comes up and the page never sees its keyup.
+@@ -1569,7 +1575,11 @@
+                                       WidgetMouseEvent::eContextMenuKey);
+   contextMenuEvent.mRefPoint = LayoutDeviceIntPoint(0, 0);
+   contextMenuEvent.AssignEventTime(aWindow->GetWidgetEventTime(aEvent->time));
+-  contextMenuEvent.mClickCount = 1;
++  // Camoufox: Windows' WM_CONTEXTMENU carries the mouse's last click count
++  // (nsWindow::WindowsClickCount); GTK says 1.
++  contextMenuEvent.mClickCount = ClaimsWindowsIdentity()
++                                     ? nsWindow::WindowsClickCount()
++                                     : 1;
+   KeymapWrapper::InitInputEvent(contextMenuEvent, aEvent->state);
+ 
+   if (contextMenuEvent.IsControl() || contextMenuEvent.IsMeta() ||

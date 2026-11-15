@@ -307,6 +307,13 @@ describe("media devices", () => {
 			expect(h(config)).toBe(c.hash);
 		}
 	});
+	it("setHostIpv6Default", () => {
+		for (const c of fx.hostipv6) {
+			const config = clone(c.config);
+			fp.setHostIpv6Default(config, big(c.salt));
+			expect(config["webrtc:hostipv6"], JSON.stringify(c.config)).toBe(c.out);
+		}
+	});
 });
 
 /** Python's exact(): sha256 of the orjson bytes, key order and number types included. */

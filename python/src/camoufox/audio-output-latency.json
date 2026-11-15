@@ -1,0 +1,15 @@
+{
+  "_comment": "AudioContext.outputLatency of the claimed OS's output devices (audio-context-spoofing.patch: MediaTrackGraphImpl::AudioOutputLatency). device_latency_s is the device stream's latency in seconds; the browser turns it into floor(latency * rate) frames (at least 128) at the context's rate, and on Windows truncates to 100 ns ticks as stock does. It belongs to the machine, so it is drawn per identity (w = relative weight). open_delay_ms is how long after a graph is made its stream opens, before which stock reads 0; it is timing, so it is drawn per launch.",
+  "win": {
+    "_source": "Stock Firefox 158.0.1 on win-i9 (Windows 11), 10 fresh-profile launches, 2026-10-31 (it1 win-results audio-latency-0..9): 0.022 s at every rate whose stream opened (176 frames at 8000, 704 at 32000, 720 at 32768 = 0.0219726, 1056 at 48000, 2112 at 96000, 128 at 3000 = 0.0426666), the same in every launch and every read. First non-zero read 94-124 ms after the context was made (131-328 ms for the first context of a launch). One machine: more Windows devices widen device_latency_s.",
+    "device_latency_s": [
+      {"w": 1, "v": 0.022}
+    ],
+    "open_delay_ms": [94, 124]
+  },
+  "mac": {
+    "_status": "Not measured: no macOS entry yet, so a macOS identity keeps the host's own value.",
+    "device_latency_s": [],
+    "open_delay_ms": [94, 124]
+  }
+}

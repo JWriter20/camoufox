@@ -395,6 +395,20 @@ inline bool GetBool(std::string_view key) {
 // platform is configured; Other, one no identity uses.
 enum class SpoofedOS { None, Windows, MacOS, Linux, Other };
 
+// The OS this build runs on. An identity presenting it needs no OS spoof: the
+// host's own answer is the one stock gives on this machine.
+constexpr SpoofedOS HostOS() {
+#if defined(XP_WIN)
+  return SpoofedOS::Windows;
+#elif defined(XP_MACOSX)
+  return SpoofedOS::MacOS;
+#elif defined(MOZ_WIDGET_GTK)
+  return SpoofedOS::Linux;
+#else
+  return SpoofedOS::Other;
+#endif
+}
+
 // Narrow or UTF-16: a context's navigator.platform is stored as UTF-16, and
 // the getters that ask for its OS are page-callable, so it is matched without
 // a conversion.

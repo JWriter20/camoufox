@@ -1,0 +1,150 @@
+diff --git a/gfx/thebes/gfxFT2FontBase.cpp b/gfx/thebes/gfxFT2FontBase.cpp
+index 7c1f76ac8a..07672b01c0 100644
+--- a/gfx/thebes/gfxFT2FontBase.cpp
++++ b/gfx/thebes/gfxFT2FontBase.cpp
+@@ -13,6 +13,7 @@
+ #include "gfxFontConstants.h"
+ #include "gfxFontUtils.h"
+ #include "gfxHarfBuzzShaper.h"
++#include "MaskConfig.hpp"
+ #include "harfbuzz/hb.h"
+ #include "mozilla/Likely.h"
+ #include "mozilla/StaticPrefs_gfx.h"
+@@ -249,6 +250,92 @@ static double FindClosestSize(FT_Face aFace, double aSize) {
+   return aFace->available_sizes[bestSize].y_ppem / 64.0;
+ }
+ 
++// Camoufox: whether to lay text out with DirectWrite's metrics (a Windows
++// identity on a FreeType host). CAMOU_CONFIG is fixed for the process.
++static bool UseWindowsMetrics() {
++  static const bool sWindows =
++      MaskConfig::GetString("fonts:metrics").value_or("") == "windows";
++  return sWindows;
++}
++
++// DirectWrite's DWRITE_FONT_METRICS for a face, from the same tables it reads:
++// the OS/2 usWin* extents (sTypo* when fsSelection sets USE_TYPO_METRICS),
++// with the hhea line gap reduced by however far usWin* already exceeds the
++// hhea extents -- GDI's external-leading rule, which DirectWrite follows.
++gfxFT2FontBase::WindowsDesignMetrics gfxFT2FontBase::GetWindowsDesignMetrics()
++    const {
++  WindowsDesignMetrics m;
++  FT_Face face = LockFTFace();
++  if (face && FT_IS_SFNT(face)) {
++    const auto* os2 =
++        static_cast<const TT_OS2*>(FT_Get_Sfnt_Table(face, ft_sfnt_os2));
++    const auto* hhea = static_cast<const TT_HoriHeader*>(
++        FT_Get_Sfnt_Table(face, ft_sfnt_hhea));
++    const auto* head =
++        static_cast<const TT_Header*>(FT_Get_Sfnt_Table(face, ft_sfnt_head));
++    if (os2 && os2->version != 0xFFFF && hhea && head &&
++        head->Units_Per_EM) {
++      const uint16_t kUseTypoMetricsMask = 1 << 7;
++      m.mUnitsPerEm = head->Units_Per_EM;
++      if (os2->fsSelection & kUseTypoMetricsMask) {
++        m.mAscent = os2->sTypoAscender;
++        m.mDescent = -os2->sTypoDescender;
++        m.mLineGap = os2->sTypoLineGap;
++      } else {
++        m.mAscent = os2->usWinAscent;
++        m.mDescent = os2->usWinDescent;
++        m.mLineGap = std::max<int32_t>(
++            0, int32_t(hhea->Ascender) - int32_t(hhea->Descender) +
++                   int32_t(hhea->Line_Gap) - (m.mAscent + m.mDescent));
++      }
++      m.mAdvanceWidthMax = hhea->advance_Width_Max;
++      m.mAvgCharWidth = os2->xAvgCharWidth;
++      m.mValid = m.mAscent + m.mDescent > 0;
++    }
++  }
++  UnlockFTFace();
++  return m;
++}
++
++// gfxDWriteFont::ComputeMetrics, arithmetic included: the conversion factor is
++// a float, ascent and descent are rounded to whole pixels, the em height stays
++// the fractional font size, and the line gap is rounded up. FreeType instead
++// takes pixel-rounded hhea extents and rounds the em height, so the same font
++// file produced other line boxes (Arial 16px: 17/18 px on Windows, 19/19 here).
++void gfxFT2FontBase::ApplyWindowsMetrics(const WindowsDesignMetrics& aDesign) {
++  const float scale = float(mAdjustedSize / aDesign.mUnitsPerEm);
++
++  mMetrics.maxAscent = round(aDesign.mAscent * scale);
++  mMetrics.maxDescent = round(aDesign.mDescent * scale);
++  mMetrics.maxHeight = mMetrics.maxAscent + mMetrics.maxDescent;
++
++  mMetrics.emHeight = mAdjustedSize;
++  mMetrics.emAscent =
++      mMetrics.maxHeight > 0.0
++          ? mMetrics.emHeight * mMetrics.maxAscent / mMetrics.maxHeight
++          : 0.0;
++  mMetrics.emDescent = mMetrics.emHeight - mMetrics.emAscent;
++
++  if (aDesign.mAdvanceWidthMax) {
++    mMetrics.maxAdvance = aDesign.mAdvanceWidthMax * scale;
++  }
++
++  mMetrics.internalLeading =
++      std::max(mMetrics.maxHeight - mMetrics.emHeight, 0.0);
++  mMetrics.externalLeading = ceil(aDesign.mLineGap * scale);
++
++  // Subpixel-positioned text (as on Windows with ClearType): the OS/2 average
++  // width unrounded, falling back to the advance of 'x'. Not maxed with the
++  // zero width as FreeType's path does.
++  mMetrics.aveCharWidth = aDesign.mAvgCharWidth * scale;
++  if (mMetrics.aveCharWidth < 1) {
++    gfxFloat xWidth;
++    if (GetCharExtents('x', &xWidth)) {
++      mMetrics.aveCharWidth = xWidth;
++    }
++  }
++}
++
+ void gfxFT2FontBase::InitMetrics() {
+   mFUnitsConvFactor = 0.0;
+ 
+@@ -591,6 +678,18 @@ void gfxFT2FontBase::InitExtraMetrics(gfxFloat aEmHeight,
+       sum > 0.0 ? mMetrics.emAscent * mMetrics.emHeight / sum : 0.0;
+   mMetrics.emDescent = mMetrics.emHeight - mMetrics.emAscent;
+ 
++  // mFUnitsConvFactor is set exactly when InitMetrics' FreeType path had a
++  // design-unit scale for this face (its yScale > 0).
++  if (mFUnitsConvFactor > 0.0 && UseWindowsMetrics()) {
++    // gfxDWriteFont::ComputeMetrics has a branch giving Arial Black Arial
++    // Bold's metrics, but stock 158 on Windows 11 lays Arial Black out with
++    // its own tables (16px: 18/5, line 23), so none is copied here.
++    WindowsDesignMetrics design = GetWindowsDesignMetrics();
++    if (design.mValid) {
++      ApplyWindowsMetrics(design);
++    }
++  }
++
+   SanitizeMetrics(false);
+ 
+ #if 0
+diff --git a/gfx/thebes/gfxFT2FontBase.h b/gfx/thebes/gfxFT2FontBase.h
+index f2c7540c25..2e40ce34f7 100644
+--- a/gfx/thebes/gfxFT2FontBase.h
++++ b/gfx/thebes/gfxFT2FontBase.h
+@@ -108,6 +108,21 @@ class gfxFT2FontBase : public gfxFont {
+   void InitMetrics();
+   void InitExtraMetrics(gfxFloat aEmHeight, gfxFloat aLineHeight);
+ 
++  // Camoufox: the vertical metrics DirectWrite derives from this face's tables
++  // (design units). With fonts:metrics set to "windows", text is laid out with
++  // these as stock Firefox on Windows does, instead of FreeType's.
++  struct WindowsDesignMetrics {
++    uint16_t mUnitsPerEm = 0;
++    int32_t mAscent = 0;
++    int32_t mDescent = 0;
++    int32_t mLineGap = 0;
++    uint16_t mAdvanceWidthMax = 0;
++    int16_t mAvgCharWidth = 0;
++    bool mValid = false;
++  };
++  WindowsDesignMetrics GetWindowsDesignMetrics() const;
++  void ApplyWindowsMetrics(const WindowsDesignMetrics& aDesign);
++
+   FT_Vector GetEmboldenStrength(FT_Face aFace) const;
+ 
+   RefPtr<mozilla::gfx::SharedFTFace> mFTFace;

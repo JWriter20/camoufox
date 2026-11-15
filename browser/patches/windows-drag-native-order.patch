@@ -1,0 +1,249 @@
+diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
+--- a/widget/gtk/nsWindow.h
++++ b/widget/gtk/nsWindow.h
+@@ -804,6 +804,11 @@
+ 
+   // Camoufox: a Windows identity's enter waits for the next dispatched move.
+   bool mClaimedOSEnterPending = false;
++  // Camoufox: a Windows identity's drag took the pointer with GTK's grab and
++  // the exit was not dispatched (OnLeaveNotifyEvent); the ungrab's enter ends
++  // it with Windows' move at the drop point.
++  bool mClaimedOSDragGrabbed = false;
++  bool IsSourceDragInProgress();
+ 
+   // Input region margin is stored in layout (scaled) coordinates.
+   InputRegion mInputRegion;
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -2616,6 +2616,8 @@
+ }
+ 
+ static bool ClaimsWindowsMouseMoves();
++static void NoteClaimedOSMove(
++    const mozilla::LayoutDeviceIntPoint& aScreenPoint);
+ 
+ void nsWindow::OnEnterNotifyEvent(GdkEventCrossing* aEvent) {
+   LOG("enter notify (win=%p, sub=%p): %.2f, %.2f mode %d, detail %d\n",
+@@ -2635,6 +2637,32 @@
+   DispatchMissedButtonReleases(aEvent);
+   mLastMouseCoordinates.Set(aEvent);
+ 
++  // Camoufox: a drag's end under a Windows identity. Windows Firefox runs a
++  // drag in DoDragDrop's modal OLE loop with no exit from the window, and once
++  // the loop returns the window gets a WM_MOUSEMOVE where the pointer is: a
++  // move at the drop point with the button released, its movement from the
++  // move before the drag (win-i9, Firefox 158.0.1, cfparity driven.drag 3/3:
++  // movement [210, 20] from the deferred move to the drop point). GTK's grab
++  // ended here; its exit was never dispatched (OnLeaveNotifyEvent), so this is
++  // that move, not an enter. The content process holds it behind dragend if
++  // the drag session is still open there (BrowserChild).
++  if (mClaimedOSDragGrabbed && aEvent->mode == GDK_CROSSING_UNGRAB) {
++    mClaimedOSDragGrabbed = false;
++    if (ClaimsWindowsMouseMoves()) {
++      const LayoutDeviceIntPoint refPoint =
++          GdkEventCoordsToDevicePixels(aEvent->x, aEvent->y);
++      NoteClaimedOSMove(
++          GdkEventCoordsToDevicePixels(aEvent->x_root, aEvent->y_root));
++      mClaimedOSEnterPending = false;
++      WidgetMouseEvent event(true, eMouseMove, this, WidgetMouseEvent::eReal);
++      event.mRefPoint = refPoint;
++      event.AssignEventTime(GetWidgetEventTime(aEvent->time));
++      KeymapWrapper::InitInputEvent(event, aEvent->state);
++      DispatchInputEvent(&event);
++      return;
++    }
++  }
++
+   // Camoufox: a Windows identity enters the widget with the first mouse move
+   // Windows dispatches, as Windows Firefox does (it synthesizes the enter from
+   // WM_MOUSEMOVE): a pointer that comes back to the point it left from
+@@ -2727,6 +2755,19 @@
+     return;
+   }
+ 
++  // Camoufox: a drag from this window under a Windows identity keeps the
++  // pointer in it. GTK's drag takes the pointer with a grab at the drag's first
++  // motion, and the window got a grab leave: the page saw a mouseleave up to
++  // the root (no relatedTarget) and the next move reported no movement. Windows'
++  // OLE drag loop leaves the window's pointer state alone (win-i9, Firefox
++  // 158.0.1: no mouseleave during a drag). The ungrab's enter ends it
++  // (OnEnterNotifyEvent).
++  if (aEvent->mode == GDK_CROSSING_GRAB && ClaimsWindowsMouseMoves() &&
++      IsSourceDragInProgress()) {
++    mClaimedOSDragGrabbed = true;
++    return;
++  }
++
+   if (mClaimedOSEnterPending) {
+     // Camoufox: never entered (see OnEnterNotifyEvent), so nothing to leave.
+     mClaimedOSEnterPending = false;
+@@ -2848,6 +2889,13 @@
+ #include "MaskConfig.hpp"
+ static mozilla::Maybe<mozilla::LayoutDeviceIntPoint> sClaimedOSLastMove[2];
+ 
++// The mouse's last dispatched point: a move synthesized at the end of a drag
++// (OnEnterNotifyEvent) counts, so a native move to the same point is dropped.
++static void NoteClaimedOSMove(
++    const mozilla::LayoutDeviceIntPoint& aScreenPoint) {
++  sClaimedOSLastMove[0] = Some(aScreenPoint);
++}
++
+ static bool ClaimsWindowsMouseMoves() {
+   return MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
+          MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows;
+@@ -5972,6 +6020,23 @@
+   return retVal;
+ }
+ 
++// Camoufox: a drag that started in this browser (it has a source node) is in
++// progress over this window (OnLeaveNotifyEvent).
++bool nsWindow::IsSourceDragInProgress() {
++  nsCOMPtr<nsIDragService> dragService =
++      do_GetService("@mozilla.org/widget/dragservice;1");
++  if (!dragService) {
++    return false;
++  }
++  nsCOMPtr<nsIDragSession> session = dragService->GetCurrentSession(this);
++  if (!session) {
++    return false;
++  }
++  nsCOMPtr<nsINode> sourceNode;
++  session->GetSourceNode(getter_AddRefs(sourceNode));
++  return !!sourceNode;
++}
++
+ bool nsWindow::DragInProgress() {
+   nsCOMPtr<nsIDragService> dragService =
+       do_GetService("@mozilla.org/widget/dragservice;1");
+diff --git a/dom/ipc/BrowserChild.h b/dom/ipc/BrowserChild.h
+--- a/dom/ipc/BrowserChild.h
++++ b/dom/ipc/BrowserChild.h
+@@ -639,6 +639,13 @@
+ 
+   void ProcessPendingCoalescedMouseDataAndDispatchEvents();
+ 
++  // Camoufox: a Windows identity's mouse moves that arrive while a drag this
++  // process started is in progress wait for dragend (RecvRealMouseMoveEvent).
++  bool HoldClaimedOSDragMove(const WidgetMouseEvent& aMouseEvent,
++                             const ScrollableLayerGuid& aGuid,
++                             uint64_t aInputBlockId);
++  void ReleaseClaimedOSDragMoves();
++
+   void ProcessPendingCoalescedTouchData();
+ 
+   /**
+@@ -936,6 +943,12 @@
+   CoalescedTouchData mCoalescedTouchData;
+ 
+   RefPtr<CoalescedMouseMoveFlusher> mCoalescedMouseEventFlusher;
++  struct ClaimedOSHeldMove {
++    WidgetMouseEvent mEvent;
++    ScrollableLayerGuid mGuid;
++    uint64_t mInputBlockId;
++  };
++  nsTArray<UniquePtr<ClaimedOSHeldMove>> mClaimedOSHeldMoves;
+   RefPtr<CoalescedTouchMoveFlusher> mCoalescedTouchMoveEventFlusher;
+ 
+   RefPtr<layers::IAPZCTreeManager> mApzcTreeManager;
+diff --git a/dom/ipc/BrowserChild.cpp b/dom/ipc/BrowserChild.cpp
+--- a/dom/ipc/BrowserChild.cpp
++++ b/dom/ipc/BrowserChild.cpp
+@@ -86,6 +86,9 @@
+ #include "nsDocShell.h"
+ #include "nsDocShellLoadState.h"
+ #include "nsDragServiceProxy.h"
++#include "MaskConfig.hpp"
++#include "mozilla/dom/NavigatorManager.h"
++#include "mozilla/dom/RoverfoxStorageManager.h"
+ #include "nsExceptionHandler.h"
+ #include "nsFilePickerProxy.h"
+ #include "nsFocusManager.h"
+@@ -1600,11 +1603,66 @@
+   }
+ }
+ 
++// Camoufox: a drag under a Windows identity holds back the mouse moves that
++// reach the page between dragstart and dragend. Windows Firefox runs the drag
++// in DoDragDrop's modal OLE loop: the WM_MOUSEMOVE queued behind the move that
++// started it stays in the window's queue until the loop returns, and the page
++// gets it after dragend with the button still held, the time it was made and
++// its movement from the move before (win-i9, Firefox 158.0.1, cfparity
++// driven.drag 3/3: pointermove/mousemove at the second move after the press,
++// buttons 1, movement [20, 5], after dragend). GTK takes the pointer only at
++// the drag's first motion, so the moves before it reached the page at once.
++// They wait here, in order, until dragend (RecvEndDragSession). Juggler's own
++// moves are left alone: Juggler orders a driven drag itself (PageHandler).
++bool BrowserChild::HoldClaimedOSDragMove(const WidgetMouseEvent& aMouseEvent,
++                                         const ScrollableLayerGuid& aGuid,
++                                         uint64_t aInputBlockId) {
++  if (MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows ||
++      aMouseEvent.mMessage != eMouseMove || aMouseEvent.mJugglerEventId ||
++      aMouseEvent.IsSynthesized()) {
++    return false;
++  }
++  RefPtr<nsIDragSession> session = GetDragSession();
++  nsCOMPtr<nsINode> sourceNode;
++  if (session) {
++    session->GetSourceNode(getter_AddRefs(sourceNode));
++  }
++  if (!sourceNode) {
++    // The drag ended without telling this process (no RecvEndDragSession):
++    // what it held goes first.
++    ReleaseClaimedOSDragMoves();
++    return false;
++  }
++  if (NavigatorManager::GetSpoofedOS(
++          RoverfoxStorageManager::UserContextId(sourceNode)) !=
++      MaskConfig::SpoofedOS::Windows) {
++    return false;
++  }
++  if (mClaimedOSHeldMoves.Length() >= 8) {
++    mClaimedOSHeldMoves.RemoveElementAt(0);
++  }
++  mClaimedOSHeldMoves.AppendElement(MakeUnique<ClaimedOSHeldMove>(
++      ClaimedOSHeldMove{aMouseEvent, aGuid, aInputBlockId}));
++  return true;
++}
++
++void BrowserChild::ReleaseClaimedOSDragMoves() {
++  nsTArray<UniquePtr<ClaimedOSHeldMove>> held =
++      std::move(mClaimedOSHeldMoves);
++  for (const UniquePtr<ClaimedOSHeldMove>& move : held) {
++    (void)RecvRealMouseMoveEvent(move->mEvent, move->mGuid,
++                                 move->mInputBlockId);
++  }
++}
++
+ mozilla::ipc::IPCResult BrowserChild::RecvRealMouseMoveEvent(
+     const WidgetMouseEvent& aMouseEvent, const ScrollableLayerGuid& aGuid,
+     const uint64_t& aInputBlockId) {
+   MOZ_ASSERT(!aMouseEvent.AsPointerEvent());
+   MOZ_ASSERT(!aMouseEvent.AsDragEvent());
++  if (HoldClaimedOSDragMove(aMouseEvent, aGuid, aInputBlockId)) {
++    return IPC_OK();
++  }
+   // Camoufox: juggler's moves coalesce like real ones. A real mouse outruns the
+   // refresh driver, so the page gets one pointermove per tick carrying the
+   // rest in getCoalescedEvents(), and a pointerrawupdate per raw move; moves
+@@ -2346,6 +2404,8 @@
+     dragSession->SetDragEndPoint(aDragEndPoint.x, aDragEndPoint.y);
+     dragSession->EndDragSession(aDoneDrag, aKeyModifiers);
+   }
++  // Camoufox: after dragend (HoldClaimedOSDragMove).
++  ReleaseClaimedOSDragMoves();
+   return IPC_OK();
+ }
+ 
+diff --git a/dom/ipc/moz.build b/dom/ipc/moz.build
+--- a/dom/ipc/moz.build
++++ b/dom/ipc/moz.build
+@@ -293,5 +293,8 @@
+ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+     CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
+ 
++# Camoufox: include path for MaskConfig.hpp
++LOCAL_INCLUDES += ["/camoucfg"]
++
+ # Add libFuzzer configuration directives
+ include("/tools/fuzzing/libfuzzer-config.mozbuild")

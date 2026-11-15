@@ -1,0 +1,115 @@
+diff --git a/dom/base/TimeoutExecutor.cpp b/dom/base/TimeoutExecutor.cpp
+--- a/dom/base/TimeoutExecutor.cpp
++++ b/dom/base/TimeoutExecutor.cpp
+@@ -92,6 +92,8 @@ nsresult TimeoutExecutor::ScheduleDelayed(const TimeStamp& aDeadline,
+   // rescheduling if more deadlines come in between now and the minimum delay
+   // firing time.
+   TimeDuration delay = TimeDuration::Max(aMinDelay, aDeadline - aNow);
++  // Camoufox: as late as the claimed OS's timer would fire.
++  delay += mOwner->ClaimedOSTimerLateness();
+ 
+   // Note, we cannot use the normal nsITimer init methods that take
+   // integer milliseconds.  We need higher precision.  Consider this
+diff --git a/dom/base/TimeoutManager.cpp b/dom/base/TimeoutManager.cpp
+--- a/dom/base/TimeoutManager.cpp
++++ b/dom/base/TimeoutManager.cpp
+@@ -5,6 +5,8 @@
+ #include "TimeoutManager.h"
+ 
+ #include "TimeoutExecutor.h"
++#include "MaskConfig.hpp"
++#include "mozilla/RandomNum.h"
+ #include "mozilla/Logging.h"
+ #include "mozilla/MediaManager.h"
+ #include "mozilla/ProfilerMarkers.h"
+@@ -19,6 +21,9 @@
+ #include "mozilla/dom/PopupBlocker.h"
+ #include "mozilla/dom/TimeoutHandler.h"
+ #include "mozilla/dom/WebTaskScheduler.h"
++#include "mozilla/dom/NavigatorManager.h"
++#include "mozilla/dom/RoverfoxStorageManager.h"
++#include "mozilla/dom/WorkerPrivate.h"
+ #include "mozilla/dom/WorkerScope.h"
+ #include "mozilla/net/WebSocketEventService.h"
+ #include "nsGlobalWindowInner.h"
+@@ -287,6 +292,65 @@ nsresult TimeoutManager::MaybeSchedule(const TimeStamp& aWhen,
+   return mExecutor->MaybeSchedule(aWhen, MinSchedulingDelay());
+ }
+ 
++// Camoufox: Windows Firefox's timers fire late. Its TimerThread sleeps on a
++// waitable timer with a tolerance (TimerThread::Wait, XP_WIN, and
++// HiResWindowsMonitor in TimerThread.h); Linux's waits on a condition variable
++// and wakes on time. A nested setTimeout(0) chain shows it: stock win-i9 gaps
++// at the page's 1 ms jittered clock are {3: 6-13, 4: 148-161, 5: 114-143,
++// 6+: 3-11} of 300 and 1-4 of 30 'timerClamp' chains read unclamped (2026-10-31,
++// 3 launches); stock Linux {3: 24-45, 4: 173-208, 5: 57-73}, 10-19 of 30.
++// Unclamped (privacy.reduceTimerPrecision off, 3 x 1199 gaps, 2026-11-01)
++// win-i9's gaps take two states: mostly 4.40-4.76 ms, about a third of them
++// 4.04-4.35 ms, each state lasting a few timers (stay 0.73 and 0.54); Linux's
++// are 4.06-4.08 ms. The lateness below draws that: per thread, a state that
++// persists with those odds and a value from the state's quantiles (the high
++// state 60 us under win-i9's raw minus Linux's 4.06, as Linux's own spread
++// adds the rest). Only timers the executor arms are late: a deadline already
++// due is dispatched at once there too.
++static constexpr uint16_t kWinLateLowUs[16] = {
++    0, 20, 60, 80, 100, 120, 140, 160, 180, 200, 200, 220, 240, 260, 280, 290};
++static constexpr uint16_t kWinLateHighUs[16] = {300, 320, 360, 360, 380, 380,
++                                                400, 400, 420, 440, 460, 480,
++                                                500, 540, 580, 640};
++
++TimeDuration TimeoutManager::ClaimedOSTimerLateness() const {
++  if (MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows) {
++    return TimeDuration();
++  }
++  uint32_t userContextId = 0;
++  if (mIsWindow) {
++    userContextId =
++        RoverfoxStorageManager::UserContextId(mGlobalObject.GetAsInnerWindow());
++  } else if (WorkerPrivate* worker = GetCurrentThreadWorkerPrivate()) {
++    userContextId = worker->GetOriginAttributes().mUserContextId;
++  }
++  if (NavigatorManager::GetSpoofedOS(userContextId) !=
++      MaskConfig::SpoofedOS::Windows) {
++    return TimeDuration();
++  }
++  // splitmix64 and the state, one each per thread (window and worker timers
++  // arm on their own threads).
++  static thread_local uint64_t sRng = RandomUint64OrDie();
++  static thread_local bool sLow = false;
++  auto next = [] {
++    uint64_t z = (sRng += 0x9E3779B97F4A7C15ULL);
++    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
++    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
++    return z ^ (z >> 31);
++  };
++  // Leave the state with probability 1 - stay (in 1/1000ths).
++  if (next() % 1000 >= (sLow ? 540u : 730u)) {
++    sLow = !sLow;
++  }
++  const uint16_t* table = sLow ? kWinLateLowUs : kWinLateHighUs;
++  const uint64_t r = next();
++  const uint32_t i = r % 16;
++  const double lo = table[i];
++  const double hi = i < 15 ? table[i + 1] : table[i] + 20;
++  const double frac = double((r >> 8) % 1024) / 1024.0;
++  return TimeDuration::FromMicroseconds(lo + frac * (hi - lo));
++}
++
+ bool TimeoutManager::IsInvalidFiringId(uint32_t aFiringId) const {
+   // Check the most common ways to invalidate a firing id first.
+   // These should be quite fast.
+diff --git a/dom/base/TimeoutManager.h b/dom/base/TimeoutManager.h
+--- a/dom/base/TimeoutManager.h
++++ b/dom/base/TimeoutManager.h
+@@ -113,6 +113,11 @@ class TimeoutManager final {
+ 
+   nsIEventTarget* EventTarget();
+ 
++  // Camoufox: how late the timer armed now fires beyond its delay, as on the
++  // OS this global's identity claims (zero but for a Windows claim off
++  // Windows).
++  TimeDuration ClaimedOSTimerLateness() const;
++
+   bool BudgetThrottlingEnabled(bool aIsBackground) const;
+ 
+   static const uint32_t InvalidFiringId;

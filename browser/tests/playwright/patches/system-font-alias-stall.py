@@ -22,6 +22,12 @@ reports then. The verdict is a ratio against a control launch that claims the
 system face exactly once, so it reads how many times a base pays for that face
 and not how fast the runner is.
 
+On a Linux host the launcher turns async fallback off for every identity (see
+gfx.font_rendering.fallback.async in utils.py), and then there is no later
+reflow: the page's first layout walks the list and resolves the sentinel
+before it returns. The page then reads the stall as the time that first
+forced layout took. The guard asks the launch it builds which mode it runs.
+
 What PASS means: no macOS base blocks the page MAX_RATIO times as long as a
 list that claims the system face once does.
 
@@ -55,17 +61,25 @@ PAGE = """<!doctype html><meta charset="utf-8"><body>
 <span id="mono" style="font-family: monospace">mmmmmmmmmmlli10OQ@#</span>
 <script>
 const width = id => document.getElementById(id).getBoundingClientRect().width;
+const report = (longest, resolvedAt) => {
+  document.documentElement.dataset.result = JSON.stringify({
+    longest, resolvedAt, systemFont: width('system') !== width('mono'),
+  });
+};
+const first = performance.now();
 const unresolved = width('sentinel');
+if (!ASYNC_FALLBACK) {
+  const took = performance.now() - first;
+  report(took, took);
+}
 const start = performance.now();
 let last = start, longest = 0;
-(function tick() {
+ASYNC_FALLBACK && (function tick() {
   const now = performance.now();
   longest = Math.max(longest, now - last);
   last = now;
   if (width('sentinel') === unresolved) return setTimeout(tick, 50);
-  document.documentElement.dataset.result = JSON.stringify({
-    longest, resolvedAt: now - start, systemFont: width('system') !== width('mono'),
-  });
+  report(longest, now - start);
 })();
 </script>"""
 
@@ -83,13 +97,24 @@ def lists():
     return [("control", control)] + [(b["id"], sorted(set(b["fonts"]) | set(essential))) for b in bases]
 
 
+def async_fallback(kwargs) -> bool:
+    """Whether the launch these kwargs build resolves fallback asynchronously."""
+    from camoufox.utils import launch_options
+
+    prefs = launch_options(**kwargs).get("firefox_user_prefs", {})
+    # Gecko's default for the pref is true.
+    return prefs.get("gfx.font_rendering.fallback.async", True) is not False
+
+
 async def measure(fonts):
     """The page's longest unresponsive interval while fallback resolves, in ms."""
     from camoufox.async_api import AsyncCamoufox
 
-    async with AsyncCamoufox(**launch_kwargs(os="macos", fonts=fonts, i_know_what_im_doing=True)) as browser:
+    kwargs = launch_kwargs(os="macos", fonts=fonts, i_know_what_im_doing=True)
+    body = PAGE.replace("<script>", f"<script>\nconst ASYNC_FALLBACK = {str(async_fallback(kwargs)).lower()};", 1)
+    async with AsyncCamoufox(**kwargs) as browser:
         page = await browser.new_page()
-        await page.route(ORIGIN, lambda route: route.fulfill(content_type="text/html", body=PAGE))
+        await page.route(ORIGIN, lambda route: route.fulfill(content_type="text/html", body=body))
         await page.goto(ORIGIN)
         handle = await page.wait_for_function(
             "() => document.documentElement.dataset.result", timeout=DEADLINE_MS, polling=250

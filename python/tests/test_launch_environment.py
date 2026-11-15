@@ -127,13 +127,15 @@ class TestFontFallbackAsyncPref:
         prefs = self._prefs_for("Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0", None)
         assert prefs[self.PREF] is False
 
-    def test_macos_keeps_async_font_fallback(self, isolated_launch_dependencies):
+    def test_macos_keeps_async_font_fallback(self, isolated_launch_dependencies, monkeypatch):
+        monkeypatch.setattr(utils, "_host_os_key", lambda: "mac")
         prefs = self._prefs_for(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0", None
         )
         assert self.PREF not in prefs
 
-    def test_windows_keeps_async_font_fallback(self, isolated_launch_dependencies):
+    def test_windows_keeps_async_font_fallback(self, isolated_launch_dependencies, monkeypatch):
+        monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
         prefs = self._prefs_for(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0", None
         )
@@ -285,6 +287,7 @@ class TestGeoipIPv6:
     def test_no_ipv6_route_is_an_ipv4_only_network(self, monkeypatch, isolated_launch_dependencies):
         sent = self._launch(monkeypatch, None, geoip=self.IPV4)
         assert sent["network:ipv4Only"] is True
+        assert sent["webrtc:hostipv6"] is False
 
     @pytest.mark.parametrize("host_ipv6", ["2001:db8::2", "2001:db8::3"], ids=["elsewhere", "unknown"])
     def test_ipv6_that_disagrees_is_dropped_with_a_warning(
@@ -293,6 +296,21 @@ class TestGeoipIPv6:
         with pytest.warns(utils.LeakWarning, match="IPv6 address geolocates somewhere other"):
             sent = self._launch(monkeypatch, host_ipv6, geoip=self.IPV4)
         assert sent["network:ipv4Only"] is True
+
+    def test_a_real_proxy_places_the_identity_at_its_exit(self, monkeypatch, isolated_launch_dependencies):
+        asked = []
+        monkeypatch.setattr(utils, "ALLOW_GEOIP", True)
+        monkeypatch.setattr(utils, "public_ip", lambda proxy=None: asked.append(proxy) or self.IPV4)
+        sent = self._launch(monkeypatch, None, proxy={"server": "http://proxy.example.com:3128"})
+        assert asked and asked[0] and "proxy.example.com" in asked[0]  # looked up through the proxy
+        assert sent["timezone"] == "America/Chicago" and sent["webrtc:ipv4"] == self.IPV4
+
+    def test_geoip_false_keeps_a_proxied_launch_unlocated(self, monkeypatch, isolated_launch_dependencies):
+        monkeypatch.setattr(utils, "ALLOW_GEOIP", True)
+        monkeypatch.setattr(utils, "public_ip", lambda proxy=None: pytest.fail("geoip=False must not look up"))
+        with pytest.warns(utils.LeakWarning):
+            sent = self._launch(monkeypatch, None, geoip=False, proxy={"server": "http://proxy.example.com:3128"})
+        assert "timezone" not in sent
 
     def test_proxy_leaves_ipv6_alone(self, monkeypatch, isolated_launch_dependencies):
         def no_lookup():
@@ -307,6 +325,7 @@ class TestGeoipIPv6:
         sent = self._launch(monkeypatch, None, geoip="2001:db8::1")
         assert "network:ipv4Only" not in sent
         assert sent["webrtc:ipv6"] == "2001:db8::1"
+        assert sent["webrtc:hostipv6"] is True
 
 
 class TestPrefsReachStartup:
@@ -567,14 +586,20 @@ class TestScreenshotCaret:
         from camoufox import driver_defaults
 
         clicks = []
+        evaluates = []
 
         class Field:
-            def __init__(self, focused):
-                self.focused = focused
+            def __init__(self, needs_click, lands):
+                self.needs_click = needs_click
+                self.lands = lands
                 self.first = self
 
-            async def evaluate(self, expression):
-                return {"typed": True, "focused": self.focused}
+            async def evaluate(self, expression, timeout=None):
+                evaluates.append(timeout)
+                return self.needs_click if expression == driver_defaults.FILL_NEEDS_CLICK else self.lands
+
+            async def scroll_into_view_if_needed(self, timeout=None):
+                pass
 
             async def click(self, **kwargs):
                 clicks.append(kwargs)
@@ -583,11 +608,12 @@ class TestScreenshotCaret:
             return selector
 
         browser = driver_defaults.mark(self.Owner())
-        for focused in (False, True):
+        for needs_click, lands in ((True, True), (False, True), (True, False)):
             frame = self.Owner(browser)
-            frame.locator = lambda selector, field=Field(focused): field
+            frame.locator = lambda selector, field=Field(needs_click, lands): field
             assert asyncio.run(driver_defaults._frame_fill_clicks_first(original)(frame, "#f", timeout=5)) == "#f"
-        assert clicks == [{"timeout": 5, "force": None}]
+        assert clicks == [{"timeout": 5, "force": None}]  # a covered field fills as it would have
+        assert set(evaluates) == {5}  # a missing field fails within the caller's timeout
 
     def test_installs_once_on_page_and_element_handle(self):
         from playwright._impl._element_handle import ElementHandle

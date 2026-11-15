@@ -49,7 +49,6 @@ be listed there.
 | `network-patches.patch` | `headers.*`, `navigator.userAgent` |
 | `no-css-animations.patch` | `instantAnimations` |
 | `screen-spoofing.patch` | `screen.*` |
-| `skia-cpu-vendor-estimates.patch` | `cpu:vendor` (process-wide: read once in `SkOpts::Init`; adds `/camoucfg` to `gfx/skia/moz.build` itself) |
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
 | `timer-lateness-claimed-os.patch` | `navigator.platform` (the timer's own context's, through `NavigatorManager::GetSpoofedOS()`) |
@@ -82,7 +81,6 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId` |
 | `timezone-spoofing.patch`, `webrtc-ip-spoofing.patch` | `audio-fingerprint-manager.patch` for `RoverfoxStorageManager.h` in `dom/base/nsGlobalWindowInner.cpp` |
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch`, `zz-stock-cost-parity.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
-| `per-context-http-user-agent.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetUserAgent()` (exported as `mozilla/dom/NavigatorManager.h`); `cross-process-storage.patch` for reading the context's value in the parent and worker processes |
 | `timer-lateness-claimed-os.patch` | `fingerprint-injection.patch` for `/camoucfg` in `dom/base/moz.build`; `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()`; `cross-process-storage.patch` for `RoverfoxStorageManager::UserContextId()` |
 | `windows-lazy-cmaps.patch` | `claimed-os-emoji-pref.patch` for `MaskConfig.hpp` in `gfx/thebes/gfxTextRun.cpp`; `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build`; `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId`; `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `virtual-display-claimed-screen.patch` | `windows-keyboard.patch` for `/camoucfg` in `widget/gtk/moz.build` |
@@ -137,10 +135,14 @@ context:
   once instead of being dropped silently.
 - `webrtc-ip-spoofing.patch` rewrites candidate, SDP and `getStats()` addresses
   to `webrtc:ipv4`/`ipv6`; it makes up host candidates when none reached the
-  page, never a srflx. The new patch keeps a srflx or relay address gathered
-  through the proxy as it is, because a page's own STUN server already saw
-  that address. Behind an HTTP proxy, or a SOCKS5 proxy that refuses UDP, no
-  srflx surfaces: the page reads a machine whose UDP is blocked.
+  page, never a srflx. It also decides whether a page is behind a proxy
+  (`ShouldForceProxy`): Juggler records each proxy it sets, which decides for a
+  document with no HTTP channel, so a direct launch stays direct and a proxied
+  one never gathers around its proxy. The new patch keeps a srflx or
+  relay address gathered through the proxy as it is, because a page's own STUN
+  server already saw that address. Behind an HTTP proxy, or a SOCKS5 proxy that
+  refuses UDP, no srflx surfaces: the page reads a machine whose UDP is
+  blocked, not one that made a STUN answer up.
 
 ICE sockets live in the socket process, and proxies are resolved in the
 parent. The patch adds an optional `LoadInfoArgs` to the existing

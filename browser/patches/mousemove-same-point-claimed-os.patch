@@ -1,0 +1,54 @@
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -2692,6 +2692,22 @@
+   gtk_window_resize(GTK_WINDOW(mShell), size.width, size.height);
+ }
+ 
++// Camoufox: a Windows identity drops a native mouse move to the screen point
++// the last dispatched one went to, as Windows Firefox does
++// (LastMouseMoveData in widget/windows/nsWindow.cpp): a mouse that did not
++// move did not move. X sends a motion event for a move to where the pointer
++// already is (XTest, or a device whose motion rounds to the same pixel), and
++// GTK passes each one on, so the page saw a mousemove with no movement that
++// Windows never dispatches. Mouse and pen are remembered apart, as Windows
++// remembers each pointer.
++#include "MaskConfig.hpp"
++static mozilla::Maybe<mozilla::LayoutDeviceIntPoint> sClaimedOSLastMove[2];
++
++static bool ClaimsWindowsMouseMoves() {
++  return MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
++         MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows;
++}
++
+ void nsWindow::OnMotionNotifyEvent(GdkEventMotion* aEvent) {
+   mLastMouseCoordinates.Set(aEvent);
+ 
+@@ -2775,6 +2791,17 @@
+     return;
+   }
+ 
++  if (ClaimsWindowsMouseMoves()) {
++    bool eraser;
++    auto& last = sClaimedOSLastMove[IsPenEvent((GdkEvent*)aEvent, &eraser)];
++    const LayoutDeviceIntPoint screenPoint =
++        GdkEventCoordsToDevicePixels(aEvent->x_root, aEvent->y_root);
++    if (last == Some(screenPoint)) {
++      return;
++    }
++    last = Some(screenPoint);
++  }
++
+   WidgetMouseEvent event(true, eMouseMove, this, WidgetMouseEvent::eReal);
+ 
+   gdouble pressure = 0;
+@@ -6988,6 +7015,9 @@
+         return NS_OK;
+       }
+ #endif
++      // As Windows does: a synthesized move is dispatched even to where the
++      // pointer already is, because its callers expect one.
++      sClaimedOSLastMove[0].reset();
+       GdkScreen* screen = gdk_window_get_screen(mGdkWindow);
+       GdkPoint point = DevicePixelsToGdkPointRoundDown(aPoint);
+       gdk_device_warp(GdkGetPointer(), screen, point.x, point.y);

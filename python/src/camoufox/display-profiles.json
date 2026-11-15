@@ -1,0 +1,6 @@
+{
+  "_doc": "Recorded display ICC profiles per claimed OS (display_profile.py). Each entry: name, w (weight), icc (base64, reduced to the tags qcms reads by scripts/reduce-icc-profile.py), source (machine and how it was recorded), and screens: the native device-pixel resolutions of the panel the profile belongs to; an entry without screens is the OS default. Only profiles recorded on real machines go here (GetICMProfileW on Windows). An OS with no entries keeps the browser's built-in sRGB.",
+  "win": [],
+  "mac": [],
+  "lin": []
+}

@@ -1,0 +1,28 @@
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -3324,7 +3324,24 @@ WidgetEventTime nsWindow::GetWidgetEvent
+   return WidgetEventTime(GetEventTimeStamp(aEventTime));
+ }
+ 
++// Camoufox: a Windows identity stamps input at the Windows tick, as Windows
++// Firefox does: its event times come from GetMessageTime, which advances with
++// the system timer (64 Hz, 15.625 ms), so events that arrive within one tick
++// share a time. Measured on win-i9 (Firefox 158.0.1): 120 SendInput moves 8 ms
++// apart gave pointerrawupdate timeStamp gaps of 0 and 15-17 ms only; X stamps
++// each event to the millisecond.
++static guint32 ClaimedOSEventTime(guint32 aEventTime) {
++  if (MaskConfig::GetSpoofedOS() != MaskConfig::SpoofedOS::Windows ||
++      MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows) {
++    return aEventTime;
++  }
++  return guint32(uint64_t(aEventTime) * 64 / 1000 * 1000 / 64);
++}
++
+ TimeStamp nsWindow::GetEventTimeStamp(guint32 aEventTime) {
++  if (aEventTime) {
++    aEventTime = ClaimedOSEventTime(aEventTime);
++  }
+   if (MOZ_UNLIKELY(mIsDestroyed)) {
+     // nsWindow has been Destroy()ed.
+     return TimeStamp::Now();

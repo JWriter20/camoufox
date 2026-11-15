@@ -19,7 +19,8 @@ the goldens are a function of the code alone:
     probe, the host GPU probe and the public-IP lookup are patched; the GeoIP
     reader is a fake maxminddb module over a fixed table; numpy's weighted
     locale choice uses a fixed uniform draw (same algorithm as numpy, so the
-    TS port can mirror it).
+    TS port can mirror it), and so do the per-launch timing draws
+    (fingerprints.launch_uniform).
   * paths: the browser bundle is tests/fixtures/launch/bundle*, the cache the
     scratch dir; both are written back as <BUNDLE>/<CACHE>/... placeholders.
 
@@ -113,10 +114,14 @@ HOST = {
     'display': [1600, 900],
     'public_ip': '81.2.69.160',
     'locale_uniform': 0.5,
+    # The per-launch timing draws (audio output open delay, Windows alias
+    # load time): real values move per launch; the golden pins the draw.
+    'launch_uniform': 0.37,
     'fresh_salt': 1234567890123456789,
 }
 
 fingerprints.host_cpu_count = lambda: HOST['cpu_count']
+fingerprints.launch_uniform = lambda: HOST['launch_uniform']
 utils._stock_profile_disk_capacity_kb = lambda: HOST['disk_capacity_kb']
 utils._host_os_key = lambda: HOST['host_os_key']
 utils.host_gpu = lambda *args: HOST['host_gpu']
@@ -327,6 +332,19 @@ scenario('humanize_true', fingerprint=FP['linux'], os='linux', humanize=True)
 scenario('humanize_float', fingerprint=FP['linux'], os='linux', humanize=1.5)
 scenario('humanize_int', fingerprint=FP['linux'], os='linux', humanize=2)
 scenario('humanize_false', fingerprint=FP['linux'], os='linux', humanize=False)
+scenario('humanize_channels', fingerprint=FP['linux'], os='linux',
+         humanize={'mouse': {'engine': 'cursory', 'options': {'maxTime': 1.0, 'minTime': 0.25}},
+                   'scroll': 'raw', 'seed': 1234})
+scenario('humanize_engine_unavailable', fingerprint=FP['linux'], os='linux',
+         humanize={'keyboard': {'engine': 'fancy', 'options': {'speed': 1.5}}})
+scenario('humanize_option_unknown', fingerprint=FP['linux'], os='linux',
+         humanize={'mouse': {'engine': 'cursory', 'options': {'speed': 1.5}}})
+scenario('humanize_option_range', fingerprint=FP['linux'], os='linux',
+         humanize={'mouse': {'engine': 'cursory', 'options': {'maxTime': -0.5}}})
+scenario('humanize_old_build', fingerprint=FP['linux'], os='linux', humanize=1.5,
+         executable_path='<BUNDLE_OLD>/camoufox-bin')
+scenario('humanize_old_build_mixed', fingerprint=FP['linux'], os='linux', humanize={'scroll': 'raw'},
+         executable_path='<BUNDLE_OLD>/camoufox-bin')
 
 # block_* and friends
 scenario('block_all', fingerprint=FP['windows'], os='windows', block_images=True, block_webrtc=True,
@@ -351,6 +369,18 @@ scenario('webgl_config_windows', fingerprint=FP['windows'], os='windows', webgl_
 scenario('webgl_config_macos', fingerprint=FP['macos'], os='macos', webgl_config=INPUTS['webgl_pairs']['mac'][0])
 scenario('webgl_config_no_os', fingerprint=FP['linux'], webgl_config=INPUTS['webgl_pairs']['lin'][0])
 scenario('webgl_config_unknown', fingerprint=FP['linux'], os='linux', webgl_config=['Nope', 'Nope GPU'])
+
+# cpu: the CPU the identity computes as (cpu:arch, cpu:manufacturer, general.cpu_identity)
+scenario('cpu_amd_windows', fingerprint=FP['windows'], os='windows', cpu={'manufacturer': 'amd'})
+scenario('cpu_intel_mac', fingerprint=FP['macos'], os='macos', cpu={'arch': 'x86', 'manufacturer': 'intel'})
+scenario('cpu_apple_mac', fingerprint=FP['macos'], os='macos', cpu={'manufacturer': 'apple'})
+scenario('cpu_arm_no_os', {'generate': 'macos'}, cpu={'arch': 'arm'})
+scenario('cpu_x86_os_list', fingerprint=FP['linux'], os=['macos', 'linux'], cpu={'arch': 'x86'})
+scenario('cpu_amd_mac', fingerprint=FP['macos'], os='macos', cpu={'manufacturer': 'amd'})
+scenario('cpu_unknown_key', fingerprint=FP['linux'], os='linux', cpu={'vendor': 'intel'})
+scenario('cpu_not_a_dict', fingerprint=FP['linux'], os='linux', cpu='arm')
+scenario('cpu_gpu_contradicts', fingerprint=FP['windows'], os='windows',
+         webgl_config=INPUTS['webgl_pairs']['win'][0], cpu={'arch': 'arm', 'manufacturer': 'qualcomm'})
 
 # fonts / voices
 scenario('fonts_custom', fingerprint=FP['linux'], os='linux', fonts=['Arial', 'Helvetica', 'Comic Sans MS'])
@@ -407,7 +437,7 @@ scenario('persistent_passthrough', fingerprint=FP['linux'], os='linux', user_dat
          slow_mo=50, timeout=12345)
 
 # executable_path handling
-scenario('executable_old_build', fingerprint=FP['linux'], os='linux', executable_path='<BUNDLE_OLD>/camoufox-bin')
+scenario('executable_old_build', fingerprint=FP['windows'], os='windows', executable_path='<BUNDLE_OLD>/camoufox-bin')
 scenario('executable_from_env', {'process_env': {'CAMOUFOX_EXECUTABLE_PATH': '<BUNDLE>/camoufox-bin'}},
          fingerprint=FP['linux'], os='linux', executable_path=None)
 
