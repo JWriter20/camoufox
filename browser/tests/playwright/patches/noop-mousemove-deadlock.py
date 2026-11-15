@@ -21,7 +21,7 @@ action of a session deadlocks whenever it targets that pixel:
     page.mouse.move(0, 0)      # exact origin
     page.mouse.move(0.4, 0.4)  # rounds to (0, 0)
 
-Any humanized driver whose cursor model initialises to 0,0 and whose first move
+Any driver whose cursor model initialises to 0,0 and whose first move
 is a short hop near the corner reaches this.
 
 Fix (PageHandler.js, the `type === 'mousemove'` branch): if the rounded

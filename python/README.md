@@ -303,7 +303,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `geoip` | `bool` or `str` | none | `True` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. Needs the `geoip` extra. |
 | `geoip_db` | `str` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `str` or `list[str]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"` or `["fr-FR", "en-US"]`. The first is used for `Intl`. |
-| `humanize` | `bool`, `float` or `dict` | off | Humanized input. A number caps one cursor movement at that many seconds (default cap 1.5); a dict picks an engine per channel ([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)). |
+| `humanize` | `bool`, `float` or `dict` | off | Input shaped by your own `custom(fn)` per channel, in the driver. The browser does not humanize input: `True`, a number or a named engine is refused on this build ([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)). |
 | `screen` | `camoufox.fingerprints.Screen` | the real display when headed | Bounds the generated screen: `Screen(max_width=1920, max_height=1080)`. |
 | `window` | `(int, int)` | generated | Fixed outer window size. |
 | `fonts` | `list[str]` | none | Extra font families on top of the OS's own. |

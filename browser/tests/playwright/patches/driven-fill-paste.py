@@ -1,10 +1,9 @@
 """
 fill() and keyboard.insert_text() reach the page as a person's paste.
 
-Playwright fills a text field with Page.insertText. Typing a whole string key
-by key takes a quarter of a second per character, and Juggler's old insert
-(one beforeinput/input pair, no key events, no paste) is nothing a person can
-do. A person enters a whole string by pasting it: the paste shortcut goes down,
+Playwright fills a text field with Page.insertText. Juggler's old insert (one
+beforeinput/input pair, no key events, no paste) is nothing a person can do. A
+person enters a whole string by pasting it: the paste shortcut goes down,
 Firefox's paste fires a trusted `paste` whose clipboardData holds the text,
 then `beforeinput` and `input` (insertFromPaste), and the shortcut comes up.
 Juggler runs Firefox's own paste with the text, so every field of those events

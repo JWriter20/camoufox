@@ -227,8 +227,7 @@ async def main() -> int:
         failures.append("an event was not trusted")
     if state[0] != "Hi there" or not state[2]:
         failures.append(f"expected the text typed and #far in view, got {state}")
-    # Every wheel call turns in whole notches, the custom engine's steps too, so
-    # where the two wheel turns leave the page decides whether #name needs a
+    # Where the two wheel turns leave the page decides whether #name needs a
     # scroll into view before the fill; #far always does.
     into_view = [entry for entry in log if entry[:2] == ["scroll", "locator"]]
     if [entry[0] for entry in log if entry not in into_view] != [
@@ -260,13 +259,14 @@ async def main() -> int:
         return [[e[0], e[5]] if e[0] == "wheel" else e[2:] for e in evs if e[0] != "mousemove"]
 
     log_b, events_b, _, _ = await custom_session(1234)
-    log_c, _, _, _ = await custom_session(1235)
+    _, events_c, _, _ = await custom_session(1235)
     same = replayed(events_b) == replayed(events)
+    differs = replayed(events_c) != replayed(events)
     print(f"seed 1234 again: identical engine calls and page events but moves: {same and log_b == log}; "
-          f"seed 1235 plans differently: {log_c != log}")
+          f"seed 1235 gives other page events: {differs}")
     if not same or log_b != log:
         failures.append("the same seed gave different input")
-    if log_c == log:
+    if not differs:
         failures.append("another seed gave the same input")
 
     # Custom mouse and keyboard with scroll auto(): the browser plans nothing.
