@@ -144,6 +144,29 @@ its own lease, so call `launch_options()` again.
 If the launch environment already has `CAMOU_LEASE_FILE`, the launcher takes it
 as a lease you manage yourself and mints nothing.
 
+### Updates
+
+A Pro release is numbered: `159.0-pro.12` is the twelfth. When the Python
+launcher is pointed at a numbered Pro release and Camoufox Pro has published a
+later one for the same platform, the launch downloads the later release once and
+launches it in place of the build it was pointed at. Nothing is asked of you, and
+the build at `executable_path` is never modified.
+
+- The release is installed in the camoufox cache, under `pro/browsers/<version>/`
+  (`~/.cache/camoufox/` on Linux). The newest two are kept; older ones are
+  removed.
+- Before anything is unpacked, the launcher checks the release's signature with
+  the keys the build it was pointed at carries, and the download's size and
+  SHA-256 against what was signed. A release that fails a check is not installed:
+  the launch fails with `UpdateRefused`.
+- The download is an https URL from the Camoufox Pro API and needs a
+  subscription, as a launch does.
+- A build whose version does not end in a release number (a local build) is
+  never replaced, and a release is never replaced by an older one.
+- Checking a signature needs the `pro` extra: `pip install "camoufox[pro]"`.
+
+The TypeScript launcher does not update: it launches the build it is pointed at.
+
 ## What a lease grants
 
 Besides the lease itself, the API can grant a browser four things. Each is a
@@ -449,15 +472,16 @@ pip install "camoufox[pro]"
 
 When the lease includes captcha solving, the browser (or persistent context)
 carries it as `.pro.captcha`: `endpoint`, `remaining` and `expires_at`.
-`endpoint` is an OpenAI-compatible API base URL. Call it with your own captcha
-key; the lease carries none:
+`endpoint` is an OpenAI-compatible API base URL. Call it with your Camoufox Pro
+key (`cfp_live_...`), the one the launch signed in with. It accepts no other
+key, and the lease carries none:
 
 ```ts
 const browser = await Camoufox({ executable_path: "/path/to/camoufox-pro/camoufox-bin" });
 const captcha = browser.pro?.captcha;
 if (captcha) {
 	const models = await fetch(`${captcha.endpoint}/models`, {
-		headers: { Authorization: `Bearer ${process.env.CAPTCHA_KEY}` },
+		headers: { Authorization: `Bearer ${process.env.CAMOUFOX_PRO_KEY}` },
 	});
 	console.log(await models.json());
 }
@@ -494,6 +518,7 @@ Python and from `camoufox` in TypeScript. Each carries the API's
 | `GpuUnavailable` | No remote GPU can serve this Windows identity now | Retry after `retry_after`, or pass `farm_gpu: false` |
 | `StatePoolSealed` | The API refused to take a warmed profile's state through the chunk routes; it only takes it back through the route it served it from | Update the launcher |
 | `ProClockSkew` | This machine's clock is more than 3 minutes off the API's, so a fresh lease would look expired | Fix the clock (NTP). Over one minute off logs a warning |
+| `UpdateRefused` | A later Pro release was published, and its signature, size or contents did not check out, so it was not installed | Report it. Nothing was installed or changed |
 | `LeaseRefused` | The browser refused the lease it was started with, and exited with status 78. `reason` is the browser's own | Report it with the reason |
 
 The launch fails instead of starting the browser without a lease, because a Pro

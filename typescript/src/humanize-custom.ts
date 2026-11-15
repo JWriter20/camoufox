@@ -4,8 +4,7 @@
  *
  * The function runs in this process, never in the browser. It plans a
  * channel's input and plays it through Playwright's own input methods, so the
- * page sees the same trusted events as from any Playwright call. The browser
- * runs that channel raw (humanizeConfig), so input is never humanized twice.
+ * page sees the same trusted events as from any Playwright call.
  *
  * What is wrapped, per page of the browser (or persistent context) it is
  * attached to, and what the function is called for:
@@ -60,7 +59,7 @@ export type Play = (steps: PlayStep[]) => Promise<PlayRecord[]>;
 export interface CustomEngineContext {
 	/** Playwright's own behaviour for this call; calling it is how a function declines. */
 	original: AnyFn;
-	/** The channel's seeded stream, bit for bit the browser's. */
+	/** The channel's seeded stream. */
 	rng: SeededRng;
 	/** Dispatch steps on this page on a schedule. */
 	play: Play;
@@ -296,7 +295,7 @@ const pointer: LocatorFlow = (engines, locator, original, args) => {
 		if (scroll) await scrollIntoView(engines, locator, timeout, true);
 		if (mouse) {
 			if (!scroll) {
-				// The point must be on screen; the browser's scroll engine plans this.
+				// The point must be on screen.
 				await locatorOriginal(locator, "scrollIntoViewIfNeeded").call(locator, {
 					timeout,
 				});

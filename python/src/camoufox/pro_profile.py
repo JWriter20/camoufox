@@ -47,6 +47,14 @@ from .pro_state import (
     write_archive,
 )
 
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+
+# How long a closing browser is given to let go of its profile: Firefox ends its own shutdown within a minute.
+BROWSER_EXIT_SECONDS = 90.0
+
 CONTENT_KEY_ENV = "CAMOUFOX_PRO_CONTENT_KEY"
 # The most chunks one uploads call may list.
 UPLOAD_BATCH = 2000
@@ -202,6 +210,32 @@ def _keep(directory: Path, profile_id: str, kind: str, why: str) -> None:
         why,
         kept,
     )
+
+
+def _wait_for_browser(directory: Path) -> None:
+    """
+    Return once no Firefox holds `directory`. A browser's close is reported
+    before its process has exited, and it writes the last of its state on the
+    way out, so a capture taken sooner is of a profile still being written.
+    """
+    if fcntl is None:  # Windows: Firefox holds no lock another process can test.
+        return
+    deadline = time.monotonic() + BROWSER_EXIT_SECONDS
+    try:
+        lock = (directory / ".parentlock").open("r+b")
+    except FileNotFoundError:
+        return
+    with lock:
+        while True:
+            try:
+                fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"the browser still holds {directory} {BROWSER_EXIT_SECONDS:g} s after it closed"
+                    ) from None
+                time.sleep(0.05)
 
 
 # ── restore ──────────────────────────────────────────────────────────────────
@@ -550,6 +584,7 @@ def open_profile(lease: pro.Lease, ff_version: str) -> Tuple[Dict[str, Any], Pat
         # The commit releases the lease, so a renewal racing it must not mint a new one.
         lease.stop_renewing()
         try:
+            _wait_for_browser(user_data_dir)
             if keys is None:
                 _commit_served(lease, section, base_version, user_data_dir, ff_version)
             else:

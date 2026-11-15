@@ -1681,11 +1681,11 @@ def launch_options(
             Name of the GeoIP database to use (e.g., "GeoIP AIO by daijro").
             If not specified, uses the one chosen with `camoufox set --geoip`, or the default.
         humanize (Optional[Union[bool, float, dict]]):
-            Humanize mouse, keyboard and scroll input, per channel.
-            `True` uses the best engine the build offers on every channel; a number is the
-            MAX duration in seconds of a cursor movement (typically up to 1.5 seconds across
-            the window); a dict picks an engine per channel with the factories in
-            `camoufox.humanize`, e.g. `{"mouse": cursory(max_time=1.0), "scroll": raw(), "seed": 1234}`.
+            Plan mouse, keyboard and scroll input, per channel. The browser delivers input
+            as the driver sends it; a dict gives a channel a client-side engine with
+            `camoufox.humanize.custom`, e.g. `{"mouse": custom(fn), "seed": 1234}`.
+            `True`, a number and the in-browser engines (`cursory()`) work only on an older build
+            that lists them, and raise HumanizeEngineUnavailable on this one.
         locale (Optional[Union[str, List[str]]]):
             Locale(s) to use in Camoufox. The first listed locale will be used for the Intl API.
         addons (Optional[List[str]]):
@@ -1913,7 +1913,8 @@ def launch_options(
     # What the lease adds to the environment, after every launch rule.
     pro_env: Dict[str, str] = {}
 
-    if profile is not None and pro_build is not None:
+    profiled = profile is not None and pro_build is not None
+    if profiled:
         if not isinstance(os, str):
             raise ValueError("A profile launch needs `os`: the one OS its identity presents.")
         check_valid_os(os)
@@ -1927,6 +1928,15 @@ def launch_options(
                 "A profile carries its own identity and browser state: pass no config, fingerprint, "
                 "fingerprint_preset or user_data_dir with it."
             )
+    if leased:
+        # A newer release of the same target, when one is published, is the build that launches.
+        from .pro_update import newest
+
+        newer = newest(pro_build, browser_binary, pro_key)
+        if newer != browser_binary:
+            executable_path, browser_binary = Path(newer), newer
+            pro_build = pro.read_build(build_file(browser_binary, "pro-build.json"))
+    if profiled:
         _HELD.lease = pro.acquire(pro_build, _OS_CODE[os], pro_key, pro_request)
         from .pro_profile import open_profile
 
@@ -2599,9 +2609,7 @@ def launch_options(
     set_into(config, 'voices:blockIfNotDefined', True)
 
     # Pass the humanize option, checked against the engines the build ships
-    for key, value in humanize_config(
-        humanize, _load_humanize_engines(executable_path), i_know_what_im_doing
-    ).items():
+    for key, value in humanize_config(humanize, _load_humanize_engines(executable_path)).items():
         set_into(config, key, value)
 
     # Enable the main world context creation

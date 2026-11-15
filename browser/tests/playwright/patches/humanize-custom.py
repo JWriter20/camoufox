@@ -19,10 +19,9 @@ What PASS means:
       adds no mousemove (Playwright's own move has no distance left), a fill
       types the text key by key, and an element out of view is brought in by
       the scroll function's wheel steps;
-    * custom() mouse beside the build's own scroll engine: the browser scrolls
-      the element into view with its engine and moves the cursor there with
-      mouse:internal (a path, not a jump), while no move from the custom mouse
-      is humanized a second time;
+    * custom() mouse and keyboard with scroll auto(): the browser plans no
+      input of its own, so no move from the custom mouse is humanized a second
+      time, and the scroll function is not called;
     * the same seed gives the same input; another seed does not;
     * the TypeScript launcher, given the same seed and functions, produces the
       same events (when it is built).
@@ -132,7 +131,7 @@ def reference_engines(log):
     return move, keys, scroll, planned
 
 
-async def custom_session(seed, humanize_extra=None, trace=None, nested=False):
+async def custom_session(seed, humanize_extra=None, trace=None):
     log = []
     move, keys, scroll, planned = reference_engines(log)
     humanize = {"mouse": custom(move), "keyboard": custom(keys), "scroll": custom(scroll), "seed": seed}
@@ -156,9 +155,6 @@ async def custom_session(seed, humanize_extra=None, trace=None, nested=False):
         await page.locator("#name").fill("Hi there")
         await page.keyboard.press("Tab")
         await page.locator("#far").click()
-        if nested:
-            # A scroller elsewhere on the page: the browser moves the cursor over it first.
-            await page.locator("#deep").click()
         state = await page.evaluate(
             "() => [document.querySelector('#name').value, Math.round(scrollY),"
             " (r => r.top >= 0 && r.bottom <= innerHeight)(document.querySelector('#far').getBoundingClientRect())]"
@@ -231,8 +227,7 @@ async def main() -> int:
         failures.append("an event was not trusted")
     if state[0] != "Hi there" or not state[2]:
         failures.append(f"expected the text typed and #far in view, got {state}")
-    # Every wheel call turns in whole notches, the custom engine's steps too, so
-    # where the two wheel turns leave the page decides whether #name needs a
+    # Where the two wheel turns leave the page decides whether #name needs a
     # scroll into view before the fill; #far always does.
     into_view = [entry for entry in log if entry[:2] == ["scroll", "locator"]]
     if [entry[0] for entry in log if entry not in into_view] != [
@@ -264,38 +259,32 @@ async def main() -> int:
         return [[e[0], e[5]] if e[0] == "wheel" else e[2:] for e in evs if e[0] != "mousemove"]
 
     log_b, events_b, _, _ = await custom_session(1234)
-    log_c, _, _, _ = await custom_session(1235)
+    _, events_c, _, _ = await custom_session(1235)
     same = replayed(events_b) == replayed(events)
+    differs = replayed(events_c) != replayed(events)
     print(f"seed 1234 again: identical engine calls and page events but moves: {same and log_b == log}; "
-          f"seed 1235 plans differently: {log_c != log}")
+          f"seed 1235 gives other page events: {differs}")
     if not same or log_b != log:
         failures.append("the same seed gave different input")
-    if log_c == log:
+    if not differs:
         failures.append("another seed gave the same input")
 
-    # Custom mouse beside the build's own scroll engine.
+    # Custom mouse and keyboard with scroll auto(): the browser plans nothing.
     with tempfile.TemporaryDirectory() as tmp:
         trace = os.path.join(tmp, "trace.jsonl")
-        log_s, events_s, state_s, _ = await custom_session(77, {"scroll": auto()}, trace, nested=True)
-        with open(trace) as f:
-            records = [json.loads(line) for line in f]
-    engines = sorted({(r["channel"], r["engine"]) for r in records})
-    internal = [r for r in records if r["channel"] == "mouse:internal"]
-    print(f"custom mouse + scroll auto(): browser plans {engines}; "
-          f"{len([e for e in events_s if e[0] == 'click'])} of 3 clicks landed; "
-          f"{len(internal)} mouse:internal moves {[(r['engine'], len(r['plan'])) for r in internal]}")
-    if any(channel == "mouse" for channel, _ in engines):
-        failures.append("the browser humanized a move the custom mouse had already planned")
+        log_s, events_s, _, _ = await custom_session(77, {"scroll": auto()}, trace)
+        records = []
+        if os.path.exists(trace):
+            with open(trace) as f:
+                records = [json.loads(line) for line in f]
     clicked = [e for e in events_s if e[0] == "click"]
-    if not any(channel == "scroll" for channel, _ in engines) or len(clicked) != 3:
-        failures.append(f"the build's scroll engine did not bring every target into view: {len(clicked)} clicks")
+    print(f"custom mouse + scroll auto(): the browser planned {len(records)} actions; {len(clicked)} of 2 clicks landed")
+    if records:
+        failures.append(f"the browser humanized input a custom engine had already planned: {records[:3]}")
+    if len(clicked) != 2:
+        failures.append(f"a target was not brought into view: {len(clicked)} of 2 clicks")
     if any(entry[0] == "scroll" for entry in log_s):
         failures.append("the custom scroll function ran although scroll was auto()")
-    # Only an engine that plans scrolling into view (not the base notches)
-    # moves the cursor over a scroller first.
-    into_view = any(r["channel"] == "scroll" and r["command"] == "Page.scrollIntoViewIfNeeded" for r in records)
-    if (into_view and not internal) or any(r["engine"] == "raw" or len(r["plan"]) < 2 for r in internal):
-        failures.append(f"a cursor move the browser originated was a jump: {internal}")
 
     # The TypeScript launcher: same seed, same functions, same events.
     ts = run_typescript(1234)

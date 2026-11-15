@@ -290,11 +290,6 @@ jobs:
         # patch guard.
         run: python3 browser/tests/ucrt-math/check.py
 
-      - name: Juggler input planners and pacing
-        # The humanize seam, its streams and pacer, and the base engines are
-        # plain ES modules, so they run under Node without a browser build.
-        run: node --test browser/tests/juggler/*.test.mjs
-
       - name: CI pipeline self-tests
         # These assert that the pipeline reports honestly: skips carry reasons,
         # shards partition exactly, and nothing identifying a sundial vector

@@ -2165,11 +2165,11 @@ export interface LaunchOptions {
 	geoip?: string | boolean;
 	/** Name of the GeoIP database to use (e.g. "GeoIP AIO by daijro"). */
 	geoip_db?: string;
-	/** Humanize mouse, keyboard and scroll input, per channel. `true` uses the
-	 * best engine the build offers on every channel; a number is the MAX
-	 * duration in seconds of a cursor movement; an object picks an engine per
-	 * channel with the factories in humanize.ts, e.g.
-	 * `{ mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 }`. */
+	/** Plan mouse, keyboard and scroll input, per channel. The browser delivers
+	 * input as the driver sends it; an object gives a channel a client-side
+	 * engine with `custom` from humanize.ts, e.g. `{ mouse: custom(fn), seed: 1234 }`.
+	 * `true`, a number and the in-browser engines (`cursory()`) work only on an
+	 * older build that lists them, and throw HumanizeEngineUnavailable on this one. */
 	humanize?: HumanizeSetting;
 	/** Locale(s) to use. The first listed locale is used for the Intl API. */
 	locale?: string | string[];
@@ -3193,11 +3193,7 @@ async function buildLaunchOptions(
 
 	// Pass the humanize option, checked against the engines the build ships
 	for (const [key, value] of Object.entries(
-		humanizeConfig(
-			humanize,
-			utilsDeps.loadHumanizeEngines(executable_path),
-			i_know_what_im_doing,
-		),
+		humanizeConfig(humanize, utilsDeps.loadHumanizeEngines(executable_path)),
 	)) {
 		setInto(config, key, value);
 	}

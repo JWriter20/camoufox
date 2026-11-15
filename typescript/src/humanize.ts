@@ -1,32 +1,32 @@
 /**
- * Per-channel humanized input: the engine factories and the launch-time config.
+ * Per-channel input planning: the engine factories and the launch-time config.
  * TypeScript twin of python/src/camoufox/humanize.py.
  *
- *     import { Camoufox, cursory, raw } from "camoufox";
- *     await Camoufox({ humanize: { mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 } });
+ *     import { Camoufox, custom } from "camoufox";
+ *     await Camoufox({ humanize: { mouse: custom(myMouse), seed: 1234 } });
  *
- * The browser intercepts the Juggler input commands Playwright already sends,
- * so the same Playwright script drives every build. Each channel (mouse,
- * keyboard, scroll) names the engine that plans its input. Which engines
- * exist, and which options each takes, is the build's humanize-engines.json
- * (docs/humanize.md); `engine(name, options)` names any of them. A factory
- * returns plain data, never behaviour.
+ * The browser delivers the input a driver sends as it was sent: it plans no
+ * cursor path, no typing and no scrolling. A channel (mouse, keyboard, scroll)
+ * is raw(), Playwright's own dispatch, or a client-side engine, `custom(fn)`:
+ * a function in this process plans the channel's input and plays it through
+ * Playwright's own input methods, with schedule pacing and a seeded stream
+ * (humanize-custom.ts).
  *
- * A channel may also run a client-side engine, `custom(fn)`: a function in this
- * process plans the channel's input and plays it through Playwright's own
- * input methods, with schedule pacing and a seeded stream (humanize-custom.ts).
- * The browser then runs that channel raw, so input is never humanized twice.
+ * A build from before that still plans input in the browser. Which engines it
+ * has, and which options each takes, is its humanize-engines.json
+ * (docs/humanize.md); `engine(name, options)` names any of them, and asking a
+ * build for an engine it does not list throws HumanizeEngineUnavailable. A
+ * factory returns plain data, never behaviour.
  *
  * `humanize` itself may also be:
  *
  *     undefined / false   every channel raw(): Playwright's own dispatch
- *     true                every channel auto()
+ *     true                every channel auto(): throws on a build with no engines
  *     a number            { mouse: cursory({ maxTime: <number> }) }, the rest auto()
  *     an object           per channel; an omitted channel is auto()
  */
 import { HumanizeEngineUnavailable } from "./exceptions.js";
 import { PyFloat, pyRepr, ValueError } from "./pycompat.js";
-import { LeakWarning } from "./warnings.js";
 
 export const CHANNELS = ["mouse", "keyboard", "scroll"] as const;
 export type Channel = (typeof CHANNELS)[number];
@@ -72,7 +72,6 @@ export type HumanizeManifest = Partial<Record<Channel, string[]>> & {
 		string,
 		{
 			module?: string;
-			movesCursor?: boolean;
 			options?: Record<string, OptionSpec>;
 		}
 	>;
@@ -110,7 +109,7 @@ export function engine(
 	return { engine: name, options };
 }
 
-/** The first engine the build lists for the channel that is available. */
+/** The first engine the build lists for the channel; raw() when it lists none. */
 export function auto(): Engine {
 	return engine("auto");
 }
@@ -120,8 +119,8 @@ export function raw(): Engine {
 	return engine("raw");
 }
 
-/** Mouse: replayed human cursor paths (Cursory), scaled into [minTime, maxTime]
- *  seconds. Defaults: 0 and 1.5. */
+/** Mouse, on a build that lists the engine: replayed human cursor paths
+ *  (Cursory), scaled into [minTime, maxTime] seconds. Defaults: 0 and 1.5. */
 export function cursory(
 	options: { maxTime?: number; minTime?: number } = {},
 ): Engine {
@@ -133,17 +132,10 @@ export function cursory(
 	);
 }
 
-/** Scroll: a wheel call arrives as native notches of 3 lines, tens of ms apart. */
-export function notches(): Engine {
-	return engine("notches");
-}
-
 /** A client-side engine: `fn` plans the channel's input in this process and
  *  plays it through Playwright. `original` runs Playwright's own behaviour for
- *  the call, `rng` is the channel's seeded stream (the browser's own
- *  derivation), and `play(steps)` dispatches steps on a schedule. Every
- *  wheel step turns in whole notches, as a physical wheel does: 100 px asked
- *  is one notch, rounded, at least one per step (docs/input-dispatch.md). */
+ *  the call, `rng` is the channel's seeded stream, and `play(steps)`
+ *  dispatches steps on a schedule. */
 export function custom(fn: CustomEngineFn): Engine {
 	if (typeof fn !== "function") {
 		throw new ValueError(
@@ -285,12 +277,12 @@ function optionKeys(
  * The camoucfg keys for a `humanize` setting on a build whose
  * humanize-engines.json is `manifest` (null for a build without one).
  *
- * Throws HumanizeEngineUnavailable for an engine the build does not ship.
+ * Throws HumanizeEngineUnavailable for an engine the build does not ship,
+ * and for `humanize: true` on a build that ships none.
  */
 export function humanizeConfig(
 	humanize: HumanizeSetting,
 	manifest: HumanizeManifest | null,
-	iKnowWhatImDoing?: boolean,
 ): Record<string, unknown> {
 	const { engines, seed } = normalize(humanize);
 	// A custom channel runs client-side, so the browser runs it raw.
@@ -311,12 +303,17 @@ export function humanizeConfig(
 		}
 	}
 
-	// A custom mouse leaves the browser's own cursor moves to mouse:internal.
-	if (
-		available.engines?.[names.scroll]?.movesCursor &&
-		engines.mouse.engine === "raw"
-	) {
-		LeakWarning.warn("humanize_scroll_teleports", iKnowWhatImDoing);
+	if (!CHANNELS.some((c) => c in available)) {
+		// The build plans no input and reads no humanize key.
+		if (humanize === true) {
+			throw new HumanizeEngineUnavailable(
+				"mouse",
+				"auto",
+				[],
+				"this build delivers input as the driver sends it; plan a channel with custom(fn)",
+			);
+		}
+		return {};
 	}
 
 	const options: Record<string, number> = {};
@@ -341,7 +338,8 @@ export function humanizeConfig(
 		Object.entries(options).map(([k, v]) => [k, new PyFloat(v)]),
 	);
 
-	const enabled = CHANNELS.some((c) => names[c] !== "raw");
+	// A channel the build has no engines for runs raw whatever it is set to.
+	const enabled = CHANNELS.some((c) => c in available && names[c] !== "raw");
 	if (legacy) {
 		const on = Object.fromEntries(
 			CHANNELS.map((c) => [c, available.auto?.[c]?.[0] ?? "raw"]),
@@ -371,12 +369,7 @@ export function humanizeConfig(
 	// Every key on every launch, so nothing depends on what an earlier launch set.
 	const config: Record<string, unknown> = { humanize: enabled };
 	for (const channel of CHANNELS)
-		config[`humanize:${channel}`] = names[channel];
-	if (engines.mouse.engine === "custom") {
-		// Moves the browser originates (the cursor move before a planned
-		// scroll) still get a humanized path, not a jump.
-		config["humanize:mouse:internal"] = "auto";
-	}
+		if (channel in available) config[`humanize:${channel}`] = names[channel];
 	Object.assign(config, floats);
 	if (seed !== undefined) {
 		// A string: Juggler reads config numbers as doubles, which cannot hold
@@ -399,9 +392,7 @@ export function customEngines(
 	);
 }
 
-// The seeded streams. The browser draws its engines' randomness from the same
-// derivation (browser/additions/juggler/input/HumanizeRng.js), so a custom engine gets
-// the stream a built-in engine on that channel would:
+// The seeded streams, one per channel (vectors: browser/tests/humanize/rng-vectors.json):
 //
 //   stream(channel) = Mulberry32(splitmix64(seed ^ TAG[channel]) & 0xffffffff)
 
@@ -422,7 +413,7 @@ export function splitmix64(x: bigint): bigint {
 }
 
 /** Mulberry32 over a 32-bit seed. Calling it returns a float in [0, 1), bit
- *  for bit what the browser's stream returns; `position` counts the draws. */
+ *  for bit what the Python launcher's stream returns; `position` counts the draws. */
 export interface SeededRng {
 	(): number;
 	random(): number;

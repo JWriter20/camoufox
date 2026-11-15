@@ -82,9 +82,9 @@ def main() -> int:
     if sum(lens) != STEPS:
         failures.append(f"pointermoves carry {sum(lens)} coalesced moves, {STEPS} were made")
     if len(moves) > STEPS * 0.7:
-        failures.append(f"{len(moves)} pointermoves for {STEPS} moves at 125 Hz: stock dispatches one per frame")
+        failures.append(f"{len(moves)} pointermoves for {STEPS} moves: stock dispatches one per frame")
     if sorted(lens)[len(lens) // 2] < 2:
-        failures.append(f"coalesced lengths {lens}: stock carries 2 to 4 per frame")
+        failures.append(f"coalesced lengths {lens}: stock carries several per frame")
     if not moves or moves[-1][1:] != [100 + STEPS * 5, 100 + STEPS * 2]:
         failures.append(f"the page's last move is {moves[-1] if moves else None} when move() returned")
     if last[1:] != [700, 500]:
