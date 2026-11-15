@@ -470,7 +470,7 @@ class ProSession:
 
     lease_id: str
     # The captcha solver the lease grants: `endpoint` is an OpenAI-compatible API
-    # base URL, called with your own captcha key (docs/pro.md). None when the
+    # base URL, called with your Camoufox Pro key (docs/pro.md). None when the
     # lease does not grant it.
     captcha: Optional[Dict[str, Any]]
 

@@ -416,6 +416,16 @@ class GpuUnavailable(ProError):
     """
 
 
+class UpdateRefused(ProError):
+    """
+    Raised when a newer Camoufox Pro release is published and what was served
+    for it is not the release the API signed. Nothing is installed.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="update_refused")
+
+
 class ProClockSkew(ProError):
     """
     Raised when this machine's clock is so far from the API's that a fresh lease

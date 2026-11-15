@@ -157,6 +157,8 @@ class FakeCloud:
         for route, queue in self.scripted.items():
             if re.fullmatch(route, path) and queue:
                 return queue.pop(0)
+        if method == "GET" and path.startswith("/api/v1/artifacts?"):
+            return 200, {"latest": None, "releases": []}
         if method == "GET" and path.startswith("/api/v1/gpus?"):
             return 200, {"os": parse_qs(urlparse(path).query)["os"][0], "firefox": "156.0.1", "renderers": self.renderers}
         if path == "/api/v1/leases":
