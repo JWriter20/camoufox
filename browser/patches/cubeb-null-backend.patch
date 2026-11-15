@@ -1,0 +1,317 @@
+diff --git a/media/libcubeb/src/cubeb.c b/media/libcubeb/src/cubeb.c
+--- a/media/libcubeb/src/cubeb.c
++++ b/media/libcubeb/src/cubeb.c
+@@ -88,6 +88,10 @@
+ int
+ kai_init(cubeb ** context, char const * context_name);
+ #endif
++#if defined(USE_NULL)
++int
++null_init(cubeb ** context, char const * context_name);
++#endif
+ 
+ static int
+ validate_stream_params(cubeb_stream_params * input_stream_params,
+@@ -215,6 +219,10 @@
+ #if defined(USE_KAI)
+       init_oneshot = kai_init;
+ #endif
++    } else if (!strcmp(backend_name, "null")) {
++#if defined(USE_NULL)
++      init_oneshot = null_init;
++#endif
+     } else {
+       /* Already set */
+     }
+@@ -271,6 +279,10 @@
+ #if defined(USE_KAI)
+       kai_init,
+ #endif
++#if defined(USE_NULL)
++      /* Last: only where no backend above found a sound server. */
++      null_init,
++#endif
+   };
+   int i;
+ 
+diff --git a/media/libcubeb/src/cubeb_null.c b/media/libcubeb/src/cubeb_null.c
+new file mode 100644
+--- /dev/null
++++ b/media/libcubeb/src/cubeb_null.c
+@@ -0,0 +1,260 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/* An output that plays to nothing, for a machine with no sound server. It is
++ * the last backend cubeb_init tries: a stream runs on its own thread at the
++ * rate of a real device, calling the data callback every 10 ms and throwing
++ * the samples away, so audio that is allowed to start starts, its clock runs
++ * and it reports a latency, as on a machine with a sound card. An input
++ * stream reads silence. */
++
++#include "cubeb-internal.h"
++#include "cubeb/cubeb.h"
++#include <pthread.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++#define NULL_PERIOD_MS 10
++
++static struct cubeb_ops const null_ops;
++
++struct cubeb {
++  struct cubeb_ops const * ops;
++};
++
++struct cubeb_stream {
++  /* Note: Must match cubeb_stream layout in cubeb.c. */
++  cubeb * context;
++  void * user_ptr;
++  cubeb_data_callback data_callback;
++  cubeb_state_callback state_callback;
++  uint32_t rate;
++  size_t in_frame_size;
++  size_t out_frame_size;
++  pthread_t thread;
++  pthread_mutex_t mutex; /* guards running and position */
++  int running;
++  uint64_t position;
++};
++
++static size_t
++null_frame_size(cubeb_stream_params * params)
++{
++  if (!params) {
++    return 0;
++  }
++  return params->channels * (params->format == CUBEB_SAMPLE_S16LE ||
++                                     params->format == CUBEB_SAMPLE_S16BE
++                                 ? sizeof(int16_t)
++                                 : sizeof(float));
++}
++
++static void *
++null_stream_run(void * arg)
++{
++  cubeb_stream * stm = arg;
++  long frames = stm->rate * NULL_PERIOD_MS / 1000;
++  void * in = stm->in_frame_size ? calloc(frames, stm->in_frame_size) : NULL;
++  void * out = stm->out_frame_size ? calloc(frames, stm->out_frame_size) : NULL;
++  struct timespec next;
++  clock_gettime(CLOCK_MONOTONIC, &next);
++
++  for (;;) {
++    pthread_mutex_lock(&stm->mutex);
++    int running = stm->running;
++    pthread_mutex_unlock(&stm->mutex);
++    if (!running) {
++      break;
++    }
++    long got = stm->data_callback(stm, stm->user_ptr, in, out, frames);
++    if (got < 0) {
++      stm->state_callback(stm, stm->user_ptr, CUBEB_STATE_ERROR);
++      break;
++    }
++    pthread_mutex_lock(&stm->mutex);
++    stm->position += got;
++    pthread_mutex_unlock(&stm->mutex);
++    if (got < frames) {
++      stm->state_callback(stm, stm->user_ptr, CUBEB_STATE_DRAINED);
++      break;
++    }
++    next.tv_nsec += NULL_PERIOD_MS * 1000000L;
++    if (next.tv_nsec >= 1000000000L) {
++      next.tv_nsec -= 1000000000L;
++      next.tv_sec += 1;
++    }
++    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
++  }
++  free(in);
++  free(out);
++  return NULL;
++}
++
++int
++null_init(cubeb ** context, char const * context_name)
++{
++  (void)context_name;
++  cubeb * ctx = calloc(1, sizeof(*ctx));
++  if (!ctx) {
++    return CUBEB_ERROR;
++  }
++  ctx->ops = &null_ops;
++  *context = ctx;
++  return CUBEB_OK;
++}
++
++static char const *
++null_get_backend_id(cubeb * context)
++{
++  (void)context;
++  return "null";
++}
++
++static int
++null_get_max_channel_count(cubeb * context, uint32_t * max_channels)
++{
++  (void)context;
++  *max_channels = 2;
++  return CUBEB_OK;
++}
++
++static int
++null_get_min_latency(cubeb * context, cubeb_stream_params params,
++                     uint32_t * latency_frames)
++{
++  (void)context;
++  *latency_frames = params.rate * NULL_PERIOD_MS / 1000;
++  return CUBEB_OK;
++}
++
++static int
++null_get_preferred_sample_rate(cubeb * context, uint32_t * rate)
++{
++  (void)context;
++  *rate = 48000;
++  return CUBEB_OK;
++}
++
++static void
++null_destroy(cubeb * context)
++{
++  free(context);
++}
++
++static int
++null_stream_init(cubeb * context, cubeb_stream ** stream,
++                 char const * stream_name, cubeb_devid input_device,
++                 cubeb_stream_params * input_stream_params,
++                 cubeb_devid output_device,
++                 cubeb_stream_params * output_stream_params,
++                 unsigned int latency, cubeb_data_callback data_callback,
++                 cubeb_state_callback state_callback, void * user_ptr)
++{
++  (void)stream_name;
++  (void)input_device;
++  (void)output_device;
++  (void)latency;
++  cubeb_stream * stm = calloc(1, sizeof(*stm));
++  if (!stm) {
++    return CUBEB_ERROR;
++  }
++  stm->context = context;
++  stm->user_ptr = user_ptr;
++  stm->data_callback = data_callback;
++  stm->state_callback = state_callback;
++  stm->rate = output_stream_params ? output_stream_params->rate
++                                   : input_stream_params->rate;
++  stm->in_frame_size = null_frame_size(input_stream_params);
++  stm->out_frame_size = null_frame_size(output_stream_params);
++  pthread_mutex_init(&stm->mutex, NULL);
++  *stream = stm;
++  return CUBEB_OK;
++}
++
++/* Ends the stream's thread, if it has one. Returns whether it had. */
++static int
++null_stream_join(cubeb_stream * stm)
++{
++  pthread_mutex_lock(&stm->mutex);
++  int was_running = stm->running;
++  stm->running = 0;
++  pthread_mutex_unlock(&stm->mutex);
++  if (was_running) {
++    pthread_join(stm->thread, NULL);
++  }
++  return was_running;
++}
++
++static int
++null_stream_stop(cubeb_stream * stm)
++{
++  if (null_stream_join(stm)) {
++    stm->state_callback(stm, stm->user_ptr, CUBEB_STATE_STOPPED);
++  }
++  return CUBEB_OK;
++}
++
++static void
++null_stream_destroy(cubeb_stream * stm)
++{
++  null_stream_join(stm);
++  pthread_mutex_destroy(&stm->mutex);
++  free(stm);
++}
++
++static int
++null_stream_start(cubeb_stream * stm)
++{
++  /* A stream that drained or failed left its thread to be joined. */
++  null_stream_join(stm);
++  stm->running = 1;
++  if (pthread_create(&stm->thread, NULL, null_stream_run, stm)) {
++    stm->running = 0;
++    return CUBEB_ERROR;
++  }
++  stm->state_callback(stm, stm->user_ptr, CUBEB_STATE_STARTED);
++  return CUBEB_OK;
++}
++
++static int
++null_stream_get_position(cubeb_stream * stm, uint64_t * position)
++{
++  pthread_mutex_lock(&stm->mutex);
++  *position = stm->position;
++  pthread_mutex_unlock(&stm->mutex);
++  return CUBEB_OK;
++}
++
++static int
++null_stream_get_latency(cubeb_stream * stm, uint32_t * latency_frames)
++{
++  *latency_frames = stm->rate * NULL_PERIOD_MS / 1000;
++  return CUBEB_OK;
++}
++
++static int
++null_stream_set_volume(cubeb_stream * stm, float volume)
++{
++  (void)stm;
++  (void)volume;
++  return CUBEB_OK;
++}
++
++static struct cubeb_ops const null_ops = {
++    .init = null_init,
++    .get_backend_id = null_get_backend_id,
++    .get_max_channel_count = null_get_max_channel_count,
++    .get_min_latency = null_get_min_latency,
++    .get_preferred_sample_rate = null_get_preferred_sample_rate,
++    .destroy = null_destroy,
++    .stream_init = null_stream_init,
++    .stream_destroy = null_stream_destroy,
++    .stream_start = null_stream_start,
++    .stream_stop = null_stream_stop,
++    .stream_get_position = null_stream_get_position,
++    .stream_get_latency = null_stream_get_latency,
++    .stream_get_input_latency = null_stream_get_latency,
++    .stream_set_volume = null_stream_set_volume,
++};
+diff --git a/media/libcubeb/src/moz.build b/media/libcubeb/src/moz.build
+--- a/media/libcubeb/src/moz.build
++++ b/media/libcubeb/src/moz.build
+@@ -41,6 +41,12 @@
+ if CONFIG['MOZ_PULSEAUDIO']:
+     DEFINES['USE_PULSE_RUST'] = True
+ 
++if CONFIG['OS_TARGET'] == 'Linux':
++    SOURCES += [
++        'cubeb_null.c',
++    ]
++    DEFINES['USE_NULL'] = True
++
+ if CONFIG['MOZ_JACK']:
+     SOURCES += [
+         'cubeb_jack.cpp',

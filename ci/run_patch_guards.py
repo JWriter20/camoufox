@@ -100,6 +100,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
     ),
     "parity": (
         "audio-output-latency-drawn",
+        "audio-runs-without-sound-server",
         "canvas-collection-bold-face",
         "certificate-revocations",
         "chrome-overlay-claimed-os",
