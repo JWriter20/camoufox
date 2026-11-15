@@ -1,0 +1,192 @@
+"""
+Camoufox Pro: launching the newest release.
+
+A Pro release is numbered: `159.0-pro.12` is the twelfth. When a launch points
+at a numbered Pro build and the Camoufox Pro API has published a release with a
+higher number for the same target, the launcher downloads that release, checks
+that it is the one the API signed, installs it in the camoufox cache and
+launches it in place of the build it was pointed at. The build the launch
+points at is never modified. See docs/pro.md.
+"""
+
+import base64
+import hashlib
+import mmap
+import re
+import shutil
+import stat
+import tempfile
+import time
+import zipfile
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import requests
+from platformdirs import user_cache_dir
+
+from . import pro
+from .exceptions import ProUnavailable, UpdateRefused
+
+RELEASE_NUMBER = re.compile(r"(?:^|[-+.])pro\.(\d+)$")
+# What the API signs of a release, and the domain it signs under.
+DOMAIN = b"cfp-artifact-v1\n"
+SIGNED_FIELDS = ("version", "target", "filename", "sha256", "size", "build_hash")
+# A Pro build carries the public keys it verifies its lease with. A release is signed with the same
+# keys, so the installed build is what says which signatures to believe.
+TRUSTED_KEYS = re.compile(rb"camoufox-pro-lease-trust-v1 keys=((?:[0-9a-f]+|-)(?:,(?:[0-9a-f]+|-))*) build=")
+ED25519_SPKI = bytes.fromhex("302a300506032b6570032100")
+LIBRARIES = ("libxul.so", "XUL", "xul.dll")
+# The release that launches and the one before it stay installed.
+KEPT = 2
+ABANDONED_S = 24 * 3600
+DOWNLOAD_TIMEOUT_S = 600
+
+
+def release_number(version: str) -> Optional[int]:
+    """The `<n>` of a version ending `pro.<n>`; None for a build that is not a numbered release."""
+    match = RELEASE_NUMBER.search(version)
+    return int(match.group(1)) if match else None
+
+
+def store() -> Path:
+    return Path(user_cache_dir("camoufox")) / "pro" / "browsers"
+
+
+def trusted_keys(executable: Path) -> Dict[int, bytes]:
+    """The Ed25519 public keys the build beside `executable` trusts, by key id."""
+    for name in LIBRARIES:
+        library = executable.parent / name
+        if not library.is_file():
+            continue
+        with open(library, "rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as image:
+            found = TRUSTED_KEYS.search(image)
+            named = found.group(1) if found else None
+        if named:
+            slots = [bytes.fromhex(slot.decode()) if slot != b"-" else b"" for slot in named.split(b",")]
+            return {
+                kid: slot[len(ED25519_SPKI) :] for kid, slot in enumerate(slots) if slot.startswith(ED25519_SPKI)
+            }
+    raise UpdateRefused(f"The Pro build at {executable.parent} names no signing key, so no release can be checked.")
+
+
+def _verify(artifact: Dict[str, Any], keys: Dict[int, bytes]) -> None:
+    try:
+        from nacl.exceptions import BadSignatureError
+        from nacl.signing import VerifyKey
+    except ImportError as error:  # pragma: no cover - the message is the point
+        raise ImportError('Updating a Camoufox Pro build needs the pro extra: pip install "camoufox[pro]"') from error
+
+    signature = artifact.get("signature") or {}
+    kid = signature.get("kid")
+    key = keys.get(kid) if isinstance(kid, int) else None
+    if key is None:
+        raise UpdateRefused(f"The release is signed by key {kid!r}, which this build does not trust.")
+    text = str(signature.get("ed25519", ""))
+    try:
+        message = DOMAIN + "\n".join(str(artifact[name]) for name in SIGNED_FIELDS).encode()
+        VerifyKey(key).verify(message, base64.urlsafe_b64decode(text + "=" * (-len(text) % 4)))
+    except (BadSignatureError, ValueError, KeyError):
+        raise UpdateRefused("The release's signature does not verify.") from None
+
+
+def _download(artifact: Dict[str, Any], archive: Path) -> None:
+    url = str(artifact["url"])
+    if not url.startswith("https://"):
+        raise UpdateRefused("The release's download is not an https URL.")
+    digest = hashlib.sha256()
+    try:
+        with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT_S) as response, open(archive, "wb") as out:
+            response.raise_for_status()
+            for chunk in response.iter_content(1 << 20):
+                digest.update(chunk)
+                out.write(chunk)
+    except requests.RequestException as error:
+        raise ProUnavailable(f"The Camoufox Pro release could not be downloaded: {error}") from None
+    if archive.stat().st_size != int(artifact["size"]) or digest.hexdigest() != artifact["sha256"]:
+        raise UpdateRefused("The download is not the release the API signed.")
+
+
+def _unpack(archive: Path, directory: Path) -> None:
+    with zipfile.ZipFile(archive) as release:
+        for entry in release.infolist():
+            if not (directory / entry.filename).resolve().is_relative_to(directory.resolve()):
+                raise UpdateRefused(f"The release archive writes outside its directory: {entry.filename}")
+            if stat.S_ISLNK(entry.external_attr >> 16):
+                raise UpdateRefused(f"The release archive holds a symbolic link: {entry.filename}")
+        release.extractall(directory)  # nosec - every entry was checked above
+        for entry in release.infolist():
+            if (entry.external_attr >> 16) & 0o111:
+                (directory / entry.filename).chmod((entry.external_attr >> 16) & 0o777)
+
+
+def _install(artifact: Dict[str, Any], installed: Path) -> None:
+    """Download, check and unpack the release into `installed`, which appears whole or not at all."""
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    partial = Path(tempfile.mkdtemp(prefix=".", dir=installed.parent))
+    try:
+        archive = partial.with_name(partial.name + ".zip")
+        try:
+            _download(artifact, archive)
+            _unpack(archive, partial)
+        finally:
+            archive.unlink(missing_ok=True)
+        try:
+            partial.rename(installed)
+        except OSError:
+            # Another launch installed the same release first.
+            if not installed.is_dir():
+                raise
+    finally:
+        shutil.rmtree(partial, ignore_errors=True)
+
+
+def _prune(browsers: Path) -> None:
+    releases = sorted(
+        (entry for entry in browsers.iterdir() if entry.is_dir() and release_number(entry.name) is not None),
+        key=lambda entry: release_number(entry.name) or 0,
+    )
+    # An install that was killed half way leaves its directory behind.
+    abandoned = [
+        entry
+        for entry in browsers.iterdir()
+        if entry.name.startswith(".") and time.time() - entry.stat().st_mtime > ABANDONED_S
+    ]
+    for old in releases[:-KEPT] + abandoned:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def newest(build: pro.ProBuild, executable: str, key: Optional[str] = None) -> str:
+    """
+    The executable to launch for a launch pointed at `executable`, whose build is `build`: itself,
+    or the same file of a newer release of its target, installed first if it is not yet.
+    """
+    mine = release_number(build.version)
+    if mine is None:
+        return executable
+    key = pro.resolve_key(key)
+    base = pro.api_base(build)
+    latest = (pro.call("GET", f"/api/v1/artifacts?target={build.target}", key=key, base=base).get("latest") or {}).get(
+        "version"
+    )
+    theirs = release_number(str(latest or ""))
+    if theirs is None or theirs <= mine:
+        return executable
+    installed = store() / str(latest)
+    if installed.parent != store():
+        raise UpdateRefused(f"The API names a release that is not a version: {latest!r}")
+    if not installed.is_dir():
+        keys = trusted_keys(Path(executable))
+        artifact = pro.call("GET", f"/api/v1/artifacts/{latest}/{build.target}", key=key, base=base)
+        _verify(artifact, keys)
+        if (artifact["version"], artifact["target"]) != (latest, build.target):
+            raise UpdateRefused(
+                f"Asked for {latest} for {build.target}; the signed answer is "
+                f"{artifact['version']} for {artifact['target']}."
+            )
+        pro.log.info("Camoufox Pro %s is installed; downloading %s.", build.version, latest)
+        _install(artifact, installed)
+        _prune(store())
+    newer = installed / Path(executable).name
+    if not newer.is_file():
+        raise UpdateRefused(f"Camoufox Pro {latest} has no {newer.name}.")
+    return str(newer)

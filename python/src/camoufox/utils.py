@@ -1913,7 +1913,8 @@ def launch_options(
     # What the lease adds to the environment, after every launch rule.
     pro_env: Dict[str, str] = {}
 
-    if profile is not None and pro_build is not None:
+    profiled = profile is not None and pro_build is not None
+    if profiled:
         if not isinstance(os, str):
             raise ValueError("A profile launch needs `os`: the one OS its identity presents.")
         check_valid_os(os)
@@ -1927,6 +1928,15 @@ def launch_options(
                 "A profile carries its own identity and browser state: pass no config, fingerprint, "
                 "fingerprint_preset or user_data_dir with it."
             )
+    if leased:
+        # A newer release of the same target, when one is published, is the build that launches.
+        from .pro_update import newest
+
+        newer = newest(pro_build, browser_binary, pro_key)
+        if newer != browser_binary:
+            executable_path, browser_binary = Path(newer), newer
+            pro_build = pro.read_build(build_file(browser_binary, "pro-build.json"))
+    if profiled:
         _HELD.lease = pro.acquire(pro_build, _OS_CODE[os], pro_key, pro_request)
         from .pro_profile import open_profile
 

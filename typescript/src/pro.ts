@@ -1126,7 +1126,7 @@ export interface ProSession {
 	leaseId: string;
 	/**
 	 * The captcha solver the lease grants: `endpoint` is an OpenAI-compatible
-	 * API base URL, called with your own captcha key (docs/pro.md). null when
+	 * API base URL, called with your Camoufox Pro key (docs/pro.md). null when
 	 * the lease does not grant it.
 	 */
 	captcha: { endpoint: string; remaining: number; expires_at?: string } | null;
