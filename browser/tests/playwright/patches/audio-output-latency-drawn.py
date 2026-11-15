@@ -1,29 +1,44 @@
 """
 AudioContext.outputLatency follows the identity's output device, as stock's does.
 
-Stock Firefox reads 0 for a context's outputLatency until its output stream has
-opened (cubeb_stream_get_latency fails before then and a 0 is not cached), then
-the device's stream latency, in whole frames at the context's rate, cached for
-the graph's life. Stock 158 on win-i9 (cfparity av.contexts): 0 when read as the
-context is made (identity.html), positive 200 ms later at every rate from 3000
-to 768000 Hz, baseLatency 0. Camoufox answered AudioContext:outputLatency from
-the moment the context was made, and the cross-OS gate pinned it to that first
-read, 0, so every later read stayed 0 (av.contexts/*/outputLatency, 9 keys).
+Stock Firefox asks the graph's current driver: an AudioCallbackDriver whose cubeb
+stream is open answers the device's stream latency, in whole frames at the
+context's rate, and the first non-zero answer is cached for the graph's life;
+anything else (no stream yet, or a graph that switched to its SystemClockDriver
+because none of its tracks is running) answers 0, uncached. So a context reads
+0 as it is made, the latency once it runs, 0 for good if the autoplay policy
+holds it (its graph opens the stream, then drops it within milliseconds as no
+track runs), and 0 if it was suspended before anything read it. Stock 159 on
+win-i9, 3 launches each: with no user activation, a context read once 200 ms
+after it was made reads 0, as do 34 of 36 read once 10-500 ms after (two
+reads at 40 ms caught the window and got 0.022; cfparity av.contexts, read at
+200 ms, is 0 at every rate); with autoplay allowed, 0 until the stream opens (60-200
+ms), then positive; ran, then suspended unread: 0; read while running, then
+suspended: keeps the value.
 
-audio-context-spoofing.patch now answers through the graph: 0 until
-AudioContext:outputLatencyDelayMs after the graph started, then the drawn
-latency as stock Windows reports it (win-i9, 10 launches: 0.022 s device,
-floor(latency * rate) frames, at least 128, truncated to 100 ns). The launcher draws the latency per
-identity and the delay per launch from audio-output-latency.json.
+audio-context-spoofing.patch answers through the same query: the drawn latency,
+as stock Windows reports it (win-i9: 0.022 s device, floor(latency * rate)
+frames, at least 128, truncated to 100 ns), only where stock would answer, i.e.
+while the host's own stream is open, and not before
+AudioContext:outputLatencyDelayMs after the graph was made. It used to answer
+once the delay passed whatever the driver, so held and suspended contexts read
+the drawn latency where stock reads 0 (av.contexts/*/outputLatency, 9 keys).
+The launcher draws the latency per identity and the delay per launch from
+audio-output-latency.json.
 
 Checks:
   * the launcher: a Windows identity on a non-Windows host gets a latency from
     the table, fresh identities get different ones, a caller's value is kept,
     and an identity of the host's own OS gets none;
-  * the browser, for two latencies at 3000, 8000, 32768, 44100 and 48000 Hz:
-    0 as the context is made, the latency in stock's frames and 100 ns ticks
-    250 ms later, baseLatency 0, and
-    getOutputTimestamp().contextTime == max(0, currentTime - outputLatency).
+  * the browser, for two latencies: contexts made before any user activation
+    (22050, 96000 Hz) are suspended and read 0, as made and 250 ms later;
+    after a click, contexts at 3000, 8000, 32768, 44100 and 48000 Hz read 0 as
+    made, the latency in stock's frames and 100 ns ticks 250 ms after they
+    run, baseLatency 0, and
+    getOutputTimestamp().contextTime == max(0, currentTime - outputLatency);
+    a context that ran and was suspended unread reads 0, and one read while
+    running keeps that value once suspended. The host needs an audio output
+    device (CI starts a PulseAudio null sink).
 
     python browser/tests/playwright/patches/audio-output-latency-drawn.py
 """
@@ -35,17 +50,50 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import resolve_binary  # noqa: E402
 
+# Running contexts; the blocked and suspended cases use rates of their own, so
+# no context shares a graph (one per rate) with another case's.
 RATES = [3000, 8000, 32768, 44100, 48000]
-PROBE = """async (rates) => {
+BLOCKED_RATES = [22050, 96000]
+SUSPENDED_UNREAD, SUSPENDED_READ = 16000, 24000
+PROBE = """async ({rates, blockedRates, unread, read, phase}) => {
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+  const running = async (c) => {
+    for (let i = 0; i < 400 && c.state !== 'running'; i++) await sleep(5);
+    return c.state;
+  };
   const out = {};
+  if (phase === 'blocked') {
+    for (const rate of blockedRates) {
+      const c = new AudioContext({ sampleRate: rate });
+      const r = { atCreate: c.outputLatency };
+      await sleep(250);
+      r.later = c.outputLatency;
+      r.state = c.state;
+      await c.close();
+      out[rate] = r;
+    }
+    return out;
+  }
   for (const rate of rates) {
     const c = new AudioContext({ sampleRate: rate });
     const r = { atCreate: c.outputLatency, baseLatency: c.baseLatency };
-    await new Promise((res) => setTimeout(res, 250));
+    r.state = await running(c);
+    await sleep(250);
     r.later = c.outputLatency;
     const ts = c.getOutputTimestamp();
     r.tsGap = c.currentTime - r.later - ts.contextTime;
     r.currentTime = c.currentTime;
+    await c.close();
+    out[rate] = r;
+  }
+  for (const [rate, readWhileRunning] of [[unread, false], [read, true]]) {
+    const c = new AudioContext({ sampleRate: rate });
+    const r = { state: await running(c) };
+    await sleep(250);
+    if (readWhileRunning) r.running = c.outputLatency;
+    await c.suspend();
+    await sleep(250);
+    r.suspended = c.outputLatency;
     await c.close();
     out[rate] = r;
   }
@@ -99,26 +147,51 @@ def check_browser(latency: float) -> list:
 
     errors = []
     config = {"AudioContext:outputLatency": latency, "AudioContext:outputLatencyDelayMs": 40.0}
+    args = {"rates": RATES, "blockedRates": BLOCKED_RATES, "unread": SUSPENDED_UNREAD, "read": SUSPENDED_READ}
     with Camoufox(executable_path=str(resolve_binary()), headless=True, os="windows", config=config,
                   i_know_what_im_doing=True) as browser:
         page = browser.new_page()
-        page.goto("about:blank")
-        got = page.evaluate(PROBE, RATES)
-    print(f"  latency {latency}: {got}")
+        page.set_content('<button id="go">go</button>')
+        blocked = page.evaluate(PROBE, {**args, "phase": "blocked"})
+        # A trusted click is the user activation autoplay waits for.
+        page.click("#go")
+        got = page.evaluate(PROBE, {**args, "phase": "allowed"})
+    print(f"  latency {latency}: blocked {blocked}, allowed {got}")
+    for rate in BLOCKED_RATES:
+        r = blocked[str(rate)]
+        if r["state"] != "suspended":
+            errors.append(f"{rate} Hz: a context made before any user activation is {r['state']}, "
+                          "not suspended by the autoplay policy")
+        if r["atCreate"] != 0 or r["later"] != 0:
+            errors.append(f"{rate} Hz: a context the autoplay policy holds reads outputLatency "
+                          f"{r['atCreate']}, then {r['later']} 250 ms later; stock's graph has left "
+                          "its output stream by then, so both are 0")
     for rate in RATES:
         r = got[str(rate)]
         want = cubeb_rounded(latency, rate)
+        if r["state"] != "running":
+            errors.append(f"{rate} Hz: the context is {r['state']} 2 s after a user click; the host "
+                          "needs an audio output device (a PulseAudio null sink will do)")
+            continue
         if r["atCreate"] != 0:
             errors.append(f"{rate} Hz: outputLatency is {r['atCreate']} as the context is made; stock's is 0 "
                           "until the output stream opens")
         if abs(r["later"] - want) > 1e-12:
-            errors.append(f"{rate} Hz: outputLatency is {r['later']} 250 ms later, want {want} "
-                          f"({latency} s in stock's frames)")
+            errors.append(f"{rate} Hz: outputLatency is {r['later']} 250 ms after the context runs, want "
+                          f"{want} ({latency} s in stock's frames)")
         if r["baseLatency"] != 0:
             errors.append(f"{rate} Hz: baseLatency {r['baseLatency']}, stock's is 0")
         if r["currentTime"] > r["later"] and abs(r["tsGap"]) > 0.01:
             errors.append(f"{rate} Hz: getOutputTimestamp().contextTime is {r['tsGap']} s off "
                           "currentTime - outputLatency")
+    unread, read = got[str(SUSPENDED_UNREAD)], got[str(SUSPENDED_READ)]
+    if unread["suspended"] != 0:
+        errors.append(f"a context that ran, was never read and was then suspended reads {unread['suspended']}; "
+                      "stock's reads 0 once its graph is off the output stream")
+    want = cubeb_rounded(latency, SUSPENDED_READ)
+    if abs(read.get("running", 0) - want) > 1e-12 or abs(read["suspended"] - want) > 1e-12:
+        errors.append(f"a context read while running ({read.get('running')}) then suspended reads "
+                      f"{read['suspended']}; stock's keeps the first non-zero read, {want}")
     return errors
 
 
@@ -130,7 +203,7 @@ def main() -> int:
         print(f"FAIL: {e}")
     if errors:
         return 1
-    print("PASS: outputLatency is 0 until the stream opens, then the drawn device latency in whole frames")
+    print("PASS: outputLatency is the drawn device latency in whole frames while the output stream is open, else 0")
     return 0
 
 
