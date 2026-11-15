@@ -238,9 +238,9 @@ def decode_manifest(data: bytes, profile_id: str, version: int) -> Dict[str, Any
     return document
 
 
-# ── which files travel (state policy sp/2) ───────────────────────────────────
+# ── which files travel (state policy sp/3) ───────────────────────────────────
 
-POLICY_VERSION = "sp/2"
+POLICY_VERSION = "sp/3"
 HARD_CAP = 1 << 30
 _DEFAULT_RULE_MAX = 1 << 20
 # Files the launcher writes into every profile itself.
@@ -261,6 +261,9 @@ _INCLUDED_FILES = frozenset({
     "signedInUser.json",
 })  # fmt: skip
 _INCLUDED_TREES = ("storage/default", "storage/permanent", "sessionstore-backups", "extensions", "extension-store")
+# A Windows profile's font cache and its warm marker (sp/3), so a profile that drew warm keeps drawing warm.
+# Not the files beside them, which every launch remakes.
+_INCLUDED_FONTCACHE = ("fontcache/cache/FontCache-*.dat", "fontcache/cache/.holo-warmed")
 _EXCLUDED_ROOT_DIRS = (
     "cache2", "startupCache", "thumbnails", "shader-cache", "jumpListCache", "OfflineCache", "gmp*",
     "safebrowsing", "remote-settings", "settings", "security_state",
@@ -331,6 +334,8 @@ def file_included(relpath: str, size: int) -> bool:
     if _file_excluded(relpath):
         return False
     if relpath in _INCLUDED_FILES or any(relpath.startswith(tree + "/") for tree in _INCLUDED_TREES):
+        return True
+    if _matches(relpath, _INCLUDED_FONTCACHE):
         return True
     return "/" not in relpath and size < _DEFAULT_RULE_MAX
 
