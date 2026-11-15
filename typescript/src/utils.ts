@@ -3185,11 +3185,7 @@ async function buildLaunchOptions(
 
 	// Pass the humanize option, checked against the engines the build ships
 	for (const [key, value] of Object.entries(
-		humanizeConfig(
-			humanize,
-			utilsDeps.loadHumanizeEngines(executable_path),
-			i_know_what_im_doing,
-		),
+		humanizeConfig(humanize, utilsDeps.loadHumanizeEngines(executable_path)),
 	)) {
 		setInto(config, key, value);
 	}

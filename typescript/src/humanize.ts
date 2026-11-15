@@ -9,8 +9,9 @@
  * so the same Playwright script drives every build. Each channel (mouse,
  * keyboard, scroll) names the engine that plans its input. Which engines
  * exist, and which options each takes, is the build's humanize-engines.json
- * (docs/humanize.md); `engine(name, options)` names any of them. A factory
- * returns plain data, never behaviour.
+ * (docs/humanize.md); `engine(name, options)` names any of them. The browser
+ * plans the mouse channel only: keyboard and scroll take raw(), auto() (raw)
+ * or custom(fn). A factory returns plain data, never behaviour.
  *
  * A channel may also run a client-side engine, `custom(fn)`: a function in this
  * process plans the channel's input and plays it through Playwright's own
@@ -26,7 +27,6 @@
  */
 import { HumanizeEngineUnavailable } from "./exceptions.js";
 import { PyFloat, pyRepr, ValueError } from "./pycompat.js";
-import { LeakWarning } from "./warnings.js";
 
 export const CHANNELS = ["mouse", "keyboard", "scroll"] as const;
 export type Channel = (typeof CHANNELS)[number];
@@ -72,7 +72,6 @@ export type HumanizeManifest = Partial<Record<Channel, string[]>> & {
 		string,
 		{
 			module?: string;
-			movesCursor?: boolean;
 			options?: Record<string, OptionSpec>;
 		}
 	>;
@@ -131,11 +130,6 @@ export function cursory(
 			Object.entries(options).filter(([, v]) => v !== undefined && v !== null),
 		) as Record<string, number>,
 	);
-}
-
-/** Scroll: a wheel call arrives as native notches of 3 lines, tens of ms apart. */
-export function notches(): Engine {
-	return engine("notches");
 }
 
 /** A client-side engine: `fn` plans the channel's input in this process and
@@ -290,7 +284,6 @@ function optionKeys(
 export function humanizeConfig(
 	humanize: HumanizeSetting,
 	manifest: HumanizeManifest | null,
-	iKnowWhatImDoing?: boolean,
 ): Record<string, unknown> {
 	const { engines, seed } = normalize(humanize);
 	// A custom channel runs client-side, so the browser runs it raw.
@@ -309,14 +302,6 @@ export function humanizeConfig(
 		if (name !== "auto" && name !== "raw" && !listed.includes(name)) {
 			throw new HumanizeEngineUnavailable(channel, name, listed);
 		}
-	}
-
-	// A custom mouse leaves the browser's own cursor moves to mouse:internal.
-	if (
-		available.engines?.[names.scroll]?.movesCursor &&
-		engines.mouse.engine === "raw"
-	) {
-		LeakWarning.warn("humanize_scroll_teleports", iKnowWhatImDoing);
 	}
 
 	const options: Record<string, number> = {};
@@ -341,7 +326,8 @@ export function humanizeConfig(
 		Object.entries(options).map(([k, v]) => [k, new PyFloat(v)]),
 	);
 
-	const enabled = CHANNELS.some((c) => names[c] !== "raw");
+	// A channel the build has no engines for runs raw whatever it is set to.
+	const enabled = CHANNELS.some((c) => c in available && names[c] !== "raw");
 	if (legacy) {
 		const on = Object.fromEntries(
 			CHANNELS.map((c) => [c, available.auto?.[c]?.[0] ?? "raw"]),
@@ -371,12 +357,7 @@ export function humanizeConfig(
 	// Every key on every launch, so nothing depends on what an earlier launch set.
 	const config: Record<string, unknown> = { humanize: enabled };
 	for (const channel of CHANNELS)
-		config[`humanize:${channel}`] = names[channel];
-	if (engines.mouse.engine === "custom") {
-		// Moves the browser originates (the cursor move before a planned
-		// scroll) still get a humanized path, not a jump.
-		config["humanize:mouse:internal"] = "auto";
-	}
+		if (channel in available) config[`humanize:${channel}`] = names[channel];
 	Object.assign(config, floats);
 	if (seed !== undefined) {
 		// A string: Juggler reads config numbers as doubles, which cannot hold

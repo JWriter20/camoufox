@@ -5,33 +5,27 @@
 "use strict";
 
 /**
- * The humanize engine seam: which engine handles an input action, and how its
- * plan is played.
+ * The humanize engine seam: which engine moves the cursor, and how its plan is
+ * played.
  *
- * Humanization intercepts the stock Juggler input commands Playwright already
- * sends, so the same Playwright script drives every build. Each command site in
- * PageHandler asks the seam for a plan; `null` means the stock dispatch runs.
- * The seam owns everything that is not modelling: engine resolution per
- * channel, the seeded streams (HumanizeRng.js), the time budget, pacing
- * (Pacer.js) and the trace. An engine is a pure planner:
+ * Humanization intercepts the stock Juggler mouse command Playwright already
+ * sends, so the same Playwright script drives every build. PageHandler asks
+ * the seam for a plan; `null` means the stock dispatch runs. The seam owns
+ * everything that is not modelling: engine resolution, the seeded streams
+ * (HumanizeRng.js), the time budget, pacing (Pacer.js) and the trace. An
+ * engine is a pure planner:
  *
  *   planMove(ctx, to)                  Page.dispatchMouseEvent mousemove
- *   planWheel(ctx, at, delta)          Page.dispatchWheelEvent
- *   planIntoView(ctx, probe)           Page.scrollIntoViewIfNeeded, in rounds
- *   planKey(ctx, keyEvent)             Page.dispatchKeyEvent
- *   planInsert(ctx, text)              Page.insertText
  *
- * Each returns `{steps, endState}` or `null` to decline. A planIntoView plan
- * that ends in a `probe` step asks for another round with a fresh probe. Steps carry `t`, ms
+ * It returns `{steps, endState}` or `null` to decline. Steps carry `t`, ms
  * from the start of the action, non-decreasing; a planner uses no randomness
  * but `ctx.rng` and reads no clock: `ctx.now` is the time the action was
  * planned at, for engines that pace against earlier actions. An engine may
- * implement any subset, and may also define `available(channel)` (false: not
- * usable on that channel right now) and `budgetMs(options)` (its own time
- * budget).
+ * also define `available(channel)` (false: not usable right now) and
+ * `budgetMs(options)` (its own time budget).
  *
  * Which engines exist is the build's humanize-engines.json (docs/humanize.md),
- * beside properties.json: the engines each channel may name, what `auto`
+ * beside properties.json: the engines the mouse channel may name, what `auto`
  * tries in order, and per engine the module that exports it and the config
  * keys its options arrive in. Nothing here names an engine.
  */
@@ -43,17 +37,14 @@ const kManifestName = 'humanize-engines.json';
 
 const kChannelKeys = {
   'mouse': 'humanize:mouse',
-  'mouse:internal': 'humanize:mouse:internal',
-  'keyboard': 'humanize:keyboard',
-  'scroll': 'humanize:scroll',
 };
 
 const kDefaultBudgetSeconds = 8;
 
 /**
  * Past this multiple of its budget, a plan whose acks are stalling
- * fast-forwards to its end state. Mouse and wheel plans hold the process-wide
- * activation slot while they play (kActivationSlotBudgetMs, 30s).
+ * fast-forwards to its end state. A mouse plan holds the process-wide
+ * activation slot while it plays (kActivationSlotBudgetMs, 30s).
  */
 const kDeadlineFactor = 1.5;
 
@@ -96,8 +87,6 @@ function randomSeed() {
   return crypto.getRandomValues(new BigUint64Array(1))[0];
 }
 
-const streamChannel = channel => (channel === 'mouse:internal' ? 'mouse' : channel);
-
 export class HumanizeSeam {
   /**
    * Everything the seam reads from the browser is injectable, so the Node unit
@@ -119,7 +108,7 @@ export class HumanizeSeam {
     const seedText = config.getString('humanize:seed');
     this._seed = seedText ? parseSeed(seedText) : randomSeed();
     // A separate stream for the delays between a person's input events, so
-    // click/hover timing does not shift a cursor or keyboard plan.
+    // click/hover timing does not shift a cursor plan.
     this._timing = channelStream(this._seed, 'timing');
   }
 
@@ -157,34 +146,30 @@ export class HumanizeSeam {
   }
 
   _usable(name, channel) {
-    return name === 'raw' || this._engine(name).available?.(streamChannel(channel)) !== false;
+    return name === 'raw' || this._engine(name).available?.(channel) !== false;
   }
 
   /** The last `auto` choice: what an unusable or failing engine falls back to. */
   _fallback(channel) {
-    return this.manifest.auto?.[streamChannel(channel)]?.at(-1) ?? 'raw';
+    return this.manifest.auto?.[channel]?.at(-1) ?? 'raw';
   }
 
   /**
-   * The engine name for `channel` (or `mouse:internal`) for the action about to
-   * run. Resolved per action, not per launch: an engine that stops being
+   * The engine name for `channel` for the action about to run. Resolved per action, not per launch: an engine that stops being
    * available falls back at the next action.
    */
   resolve(channel) {
     let name = this._config.getString(kChannelKeys[channel]);
-    if (!name) {
-      if (channel === 'mouse:internal')
-        return this.resolve('mouse');
-      // A launcher that predates the channel keys sends only `humanize`, which
-      // meant cursory mouse plus notched wheel: the base `auto`.
+    // A launcher that predates the channel keys sends only `humanize`, which
+    // meant the base `auto`.
+    if (!name)
       name = this._config.getBool('humanize', false) ? 'auto' : 'raw';
-    }
     if (name === 'raw')
       return name;
     if (name === 'auto')
-      return (this.manifest.auto?.[streamChannel(channel)] ?? []).find(n => this._usable(n, channel)) ?? 'raw';
-    if (!(this.manifest[streamChannel(channel)] ?? []).includes(name))
-      throw new Error(`${kChannelKeys[channel]} names "${name}", which ${kManifestName} does not list for ${streamChannel(channel)}`);
+      return (this.manifest.auto?.[channel] ?? []).find(n => this._usable(n, channel)) ?? 'raw';
+    if (!(this.manifest[channel] ?? []).includes(name))
+      throw new Error(`${kChannelKeys[channel]} names "${name}", which ${kManifestName} does not list for ${channel}`);
     if (!this._usable(name, channel)) {
       const fallback = this._fallback(channel);
       this._warnOnce('humanize_engine_unavailable', `${channel} runs ${fallback}: ${name} is not available`);
@@ -193,30 +178,11 @@ export class HumanizeSeam {
     return name;
   }
 
-  /**
-   * Whether `channel` has an engine other than `raw` for the next action. A
-   * command site checks this before gathering context that only an engine
-   * needs, such as what has focus.
-   */
-  active(channel) {
-    return this.resolve(channel) !== 'raw';
-  }
-
-  /**
-   * Whether the engine for `channel`'s next action implements `method`. A
-   * command site checks this before a round trip that only such an engine
-   * needs, such as the scroll probe.
-   */
-  handles(channel, method) {
-    const name = this.resolve(channel);
-    return name !== 'raw' && typeof this._engine(name)[method] === 'function';
-  }
-
   _stream(channel) {
-    let stream = this._streams.get(streamChannel(channel));
+    let stream = this._streams.get(channel);
     if (!stream) {
-      stream = channelStream(this._seed, streamChannel(channel));
-      this._streams.set(streamChannel(channel), stream);
+      stream = channelStream(this._seed, channel);
+      this._streams.set(channel, stream);
     }
     return stream;
   }
@@ -238,9 +204,9 @@ export class HumanizeSeam {
    * Plan one action. Returns null when the stock dispatch should run: the
    * channel is `raw`, or its engine does not handle this command, or declined.
    *
-   * @param {string} channel mouse | mouse:internal | keyboard | scroll
+   * @param {string} channel mouse
    * @param {string} method the engine method, e.g. 'planMove'
-   * @param {object} context per-page state: cursor, viewport, keyboardState
+   * @param {object} context per-page state: cursor, viewport
    * @param {...any} args the method's own arguments
    */
   plan(channel, method, context, ...args) {

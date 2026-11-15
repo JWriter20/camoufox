@@ -16,7 +16,6 @@ import math
 import os
 import re
 import time
-import warnings
 from pathlib import Path
 
 import pytest
@@ -105,38 +104,9 @@ def test_custom_channels_run_raw_in_the_browser():
     config = humanize_config(
         {"mouse": custom(noop), "keyboard": custom(noop), "scroll": auto(), "seed": 5}, BASE_MANIFEST
     )
-    assert config == {
-        "humanize": True,
-        "humanize:mouse": "raw",
-        "humanize:mouse:internal": "auto",
-        "humanize:keyboard": "raw",
-        "humanize:scroll": "auto",
-        "humanize:seed": "5",
-    }
-    # Only a custom mouse writes mouse:internal.
+    assert config == {"humanize": False, "humanize:mouse": "raw", "humanize:seed": "5"}
     config = humanize_config({"keyboard": custom(noop), "scroll": custom(noop)}, BASE_MANIFEST)
-    assert config == {
-        "humanize": True,
-        "humanize:mouse": "auto",
-        "humanize:keyboard": "raw",
-        "humanize:scroll": "raw",
-    }
-    # Every channel custom: the browser humanizes nothing itself.
-    config = humanize_config({c: custom(noop) for c in CHANNELS}, BASE_MANIFEST)
-    assert config["humanize"] is False and config["humanize:mouse:internal"] == "auto"
-
-
-def test_custom_mouse_does_not_teleport_a_cursor_moving_scroll():
-    manifest = {
-        **BASE_MANIFEST,
-        "scroll": [*BASE_MANIFEST["scroll"], "fancy"],
-        "engines": {**BASE_MANIFEST["engines"], "fancy": {"movesCursor": True}},
-    }
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        humanize_config({"mouse": custom(noop), "scroll": engine("fancy")}, manifest)
-    with pytest.warns(RuntimeWarning, match="single jump"):
-        humanize_config({"mouse": raw(), "scroll": engine("fancy")}, manifest)
+    assert config == {"humanize": True, "humanize:mouse": "auto"}
 
 
 def test_custom_on_a_build_without_the_manifest():

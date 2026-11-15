@@ -2590,9 +2590,7 @@ def launch_options(
     set_into(config, 'voices:blockIfNotDefined', True)
 
     # Pass the humanize option, checked against the engines the build ships
-    for key, value in humanize_config(
-        humanize, _load_humanize_engines(executable_path), i_know_what_im_doing
-    ).items():
+    for key, value in humanize_config(humanize, _load_humanize_engines(executable_path)).items():
         set_into(config, key, value)
 
     # Enable the main world context creation

@@ -295,7 +295,7 @@ and `from_options` (an object from `launchOptions()` to use as is).
 `launchServer()` also takes `port` and `ws_path`.
 
 `humanize` takes one engine per input channel, built with the factories the
-package exports (`auto`, `raw`, `cursory`, `notches`, and `engine(name,
+package exports (`auto`, `raw`, `cursory`, `custom`, and `engine(name,
 options)` for any engine a build lists in its `humanize-engines.json`), which
 take their options in camelCase:
 

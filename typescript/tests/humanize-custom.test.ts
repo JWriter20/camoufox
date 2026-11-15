@@ -126,14 +126,7 @@ describe("factory and config", () => {
 					BASE_MANIFEST,
 				),
 			),
-		).toEqual({
-			humanize: true,
-			"humanize:mouse": "raw",
-			"humanize:mouse:internal": "auto",
-			"humanize:keyboard": "raw",
-			"humanize:scroll": "auto",
-			"humanize:seed": "5",
-		});
+		).toEqual({ humanize: false, "humanize:mouse": "raw", "humanize:seed": "5" });
 		expect(
 			plain(
 				humanizeConfig(
@@ -141,18 +134,7 @@ describe("factory and config", () => {
 					BASE_MANIFEST,
 				),
 			),
-		).toEqual({
-			humanize: true,
-			"humanize:mouse": "auto",
-			"humanize:keyboard": "raw",
-			"humanize:scroll": "raw",
-		});
-		const all = humanizeConfig(
-			{ mouse: custom(noop), keyboard: custom(noop), scroll: custom(noop) },
-			BASE_MANIFEST,
-		);
-		expect(all.humanize).toBe(false);
-		expect(all["humanize:mouse:internal"]).toBe("auto");
+		).toEqual({ humanize: true, "humanize:mouse": "auto" });
 	});
 
 	it("a build without the manifest", () => {
