@@ -934,8 +934,9 @@ jobs:
         # windows-keyboard sends real X11 key events. libegl1: a display-less
         # headless launch probes Mesa through EGL (headless-software-webgl.patch).
         # This image has GLX for Xvfb but not libEGL or the software rasterizer.
-        # pulseaudio: audio-output-latency-drawn needs an output stream to open,
-        # and the runner has no sound device; a null sink is one.
+        # pulseaudio: audio-output-latency-drawn checks the latency over a real
+        # backend, and the runner has no sound device; a null sink is one.
+        # audio-runs-without-sound-server points away from it on purpose.
         run: |
           sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends xdotool x11-xkb-utils libegl1 libgles2 libgl1-mesa-dri pulseaudio pulseaudio-utils
           pulseaudio --start --exit-idle-time=-1
