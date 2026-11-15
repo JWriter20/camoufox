@@ -1,0 +1,406 @@
+diff --git a/widget/ClaimedWindowFrame.h b/widget/ClaimedWindowFrame.h
+new file mode 100644
+--- /dev/null
++++ b/widget/ClaimedWindowFrame.h
+@@ -0,0 +1,121 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++// Camoufox: the frame a Windows identity's window has, for the widgets that
++// stand in for a Windows one (GTK, and headless, which has no frame at all).
++// Windows Firefox draws its tabs in the titlebar, so a normal window's client
++// area runs to the top edge, and the window rect carries the invisible resize
++// border on the other three sides; a maximized window overhangs the work area
++// by that border on all four; fullscreen has none.
++
++#ifndef mozilla_widget_ClaimedWindowFrame_h
++#define mozilla_widget_ClaimedWindowFrame_h
++
++#include <cmath>
++#include <iterator>
++
++#include "MaskConfig.hpp"
++#include "nsIAppWindow.h"
++#include "nsIWebBrowserChrome.h"
++#include "nsIWidgetListener.h"
++
++namespace mozilla::widget {
++
++inline bool ClaimsWindowsFrame() {
++  return MaskConfig::GetSpoofedOS() == MaskConfig::SpoofedOS::Windows &&
++         MaskConfig::HostOS() != MaskConfig::SpoofedOS::Windows;
++}
++
++// The identity's devicePixelRatio is the DPI Windows scales its frame to.
++inline double ClaimedWindowsDpr() {
++  return MaskConfig::GetDouble("window.devicePixelRatio").value_or(1.0);
++}
++
++// The border is SM_CXFRAME + SM_CXPADDEDBORDER at the display's DPI, in device
++// pixels. Measured with stock Firefox: 8 at 96 DPI (dpr 1) and 16 at 240 DPI
++// (dpr 2.5, outerWidth - innerWidth = 12.8). Between those it follows 3 +
++// round(dpr) + round(4 * dpr), which reproduces both and the recorded
++// population's 7 CSS px at dpr 1.25, 1.5 and 2.
++inline int32_t WindowsResizeBorderDevicePixels(double aDpr) {
++  auto roundHalfUp = [](double v) { return int32_t(std::floor(v + 0.5)); };
++  return 3 + roundHalfUp(aDpr) + roundHalfUp(4 * aDpr);
++}
++
++// A window that does not draw in its titlebar (a pop-up) has Windows's
++// caption above the client area: SM_CYCAPTION,
++// the NONCLIENTMETRICS caption height (22 at 96 DPI) scaled to the DPI plus
++// one, so the client area starts this far below the resize border. With the
++// border, it reproduces within a device pixel what stock Firefox 158 on
++// Windows put above a window.open pop-up's toolbar at 100, 125, 150, 175, 200,
++// 225 and 250 % (31, 38, 45, 52, 58, 64 and 72 device px).
++inline int32_t WindowsCaptionDevicePixels(double aDpr) {
++  return int32_t(std::floor(22 * aDpr + 0.5)) + 1;
++}
++
++// Windows keeps a window at least SM_CXMINTRACK wide: the caption's buttons,
++// icon and borders. Stock Firefox 158 on Windows, a window.open pop-up asked
++// for 100 CSS px: 136, 166, 198, 231, 258, 291 and 325 device px wide at 100,
++// 125, 150, 175, 200, 225 and 250 %. It does not follow one rounding of the
++// DPI, so it is the measured values, linear between them.
++inline int32_t WindowsMinTrackWidthDevicePixels(double aDpr) {
++  static constexpr double kDpr[] = {1, 1.25, 1.5, 1.75, 2, 2.25, 2.5};
++  static constexpr double kWidth[] = {136, 166, 198, 231, 258, 291, 325};
++  constexpr size_t kLast = std::size(kDpr) - 1;
++  if (aDpr <= kDpr[0]) {
++    return int32_t(std::round(kWidth[0] * aDpr / kDpr[0]));
++  }
++  if (aDpr >= kDpr[kLast]) {
++    return int32_t(std::round(kWidth[kLast] * aDpr / kDpr[kLast]));
++  }
++  size_t i = 1;
++  while (kDpr[i] < aDpr) {
++    i++;
++  }
++  const double t = (aDpr - kDpr[i - 1]) / (kDpr[i] - kDpr[i - 1]);
++  return int32_t(std::round(kWidth[i - 1] + t * (kWidth[i] - kWidth[i - 1])));
++}
++
++// Whether the window was opened with a toolbar. Windows Firefox draws the
++// tabs of every such window in its titlebar, and not those of a pop-up opened
++// without one (TabBarVisibility: CustomTitlebar.allowedBy("non-popup")), which
++// keeps the system caption.
++inline bool WindowHasToolbar(nsIWidgetListener* aListener) {
++  nsIAppWindow* appWindow = aListener ? aListener->GetAppWindow() : nullptr;
++  uint32_t flags = 0;
++  return appWindow && NS_SUCCEEDED(appWindow->GetChromeFlags(&flags)) &&
++         (flags & nsIWebBrowserChrome::CHROME_TOOLBAR);
++}
++
++// The frame around the client area of a top-level window in aSizeMode, in the
++// widget's own units: aDevicePixelsPerUnit device pixels each.
++template <typename Margin>
++Margin ClaimedWindowsFrame(nsSizeMode aSizeMode, bool aCustomTitlebar,
++                           double aDevicePixelsPerUnit) {
++  if (aSizeMode == nsSizeMode_Fullscreen) {
++    return {};
++  }
++  const double dpr = ClaimedWindowsDpr();
++  const int32_t border = int32_t(
++      std::round(WindowsResizeBorderDevicePixels(dpr) / aDevicePixelsPerUnit));
++  if (aSizeMode == nsSizeMode_Maximized) {
++    return Margin(border, border, border, border);
++  }
++  if (!aCustomTitlebar) {
++    const int32_t caption = int32_t(
++        std::round(WindowsCaptionDevicePixels(dpr) / aDevicePixelsPerUnit));
++    return Margin(border + caption, border, border, border);
++  }
++  return Margin(0, border, border, border);
++}
++
++// The least width of a normal top-level window, in the same units.
++inline int32_t ClaimedWindowsMinWidth(double aDevicePixelsPerUnit) {
++  return int32_t(
++      std::round(WindowsMinTrackWidthDevicePixels(ClaimedWindowsDpr()) /
++                 aDevicePixelsPerUnit));
++}
++
++}  // namespace mozilla::widget
++
++#endif  // mozilla_widget_ClaimedWindowFrame_h
+diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
+--- a/widget/gtk/nsWindow.cpp
++++ b/widget/gtk/nsWindow.cpp
+@@ -3,9 +3,8 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "nsWindow.h"
++#include "ClaimedWindowFrame.h"
+ #include "MaskConfig.hpp"
+-#include "nsIAppWindow.h"
+-#include "nsIWebBrowserChrome.h"
+ #ifdef MOZ_X11
+ #  include "nsWindowX11.h"
+ #endif
+@@ -886,112 +885,34 @@
+   return GetGtkCSDEnv() == GtkCsd::One;
+ }
+ 
+-// Camoufox: the frame a Windows identity's window has. Windows Firefox draws
+-// its tabs in the titlebar, so a normal window's client area runs to the top
+-// edge, and the window rect carries the invisible resize border on the other
+-// three sides; a maximized window overhangs the work area by that border on
+-// all four; fullscreen has none. Without this, outerWidth/outerHeight,
+-// screenX/screenY and mozInnerScreenX/Y answered with this host's window
+-// manager decorations (openbox: a 1px border and an 8 CSS px titlebar).
++// Camoufox: the frame a Windows identity's window has (ClaimedWindowFrame.h).
++// Without this, outerWidth/outerHeight, screenX/screenY and
++// mozInnerScreenX/Y answered with this host's window manager decorations
++// (openbox: a 1px border and an 8 CSS px titlebar).
+ //
+-// The border is SM_CXFRAME + SM_CXPADDEDBORDER at the display's DPI, in device
+-// pixels, and the identity's devicePixelRatio is that DPI. Measured with
+-// stock Firefox: 8 at 96 DPI (dpr 1) and 16 at 240 DPI (dpr 2.5, win-i9,
+-// outerWidth - innerWidth = 12.8). Between those it follows 3 +
+-// round(dpr) + round(4 * dpr), which reproduces both and the recorded
+-// population's 7 CSS px at dpr 1.25, 1.5 and 2.
+-static int32_t WindowsResizeBorderDevicePixels(double aDpr) {
+-  auto roundHalfUp = [](double v) { return int32_t(std::floor(v + 0.5)); };
+-  return 3 + roundHalfUp(aDpr) + roundHalfUp(4 * aDpr);
+-}
+-
+-// A window that does not draw in its titlebar (a pop-up) has Windows's
+-// caption above the client area: SM_CYCAPTION,
+-// the NONCLIENTMETRICS caption height (22 at 96 DPI) scaled to the DPI plus
+-// one, so the client area starts this far below the resize border. With the
+-// border, it reproduces within a device pixel what stock Firefox 158 on win-i9
+-// put above a window.open pop-up's toolbar at 100, 125, 150, 175, 200, 225
+-// and 250 % (31, 38, 45, 52, 58, 64 and 72 device px).
+-static int32_t WindowsCaptionDevicePixels(double aDpr) {
+-  return int32_t(std::floor(22 * aDpr + 0.5)) + 1;
+-}
+-
+-// Whether Windows Firefox would draw this window's tabs in its titlebar. It
+-// does for every window with a toolbar, and not for a pop-up opened without
+-// one (TabBarVisibility: CustomTitlebar.allowedBy("non-popup")), which keeps
+-// the system caption. On this host the answer cannot come from
+-// mDrawInTitlebar: GTK only draws in the titlebar where client-side
+-// decorations are available, and a window manager without them (openbox)
+-// leaves every window with a system titlebar.
++// Whether Windows Firefox would draw this window's tabs in its titlebar
++// cannot come from mDrawInTitlebar alone on this host: GTK only draws in the
++// titlebar where client-side decorations are available, and a window manager
++// without them (openbox) leaves every window with a system titlebar.
+ bool nsWindow::ClaimsCustomTitlebar() const {
+-  if (mDrawInTitlebar) {
+-    return true;
+-  }
+-  nsIAppWindow* appWindow =
+-      mWidgetListener ? mWidgetListener->GetAppWindow() : nullptr;
+-  uint32_t flags = 0;
+-  return appWindow && NS_SUCCEEDED(appWindow->GetChromeFlags(&flags)) &&
+-         (flags & nsIWebBrowserChrome::CHROME_TOOLBAR);
+-}
+-
+-// Windows keeps a window at least SM_CXMINTRACK wide: the caption's buttons,
+-// icon and borders. Stock Firefox 158 on win-i9, a window.open pop-up asked
+-// for 100 CSS px: 136, 166, 198, 231, 258, 291 and 325 device px wide at 100,
+-// 125, 150, 175, 200, 225 and 250 %. It does not follow one rounding of the
+-// DPI, so it is the measured values, linear between them.
+-static int32_t WindowsMinTrackWidthDevicePixels(double aDpr) {
+-  static constexpr double kDpr[] = {1, 1.25, 1.5, 1.75, 2, 2.25, 2.5};
+-  static constexpr double kWidth[] = {136, 166, 198, 231, 258, 291, 325};
+-  constexpr size_t kLast = std::size(kDpr) - 1;
+-  if (aDpr <= kDpr[0]) {
+-    return int32_t(std::round(kWidth[0] * aDpr / kDpr[0]));
+-  }
+-  if (aDpr >= kDpr[kLast]) {
+-    return int32_t(std::round(kWidth[kLast] * aDpr / kDpr[kLast]));
+-  }
+-  size_t i = 1;
+-  while (kDpr[i] < aDpr) {
+-    i++;
+-  }
+-  const double t = (aDpr - kDpr[i - 1]) / (kDpr[i] - kDpr[i - 1]);
+-  return int32_t(std::round(kWidth[i - 1] + t * (kWidth[i] - kWidth[i - 1])));
++  return mDrawInTitlebar || widget::WindowHasToolbar(mWidgetListener);
+ }
+ 
+ int32_t nsWindow::ClaimedMinWidth() const {
+   if (!IsTopLevelWidget() || IsPopup() || mSizeMode != nsSizeMode_Normal ||
+-      MaskConfig::GetSpoofedOS() != MaskConfig::SpoofedOS::Windows ||
+-      MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows) {
++      !widget::ClaimsWindowsFrame()) {
+     return 0;
+   }
+-  const double dpr =
+-      MaskConfig::GetDouble("window.devicePixelRatio").value_or(1.0);
+-  return int32_t(std::round(WindowsMinTrackWidthDevicePixels(dpr) /
+-                            FractionalScaleFactor()));
++  return widget::ClaimedWindowsMinWidth(FractionalScaleFactor());
+ }
+ 
+ DesktopIntMargin nsWindow::ClaimedClientMargin(
+     const DesktopIntMargin& aNative) const {
+-  if (!IsTopLevelWidget() || IsPopup() ||
+-      MaskConfig::GetSpoofedOS() != MaskConfig::SpoofedOS::Windows ||
+-      MaskConfig::HostOS() == MaskConfig::SpoofedOS::Windows) {
++  if (!IsTopLevelWidget() || IsPopup() || !widget::ClaimsWindowsFrame()) {
+     return aNative;
+   }
+-  if (mSizeMode == nsSizeMode_Fullscreen) {
+-    return {};
+-  }
+-  const double dpr =
+-      MaskConfig::GetDouble("window.devicePixelRatio").value_or(1.0);
+-  const int32_t border = int32_t(std::round(
+-      WindowsResizeBorderDevicePixels(dpr) / FractionalScaleFactor()));
+-  if (mSizeMode == nsSizeMode_Maximized) {
+-    return DesktopIntMargin(border, border, border, border);
+-  }
+-  if (!ClaimsCustomTitlebar()) {
+-    const int32_t caption = int32_t(std::round(
+-        WindowsCaptionDevicePixels(dpr) / FractionalScaleFactor()));
+-    return DesktopIntMargin(border + caption, border, border, border);
+-  }
+-  return DesktopIntMargin(0, border, border, border);
++  return widget::ClaimedWindowsFrame<DesktopIntMargin>(
++      mSizeMode, ClaimsCustomTitlebar(), FractionalScaleFactor());
+ }
+ 
+ // Camoufox: stock Firefox on Windows reports a drag's end (the dragend
+diff --git a/widget/headless/HeadlessLookAndFeelGTK.cpp b/widget/headless/HeadlessLookAndFeelGTK.cpp
+--- a/widget/headless/HeadlessLookAndFeelGTK.cpp
++++ b/widget/headless/HeadlessLookAndFeelGTK.cpp
+@@ -128,7 +128,16 @@
+       aResult = 1;
+       break;
+     case IntID::GTKCSDAvailable:
+-      aResult = 0;
++      // Camoufox: no window manager draws a headless window a titlebar, so
++      // the browser draws its tabs in it, as it does in a real window on a
++      // desktop with client-side decorations and on Windows and macOS.
++      aResult = 1;
++      break;
++    case IntID::GTKThemeFamily:
++      // Camoufox: Adwaita, the theme GTK uses when the desktop sets none.
++      // With no theme family the toolbar draws a separator a real window
++      // does not, and a page reads an innerHeight a pixel shorter.
++      aResult = int32_t(StyleGtkThemeFamily::Adwaita);
+       break;
+     case IntID::GTKCSDMinimizeButton:
+       aResult = 0;
+diff --git a/widget/headless/HeadlessWidget.cpp b/widget/headless/HeadlessWidget.cpp
+--- a/widget/headless/HeadlessWidget.cpp
++++ b/widget/headless/HeadlessWidget.cpp
+@@ -4,6 +4,7 @@
+ #include "HeadlessWidget.h"
+ 
+ #include "BasicEvents.h"
++#include "ClaimedWindowFrame.h"
+ #include "ErrorList.h"
+ #include "HeadlessCompositorWidget.h"
+ #include "HeadlessKeyBindings.h"
+@@ -232,7 +233,32 @@
+   if (mWindowType == WindowType::Popup) {
+     return mBounds.TopLeft();
+   }
+-  return GetTopLevelWidget()->GetBounds().TopLeft();
++  return GetTopLevelWidget()->GetClientBounds().TopLeft();
++}
++
++// Camoufox: with no frame, a headless window's client area was its window
++// rect, so a page read outerWidth == innerWidth and mozInnerScreenX ==
++// screenX where the same identity in a real window reads the frame between
++// them. Only a Windows identity claims a frame, as in the GTK widget.
++LayoutDeviceIntMargin HeadlessWidget::ClientMargin(nsSizeMode aMode) const {
++  if ((mWindowType != WindowType::TopLevel &&
++       mWindowType != WindowType::Dialog) ||
++      !ClaimsWindowsFrame()) {
++    return {};
++  }
++  return ClaimedWindowsFrame<LayoutDeviceIntMargin>(
++      aMode, WindowHasToolbar(mWidgetListener), 1.0);
++}
++
++LayoutDeviceIntRect HeadlessWidget::GetClientBounds() {
++  LayoutDeviceIntRect client = mBounds;
++  client.Deflate(ClientMargin(mSizeMode));
++  return client;
++}
++
++LayoutDeviceIntPoint HeadlessWidget::GetClientOffset() {
++  const LayoutDeviceIntMargin margin = ClientMargin(mSizeMode);
++  return {margin.left, margin.top};
+ }
+ 
+ WindowRenderer* HeadlessWidget::GetWindowRenderer() {
+@@ -253,16 +279,24 @@
+ void HeadlessWidget::ResizeInternal(int32_t aWidth, int32_t aHeight,
+                                     bool aRepaint) {
+   ConstrainSize(&aWidth, &aHeight);
++  // Camoufox: Windows keeps a normal window at least SM_CXMINTRACK wide.
++  if (mSizeMode == nsSizeMode_Normal &&
++      (mWindowType == WindowType::TopLevel ||
++       mWindowType == WindowType::Dialog) &&
++      ClaimsWindowsFrame()) {
++    aWidth = std::max(aWidth, ClaimedWindowsMinWidth(1.0));
++  }
+   mBounds.SizeTo(LayoutDeviceIntSize(aWidth, aHeight));
+ 
++  const LayoutDeviceIntSize clientSize = GetClientSize();
+   if (mCompositorWidgetDelegate) {
+-    mCompositorWidgetDelegate->NotifyClientSizeChanged(mBounds.Size());
++    mCompositorWidgetDelegate->NotifyClientSizeChanged(clientSize);
+   }
+   if (mWidgetListener) {
+-    mWidgetListener->WindowResized(this, mBounds.Size());
++    mWidgetListener->WindowResized(this, clientSize);
+   }
+   if (mAttachedWidgetListener) {
+-    mAttachedWidgetListener->WindowResized(this, mBounds.Size());
++    mAttachedWidgetListener->WindowResized(this, clientSize);
+   }
+ }
+ 
+@@ -316,11 +350,15 @@
+     case nsSizeMode_Maximized: {
+       nsCOMPtr<nsIScreen> screen = GetWidgetScreen();
+       if (screen) {
++        // Camoufox: a maximized window fills the work area, its frame
++        // hanging over the edges, not the whole screen from its origin.
+         int32_t left, top, width, height;
+         if (NS_SUCCEEDED(
+-                screen->GetRectDisplayPix(&left, &top, &width, &height))) {
+-          MoveInternal(0, 0);
+-          ResizeInternal(width, height, true);
++                screen->GetAvailRectDisplayPix(&left, &top, &width, &height))) {
++          LayoutDeviceIntRect rect(left, top, width, height);
++          rect.Inflate(ClientMargin(nsSizeMode_Maximized));
++          MoveInternal(rect.x, rect.y);
++          ResizeInternal(rect.width, rect.height, true);
+         }
+       }
+       break;
+diff --git a/widget/headless/HeadlessWidget.h b/widget/headless/HeadlessWidget.h
+--- a/widget/headless/HeadlessWidget.h
++++ b/widget/headless/HeadlessWidget.h
+@@ -69,6 +69,11 @@
+   bool IsEnabled() const override;
+   void SetFocus(Raise, mozilla::dom::CallerType aCallerType) override;
+   LayoutDeviceIntRect GetBounds() override { return mBounds; }
++  LayoutDeviceIntRect GetClientBounds() override;
++  LayoutDeviceIntPoint GetClientOffset() override;
++  LayoutDeviceIntMargin NormalSizeModeClientToWindowMargin() override {
++    return ClientMargin(nsSizeMode_Normal);
++  }
+   void Invalidate(const LayoutDeviceIntRect& aRect) override {
+     // TODO: see if we need to do anything here.
+   }
+@@ -149,6 +154,10 @@
+   // across size mode changes, so we must track it to emulate.
+   LayoutDeviceIntRect mRestoreBounds;
+   LayoutDeviceIntRect mBounds;
++  // Camoufox: the frame between mBounds, the window rect, and the client
++  // area in a size mode. A headless window has none of its own, so it is the
++  // one the identity's OS gives a window (ClaimedWindowFrame.h).
++  LayoutDeviceIntMargin ClientMargin(nsSizeMode aMode) const;
+   void ApplySizeModeSideEffects();
+   // Move while maintaining size mode.
+   void MoveInternal(int32_t aX, int32_t aY);

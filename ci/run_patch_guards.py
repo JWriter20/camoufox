@@ -127,6 +127,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "geolocation-system-setting-claimed-os",
         "getter-cost-parity",
         "gfx-probes-packaged",
+        "headless-claimed-screen",
         "headless-software-webgl",
         "juggler-initial-blank-context",
         "juggler-input-gate",
@@ -179,6 +180,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "windows-lock-keys-claimed-os",
         "windows-menu-key-click-count",
         "windows-start-menu-claimed-os",
+        "windows-window-frame-headless",
     ),
 }
 

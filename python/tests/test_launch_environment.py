@@ -386,6 +386,32 @@ class TestWindowsScrollbarsFollowVersion:
         assert self._prefs(["DejaVu Sans"], ua=ua)[self.PREF] == 1
 
 
+class TestColourSchemeOfAnotherOs:
+    """An identity of another OS reads light in a window and headless alike; on
+    its own OS the browser follows the desktop, as stock does."""
+
+    PREF = "ui.systemUsesDarkTheme"
+    WIN_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
+
+    def _prefs(self, monkeypatch, host, **options):
+        monkeypatch.setattr(utils, "_host_os_key", lambda: host)
+        return utils.launch_options(
+            config={"navigator.userAgent": self.WIN_UA},
+            i_know_what_im_doing=True,
+            **options,
+        )["firefox_user_prefs"]
+
+    def test_another_os_is_light(self, monkeypatch, isolated_launch_dependencies):
+        assert self._prefs(monkeypatch, "lin")[self.PREF] == 0
+
+    def test_own_os_follows_the_desktop(self, monkeypatch, isolated_launch_dependencies):
+        assert self.PREF not in self._prefs(monkeypatch, "win")
+
+    def test_caller_pref_wins(self, monkeypatch, isolated_launch_dependencies):
+        prefs = self._prefs(monkeypatch, "lin", firefox_user_prefs={self.PREF: 1})
+        assert prefs[self.PREF] == 1
+
+
 class TestNativeWindowsVariantFonts:
     """A native Windows identity claims the Win11 font variant iff the host has it."""
 

@@ -515,6 +515,8 @@ claims the host's OS. Details are in
 | Driver calls define no interfaces on the page's window | `isolated-world-global-order` patch |
 | A SOCKS5 proxy with a username and password works, for the launch and per context: the launcher hands the credentials to Juggler, which Playwright alone refuses | Launcher, Juggler |
 | Headless reports a fine pointer, like a desktop | `force-default-pointer` patch |
+| A headless window has the frame, toolbar height and screen of a window on a desktop: a Windows identity's resize border and caption, and pop-ups and maximized windows fitted to the claimed screen's work area instead of headless Firefox's fixed 1366x768 | `windows-window-frame-headless`, `headless-claimed-screen` patches |
+| An identity of another OS reports the light color scheme in a window and headless alike (the claimed OS's out-of-the-box setting; `color_scheme=` or `ui.systemUsesDarkTheme` overrides it). On its own OS the browser follows the desktop | Launcher |
 | `mouse.wheel()` turns notches, as a physical wheel does: 100 px is one notch, each its own event with a native tick | Juggler, `wheel-native-ticks` patch |
 | Juggler's debugger leaves no side effects content can observe | `debugger-invisible-to-content` patch |
 | Per-context fingerprint setters are gone before page script runs | `window-setter-seal` patch |
