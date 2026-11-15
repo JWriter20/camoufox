@@ -1185,12 +1185,15 @@ def set_output_latency_default(
 ) -> None:
     """Draw the identity's audio output device latency.
 
-    AudioContext.outputLatency is the output stream's latency: 0 until the
-    stream opens, then a device-specific figure (the host's own on a host of
-    the claimed OS). An identity of another OS would otherwise show the
-    host's figure, or 0 for good on a host with no sound device. The device
-    latency belongs to the machine, so it follows the identity seed; the
-    stream's opening delay is timing, so each launch draws its own.
+    AudioContext.outputLatency is the output stream's latency: 0 while the
+    context's graph has no open output stream (before it opens, and for a
+    context the autoplay policy holds or that was suspended before anything
+    read it), then a device-specific figure (the host's own on a host of the
+    claimed OS). An identity of another OS would otherwise show the host's
+    figure. The browser gives the drawn figure only while the host's stream
+    is open, so the 0s land where stock's do. The device latency belongs to
+    the machine, so it follows the identity seed; the stream's opening delay
+    is timing, so each launch draws its own.
     Nothing is set when the caller set the key or the OS has no measured
     devices.
     """

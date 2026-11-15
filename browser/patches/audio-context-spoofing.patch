@@ -20,7 +20,7 @@ index 72551b795a..5bbe58e8a3 100644
      return 44100;
    }
 diff --git a/dom/media/MediaTrackGraph.cpp b/dom/media/MediaTrackGraph.cpp
-index b262d6fd46..f6783edf24 100644
+index b262d6fd46..3f1dd67f64 100644
 --- a/dom/media/MediaTrackGraph.cpp
 +++ b/dom/media/MediaTrackGraph.cpp
 @@ -3,6 +3,7 @@
@@ -47,21 +47,45 @@ index b262d6fd46..f6783edf24 100644
    // The caller queries the default output device's channel count off the graph
    // thread and passes it in. Offline graphs have no audio output device, so
    // they pass 0 here and avoid the (potentially expensive) query entirely.
-@@ -4094,6 +4097,35 @@ double MediaTrackGraphImpl::AudioOutputLatency() {
+@@ -4094,17 +4097,50 @@ double MediaTrackGraphImpl::AudioOutputLatency() {
    if (mAudioOutputLatency != 0.0) {
      return mAudioOutputLatency;
    }
-+  // Camoufox: the identity's output device instead of the host's. Stock reads
-+  // 0 until the device's stream has opened (cubeb_stream_get_latency fails
-+  // before then, and a 0 is not cached), then the stream's latency in whole
-+  // frames at the graph's rate, cached for the graph's life. The launcher
-+  // draws the latency and the opening delay from devices measured on the
-+  // claimed OS. Stock 158 on win-i9 (0.022 s device): floor(latency * rate)
-+  // frames at 8000-96000 Hz (176, 704, 720 at 32768, 1056, 2112), 128 at
-+  // 3000 Hz; and Windows' TimeDuration counts 100 ns ticks
+-  MonitorAutoLock lock(mMonitor);
+-  if (CurrentDriver()->AsAudioCallbackDriver()) {
+-    mAudioOutputLatency = CurrentDriver()
+-                              ->AsAudioCallbackDriver()
+-                              ->AudioOutputLatency()
+-                              .ToSeconds();
+-  } else {
+-    // Failure mode: return 0.0 if running on a normal thread.
+-    mAudioOutputLatency = 0.0;
++  double host = 0.0;
++  {
++    MonitorAutoLock lock(mMonitor);
++    if (CurrentDriver()->AsAudioCallbackDriver()) {
++      host = CurrentDriver()
++                 ->AsAudioCallbackDriver()
++                 ->AudioOutputLatency()
++                 .ToSeconds();
++    }
++    // Failure mode: 0.0 if running on a normal thread.
++  }
++  // Camoufox: the identity's output device instead of the host's. Stock
++  // answers only while the graph runs an AudioCallbackDriver whose stream is
++  // open: 0 before it opens (cubeb_stream_get_latency fails), 0 once the
++  // graph has switched to its SystemClockDriver because no track runs (a
++  // context the autoplay policy holds, or one suspended), and a 0 is not
++  // cached; the first non-zero answer is, for the graph's life. So the drawn
++  // latency stands in only where the host's stream answers, and not before
++  // the drawn opening delay after the graph was made. The launcher draws the
++  // latency and the delay from devices measured on the claimed OS. Stock 158
++  // on win-i9 (0.022 s device): floor(latency * rate) frames at 8000-96000 Hz
++  // (176, 704, 720 at 32768, 1056, 2112), 128 at 3000 Hz; and Windows'
++  // TimeDuration counts 100 ns ticks
 +  // (AudioCallbackDriver::AudioOutputLatency), so 720/32768 reads 0.0219726.
 +  if (auto spoofed = MaskConfig::GetDouble("AudioContext:outputLatency")) {
-+    if (!(*spoofed > 0.0) || !mRealtime) {
++    if (host == 0.0 || !(*spoofed > 0.0)) {
 +      return 0.0;
 +    }
 +    const double openMs =
@@ -77,14 +101,15 @@ index b262d6fd46..f6783edf24 100644
 +      // truncated; ToSeconds divides by 10^7.
 +      seconds = std::trunc(frames / GraphRate() * 1000.0 * 10000.0) / 1e7;
 +    }
-+    mAudioOutputLatency = seconds;
-+    return mAudioOutputLatency;
-+  }
-   MonitorAutoLock lock(mMonitor);
-   if (CurrentDriver()->AsAudioCallbackDriver()) {
-     mAudioOutputLatency = CurrentDriver()
++    host = seconds;
+   }
+-
++  mAudioOutputLatency = host;
+   return mAudioOutputLatency;
+ }
+ 
 diff --git a/dom/media/MediaTrackGraphImpl.h b/dom/media/MediaTrackGraphImpl.h
-index 7ec59bf6d6..d295e86fb2 100644
+index 7ec59bf6d6..075cb42331 100644
 --- a/dom/media/MediaTrackGraphImpl.h
 +++ b/dom/media/MediaTrackGraphImpl.h
 @@ -1191,6 +1191,13 @@ class MediaTrackGraphImpl : public MediaTrackGraph,
@@ -92,9 +117,9 @@ index 7ec59bf6d6..d295e86fb2 100644
    double mAudioOutputLatency;
  
 +  /**
-+   * Camoufox: when this realtime graph started opening its output device,
-+   * from which a spoofed AudioContext:outputLatency stays 0 for
-+   * AudioContext:outputLatencyDelayMs, as stock's does until the stream opens.
++   * Camoufox: when this graph was made, from which a spoofed
++   * AudioContext:outputLatency stays 0 for AudioContext:outputLatencyDelayMs,
++   * as stock's does until the claimed device's stream would have opened.
 +   */
 +  TimeStamp mSpoofedLatencyEpoch;
 +
@@ -114,7 +139,7 @@ index af9a8c99f0..caa1eaf516 100644
  
  SPHINX_TREES["/media"] = "docs"
 diff --git a/dom/media/webaudio/AudioContext.cpp b/dom/media/webaudio/AudioContext.cpp
-index 6e7f17e7c3..f5c83ea753 100644
+index 6e7f17e7c3..66aea77f59 100644
 --- a/dom/media/webaudio/AudioContext.cpp
 +++ b/dom/media/webaudio/AudioContext.cpp
 @@ -4,6 +4,7 @@
@@ -125,20 +150,21 @@ index 6e7f17e7c3..f5c83ea753 100644
  #include "AudioBuffer.h"
  #include "AudioBufferSourceNode.h"
  #include "AudioChannelService.h"
-@@ -561,6 +562,12 @@ double AudioContext::OutputLatency() {
+@@ -561,6 +562,13 @@ double AudioContext::OutputLatency() {
    }
    // When reduceFingerprinting is enabled, return a latency figure that is
    // fixed, but plausible for the platform.
 +  // Camoufox: the identity's output device. Its graph answers as stock's does
-+  // (MediaTrackGraphImpl::AudioOutputLatency), so a read before the device's
-+  // stream opens is 0 there too.
++  // (MediaTrackGraphImpl::AudioOutputLatency), so a read while the graph has
++  // no open output stream (not yet opened, autoplay-blocked, suspended) is 0
++  // there too.
 +  if (MaskConfig::GetDouble("AudioContext:outputLatency")) {
 +    return Graph()->AudioOutputLatency();
 +  }
    double latency_s = 0.0;
    if (mShouldResistFingerprinting) {
  #ifdef XP_MACOSX
-@@ -714,6 +721,11 @@ void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
+@@ -714,6 +722,11 @@ void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
  }
  
  uint32_t AudioContext::MaxChannelCount() const {
@@ -151,10 +177,10 @@ index 6e7f17e7c3..f5c83ea753 100644
      return 2;
    }
 diff --git a/dom/media/webaudio/moz.build b/dom/media/webaudio/moz.build
-index 7e43523379..3bd802d715 100644
+index 6ccf96569c..2a51a8f759 100644
 --- a/dom/media/webaudio/moz.build
 +++ b/dom/media/webaudio/moz.build
-@@ -149,3 +149,6 @@ include("/ipc/chromium/chromium-config.mozbuild")
+@@ -150,3 +150,6 @@ include("/ipc/chromium/chromium-config.mozbuild")
  
  FINAL_LIBRARY = "xul"
  LOCAL_INCLUDES += [".."]
