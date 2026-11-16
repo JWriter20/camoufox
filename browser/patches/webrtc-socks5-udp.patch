@@ -762,7 +762,7 @@ diff --git a/dom/media/webrtc/transport/nr_socket_prsock.cpp b/dom/media/webrtc/
 index c8bcce464c..84893a8e5b 100644
 --- a/dom/media/webrtc/transport/nr_socket_prsock.cpp
 +++ b/dom/media/webrtc/transport/nr_socket_prsock.cpp
-@@ -1003,6 +1003,223 @@ abort:
+@@ -1003,6 +1003,227 @@ abort:
    return (_status);
  }
  
@@ -844,7 +844,11 @@ index c8bcce464c..84893a8e5b 100644
 +  datagram.AppendElements(static_cast<const uint8_t*>(msg), len);
 +
 +  if (state_ == State::Associating) {
-+    if (pending_.size() < kRelayPendingMax) {
++    // A retransmission of a datagram still waiting here is that datagram: the
++    // relay gets it once, not a burst no machine sending its own UDP makes.
++    if (pending_.size() < kRelayPendingMax &&
++        std::find(pending_.begin(), pending_.end(), datagram) ==
++            pending_.end()) {
 +      pending_.push_back(std::move(datagram));
 +    }
 +    return 0;
@@ -986,7 +990,7 @@ index c8bcce464c..84893a8e5b 100644
  NS_IMPL_ISUPPORTS(NrUdpSocketIpcProxy, nsIUDPSocketInternal)
  
  nsresult NrUdpSocketIpcProxy::Init(const RefPtr<NrUdpSocketIpc>& socket) {
-@@ -1602,9 +1819,10 @@ int NrSocketBase::CreateSocket(
+@@ -1602,9 +1823,10 @@ int NrSocketBase::CreateSocket(
    std::optional<std::pair<uint16_t, uint16_t>> ports;
    // Camoufox: behind a proxy, stock Firefox refuses UDP outright, which leaves
    // a page with no host candidate and no connection even to a peer on this
@@ -1000,7 +1004,7 @@ index c8bcce464c..84893a8e5b 100644
        config && config->GetForceProxy() && addr->protocol == IPPROTO_UDP;
  
    if (IsForbiddenAddress(addr)) {
-@@ -1642,6 +1860,8 @@ int NrSocketBase::CreateSocket(
+@@ -1642,6 +1864,8 @@ int NrSocketBase::CreateSocket(
      } else if (XRE_IsSocketProcess()) {
        if (addr->protocol == IPPROTO_TCP) {
          *sock = new NrTcpSocket(config);
@@ -1009,7 +1013,7 @@ index c8bcce464c..84893a8e5b 100644
        } else {
          *sock = new NrSocket();
        }
-@@ -1653,7 +1873,7 @@ int NrSocketBase::CreateSocket(
+@@ -1653,7 +1877,7 @@ int NrSocketBase::CreateSocket(
        }
      }
  
@@ -1018,7 +1022,7 @@ index c8bcce464c..84893a8e5b 100644
      r = (*sock)->create(ports ? &bindAddr : addr);
      if (!r) break;
    }
-@@ -1667,11 +1887,16 @@ abort:
+@@ -1667,11 +1891,16 @@ abort:
    return _status;
  }
  
@@ -1041,15 +1045,16 @@ diff --git a/dom/media/webrtc/transport/nr_socket_prsock.h b/dom/media/webrtc/tr
 index bfd5a26286..c1a6abda03 100644
 --- a/dom/media/webrtc/transport/nr_socket_prsock.h
 +++ b/dom/media/webrtc/transport/nr_socket_prsock.h
-@@ -43,6 +43,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@@ -43,6 +43,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  #ifndef nr_socket_prsock_
  #define nr_socket_prsock_
  
++#include <algorithm>
 +#include <deque>
  #include <memory>
  #include <queue>
  
-@@ -66,6 +67,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@@ -66,6 +68,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  #include "async_wait.h"
  #include "transport_addr.h"
  
@@ -1060,7 +1065,7 @@ index bfd5a26286..c1a6abda03 100644
  // Stub declaration for nICEr type
  typedef struct nr_socket_vtbl_ nr_socket_vtbl;
  typedef struct nr_socket_ nr_socket;
-@@ -134,11 +139,16 @@ class NrSocketBase {
+@@ -134,11 +140,16 @@ class NrSocketBase {
    void fire_callback(int how);
  
   protected:
@@ -1079,7 +1084,7 @@ index bfd5a26286..c1a6abda03 100644
    nr_transport_addr my_addr_;
  
   private:
-@@ -195,6 +205,55 @@ class NrSocket : public NrSocketBase, public nsASocketHandler {
+@@ -195,6 +206,55 @@ class NrSocket : public NrSocketBase, public nsASocketHandler {
    nsCOMPtr<nsIEventTarget> ststhread_;
  };
  
