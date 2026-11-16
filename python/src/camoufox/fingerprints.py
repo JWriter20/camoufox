@@ -2101,6 +2101,17 @@ def handle_window_size(fp: Dict[str, Any], outer_width: int, outer_height: int) 
     window['outerHeight'] = outer_height
 
 
+def place_window(config: Dict[str, Any], outer_width: int, outer_height: int) -> None:
+    """handle_window_size() for a config: its geometry is final, where a drawn
+    fingerprint's is still rescaled when its devicePixelRatio moves."""
+    for axis, outer, position in (('Width', outer_width, 'X'), ('Height', outer_height, 'Y')):
+        inner = config.get(f'window.inner{axis}')
+        if inner:
+            config[f'window.inner{axis}'] = max(outer - (config.get(f'window.outer{axis}') or 0) + inner, 0)
+        config[f'window.outer{axis}'] = outer
+        config[f'window.screen{position}'] = ((config.get(f'screen.{axis.lower()}') or outer) - outer) // 2
+
+
 def generate_fingerprint(
     window: Optional[Tuple[int, int]] = None,
     screen: Optional[Screen] = None,

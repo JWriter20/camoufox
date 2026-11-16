@@ -307,6 +307,55 @@ describe.skipIf(!MODEL.ok)(
 				700 + chromeH,
 			);
 		});
+
+		// A drawn devicePixelRatio of 1.2 is a zoom: it moves to a display scale
+		// and every CSS size is rescaled with it. That turned the 1018x830 window
+		// drawn around the viewport into 977x797 in about one launch in twelve,
+		// and at 1.25 a 1600x900 screen is 1536x864, which cannot hold that
+		// window above its taskbar: that screen is the same display at 1.
+		it.each([
+			[
+				[2133, 1333],
+				[2048, 1280],
+			],
+			[
+				[1600, 900],
+				[1920, 1080],
+			],
+		])("a drawn browser zoom on %j leaves the window around the viewport", async (screen, kept) => {
+			const generate = utils.utilsDeps.generateFingerprint;
+			utils.utilsDeps.generateFingerprint = async (options) => {
+				const fingerprint: any = await generate(options);
+				fingerprint.window.devicePixelRatio = 1.2;
+				Object.assign(fingerprint.screen, {
+					width: screen[0],
+					height: screen[1],
+					availWidth: screen[0],
+					availHeight: screen[1],
+				});
+				return fingerprint;
+			};
+			const opts = await quietly(() =>
+				utils.launchOptions({
+					env: { HOME },
+					headless: true,
+					i_know_what_im_doing: true,
+					executable_path: BUNDLE_EXE,
+					os: "windows",
+					viewport: VIEWPORT,
+				} as any),
+			);
+			const config = configOf(opts);
+			const [chromeW, chromeH] = fingerprints.RECORDED_WINDOW_CHROME.win;
+			expect([
+				config["window.outerWidth"],
+				config["window.outerHeight"],
+			]).toEqual([1000 + chromeW, 700 + chromeH]);
+			expect([config["screen.width"], config["screen.height"]]).toEqual(kept);
+			expect(config["screen.availHeight"]).toBeGreaterThanOrEqual(
+				700 + chromeH,
+			);
+		});
 	},
 );
 

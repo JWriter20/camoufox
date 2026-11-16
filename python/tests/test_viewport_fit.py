@@ -312,6 +312,29 @@ class TestPersistentLaunchIsDrawnAroundItsViewport:
             assert config['screen.availHeight'] >= 700 + chrome_h
             assert config['window.screenX'] + config['window.outerWidth'] <= config['screen.width']
 
+    @pytest.mark.parametrize('ratio, screen, kept', [(1.2, (2133, 1333), (2048, 1280)), (1.2, (1600, 900), (1920, 1080))])
+    def test_a_drawn_browser_zoom_leaves_the_window_around_the_viewport(self, ratio, screen, kept):
+        # A drawn devicePixelRatio of 1.2 is a zoom: it moves to a display scale and every CSS
+        # size is rescaled with it. That turned the 1018x830 window drawn around the viewport
+        # into 977x797 in about one launch in twelve, and at 1.25 a 1600x900 screen is 1536x864,
+        # which cannot hold that window above its taskbar: that screen is the same display at 1.
+        generate = utils.generate_fingerprint
+
+        def zoomed(**kwargs):
+            fingerprint = generate(**kwargs)
+            fingerprint['window']['devicePixelRatio'] = ratio
+            fingerprint['screen'].update(width=screen[0], height=screen[1], availWidth=screen[0], availHeight=screen[1])
+            return fingerprint
+
+        with _host(), mock.patch.object(utils, 'generate_fingerprint', zoomed), warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            options = utils.launch_options(os='windows', headless=True, i_know_what_im_doing=True, viewport=VIEWPORT)
+        config = _config(options)
+        chrome_w, chrome_h = fp.RECORDED_WINDOW_CHROME['win']
+        assert (config['window.outerWidth'], config['window.outerHeight']) == (1000 + chrome_w, 700 + chrome_h)
+        assert (config['screen.width'], config['screen.height']) == kept
+        assert config['screen.availHeight'] >= 700 + chrome_h
+
     def test_a_callers_screen_holds_the_window_the_launcher_placed(self):
         # The caller sets win-i9's screen and window size but no position: the generated screenX/Y,
         # drawn against a wider screen, put the window past the caller's edge (x=206 + 1280 > 1382)
