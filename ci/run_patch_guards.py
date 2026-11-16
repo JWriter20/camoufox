@@ -160,6 +160,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "widget-event-time-claimed-os",
         "window-frame-claimed-os",
         "window-frame-dragend-claimed-os",
+        "window-frame-fullscreen-exit-claimed-os",
         "window-popup-placement-claimed-os",
         "windows-behaviour-click-scrollbar",
         "windows-crt-math",
