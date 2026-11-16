@@ -466,12 +466,17 @@ export async function installVersioned(
 	}
 
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-"));
-	const tempFilePath = path.join(tempDir, "camoufox.zip");
+	const tempFilePath = fetcher.partial ?? path.join(tempDir, "camoufox.zip");
 
 	try {
 		fs.mkdirSync(installPath, { recursive: true });
+		// Mark the install dir as compatible with this version. Before the
+		// download, so that one kept to be resumed is not cleaned as old data.
+		fs.writeFileSync(COMPAT_FLAG, "");
 
-		const tempFileStream = fs.createWriteStream(tempFilePath);
+		const tempFileStream = fs.createWriteStream(tempFilePath, {
+			flags: fetcher.partial ? "a" : "w",
+		});
 		// finished() listens for the stream's 'error' from the start. Without a
 		// listener, a failed write (disk full) is an uncaught 'error' event that
 		// kills the process before the catch below can remove the partial
@@ -479,12 +484,7 @@ export async function installVersioned(
 		const written = finished(tempFileStream);
 		written.catch(() => {}); // awaited below; a download error wins
 		try {
-			// Through the instance's class, as Python's fetcher.download_file(),
-			// so a subclass can override it.
-			await (fetcher.constructor as typeof CamoufoxFetcher).downloadFile(
-				tempFileStream,
-				fetcher.url,
-			);
+			await fetcher.download(tempFileStream);
 		} finally {
 			tempFileStream.end();
 		}
@@ -518,9 +518,6 @@ export async function installVersioned(
 		}
 
 		setActive(`browsers/${repoName}/${versionFolder}`);
-
-		// Mark the install dir as compatible with this version
-		fs.writeFileSync(COMPAT_FLAG, "");
 
 		rprint(`\nCamoufox v${fetcher.verstr} installed.`, "green");
 		rprint(`Path: ${installPath}`, "green");

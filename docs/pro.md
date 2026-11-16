@@ -62,6 +62,46 @@ is set: the `pro_key` argument, `CAMOUFOX_PRO_KEY`, the key file.
 `CAMOUFOX_PRO_API` points both launchers at a different Camoufox Pro API. It
 defaults to the build's `"api"`, then `https://api.camoufox.com`.
 
+## Installing a Pro build
+
+```bash
+camoufox fetch pro                # the newest release for this machine
+camoufox fetch pro 159.0-pro.12   # that release
+```
+
+(`npx camoufox fetch pro` with the TypeScript launcher.) It needs the key from
+`camoufox login`, or `CAMOUFOX_PRO_KEY`, and a Camoufox Pro subscription. The
+launcher asks the Camoufox Pro API for the release built for this machine's OS
+and architecture, downloads it over https with a progress bar, and installs it
+in the camoufox cache under `browsers/pro/`, beside the public builds:
+`camoufox list`, `active`, `remove` and `set pro/stable/<version>` treat it
+like any other install.
+
+- The release becomes the build every launch uses, in place of the build this
+  camoufox release pairs with. After `camoufox fetch pro`, a plain
+  `camoufox fetch` installs the newest Pro release; after
+  `camoufox fetch pro <version>`, it keeps that one. `camoufox set --release`
+  goes back to the paired public build.
+- A download that is interrupted is kept and resumed by the next
+  `camoufox fetch pro`.
+- The API signs each release: its version, platform, file name, size, SHA-256
+  and build hash. When a Pro build is already the active build, the launcher
+  checks that signature with the keys that build carries before it downloads
+  anything, then checks the download's SHA-256. A release that fails a check is
+  not installed.
+- The first Pro build on a machine has no installed build to take keys from. Its
+  download is checked against the SHA-256 the API answered with over https, and
+  after unpacking, the signature is checked with the keys the release itself
+  carries; a release that fails is removed. `camoufox fetch pro` says so when it
+  installs one this way.
+- An account without a subscription, or a suspended one, is refused with the
+  page that resolves it.
+- With Python, checking a signature needs the `pro` extra:
+  `pip install "camoufox[pro]"`.
+
+A build installed by hand works too: point `executable_path` or
+`CAMOUFOX_EXECUTABLE_PATH` at its executable.
+
 ## Checking a machine
 
 ```bash

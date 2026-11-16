@@ -367,8 +367,11 @@ def install_versioned(fetcher, replace: bool = False) -> bool:
 
     try:
         install_path.mkdir(parents=True, exist_ok=True)
+        # Mark the install dir as compatible with this version. Before the
+        # download, so that one kept to be resumed is not cleaned as old data.
+        COMPAT_FLAG.touch()
 
-        with tempfile.NamedTemporaryFile() as temp_file:
+        with open(fetcher.partial, "ab+") if fetcher.partial else tempfile.NamedTemporaryFile() as temp_file:
             fetcher.download_file(temp_file, fetcher.url)
 
             expected_sha = (
@@ -399,9 +402,6 @@ def install_versioned(fetcher, replace: bool = False) -> bool:
             os.system(f'chmod -R 755 {shlex.quote(str(install_path))}')  # nosec
 
         set_active(f"browsers/{repo_name}/{version_folder}")
-
-        # Mark the install dir as compatible with this version
-        COMPAT_FLAG.touch()
 
         rprint(f'\nCamoufox v{fetcher.verstr} installed.', fg="green")
         rprint(f'Path: {install_path}', fg="green")

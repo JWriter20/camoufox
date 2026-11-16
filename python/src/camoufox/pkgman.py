@@ -579,6 +579,9 @@ class CamoufoxFetcher:
         self.installed_sha256: Optional[str] = None
         self.installed_created_at: Optional[str] = None
         self.installed_interface: int = 1
+        # Where the download is kept between runs, so that a later fetch
+        # resumes it; None downloads into a temporary file.
+        self.partial: Optional[Path] = None
 
         if selected_version:
             self._selected_version = selected_version
@@ -1017,24 +1020,33 @@ def webdl(
     buffer: Optional[DownloadBuffer] = None,
     bar: bool = True,
     progress_callback: Optional[ProgressCallback] = None,
+    offset: int = 0,
 ) -> DownloadBuffer:
     """
-    Download a file from the given URL
+    Download a file from the given URL. `offset` resumes a download whose first
+    `offset` bytes `buffer` already ends with.
     """
     headers = (
         {"Authorization": f"Bearer {GITHUB_TOKEN}"} if "api.github" in url and GITHUB_TOKEN else {}
     )
-    response = requests.get(url, stream=True, headers=headers)
-    response.raise_for_status()
-
-    total_size = int(response.headers.get('content-length', 0))
-    block_size = 8192
     if buffer is None:
         buffer = BytesIO()
+    if offset:
+        headers["Range"] = f"bytes={offset}-"
+    response = requests.get(url, stream=True, headers=headers)
+    response.raise_for_status()
+    if offset and response.status_code != 206:
+        # The server sent the whole file, not the rest of it.
+        buffer.seek(0)
+        buffer.truncate()
+        offset = 0
+
+    total_size = offset + int(response.headers.get('content-length', 0))
+    block_size = 8192
 
     if progress_callback:
-        downloaded = 0
-        last_update = 0
+        downloaded = offset
+        last_update = offset
         for data in response.iter_content(block_size * 4):
             size = buffer.write(data)
             downloaded += size
@@ -1051,12 +1063,12 @@ def webdl(
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task(desc or "Downloading", total=total_size)
+            task = progress.add_task(desc or "Downloading", total=total_size, completed=offset)
             for data in response.iter_content(block_size):
                 size = buffer.write(data)
                 progress.update(task, advance=size)
     else:
-        downloaded = 0
+        downloaded = offset
         for data in response.iter_content(block_size):
             size = buffer.write(data)
             downloaded += size

@@ -201,6 +201,10 @@ def _ensure_synced() -> bool:
     return True
 
 
+# The channel `camoufox fetch pro` chooses: Camoufox Pro's published releases.
+PRO_CHANNEL = "pro/stable"
+
+
 class CamoufoxUpdate(CamoufoxFetcher):
     """
     Checks & updates Camoufox
@@ -269,7 +273,8 @@ def sync(spoof_os, spoof_arch):
 
 @cli.command(name="fetch")
 @click.argument("version", default=None, required=False)
-def fetch(version):
+@click.argument("pro_version", default=None, required=False)
+def fetch(version, pro_version):
     """
     Install the active version, or a specific version
 
@@ -277,9 +282,62 @@ def fetch(version):
     Examples:
       camoufox fetch                         # install active version
       camoufox fetch official/135.0-beta.25  # install specific version
+      camoufox fetch pro                     # install the newest Camoufox Pro release
+      camoufox fetch pro 159.0-pro.12        # install that Camoufox Pro release
     """
     remove_incompatible_data()
     config = load_config()
+    if version == "pro":
+        _fetch_pro(pro_version)
+    elif pro_version:
+        raise click.UsageError("Only `camoufox fetch pro` takes a second argument.")
+    elif not version and config.get("channel") == PRO_CHANNEL:
+        _fetch_pro(config.get("pinned"))
+    else:
+        _fetch_public(config, version)
+    if ALLOW_GEOIP:
+        download_mmdb()
+    ensure_fpgen_model()
+
+
+def _active_pro_build():
+    """The Pro build a launch would run and its executable, or (None, None) when it is not a Pro build."""
+    from .exceptions import CamoufoxNotInstalled, UnsupportedVersion
+    from .pkgman import build_file
+    from .pro import read_build
+
+    try:
+        executable = _active_executable()
+        build = read_build(build_file(executable, "pro-build.json"))
+    except (CamoufoxNotInstalled, UnsupportedVersion):
+        return None, None
+    except ValueError as error:
+        _fail(str(error))
+    return (build, executable) if build else (None, None)
+
+
+def _fetch_pro(version: Optional[str]) -> None:
+    """
+    Install a Camoufox Pro release and make it the chosen build: the newest
+    one, which `camoufox fetch` then follows, or `version`, which it keeps.
+    """
+    from . import pro_update
+    from .exceptions import CorruptedDownload, ProError
+
+    try:
+        pro_update.fetch(version, *_active_pro_build(), echo=click.echo)
+    except (ProError, CorruptedDownload, ImportError, requests.RequestException) as error:
+        _fail(str(error))
+    config = load_config()
+    config.pop("pinned_sha", None)
+    config.pop("pinned", None)
+    config["channel"] = PRO_CHANNEL
+    if version:
+        config["pinned"] = version
+    save_config(config)
+
+
+def _fetch_public(config: dict, version: Optional[str]) -> None:
     pin = None if version else effective_pin(config)
 
     repo_name = spec = tag = None
@@ -312,9 +370,6 @@ def fetch(version):
             rprint("Release not found (404). Asset may have been removed.", fg="red")
             _fail("Run 'camoufox sync' to refresh available versions.")
         _fail(f"Error: {msg}")
-    if ALLOW_GEOIP:
-        download_mmdb()
-    ensure_fpgen_model()
 
 
 def _fail(message: str) -> NoReturn:
@@ -558,6 +613,14 @@ def set_cmd(specifier, geoip, paired):
         else:
             rprint(f"Invalid specifier '{specifier}'.", fg="red")
             rprint("Use: version-build, repo/channel, or repo/channel/version-build", fg="yellow")
+            return
+
+        if f"{repo_name}/stable" == PRO_CHANNEL:
+            # Pro releases come from the Camoufox Pro API, not a synced repository.
+            inst = _find_installed(f"{repo_name}/{spec}")
+            if inst is None:
+                _fail(f"Camoufox Pro {spec} is not installed. Run `camoufox fetch pro {spec}`.")
+            _set_pinned(repo_name, "stable", {"version": inst.version.version, "build": inst.version.build}, inst)
             return
 
         if not _ensure_synced():
@@ -933,18 +996,11 @@ def login():
     """
     Sign in to Camoufox Pro on this machine
     """
-    from .exceptions import CamoufoxNotInstalled, ProError, UnsupportedVersion
-    from .pkgman import build_file
-    from .pro import login as device_login, read_build
+    from .exceptions import ProError
+    from .pro import login as device_login
 
     # The key is for the API the installed Pro build leases from.
-    try:
-        build = read_build(build_file(_active_executable(), "pro-build.json"))
-    except (CamoufoxNotInstalled, UnsupportedVersion):
-        build = None
-    except ValueError as error:
-        rprint(str(error), fg="red")
-        raise SystemExit(1) from None
+    build, _ = _active_pro_build()
     try:
         signed_in = device_login(echo=click.echo, build=build)
     except ProError as error:

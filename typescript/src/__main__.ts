@@ -36,6 +36,7 @@ import {
 import {
 	BROWSERS_DIR,
 	type CachedVersion,
+	type CamoufoxConfig,
 	COMPAT_FLAG,
 	CONFIG_FILE,
 	findInstall,
@@ -72,6 +73,7 @@ import {
 	upgradeMessage,
 	Version,
 } from "./pkgman.js";
+import type { ProBuild } from "./pro.js";
 
 // --------------------------------------------------------------------------
 // click-style output + prompts
@@ -410,7 +412,7 @@ function setChannel(repoName: string, channelType: string): void {
 function setPinned(
 	repoName: string,
 	channelType: string,
-	verData: CachedVersion,
+	verData: Pick<CachedVersion, "version" | "build">,
 	inst: InstalledVersion | null,
 	sha?: string | null,
 ): void {
@@ -614,11 +616,51 @@ program
 		);
 	});
 
+/** The channel `camoufox fetch pro` chooses: Camoufox Pro's published releases. */
+const PRO_CHANNEL = "pro/stable";
+
+/** The Pro build a launch would run and its executable, or nulls when it is not a Pro build. */
+async function activeProBuild(): Promise<[ProBuild, string] | [null, null]> {
+	const { readBuild } = await import("./pro.js");
+	const { buildFile } = await import("./pkgman.js");
+	let executable: string;
+	try {
+		executable = activeExecutable();
+	} catch {
+		return [null, null];
+	}
+	const build = readBuild(buildFile(executable, "pro-build.json"));
+	return build ? [build, executable] : [null, null];
+}
+
+/**
+ * Install a Camoufox Pro release and make it the chosen build: the newest
+ * one, which `camoufox fetch` then follows, or `version`, which it keeps.
+ */
+async function fetchPro(version: string | null): Promise<void> {
+	const { fetchRelease } = await import("./pro-update.js");
+	try {
+		const [build, executable] = await activeProBuild();
+		await fetchRelease(version, build, executable);
+	} catch (e) {
+		fail(errorMessage(e));
+	}
+	const config = loadConfig();
+	delete config.pinned_sha;
+	delete config.pinned;
+	config.channel = PRO_CHANNEL;
+	if (version) config.pinned = version;
+	saveConfig(config);
+}
+
 program
 	.command("fetch")
-	.description("Install the active version, or a specific version")
-	.argument("[version]", "e.g. official/135.0-beta.25")
-	.action(async (version?: string) => {
+	.description(
+		"Install the active version, a specific version, or (fetch pro [version]) a Camoufox Pro release",
+	)
+	.argument("[version]", "e.g. official/135.0-beta.25, or pro")
+	.argument("[pro_version]", "after pro: a release, e.g. 159.0-pro.12")
+	.action(async (version?: string, proVersion?: string) => {
 		// Clean up an incompatible old data directory
 		if (
 			fs.existsSync(INSTALL_DIR) &&
@@ -630,49 +672,14 @@ program
 		}
 
 		const config = loadConfig();
-		const pin = version ? null : effectivePin(config);
-
-		let repoName: string | null = null;
-		let spec: string | null = null;
-		let tag: string | null = null;
-		if (version) {
-			const parts = version.toLowerCase().split("/");
-			if (parts.length === 1) {
-				repoName = RepoConfig.getDefaultName();
-				spec = parts[0];
-			} else if (parts.length === 2 || parts.length === 3) {
-				repoName = parts[0];
-				spec = parts[parts.length - 1];
-			} else {
-				fail(
-					"Format: version-build, repo/version-build, or repo/channel/version-build",
-				);
-			}
-			spec = spec.replace(/^v+/, "");
-			tag = `v${spec}`;
-		} else if (pin) {
-			// This library release pairs with exactly one browser build.
-			repoName = pin.repoName;
-			spec = pinSpec(pin);
-			tag = pin.tag;
-		}
-
-		const [repoConfig, selected] =
-			(repoName && spec && tag && (await taggedBuild(repoName, tag, spec))) ||
-			(await syncedBuild(config, repoName, spec, pin));
-		try {
-			const updater = await new CamoufoxUpdate(repoConfig, selected).init();
-			// The paired build is what this release was tested with; installing
-			// it needs no "this is a prerelease" confirmation even when it is one.
-			await updater.update(false, pin !== null);
-		} catch (e) {
-			if (e instanceof CommandFailed) throw e;
-			const msg = errorMessage(e);
-			if (msg.includes("404") || msg.includes("Not Found")) {
-				rprint("Release not found (404). Asset may have been removed.", "red");
-				fail("Run 'camoufox sync' to refresh available versions.");
-			}
-			fail(`Error: ${msg}`);
+		if (version === "pro") {
+			await fetchPro(proVersion ?? null);
+		} else if (proVersion) {
+			fail("Only `camoufox fetch pro` takes a second argument.");
+		} else if (!version && config.channel === PRO_CHANNEL) {
+			await fetchPro(config.pinned ?? null);
+		} else {
+			await fetchPublic(config, version);
 		}
 		if (allowGeoip()) {
 			await downloadMmdb();
@@ -680,6 +687,56 @@ program
 		// Fetch the pinned fpgen model now rather than on the first launch.
 		await ensureModel();
 	});
+
+async function fetchPublic(
+	config: CamoufoxConfig,
+	version?: string,
+): Promise<void> {
+	const pin = version ? null : effectivePin(config);
+
+	let repoName: string | null = null;
+	let spec: string | null = null;
+	let tag: string | null = null;
+	if (version) {
+		const parts = version.toLowerCase().split("/");
+		if (parts.length === 1) {
+			repoName = RepoConfig.getDefaultName();
+			spec = parts[0];
+		} else if (parts.length === 2 || parts.length === 3) {
+			repoName = parts[0];
+			spec = parts[parts.length - 1];
+		} else {
+			fail(
+				"Format: version-build, repo/version-build, or repo/channel/version-build",
+			);
+		}
+		spec = spec.replace(/^v+/, "");
+		tag = `v${spec}`;
+	} else if (pin) {
+		// This library release pairs with exactly one browser build.
+		repoName = pin.repoName;
+		spec = pinSpec(pin);
+		tag = pin.tag;
+	}
+
+	const [repoConfig, selected] =
+		(repoName && spec && tag && (await taggedBuild(repoName, tag, spec))) ||
+		(await syncedBuild(config, repoName, spec, pin));
+	try {
+		const updater = await new CamoufoxUpdate(repoConfig, selected).init();
+		// The paired build is what this release was tested with; installing
+		// it needs no "this is a prerelease" confirmation even when it is one.
+		await updater.update(false, pin !== null);
+	} catch (e) {
+		if (e instanceof CommandFailed) throw e;
+		const msg = errorMessage(e);
+		if (msg.includes("404") || msg.includes("Not Found")) {
+			rprint("Release not found (404). Asset may have been removed.", "red");
+			fail("Run 'camoufox sync' to refresh available versions.");
+		}
+		fail(`Error: ${msg}`);
+	}
+}
 
 program
 	.command("set")
@@ -765,6 +822,26 @@ program
 				rprint(
 					"Use: version-build, repo/channel, or repo/channel/version-build",
 					"yellow",
+				);
+				return;
+			}
+
+			if (`${repoName}/stable` === PRO_CHANNEL) {
+				// Pro releases come from the Camoufox Pro API, not a synced repository.
+				const inst = findInstalled(`${repoName}/${spec}`);
+				if (!inst) {
+					fail(
+						`Camoufox Pro ${spec} is not installed. Run \`camoufox fetch pro ${spec}\`.`,
+					);
+				}
+				setPinned(
+					repoName,
+					"stable",
+					{
+						version: inst.version.version as string,
+						build: inst.version.build,
+					},
+					inst,
 				);
 				return;
 			}
@@ -1190,18 +1267,9 @@ program
 	.command("login")
 	.description("Sign in to Camoufox Pro on this machine")
 	.action(async () => {
-		const { login, readBuild } = await import("./pro.js");
-		const { buildFile } = await import("./pkgman.js");
+		const { login } = await import("./pro.js");
 		// The key is for the API the installed Pro build leases from.
-		let executable: string | null;
-		try {
-			executable = activeExecutable();
-		} catch {
-			executable = null;
-		}
-		const build = executable
-			? readBuild(buildFile(executable, "pro-build.json"))
-			: null;
+		const [build] = await activeProBuild();
 		const signedIn = await login(undefined, undefined, build);
 		rprint(
 			`Signed in to ${signedIn.account.name} as ${signedIn.user.github_login}. ` +
