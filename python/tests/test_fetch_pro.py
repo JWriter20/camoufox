@@ -1,9 +1,9 @@
 """`camoufox fetch pro` installs a Camoufox Pro release beside the public builds.
 
 The API is test_pro's local fake, answering the download route in the server's
-shape. A release is a zip signed with a key its own build carries, as a
-published one is; its download is the one thing stubbed, because a release is
-fetched over https only.
+shape, and its public key is in a keys file of the shape the launcher ships.
+A release's download is the one thing stubbed, because a release is fetched
+over https only.
 """
 
 import hashlib
@@ -27,18 +27,35 @@ FIRST, SECOND = "159.0-pro.1", "159.0-pro.2"
 class Gate:
     """The download gate of the fake API, and the storage its signed URLs point at."""
 
-    def __init__(self, api, monkeypatch):
+    def __init__(self, api, monkeypatch, keys):
         self.api = api
         self.signer = SigningKey.generate()
+        self.keys = keys
+        self.trust(self.signer)
+        monkeypatch.setenv(pro_update.KEYS_ENV, str(keys))
         self.served = {}
         self.ranges = []
         # The download drops after this many bytes of a response, once.
         self.drop_after = None
         monkeypatch.setattr(pkgman.requests, "get", self.get)
 
-    def release(self, version, signer=None):
-        """The archive of a release whose build trusts `signer`."""
-        spki = pro_update.ED25519_SPKI + (signer or self.signer).verify_key.encode()
+    def trust(self, *signers):
+        """Write the keys file as the API lists its signing keys: `signers` in slots 1, 2, ..."""
+        listed = [
+            {
+                "kid": kid,
+                "generation": 1,
+                "algorithm": "ed25519",
+                "public_key_b64url": b64(pro_update.ED25519_SPKI + signer.verify_key.encode()),
+                "state": "active" if kid == 1 else "standby",
+            }
+            for kid, signer in enumerate(signers, 1)
+        ]
+        self.keys.write_text(json.dumps({"keys": listed}))
+
+    def release(self, version):
+        """The archive of a release. The key its build carries is not one that signs releases here."""
+        spki = pro_update.ED25519_SPKI + SigningKey.generate().verify_key.encode()
         marker = f"camoufox-pro-lease-trust-v1 keys=-,{spki.hex()},- build={'ab' * 32}".encode()
         declared = {"build_hash": "sha256:" + "cd" * 32, "version": version, "target": TARGET}
         return archive_of(
@@ -49,8 +66,8 @@ class Gate:
             }
         )
 
-    def publish(self, release, archive=None, signer=None, **changed):
-        """Publish `release`; `changed` replaces fields of the answer after it is signed."""
+    def publish(self, release, archive=None, signer=None, kid=1, signed=None, **changed):
+        """Publish `release`; `signed` replaces fields of the answer before it is signed, `changed` after."""
         archive = archive or self.release(release)
         artifact = {
             "version": release,
@@ -59,11 +76,12 @@ class Gate:
             "sha256": hashlib.sha256(archive).hexdigest(),
             "size": len(archive),
             "build_hash": "sha256:" + "cd" * 32,
+            **(signed or {}),
         }
         message = pro_update.DOMAIN + "\n".join(str(artifact[name]) for name in pro_update.SIGNED_FIELDS).encode()
         signature = (signer or self.signer).sign(message).signature
         url = f"https://releases.test/{release}.zip?signature=secret"
-        self.api.artifact = {**artifact, "url": url, "signature": {"kid": 1, "ed25519": b64(signature)}, **changed}
+        self.api.artifact = {**artifact, "url": url, "signature": {"kid": kid, "ed25519": b64(signature)}, **changed}
         self.served[self.api.artifact["url"]] = archive
         return archive
 
@@ -93,7 +111,7 @@ class Gate:
 
 @pytest.fixture
 def gate(api, tmp_path, monkeypatch):  # noqa: F811
-    """A machine with an empty camoufox cache, this checkout's unpinned launcher, and no key."""
+    """A machine with an empty camoufox cache, this checkout's unpinned launcher, and no Pro key."""
     cache = tmp_path / "XDG_CACHE_HOME" / "camoufox"
     cache.mkdir()
     monkeypatch.setattr(pkgman, "INSTALL_DIR", cache)
@@ -112,7 +130,7 @@ def gate(api, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setattr(pro, "HOST_OS", "linux")
     monkeypatch.setattr("platform.machine", lambda: "x86_64")
     monkeypatch.delenv("CAMOUFOX_EXECUTABLE_PATH", raising=False)
-    return Gate(api, monkeypatch)
+    return Gate(api, monkeypatch, tmp_path / "signing-keys.json")
 
 
 def fetch(*args):
@@ -182,61 +200,124 @@ def test_the_newest_release_is_installed_and_made_active_like_any_build(api, gat
     assert installed() == {}
 
 
-def test_a_first_install_says_what_its_signature_was_checked_against(gate, monkeypatch):
+REFUSED_UNSEEN = {
+    "a key the launcher does not trust": lambda gate: gate.publish(FIRST, signer=SigningKey.generate()),
+    "a key id the launcher has no key for": lambda gate: gate.publish(FIRST, kid=0),
+    "no signature": lambda gate: gate.publish(FIRST, signature=None),
+    "a digest that was not signed": lambda gate: gate.publish(FIRST, sha256="00" * 32),
+    "another key in the signer's slot": lambda gate: (gate.publish(FIRST), gate.trust(SigningKey.generate())),
+}
+
+
+@pytest.mark.parametrize("case", REFUSED_UNSEEN)
+def test_a_release_the_launchers_keys_did_not_sign_is_refused_before_any_download(gate, monkeypatch, case):
     monkeypatch.setenv(pro.KEY_ENV, KEY)
-    gate.publish(FIRST)
-
-    result = fetch()
-
-    assert "No Camoufox Pro build is installed" in " ".join(result.output.split())
-
-
-def test_a_first_install_whose_own_key_did_not_sign_it_is_removed(gate, monkeypatch):
-    monkeypatch.setenv(pro.KEY_ENV, KEY)
-    gate.publish(FIRST, signer=SigningKey.generate())
+    REFUSED_UNSEEN[case](gate)
 
     result = fetch()
 
     assert result.exit_code == 1
-    assert "signature does not verify" in result.output
-    assert installed() == {}
+    assert "signature does not verify" in result.output or "not a key trusted here" in result.output
+    assert gate.ranges == [] and installed() == {} and partials() == []
 
 
-def test_a_later_release_is_checked_against_the_installed_build_before_it_is_downloaded(gate, monkeypatch):
+def test_a_standby_key_the_launcher_ships_signs_after_a_rotation(gate, monkeypatch):
     monkeypatch.setenv(pro.KEY_ENV, KEY)
-    gate.publish(FIRST)
+    standby = SigningKey.generate()
+    gate.trust(gate.signer, standby)
+    gate.publish(FIRST, signer=standby, kid=2)
+
     assert fetch().exit_code == 0
-    stranger = SigningKey.generate()
-    gate.publish(SECOND, archive=gate.release(SECOND, signer=stranger), signer=stranger)
-    downloads = len(gate.ranges)
+    assert installed()[FIRST].is_active
+
+
+@pytest.fixture
+def default_api(api, monkeypatch):  # noqa: F811
+    """The fake API is the one the launcher asks by default, as api.camoufox.com is."""
+    monkeypatch.setattr(pro, "DEFAULT_API", pro.api_base())
+    monkeypatch.delenv(pro.API_ENV)
+
+
+def test_the_default_api_is_checked_with_the_keys_the_launcher_ships(gate, default_api, monkeypatch):
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    monkeypatch.setattr(pro_update, "RELEASE_KEYS", gate.keys)
+    monkeypatch.delenv(pro_update.KEYS_ENV)
+    gate.publish(FIRST)
+
+    assert fetch().exit_code == 0
+    assert installed()[FIRST].is_active
+
+
+def test_the_default_api_takes_no_other_keys_than_the_shipped_ones(api, gate, default_api, monkeypatch, tmp_path):  # noqa: F811
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    shipped = tmp_path / "shipped.json"
+    shipped.write_text('{"keys": []}')
+    monkeypatch.setattr(pro_update, "RELEASE_KEYS", shipped)
+    gate.publish(FIRST)
+
+    # CAMOUFOX_PRO_KEYS names the key that signed the release, and is not read for this API.
+    result = fetch()
+
+    assert result.exit_code == 1
+    assert "ships no Camoufox Pro release key" in " ".join(result.output.split())
+    assert api.requests == [] and installed() == {}
+
+
+def test_another_api_is_asked_nothing_without_its_keys(api, gate, monkeypatch):  # noqa: F811
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    monkeypatch.delenv(pro_update.KEYS_ENV)
+    gate.publish(FIRST)
+
+    result = fetch()
+
+    assert result.exit_code == 1
+    assert pro_update.KEYS_ENV in result.output
+    assert api.requests == [] and installed() == {}
+
+
+def test_the_shipped_keys_file_is_the_signing_keys_listing():
+    listing = json.loads(pro_update.RELEASE_KEYS.read_text())
+    assert list(listing) == ["keys"]
+    for entry in listing["keys"]:
+        assert set(entry) == {"kid", "generation", "algorithm", "public_key_b64url", "state"}
+        assert entry["kid"] in (0, 1, 2) and entry["algorithm"] == "ed25519"
+    if listing["keys"]:
+        assert sorted(pro_update.release_keys(pro.DEFAULT_API)) == sorted(entry["kid"] for entry in listing["keys"])
+
+
+def test_a_release_this_launcher_is_too_old_to_drive_is_not_downloaded(gate, monkeypatch):
+    monkeypatch.setenv(pro.KEY_ENV, KEY)
+    monkeypatch.setattr(pro_update, "package_version", lambda name: "0.5.7")
+    gate.publish(FIRST, min_driver_version="0.6")
 
     refused = fetch()
 
     assert refused.exit_code == 1
-    assert "signature does not verify" in refused.output
-    assert len(gate.ranges) == downloads
-    assert list(installed()) == [FIRST] and installed()[FIRST].is_active
+    assert "needs camoufox 0.6 or newer, and this is 0.5.7" in " ".join(refused.output.split())
+    assert "pip install -U camoufox" in refused.output
+    assert gate.ranges == [] and installed() == {}
 
-    gate.publish(SECOND)
-    accepted = fetch()
-
-    assert accepted.exit_code == 0, accepted.output
-    assert "No Camoufox Pro build is installed" not in " ".join(accepted.output.split())
-    assert installed()[SECOND].is_active and not installed()[FIRST].is_active
+    gate.publish(FIRST, min_driver_version="0.5.7")
+    assert fetch().exit_code == 0
 
 
 @pytest.mark.parametrize(
-    "changed",
-    [{"version": "../../elsewhere"}, {"target": "windows-x86_64"}, {"url": "http://releases.test/159.0-pro.1.zip"}],
+    "answer",
+    [
+        {"signed": {"version": "../../elsewhere"}},
+        {"signed": {"target": "windows-x86_64"}},
+        {"url": "http://releases.test/159.0-pro.1.zip"},
+    ],
     ids=["version", "target", "url"],
 )
-def test_an_answer_that_is_not_the_release_asked_for_is_refused(gate, monkeypatch, changed):
+def test_a_signed_answer_that_is_not_the_release_asked_for_is_refused(gate, monkeypatch, answer):
     monkeypatch.setenv(pro.KEY_ENV, KEY)
-    gate.publish(FIRST, **changed)
+    gate.publish(FIRST, **answer)
 
     result = fetch()
 
     assert result.exit_code == 1
+    assert "not a release to install" in " ".join(result.output.split())
     assert gate.ranges == [] and installed() == {}
 
 

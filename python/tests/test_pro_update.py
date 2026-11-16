@@ -180,6 +180,19 @@ def test_a_release_that_does_not_check_out_is_refused(api, pro_build, channel, m
     assert not (pro_update.store().parent.parent / "outside").exists()
 
 
+def test_a_release_this_launcher_is_too_old_to_drive_is_left_for_a_newer_launcher(
+    api, pro_build, channel, monkeypatch, caplog  # noqa: F811
+):
+    monkeypatch.setattr(pro_update, "package_version", lambda name: "0.5.7")
+    channel.publish(archive_of(build_files()), min_driver_version="0.5.8")
+
+    with caplog.at_level("WARNING", logger=pro.log.name):
+        assert launch(pro_build, monkeypatch)["executable_path"] == str(pro_build)
+
+    assert "pip install -U camoufox" in caplog.text
+    assert channel.downloads == [] and installed() == []
+
+
 def test_a_build_that_names_no_signing_key_installs_nothing(api, pro_build, channel, monkeypatch):  # noqa: F811
     channel.publish(archive_of(build_files()))
     (pro_build.parent / "libxul.so").write_bytes(b"camoufox-pro-lease-trust-v1 keys=-,-,- build=-")

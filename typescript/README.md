@@ -336,7 +336,7 @@ The same seed and function give the same events as the Python launcher.
 | Command | Options | What it does |
 |---|---|---|
 | `fetch [version]` | | Install the paired build (or, after `set`, the latest in the chosen channel), or `version` without making it active. A named or paired build is read from its own release; anything else syncs first. Exits non-zero when nothing is installed. |
-| `fetch pro [version]` | | Install the newest Camoufox Pro release for this machine, or `version` (`159.0-pro.12`), and make it the build every launch uses. Needs `camoufox login` and a subscription; checks the release's signature and SHA-256, and resumes an interrupted download ([docs/pro.md](https://github.com/daijro/camoufox/blob/main/docs/pro.md#installing-a-pro-build)). |
+| `fetch pro [version]` | | Install the newest Camoufox Pro release for this machine, or `version` (`159.0-pro.12`), and make it the build every launch uses. Needs `camoufox login` and a subscription; checks the release's signature with the public keys this package ships before it downloads, then the SHA-256, and resumes an interrupted download ([docs/pro.md](https://github.com/daijro/camoufox/blob/main/docs/pro.md#installing-a-pro-build)). |
 | `sync` | `--spoof-os auto\|mac\|win\|lin`, `--spoof-arch auto\|x86_64\|i686\|arm64` | Refresh the list of available builds. |
 | `set [specifier]` | `--geoip`, `--release` | Pin a build (`official/stable/134.0.2-beta.20`) or follow a channel (`official/stable`). No specifier opens a picker. `--geoip` picks the GeoIP database instead; `--release` goes back to the paired build. |
 | `active` | | Print the active build. A build that is chosen but not downloaded is marked `(not fetched)`. |

@@ -3,8 +3,8 @@
  * Camoufox Pro release beside the public builds.
  *
  * The API and the storage its signed URLs point at are a stubbed fetch,
- * answering the download route in the server's shape. A release is a zip
- * signed with a key its own build carries, as a published one is.
+ * answering the download route in the server's shape. The API's public key
+ * is in a keys file of the shape the launcher ships.
  *
  * The CLI runs on import, so each command imports __main__ afresh and waits
  * for it to finish or set an exit code.
@@ -23,6 +23,7 @@ import AdmZip from "adm-zip";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const API = "https://api.camoufox.test";
+const DEFAULT_API = "https://api.camoufox.com";
 const KEY = `cfp_live_${"k".repeat(43)}`;
 const FIRST = "159.0-pro.1";
 const SECOND = "159.0-pro.2";
@@ -34,6 +35,7 @@ const ENV = [
 	"HOME",
 	"CAMOUFOX_PRO_API",
 	"CAMOUFOX_PRO_KEY",
+	"CAMOUFOX_PRO_KEYS",
 	"CAMOUFOX_EXECUTABLE_PATH",
 ];
 
@@ -42,9 +44,15 @@ let saved: Record<string, string | undefined>;
 let savedArgv: string[];
 let output: string;
 let finished: boolean;
-/** The key the published builds trust, and the gate signs with. */
+/** The key the gate signs with, and its public half, which the keys file names. */
 let signer: KeyObject;
 let trusted: KeyObject;
+/** The keys file CAMOUFOX_PRO_KEYS names. */
+let keysFile: string;
+/** What the launcher is made to read as the keys file it ships, when a test replaces it. */
+let shipped: string | null;
+/** The version the launcher is made to be, when a test replaces it. */
+let libraryVersion: string | null;
 /** What the download gate answers: a status and a body. */
 let gate: [number, Record<string, any>];
 let asked: { path: string; auth: string | null }[];
@@ -70,11 +78,23 @@ beforeEach(() => {
 	ranges = [];
 	dropAfter = null;
 	({ privateKey: signer, publicKey: trusted } = generateKeyPairSync("ed25519"));
+	keysFile = path.join(tmp, "signing-keys.json");
+	trust(trusted);
+	process.env.CAMOUFOX_PRO_KEYS = keysFile;
+	shipped = null;
+	libraryVersion = null;
+	vi.doMock("../src/pro-update.js", async (load) => {
+		const actual = await load<typeof import("../src/pro-update.js")>();
+		if (shipped) actual.proUpdateDeps.releaseKeys = shipped;
+		if (libraryVersion) actual.proUpdateDeps.libraryVersion = libraryVersion;
+		return actual;
+	});
 	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
 		const headers = new Headers(init?.headers);
-		if (url.startsWith(API)) {
+		const api = [API, DEFAULT_API].find((base) => url.startsWith(base));
+		if (api) {
 			asked.push({
-				path: url.slice(API.length),
+				path: url.slice(api.length),
 				auth: headers.get("Authorization"),
 			});
 			return new Response(JSON.stringify(gate[1]), { status: gate[0] });
@@ -133,6 +153,7 @@ afterEach(() => {
 	}
 	process.argv = savedArgv;
 	process.exitCode = undefined;
+	vi.doUnmock("../src/pro-update.js");
 	vi.doUnmock("../src/geolocation.js");
 	vi.doUnmock("fpgen-js");
 	vi.unstubAllGlobals();
@@ -140,9 +161,29 @@ afterEach(() => {
 	fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-/** The archive of a release whose build trusts `key`. */
-function release(version: string, key: KeyObject = trusted): Buffer {
-	const spki = key.export({ format: "der", type: "spki" }).toString("hex");
+/** Write the keys file as the API lists its signing keys: `keys` in slots 1, 2, ... */
+function trust(...keys: KeyObject[]): void {
+	fs.writeFileSync(
+		keysFile,
+		JSON.stringify({
+			keys: keys.map((key, at) => ({
+				kid: at + 1,
+				generation: 1,
+				algorithm: "ed25519",
+				public_key_b64url: key
+					.export({ format: "der", type: "spki" })
+					.toString("base64url"),
+				state: at ? "standby" : "active",
+			})),
+		}),
+	);
+}
+
+/** The archive of a release. The key its build carries is not one that signs releases here. */
+function release(version: string): Buffer {
+	const spki = generateKeyPairSync("ed25519")
+		.publicKey.export({ format: "der", type: "spki" })
+		.toString("hex");
 	const zip = new AdmZip();
 	zip.addFile("camoufox-bin", Buffer.from("#!/bin/sh\n"), "", 0o755);
 	zip.addFile(
@@ -170,14 +211,22 @@ function release(version: string, key: KeyObject = trusted): Buffer {
 	return zip.toBuffer();
 }
 
-/** Publish `version`; `changed` replaces fields of the answer after it is signed. */
+/** Publish `version`; `signed` replaces fields of the answer before it is signed, `changed` after. */
 function publish(
 	version: string,
 	{
 		archive = release(version),
 		key = signer,
+		kid = 1,
+		signed = {},
 		changed = {},
-	}: { archive?: Buffer; key?: KeyObject; changed?: Record<string, any> } = {},
+	}: {
+		archive?: Buffer;
+		key?: KeyObject;
+		kid?: number;
+		signed?: Record<string, any>;
+		changed?: Record<string, any>;
+	} = {},
 ): Buffer {
 	const artifact: Record<string, any> = {
 		version,
@@ -186,6 +235,7 @@ function publish(
 		sha256: createHash("sha256").update(archive).digest("hex"),
 		size: archive.length,
 		build_hash: `sha256:${"cd".repeat(32)}`,
+		...signed,
 	};
 	const message = Buffer.from(
 		"cfp-artifact-v1\n" +
@@ -197,7 +247,7 @@ function publish(
 		...artifact,
 		url: `https://releases.test/${version}.zip?signature=secret`,
 		signature: {
-			kid: 1,
+			kid,
 			ed25519: sign(null, message, key).toString("base64url"),
 		},
 		...changed,
@@ -311,59 +361,133 @@ it("installs the newest release and makes it active like any build", async () =>
 	expect((await installed()).size).toBe(0);
 });
 
-it("says what a first install's signature was checked against", async () => {
-	publish(FIRST);
+const stranger = () => generateKeyPairSync("ed25519");
 
-	const result = await fetchPro();
-
-	expect(flat(result.output)).toContain("No Camoufox Pro build is installed");
-});
-
-it("removes a first install whose own key did not sign it", async () => {
-	publish(FIRST, { key: generateKeyPairSync("ed25519").privateKey });
+it.each<[string, () => void]>([
+	[
+		"a key the launcher does not trust",
+		() => publish(FIRST, { key: stranger().privateKey }),
+	],
+	["a key id the launcher has no key for", () => publish(FIRST, { kid: 0 })],
+	["no signature", () => publish(FIRST, { changed: { signature: null } })],
+	[
+		"a digest that was not signed",
+		() => publish(FIRST, { changed: { sha256: "00".repeat(32) } }),
+	],
+	[
+		"another key in the signer's slot",
+		() => {
+			publish(FIRST);
+			trust(stranger().publicKey);
+		},
+	],
+])("refuses, before any download, a release signed by %s", async (_name, arrange) => {
+	arrange();
 
 	const result = await fetchPro();
 
 	expect(result.code).toBe(1);
-	expect(result.output).toContain("signature does not verify");
+	expect(result.output).toMatch(
+		/signature does not verify|not a key trusted here/,
+	);
+	expect(ranges).toEqual([]);
+	expect((await installed()).size).toBe(0);
+	expect(partials()).toEqual([]);
+});
+
+it("accepts a standby key the launcher ships, as after a rotation", async () => {
+	const standby = stranger();
+	trust(trusted, standby.publicKey);
+	publish(FIRST, { key: standby.privateKey, kid: 2 });
+
+	expect((await fetchPro()).code).toBe(0);
+	expect((await installed()).get(FIRST)?.isActive).toBe(true);
+});
+
+it("checks the default API with the keys the launcher ships", async () => {
+	delete process.env.CAMOUFOX_PRO_API;
+	delete process.env.CAMOUFOX_PRO_KEYS;
+	shipped = keysFile;
+	publish(FIRST);
+
+	expect((await fetchPro()).code).toBe(0);
+	expect((await installed()).get(FIRST)?.isActive).toBe(true);
+});
+
+it("takes no other keys for the default API than the shipped ones", async () => {
+	delete process.env.CAMOUFOX_PRO_API;
+	shipped = path.join(tmp, "shipped.json");
+	fs.writeFileSync(shipped, '{"keys": []}');
+	publish(FIRST);
+
+	// CAMOUFOX_PRO_KEYS names the key that signed the release, and is not read for this API.
+	const result = await fetchPro();
+
+	expect(result.code).toBe(1);
+	expect(flat(result.output)).toContain("ships no Camoufox Pro release key");
+	expect(asked).toEqual([]);
 	expect((await installed()).size).toBe(0);
 });
 
-it("checks a later release against the installed build before it is downloaded", async () => {
+it("asks another API nothing without its keys", async () => {
+	delete process.env.CAMOUFOX_PRO_KEYS;
 	publish(FIRST);
-	expect((await fetchPro()).code).toBe(0);
-	const stranger = generateKeyPairSync("ed25519");
-	publish(SECOND, {
-		archive: release(SECOND, stranger.publicKey),
-		key: stranger.privateKey,
-	});
-	const downloads = ranges.length;
+
+	const result = await fetchPro();
+
+	expect(result.code).toBe(1);
+	expect(result.output).toContain("CAMOUFOX_PRO_KEYS");
+	expect(asked).toEqual([]);
+	expect((await installed()).size).toBe(0);
+});
+
+it("ships the signing-keys listing both launchers read", async () => {
+	vi.doUnmock("../src/pro-update.js");
+	vi.resetModules();
+	const { proUpdateDeps, releaseKeys } = await import("../src/pro-update.js");
+	expect(fs.realpathSync(proUpdateDeps.releaseKeys)).toBe(
+		fs.realpathSync(
+			path.join(
+				import.meta.dirname,
+				"../../python/src/camoufox/pro-release-public-keys.json",
+			),
+		),
+	);
+	const listing = JSON.parse(
+		fs.readFileSync(proUpdateDeps.releaseKeys, "utf8"),
+	);
+	expect(Object.keys(listing)).toEqual(["keys"]);
+	if (listing.keys.length) {
+		expect([...releaseKeys(DEFAULT_API).keys()].sort()).toEqual(
+			listing.keys.map((entry: { kid: number }) => entry.kid).sort(),
+		);
+	}
+});
+
+it("does not download a release this launcher is too old to drive", async () => {
+	libraryVersion = "0.5.7";
+	publish(FIRST, { changed: { min_driver_version: "0.6" } });
 
 	const refused = await fetchPro();
 
 	expect(refused.code).toBe(1);
-	expect(refused.output).toContain("signature does not verify");
-	expect(ranges.length).toBe(downloads);
-	expect([...(await installed()).keys()]).toEqual([FIRST]);
-
-	publish(SECOND);
-	const accepted = await fetchPro();
-
-	expect(accepted.code, accepted.output).toBe(0);
-	expect(flat(accepted.output)).not.toContain(
-		"No Camoufox Pro build is installed",
+	expect(flat(refused.output)).toContain(
+		"needs camoufox 0.6 or newer, and this is 0.5.7",
 	);
-	const builds = await installed();
-	expect(builds.get(SECOND)?.isActive).toBe(true);
-	expect(builds.get(FIRST)?.isActive).toBe(false);
+	expect(refused.output).toContain("npm install camoufox@latest");
+	expect(ranges).toEqual([]);
+	expect((await installed()).size).toBe(0);
+
+	publish(FIRST, { changed: { min_driver_version: "0.5.7" } });
+	expect((await fetchPro()).code).toBe(0);
 });
 
 it.each([
-	["version", { version: "../../elsewhere" }],
-	["target", { target: "plan9-x86_64" }],
-	["url", { url: "http://releases.test/159.0-pro.1.zip" }],
-])("refuses an answer that is not the release asked for (%s)", async (_name, changed) => {
-	publish(FIRST, { changed });
+	["version", { signed: { version: "../../elsewhere" } }],
+	["target", { signed: { target: "plan9-x86_64" } }],
+	["url", { changed: { url: "http://releases.test/159.0-pro.1.zip" } }],
+])("refuses a signed answer that is not the release asked for (%s)", async (_name, answer) => {
+	publish(FIRST, answer);
 
 	const result = await fetchPro();
 

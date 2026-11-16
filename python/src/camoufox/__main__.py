@@ -301,7 +301,7 @@ def fetch(version, pro_version):
 
 
 def _active_pro_build():
-    """The Pro build a launch would run and its executable, or (None, None) when it is not a Pro build."""
+    """The Pro build a launch would run, or None when it is not a Pro build."""
     from .exceptions import CamoufoxNotInstalled, UnsupportedVersion
     from .pkgman import build_file
     from .pro import read_build
@@ -310,10 +310,10 @@ def _active_pro_build():
         executable = _active_executable()
         build = read_build(build_file(executable, "pro-build.json"))
     except (CamoufoxNotInstalled, UnsupportedVersion):
-        return None, None
+        return None
     except ValueError as error:
         _fail(str(error))
-    return (build, executable) if build else (None, None)
+    return build
 
 
 def _fetch_pro(version: Optional[str]) -> None:
@@ -325,7 +325,7 @@ def _fetch_pro(version: Optional[str]) -> None:
     from .exceptions import CorruptedDownload, ProError
 
     try:
-        pro_update.fetch(version, *_active_pro_build(), echo=click.echo)
+        pro_update.fetch(version, _active_pro_build())
     except (ProError, CorruptedDownload, ImportError, requests.RequestException) as error:
         _fail(str(error))
     config = load_config()
@@ -1000,7 +1000,7 @@ def login():
     from .pro import login as device_login
 
     # The key is for the API the installed Pro build leases from.
-    build, _ = _active_pro_build()
+    build = _active_pro_build()
     try:
         signed_in = device_login(echo=click.echo, build=build)
     except ProError as error:
