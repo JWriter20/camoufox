@@ -234,7 +234,7 @@ index 07741a3deb..702d44eed9 100644
  
    if (!mCreated) {
      LOG("  is not created, return.\n");
-@@ -1669,10 +1787,12 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
+@@ -1669,10 +1787,35 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
    }
  
    const auto oldMargin = mClientMargin;
@@ -244,11 +244,34 @@ index 07741a3deb..702d44eed9 100644
    mClientArea = newBounds.mClientArea;
 -  mClientMargin = newBounds.mClientMargin;
 +  mNativeClientMargin = newBounds.mClientMargin;
-+  mClientMargin = ClaimedClientMargin(mNativeClientMargin);
++  // Camoufox: a claimed frame follows the size mode, and the size mode changes
++  // before the container has the size the window manager gave the window for
++  // it: on the way out of fullscreen the client area is still the screen's
++  // while the toplevel is already the restored window. The new frame around
++  // the old client area is a window that never exists (screen-sized plus a
++  // resize border), and one that is not the screen's size, which is how
++  // AppWindow tells that the widget has not resized yet: it finished the
++  // fullscreen change at once and the page was laid out screen-wide with the
++  // toolbars back. So the frame of the size mode the client area belongs to
++  // stays until the client area fits the toplevel again.
++  const auto claimedMargin = ClaimedClientMargin(mNativeClientMargin);
++  const bool frameFollowsSizeMode = mSizeMode != mClaimedFrameSizeMode;
++  const bool clientAreaIsOld = [&] {
++    if (!frameFollowsSizeMode || claimedMargin == mNativeClientMargin) {
++      return false;
++    }
++    int width = 0, height = 0;
++    gdk_window_get_geometry(toplevel, nullptr, nullptr, &width, &height);
++    return mClientArea.width > width || mClientArea.height > height;
++  }();
++  if (!clientAreaIsOld) {
++    mClientMargin = claimedMargin;
++    mClaimedFrameSizeMode = mSizeMode;
++  }
  
    if (IsPopup()) {
      // Popup windows is not moved by the window manager, and so any change in
-@@ -1709,6 +1829,38 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
+@@ -1709,6 +1852,41 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
      mLastSizeRequest.height +=
          mClientMargin.TopBottom() - oldMargin.TopBottom();
    }
@@ -261,8 +284,11 @@ index 07741a3deb..702d44eed9 100644
 +  // position is pending, each configure compares the window rect with it and
 +  // moves again, a few times at most so as not to fight a window manager that
 +  // will not have it there. Windows also keeps the window rect where it is
-+  // when the frame changes (a titlebar drawn or dropped).
-+  if (mClientMargin != mNativeClientMargin && mSizeMode == nsSizeMode_Normal) {
++  // when the frame changes (a titlebar drawn or dropped). A frame that changes
++  // with the size mode is not that: the window manager puts a window leaving
++  // fullscreen or maximized back where it was.
++  if (mClientMargin != mNativeClientMargin && mSizeMode == nsSizeMode_Normal &&
++      !frameFollowsSizeMode) {
 +    if (clientMarginsChanged && !mClaimedPlacementPending) {
 +      mLastMoveRequest = oldClientArea.TopLeft() -
 +                         DesktopIntPoint(oldMargin.left, oldMargin.top);
@@ -287,7 +313,7 @@ index 07741a3deb..702d44eed9 100644
  
    // We need to send WindowMoved even if only the client margins changed
    // so that BrowserParent picks up the new offsets.
-@@ -3834,6 +3986,9 @@ void nsWindow::OnWindowStateEvent(GtkWidget* aWidget,
+@@ -3834,6 +4012,9 @@ void nsWindow::OnWindowStateEvent(GtkWidget* aWidget,
        // fullscreen mode if the relevant configure hasn't happened yet or what
        // not.
        RecomputeBounds();
@@ -297,7 +323,7 @@ index 07741a3deb..702d44eed9 100644
      }
      if (mWidgetListener) {
        mWidgetListener->SizeModeChanged(mSizeMode);
-@@ -4755,6 +4910,20 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+@@ -4755,6 +4936,20 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
      mGtkWindowAppName = gAppData->name;
    }
  
@@ -318,7 +344,7 @@ index 07741a3deb..702d44eed9 100644
    mCreated = true;
    return NS_OK;
  }
-@@ -4886,7 +5055,7 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
+@@ -4886,7 +5081,7 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
      // SSD mode expects coordinates with decorations (outer frame)
      // so put the margin offset back.
      if (!ToplevelUsesCSD()) {
@@ -327,7 +353,7 @@ index 07741a3deb..702d44eed9 100644
      }
      return GdkRectangle{cr.x, cr.y, cr.width, cr.height};
    }();
-@@ -4974,11 +5143,16 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
+@@ -4974,11 +5169,16 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
    // the request is granted.
    bool isOrWillBeVisible = mHasReceivedSizeAllocate || mNeedsShow || mIsShown;
    if (!isOrWillBeVisible || IsPopup()) {
@@ -346,7 +372,7 @@ index 07741a3deb..702d44eed9 100644
        NotifyWindowMoved(mClientArea.TopLeft());
      }
      if (aResized) {
-@@ -7727,8 +7901,9 @@ void nsWindow::InsertEmoji(RefPtr<nsWindow> aToplevelWindow) {
+@@ -7727,8 +7927,9 @@ void nsWindow::InsertEmoji(RefPtr<nsWindow> aToplevelWindow) {
    auto offset = IsTopLevelWidget()
                      ? DesktopIntPoint()
                      : WidgetToScreenOffsetUnscaled() -
@@ -372,7 +398,7 @@ index 787e3c4cc3..a817e03de0 100644
    bool ToplevelUsesCSD() const;
  
    void CreateAndPutGdkScrollEvent(mozilla::LayoutDeviceIntPoint aPoint,
-@@ -660,7 +663,16 @@ class nsWindow : public nsIWidget {
+@@ -660,7 +663,18 @@ class nsWindow : public nsIWidget {
  
    // See Bounds for these members.
    DesktopIntRect mClientArea;
@@ -386,6 +412,8 @@ index 787e3c4cc3..a817e03de0 100644
 +  // and how often it was moved there since (RecomputeBounds).
 +  bool mClaimedPlacementPending = true;
 +  int mClaimedPlacementMoves = 0;
++  // The size mode mClientMargin is the claimed frame of.
++  nsSizeMode mClaimedFrameSizeMode = nsSizeMode_Normal;
  
    // This field omits duplicate scroll events caused by GNOME bug 726878.
    guint32 mLastScrollEventTime = GDK_CURRENT_TIME;
