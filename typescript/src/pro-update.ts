@@ -2,31 +2,38 @@
  * Camoufox Pro: installing a release.
  *
  * `camoufox fetch pro` asks the Camoufox Pro API for a published release for
- * this machine, checks that it is the one the API signed, and installs it
- * beside the public builds. Mirrors `fetch` in
+ * this machine, checks its signature against the public keys this package
+ * ships (pro-release-public-keys.json) before it downloads anything, and
+ * installs it beside the public builds. Mirrors `fetch` in
  * python/src/camoufox/pro_update.py. See docs/pro.md.
  */
 import { createPublicKey, verify as verifySignature } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Writable } from "node:stream";
+import { LIBRARY_VERSION } from "./__version__.js";
 import { UnsupportedArchitecture, UpdateRefused } from "./exceptions.js";
 import {
 	type InstalledVersion,
 	listInstalled,
-	removeVersion,
 	setActive,
 } from "./multiversion.js";
-import { ARCH_MAP, rprint, userCacheDir } from "./paths.js";
+import { ARCH_MAP, LOCAL_DATA, rprint, userCacheDir } from "./paths.js";
 import {
 	AvailableVersion,
 	CamoufoxFetcher,
-	launchPath,
 	RepoConfig,
 	Version,
 	webdl,
 } from "./pkgman.js";
-import { apiBase, call, HOST_OS, type ProBuild, resolveKey } from "./pro.js";
+import {
+	apiBase,
+	call,
+	DEFAULT_API,
+	HOST_OS,
+	type ProBuild,
+	resolveKey,
+} from "./pro.js";
 
 /** What the API signs of a release, and the domain it signs under. */
 const DOMAIN = "cfp-artifact-v1\n";
@@ -43,12 +50,19 @@ const VERSION = /^(\d+(?:\.\d+)*)-([0-9A-Za-z]+(?:[.+][0-9A-Za-z]+)*)$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 /** The folder of `browsers/` that Pro releases are installed in, and the name `camoufox list` shows. */
 const REPO = "pro";
-// A Pro build carries the public keys it verifies its lease with. A release is signed with the same
-// keys, so the installed build is what says which signatures to believe.
-const TRUST_MARKER = "camoufox-pro-lease-trust-v1 keys=";
-const TRUSTED_KEYS = /^((?:[0-9a-f]+|-)(?:,(?:[0-9a-f]+|-))*) build=/;
 export const ED25519_SPKI = Buffer.from("302a300506032b6570032100", "hex");
-const LIBRARIES = ["libxul.so", "XUL", "xul.dll"];
+/** The same file as the shipped one for another API (CAMOUFOX_PRO_API), whose releases other keys sign. */
+export const KEYS_ENV = "CAMOUFOX_PRO_KEYS";
+
+/**
+ * Test seam, like browserPinDeps. `releaseKeys` is the public keys a release of
+ * the default API is verified with: the body of that API's signing-keys
+ * listing, public halves only. Both launchers ship this one file.
+ */
+export const proUpdateDeps = {
+	releaseKeys: path.join(LOCAL_DATA, "pro-release-public-keys.json"),
+	libraryVersion: LIBRARY_VERSION,
+};
 
 /** Where the download of a release is kept until it is whole. */
 export function partials(): string {
@@ -66,37 +80,55 @@ export function hostTarget(): string {
 	return `${HOST_OS}-${arch}`;
 }
 
-/** The Ed25519 public keys the build beside `executable` trusts, as SPKI, by key id. */
-export function trustedKeys(executable: string): Map<number, Buffer> {
-	for (const name of LIBRARIES) {
-		const library = path.join(path.dirname(executable), name);
-		if (!fs.existsSync(library)) continue;
-		const image = fs.readFileSync(library);
-		const at = image.indexOf(TRUST_MARKER);
-		const named =
-			at < 0
-				? null
-				: TRUSTED_KEYS.exec(
-						image
-							.subarray(
-								at + TRUST_MARKER.length,
-								at + TRUST_MARKER.length + 4096,
-							)
-							.toString("latin1"),
-					);
-		if (named) {
-			const keys = new Map<number, Buffer>();
-			named[1].split(",").forEach((slot, kid) => {
-				const spki = slot === "-" ? Buffer.alloc(0) : Buffer.from(slot, "hex");
-				if (spki.subarray(0, ED25519_SPKI.length).equals(ED25519_SPKI))
-					keys.set(kid, spki);
-			});
-			return keys;
+/** The Ed25519 public keys that sign the releases of the API at `base`, as SPKI, by key id. */
+export function releaseKeys(base: string): Map<number, Buffer> {
+	let file = proUpdateDeps.releaseKeys;
+	let missing =
+		"This camoufox ships no Camoufox Pro release key yet. Update camoufox.";
+	if (base !== DEFAULT_API) {
+		file = (process.env[KEYS_ENV] ?? "").trim();
+		missing = `${file} names no key.`;
+		if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+			throw new UpdateRefused(
+				`${base} is not the Camoufox Pro API this camoufox ships the release keys of. ` +
+					`Set ${KEYS_ENV} to the file of that API's public signing keys.`,
+			);
 		}
 	}
-	throw new UpdateRefused(
-		`The Pro build at ${path.dirname(executable)} names no signing key, so no release can be checked.`,
-	);
+	const keys = new Map<number, Buffer>();
+	for (const entry of JSON.parse(fs.readFileSync(file, "utf8")).keys) {
+		const raw = Buffer.from(String(entry.public_key_b64url), "base64url");
+		const key = raw.subarray(0, ED25519_SPKI.length).equals(ED25519_SPKI)
+			? raw.subarray(ED25519_SPKI.length)
+			: raw;
+		if ((entry.algorithm ?? "ed25519") !== "ed25519" || key.length !== 32) {
+			throw new UpdateRefused(
+				`${file} holds a key that is not an Ed25519 public key.`,
+			);
+		}
+		keys.set(Number(entry.kid), Buffer.concat([ED25519_SPKI, key]));
+	}
+	if (!keys.size) {
+		throw new UpdateRefused(
+			`No Camoufox Pro release can be checked: ${missing}`,
+		);
+	}
+	return keys;
+}
+
+/** Whether this camoufox is at least the `min_driver_version` the release names. */
+function launcherDrives(artifact: Record<string, any>): boolean {
+	const numbers = (version: string) =>
+		(/^\d+(?:\.\d+)*/.exec(version) as RegExpExecArray)[0]
+			.split(".")
+			.map(Number);
+	if (!artifact.min_driver_version) return true;
+	const mine = numbers(proUpdateDeps.libraryVersion);
+	const needed = numbers(String(artifact.min_driver_version));
+	for (let at = 0; at < Math.max(mine.length, needed.length); at++) {
+		if (mine[at] !== needed[at]) return (mine[at] ?? -1) > (needed[at] ?? -1);
+	}
+	return true;
 }
 
 function verify(
@@ -107,7 +139,7 @@ function verify(
 	const key = keys.get(kid);
 	if (!key) {
 		throw new UpdateRefused(
-			`The release is signed by key ${JSON.stringify(kid)}, which this build does not trust.`,
+			`The release is signed by key ${JSON.stringify(kid)}, which is not a key trusted here.`,
 		);
 	}
 	const message = Buffer.from(
@@ -187,26 +219,26 @@ class ProFetcher extends CamoufoxFetcher {
  * Install the newest published release for this machine, or `version`, and
  * make it the active build.
  *
- * `build` and `executable` are the Pro build already active on this machine,
- * if one is: the release is checked against the keys it carries before
- * anything is downloaded. Without one there is no key to check with until the
- * release is unpacked, so it is checked against its own.
+ * `build` is the Pro build already active on this machine, if one is: its API
+ * is the one asked. The answer is checked against that API's public keys
+ * before anything is downloaded.
  */
 export async function fetchRelease(
 	version: string | null,
 	build: ProBuild | null,
-	executable: string | null,
 ): Promise<InstalledVersion> {
 	const key = resolveKey();
+	const base = apiBase(build);
+	// Needed to check the release, so their absence is found before the API is asked.
+	const keys = releaseKeys(base);
 	const target = hostTarget();
 	const artifact = await call(
 		"GET",
 		`/api/v1/artifacts/${encodeURIComponent(version ?? "latest")}/${target}`,
 		null,
-		{ key, base: apiBase(build) },
+		{ key, base },
 	);
-	const keys = build && executable ? trustedKeys(executable) : null;
-	if (keys) verify(artifact, keys);
+	verify(artifact, keys);
 	const named = VERSION.exec(String(artifact.version));
 	if (
 		!named ||
@@ -220,23 +252,16 @@ export async function fetchRelease(
 				`${JSON.stringify(artifact.version)} for ${JSON.stringify(artifact.target)}, which is not a release to install.`,
 		);
 	}
+	if (!launcherDrives(artifact)) {
+		throw new UpdateRefused(
+			`Camoufox Pro ${artifact.version} needs camoufox ${artifact.min_driver_version} or newer, ` +
+				`and this is ${proUpdateDeps.libraryVersion}. Update the launcher: npm install camoufox@latest`,
+		);
+	}
 	await new ProFetcher(artifact, named[1], named[2]).install();
 	const installed = listInstalled().find(
 		(iv) => iv.repoName === REPO && iv.sha256 === artifact.sha256,
 	) as InstalledVersion;
-	if (!keys) {
-		try {
-			verify(artifact, trustedKeys(launchPath(installed.path)));
-		} catch (error) {
-			if (error instanceof UpdateRefused) removeVersion(installed.path);
-			throw error;
-		}
-		rprint(
-			"No Camoufox Pro build is installed to check this release against, so its signature was " +
-				"checked with the key the release itself carries. Later releases are checked with that key " +
-				"before they are downloaded.",
-		);
-	}
 	setActive(installed.relativePath);
 	return installed;
 }

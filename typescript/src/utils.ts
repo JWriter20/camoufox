@@ -45,10 +45,10 @@ import {
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
 	getRandomPreset,
-	handleWindowSize,
 	identitySalt,
 	identitySeed,
 	loadOsFonts,
+	placeWindow,
 	RECORDED_WINDOW_CHROME,
 	raiseScreenToModernFloor,
 	Screen,
@@ -1748,11 +1748,6 @@ export function viewportScreenBound(
 	});
 }
 
-function fingerprintUserAgent(fingerprint: Record<string, any>): string {
-	const ua = fingerprint.navigator?.userAgent ?? "";
-	return Array.isArray(ua) ? String(ua[0] ?? "") : String(ua);
-}
-
 /**
  * A bound on the screen a NewContext() identity draws, so that it holds the
  * context's pages: the viewport the caller asks for, with the recorded chrome
@@ -2641,17 +2636,6 @@ async function buildLaunchOptions(
 			window,
 			os: targetOsOption,
 		});
-		if (fitViewport && !window && launchViewport) {
-			const [chromeW, chromeH] =
-				RECORDED_WINDOW_CHROME[
-					determineUaOs(fingerprintUserAgent(fingerprint as any))
-				];
-			handleWindowSize(
-				fingerprint as any,
-				launchViewport[0] + chromeW,
-				launchViewport[1] + chromeH,
-			);
-		}
 	}
 
 	if (!usedPreset && fingerprint != null) {
@@ -2690,12 +2674,44 @@ async function buildLaunchOptions(
 				firefox_user_prefs["layout.css.devPixelsPerPx"] ?? -1,
 			);
 			config["window.devicePixelRatio"] = drawnDpr;
-			coherence.repairDevicePixelRatio(
-				config,
-				targetOs,
-				callerScale > 0 ? callerScale : undefined,
-			);
+			let scale = callerScale > 0 ? callerScale : undefined;
+			if (fitViewport && launchViewport && scale === undefined) {
+				// The screen was drawn to hold the viewport's window at the drawn
+				// ratio, and a larger one shrinks it: the nearest display mode at
+				// which it still does.
+				const floor = screenFloor(
+					targetOs,
+					{ width: launchViewport[0], height: launchViewport[1] },
+					window ? { width: window[0], height: window[1] } : null,
+				);
+				for (const step of coherence.PLAUSIBLE_DPR[targetOs]) {
+					const holds = (["width", "height"] as const).every(
+						(axis, at) =>
+							coherence.roundHalfEven(
+								(config[`screen.${axis}`] * drawnDpr) / step,
+							) >= floor[at],
+					);
+					if (
+						holds &&
+						(scale === undefined ||
+							Math.abs(step - drawnDpr) < Math.abs(scale - drawnDpr))
+					)
+						scale = step;
+				}
+			}
+			coherence.repairDevicePixelRatio(config, targetOs, scale);
 		}
+	}
+
+	// After the ratio moved, which rescales every CSS size: the viewport is in
+	// the pixels the page reports, so its window is placed in them too.
+	if (fitViewport && launchViewport && !window) {
+		const [chromeW, chromeH] = RECORDED_WINDOW_CHROME[targetOs];
+		placeWindow(
+			config,
+			launchViewport[0] + chromeW,
+			launchViewport[1] + chromeH,
+		);
 	}
 
 	if (leased) {

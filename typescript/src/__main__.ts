@@ -619,18 +619,17 @@ program
 /** The channel `camoufox fetch pro` chooses: Camoufox Pro's published releases. */
 const PRO_CHANNEL = "pro/stable";
 
-/** The Pro build a launch would run and its executable, or nulls when it is not a Pro build. */
-async function activeProBuild(): Promise<[ProBuild, string] | [null, null]> {
+/** The Pro build a launch would run, or null when it is not a Pro build. */
+async function activeProBuild(): Promise<ProBuild | null> {
 	const { readBuild } = await import("./pro.js");
 	const { buildFile } = await import("./pkgman.js");
 	let executable: string;
 	try {
 		executable = activeExecutable();
 	} catch {
-		return [null, null];
+		return null;
 	}
-	const build = readBuild(buildFile(executable, "pro-build.json"));
-	return build ? [build, executable] : [null, null];
+	return readBuild(buildFile(executable, "pro-build.json"));
 }
 
 /**
@@ -640,8 +639,7 @@ async function activeProBuild(): Promise<[ProBuild, string] | [null, null]> {
 async function fetchPro(version: string | null): Promise<void> {
 	const { fetchRelease } = await import("./pro-update.js");
 	try {
-		const [build, executable] = await activeProBuild();
-		await fetchRelease(version, build, executable);
+		await fetchRelease(version, await activeProBuild());
 	} catch (e) {
 		fail(errorMessage(e));
 	}
@@ -1269,7 +1267,7 @@ program
 	.action(async () => {
 		const { login } = await import("./pro.js");
 		// The key is for the API the installed Pro build leases from.
-		const [build] = await activeProBuild();
+		const build = await activeProBuild();
 		const signedIn = await login(undefined, undefined, build);
 		rprint(
 			`Signed in to ${signedIn.account.name} as ${signedIn.user.github_login}. ` +

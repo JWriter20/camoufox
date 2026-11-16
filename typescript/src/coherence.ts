@@ -308,7 +308,7 @@ const CSS_GEOMETRY_KEYS = [
 ] as const;
 
 /** Python's round(): half to even, so both launchers draw the same geometry. */
-function roundHalfEven(v: number): number {
+export function roundHalfEven(v: number): number {
 	const r = Math.round(v);
 	return Math.abs(v % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
 }

@@ -61,6 +61,9 @@ is set: the `pro_key` argument, `CAMOUFOX_PRO_KEY`, the key file.
 
 `CAMOUFOX_PRO_API` points both launchers at a different Camoufox Pro API. It
 defaults to the build's `"api"`, then `https://api.camoufox.com`.
+`camoufox fetch pro` from an API other than `https://api.camoufox.com` also
+needs `CAMOUFOX_PRO_KEYS`, the path of a file with that API's public signing
+keys ([Installing a Pro build](#installing-a-pro-build)).
 
 ## Installing a Pro build
 
@@ -85,15 +88,28 @@ like any other install.
 - A download that is interrupted is kept and resumed by the next
   `camoufox fetch pro`.
 - The API signs each release: its version, platform, file name, size, SHA-256
-  and build hash. When a Pro build is already the active build, the launcher
-  checks that signature with the keys that build carries before it downloads
-  anything, then checks the download's SHA-256. A release that fails a check is
-  not installed.
-- The first Pro build on a machine has no installed build to take keys from. Its
-  download is checked against the SHA-256 the API answered with over https, and
-  after unpacking, the signature is checked with the keys the release itself
-  carries; a release that fails is removed. `camoufox fetch pro` says so when it
-  installs one this way.
+  and build hash. The launcher checks that signature before it downloads
+  anything, on a machine with no Pro build as on any other, then checks the
+  download's SHA-256. A release that fails a check is not downloaded or
+  installed.
+- The keys it checks with are public keys, shipped in both launcher packages as
+  [`pro-release-public-keys.json`](../python/src/camoufox/pro-release-public-keys.json):
+  the public halves of the keys `https://api.camoufox.com` signs releases
+  with, in the shape that API lists them (`{"keys": [{"kid", "generation",
+  "algorithm", "public_key_b64url", "state"}]}`). They verify a signature and
+  cannot make one. The file holds the active key and two standby keys, so a
+  rotation to a standby key needs no new launcher. When a key in the file is
+  replaced, a launcher from before that refuses releases signed with the new
+  key until it is updated.
+- While that file names no key, `camoufox fetch pro` refuses before it asks the
+  API anything.
+- Another API (`CAMOUFOX_PRO_API`, or a build made for one) signs with its own
+  keys. `CAMOUFOX_PRO_KEYS` names a file of that API's public keys in the same
+  shape; without it `camoufox fetch pro` refuses. It is not read for
+  `https://api.camoufox.com`.
+- A release may name the oldest camoufox that can drive it. An older launcher
+  is told to update (`pip install -U camoufox`, `npm install camoufox@latest`)
+  and downloads nothing.
 - An account without a subscription, or a suspended one, is refused with the
   page that resolves it.
 - With Python, checking a signature needs the `pro` extra:
@@ -203,6 +219,9 @@ the build at `executable_path` is never modified.
   subscription, as a launch does.
 - A build whose version does not end in a release number (a local build) is
   never replaced, and a release is never replaced by an older one.
+- A release that names a newer camoufox than this one as the oldest that can
+  drive it is not installed: the launch logs a warning to update camoufox and
+  runs the build it was pointed at.
 - Checking a signature needs the `pro` extra: `pip install "camoufox[pro]"`.
 
 The TypeScript launcher does not update: it launches the build it is pointed at.
@@ -558,7 +577,7 @@ Python and from `camoufox` in TypeScript. Each carries the API's
 | `GpuUnavailable` | No remote GPU can serve this Windows identity now | Retry after `retry_after`, or pass `farm_gpu: false` |
 | `StatePoolSealed` | The API refused to take a warmed profile's state through the chunk routes; it only takes it back through the route it served it from | Update the launcher |
 | `ProClockSkew` | This machine's clock is more than 3 minutes off the API's, so a fresh lease would look expired | Fix the clock (NTP). Over one minute off logs a warning |
-| `UpdateRefused` | A later Pro release was published, and its signature, size or contents did not check out, so it was not installed | Report it. Nothing was installed or changed |
+| `UpdateRefused` | A Pro release's signature, size or contents did not check out, or `camoufox fetch pro` had no key to check it with or is too old to drive it, so it was not installed | Update camoufox if the message says to; otherwise report it. Nothing was installed or changed |
 | `LeaseRefused` | The browser refused the lease it was started with, and exited with status 78. `reason` is the browser's own | Report it with the reason |
 
 The launch fails instead of starting the browser without a lease, because a Pro

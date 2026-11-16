@@ -28,7 +28,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, font_unit_families, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, fit_window_to_caller_screen, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, place_window, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, font_unit_families, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, fit_window_to_caller_screen, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence, pro
 from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
@@ -1379,11 +1379,6 @@ def viewport_screen_bound(
     )
 
 
-def _fingerprint_user_agent(fingerprint: Dict[str, Any]) -> str:
-    ua = (fingerprint.get('navigator') or {}).get('userAgent') or ''
-    return ua[0] if isinstance(ua, list) and ua else str(ua)
-
-
 def context_screen_bound(browser: Any, os: Optional[str], context_kwargs: Dict[str, Any]) -> Optional[Screen]:
     """A bound on the screen a NewContext() identity draws, so that it holds
     the context's pages: the viewport the caller asks for, with the recorded
@@ -2066,9 +2061,6 @@ def launch_options(
             window=window,
             os=os,
         )
-        if fit_viewport and window is None:
-            chrome_w, chrome_h = RECORDED_WINDOW_CHROME[determine_ua_os(_fingerprint_user_agent(fingerprint))]
-            handle_window_size(fingerprint, launch_viewport[0] + chrome_w, launch_viewport[1] + chrome_h)
 
     if not _used_preset and fingerprint is not None:
         # Inject the generated fingerprint into the config
@@ -2098,7 +2090,27 @@ def launch_options(
             except (TypeError, ValueError):
                 caller_scale = -1.0
             config['window.devicePixelRatio'] = drawn_dpr
-            coherence.repair_device_pixel_ratio(config, target_os, caller_scale if caller_scale > 0 else None)
+            scale = caller_scale if caller_scale > 0 else None
+            if fit_viewport and scale is None:
+                # The screen was drawn to hold the viewport's window at the drawn ratio, and a
+                # larger one shrinks it: the nearest display mode at which it still does.
+                floor = screen_floor(
+                    target_os, {'width': launch_viewport[0], 'height': launch_viewport[1]},
+                    window and {'width': window[0], 'height': window[1]},
+                )
+                holding = [
+                    step for step in coherence.PLAUSIBLE_DPR[target_os]
+                    if all(round(config[f'screen.{axis}'] * drawn_dpr / step) >= least
+                           for axis, least in zip(('width', 'height'), floor))
+                ]
+                scale = min(holding, key=lambda step: abs(step - drawn_dpr), default=None)
+            coherence.repair_device_pixel_ratio(config, target_os, scale)
+
+    # After the ratio moved, which rescales every CSS size: the viewport is in
+    # the pixels the page reports, so its window is placed in them too.
+    if fit_viewport and window is None:
+        chrome_w, chrome_h = RECORDED_WINDOW_CHROME[target_os]
+        place_window(config, launch_viewport[0] + chrome_w, launch_viewport[1] + chrome_h)
 
     if leased and _HELD.lease is None and pro_request.get("gpu") is not False and not block_webgl:
         # The farm draws only the GPUs it has, so the identity claims one of them, and the mint names
