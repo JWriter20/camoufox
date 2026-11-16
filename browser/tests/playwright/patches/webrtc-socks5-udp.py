@@ -35,6 +35,10 @@ What PASS means:
       HTTP proxy that hangs up right after CONNECT does not take the browser
       down (stock reports the close before the connect, then calls through the
       callbacks the close cleared);
+    * a proxy slow to grant its relay hears each Binding request once: a
+      retransmission due while the first transmission still waits for the relay
+      is not sent after it (the server used to get them in one burst, which no
+      machine sending its own UDP does);
     * a proxy that drops the control connection once the relay is in use leaves
       gathering as UDP-blocked as a proxy that never had a relay;
     * behind an HTTP proxy, and behind a SOCKS5 proxy that refuses UDP
@@ -70,6 +74,9 @@ NAMES = {STUN_NAME: STUN_ADDR[0]}
 PAGE = b"<!doctype html><title>proxied</title><body>"
 TURN_TCP = f"turn:{STUN_ADDR[0]}:{STUN_ADDR[1]}?transport=tcp"
 CREDENTIALS = ("guard-user", "guard-password")
+# A grant this late falls between the fifth transmission of a Binding request
+# (1.5 s after the first) and the sixth (3.1 s): five wait for the relay.
+SLOW_GRANT_S = 2.3
 # Both gatherings run the same STUN retransmit timers, which measured within
 # 20 ms of each other at 11.1 s; the margin is for a loaded CI runner.
 TIMER_TOLERANCE_MS = 1000
@@ -202,6 +209,7 @@ class StunServer:
     def __init__(self, net: Internet) -> None:
         self.net = net
         self.requests = []  # source of every Binding request
+        self.transactions = []  # transaction id of every Binding request
         self.mapped = []  # every XOR-MAPPED-ADDRESS returned, "ip:port"
         self.oversized = False  # send a datagram past the read buffer before each answer
         net.hosts[STUN_ADDR] = self.on_datagram
@@ -211,6 +219,7 @@ class StunServer:
         if response is None:
             return
         self.requests.append(src)
+        self.transactions.append(data[8:20])
         self.mapped.append(f"{src[0]}:{src[1]}")
         if self.oversized:
             self.net.send(b"\xff" * OVERSIZED, STUN_ADDR, src)
@@ -289,12 +298,14 @@ class Socks5Proxy:
     False, relays UDP ASSOCIATE onto `net` from `public_ip`. `auth` requires
     those RFC 1929 credentials. `bound` is how the grant names the relay:
     "address", "ipv6", "name" or "unspecified". `hang_up` drops the control
-    connection at the first datagram the relay hears."""
+    connection at the first datagram the relay hears. `grant_delay` is how long
+    the proxy takes to grant a relay, in seconds."""
 
     def __init__(self, net: Internet, public_ip: str, udp: bool = True,
-                 auth: tuple = None, bound: str = "address", hang_up: bool = False) -> None:
+                 auth: tuple = None, bound: str = "address", hang_up: bool = False,
+                 grant_delay: float = 0) -> None:
         self.net, self.public_ip, self.udp, self.auth, self.bound = net, public_ip, udp, auth, bound
-        self.hang_up = hang_up
+        self.hang_up, self.grant_delay = hang_up, grant_delay
         self.hung_up = 0
         self.authenticated = 0
         self.connects = []  # (host, port) of every CONNECT
@@ -353,6 +364,7 @@ class Socks5Proxy:
             self.refused += 1
             writer.write(b"\x05\x07\x00\x01" + bytes(6))
             return
+        await asyncio.sleep(self.grant_delay)
         self.associations += 1
         public = (self.public_ip, 40000 + self.associations)
         # The browser reaches an IPv6 relay from ::1, not from the control connection's address.
@@ -413,7 +425,9 @@ async def main() -> int:
     launched = Socks5Proxy(net, "198.51.100.90")
     capturing = Socks5Proxy(net, "198.51.100.100")
     hanging_up = Socks5Proxy(net, "198.51.100.110", hang_up=True)
+    slow = Socks5Proxy(net, "198.51.100.120", grant_delay=SLOW_GRANT_S)
     proxies = {p: await p.start() for p in (relaying, refusing, peer_a, peer_b, authed, launched, capturing, hanging_up,
+                                            slow,
                                             *grants.values())}
     http_requests = []
     http = await asyncio.start_server(lambda r, w: serve_http_proxy(http_requests, r, w), "127.0.0.1", 0)
@@ -485,6 +499,9 @@ async def main() -> int:
         via_grant = {bound: await gather_through(await page_behind(browser, socks(proxy)))
                      for bound, proxy in grants.items()}
         via_hang_up = await gather_through(await page_behind(browser, socks(hanging_up)))
+        before = len(stun.transactions)
+        via_slow = await gather_through(await page_behind(browser, socks(slow)))
+        slow_transactions = stun.transactions[before:]
         await page.evaluate(GATHER, TURN_TCP)
         await http_page.evaluate(GATHER, TURN_TCP)
 
@@ -581,6 +598,10 @@ async def main() -> int:
          via_hang_up[0]["elapsed"] is not None and unanswered["elapsed"] is not None
          and abs(via_hang_up[0]["elapsed"] - unanswered["elapsed"]) < TIMER_TOLERANCE_MS,
          f"{via_hang_up[0]['elapsed']} against {unanswered['elapsed']}"),
+        *relayed("SOCKS5 slow to grant its relay", slow, via_slow),
+        ("SOCKS5 slow to grant its relay: the server heard each Binding request once",
+         len(slow_transactions) == len(set(slow_transactions)),
+         f"{len(slow_transactions)} requests in {len(set(slow_transactions))} transactions"),
         ("two contexts, each behind its own SOCKS5 proxy: the data channel opens",
          opened and messages == ("pong", "ping"), f"opened={opened} messages={messages}"),
         ("two contexts: their datagrams crossed between the two relays",
