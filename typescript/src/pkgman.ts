@@ -757,6 +757,11 @@ export class CamoufoxFetcher {
 	_versionObj?: Version;
 	_selectedVersion?: AvailableVersion;
 	_url?: string;
+	/**
+	 * Where the download is kept between runs, so that a later fetch resumes
+	 * it; unset downloads into a temporary file.
+	 */
+	partial?: string;
 
 	constructor(repoConfig?: RepoConfig, selectedVersion?: AvailableVersion) {
 		this.repoConfig = repoConfig ?? RepoConfig.getDefault();
@@ -909,6 +914,17 @@ export class CamoufoxFetcher {
 	static async downloadFile(file: Writable, url: string): Promise<void> {
 		rprint(`Downloading package: ${url}`);
 		await webdl(url, undefined, true, file);
+	}
+
+	/**
+	 * Download this build's archive into `file`. Through the instance's class,
+	 * as Python's fetcher.download_file(), so a subclass can override either.
+	 */
+	download(file: Writable): Promise<void> {
+		return (this.constructor as typeof CamoufoxFetcher).downloadFile(
+			file,
+			this.url,
+		);
 	}
 
 	/**
@@ -1328,21 +1344,37 @@ export type ProgressCallback = (downloaded: number, total: number) => void;
  *
  * An HTTP error raises requests' "<status> Client Error: ... for url: ..."
  * message, like the Python twin; see request() for network failures.
+ *
+ * `offset` resumes a download whose first `offset` bytes `buffer` already
+ * appends to. `restart` empties what `buffer` writes to: it is called when the
+ * server sends the whole file, not the rest of it.
  */
 export async function webdl(
 	url: string,
 	desc?: string,
 	bar: boolean = true,
 	buffer: Writable | null = null,
-	{ progressCallback }: { progressCallback?: ProgressCallback } = {},
+	{
+		progressCallback,
+		offset = 0,
+		restart,
+	}: {
+		progressCallback?: ProgressCallback;
+		offset?: number;
+		restart?: () => void;
+	} = {},
 ): Promise<Buffer> {
-	const response = await request(url, { headers: githubHeaders(url) });
+	const headers = githubHeaders(url);
+	if (offset) headers.Range = `bytes=${offset}-`;
+	const response = await request(url, { headers });
 	raiseForStatus(response, url);
+	if (offset && response.status !== 206) {
+		restart?.();
+		offset = 0;
+	}
 
-	const totalSize = Number.parseInt(
-		response.headers.get("content-length") || "0",
-		10,
-	);
+	const totalSize =
+		offset + Number.parseInt(response.headers.get("content-length") || "0", 10);
 	let progressBar: cliProgress.SingleBar | null = null;
 	if (!progressCallback && bar) {
 		progressBar = new cliProgress.SingleBar(
@@ -1353,12 +1385,12 @@ export async function webdl(
 			},
 			cliProgress.Presets.shades_classic,
 		);
-		progressBar.start(totalSize, 0);
+		progressBar.start(totalSize, offset);
 	}
 
 	const chunks: Uint8Array[] = [];
-	let downloaded = 0;
-	let lastUpdate = 0;
+	let downloaded = offset;
+	let lastUpdate = offset;
 	try {
 		if (!response.body) {
 			throw new Error(`Response from ${url} had no body`);

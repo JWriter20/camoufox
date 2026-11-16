@@ -308,6 +308,13 @@ export class ProError extends Error {
 	}
 }
 
+/** What the API served for a Camoufox Pro release is not the release it
+ * signed. Nothing is installed. */
+export class UpdateRefused extends ProError {
+	constructor(message: string) {
+		super(message, { code: "update_refused" });
+	}
+}
 /** No Camoufox Pro key, or the API does not accept it. */
 export class NotSignedIn extends ProError {}
 /** The API rejected the lease request itself. */
