@@ -10,7 +10,7 @@ index 6d55ea7110..e2ae767b72 100644
  
  #ifdef MOZ_X11
  #  include <X11/Xlib.h>
-@@ -185,6 +186,35 @@ static already_AddRefed<Screen> MakeScreenGtk(unsigned int aMonitor,
+@@ -185,6 +186,35 @@
      }
    }
  
@@ -60,7 +60,7 @@ index 07741a3deb..702d44eed9 100644
  #ifdef MOZ_X11
  #  include "nsWindowX11.h"
  #endif
-@@ -753,8 +756,8 @@ void nsWindow::RegisterTouchWindow() {
+@@ -753,8 +756,8 @@
  
  LayoutDeviceIntPoint nsWindow::GetScreenEdgeSlop() {
    if (DrawsToCSDTitlebar()) {
@@ -71,7 +71,7 @@ index 07741a3deb..702d44eed9 100644
    }
    return {};
  }
-@@ -806,6 +809,11 @@ bool nsWindow::ConstrainSizeWithScale(int* aWidth, int* aHeight,
+@@ -806,6 +809,11 @@
    if (*aWidth <= mClientMargin.LeftRight()) {
      *aWidth = mClientMargin.LeftRight() + 1;
    }
@@ -83,7 +83,7 @@ index 07741a3deb..702d44eed9 100644
    if (*aHeight <= mClientMargin.TopBottom()) {
      *aHeight = mClientMargin.TopBottom() + 1;
    }
-@@ -821,7 +829,7 @@ bool nsWindow::ConstrainSizeWithScale(int* aWidth, int* aHeight,
+@@ -821,7 +829,7 @@
      *aHeight = int(round(tmpHeight / aScale)) + mClientMargin.TopBottom();
      return true;
    }
@@ -92,7 +92,7 @@ index 07741a3deb..702d44eed9 100644
  }
  
  // Constraints are in desktop pixels. GDK coords are also desktop pixels on
-@@ -877,6 +885,114 @@ bool nsWindow::ToplevelUsesCSD() const {
+@@ -877,6 +885,114 @@
    return GetGtkCSDEnv() == GtkCsd::One;
  }
  
@@ -207,7 +207,7 @@ index 07741a3deb..702d44eed9 100644
  bool nsWindow::DrawsToCSDTitlebar() const {
    return mGtkWindowDecoration == GTK_DECORATION_CLIENT && mDrawInTitlebar;
  }
-@@ -893,7 +1009,7 @@ void nsWindow::ApplySizeConstraints() {
+@@ -893,7 +1009,7 @@
                                  constraints.mMinSize.width,
                                  constraints.mMinSize.height);
      if (ToplevelUsesCSD()) {
@@ -216,7 +216,7 @@ index 07741a3deb..702d44eed9 100644
        constraints.mMinSize.height += margin.TopBottom();
        constraints.mMinSize.width += margin.LeftRight();
      }
-@@ -901,7 +1017,7 @@ void nsWindow::ApplySizeConstraints() {
+@@ -901,7 +1017,7 @@
    }
    if (mSizeConstraints.mMaxSize != DesktopIntSize(NS_MAXSIZE, NS_MAXSIZE)) {
      if (ToplevelUsesCSD()) {
@@ -225,7 +225,7 @@ index 07741a3deb..702d44eed9 100644
        constraints.mMaxSize.height += margin.TopBottom();
        constraints.mMaxSize.width += margin.LeftRight();
      }
-@@ -1106,6 +1222,8 @@ void nsWindow::Move(const DesktopPoint& aTopLeft) {
+@@ -1106,6 +1222,8 @@
  
    // XXX Should we do some AreBoundsSane check here?
    mLastMoveRequest = request;
@@ -234,35 +234,64 @@ index 07741a3deb..702d44eed9 100644
  
    if (!mCreated) {
      LOG("  is not created, return.\n");
-@@ -1669,10 +1787,35 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
+@@ -1669,10 +1787,64 @@
    }
  
    const auto oldMargin = mClientMargin;
 +  const auto oldNativeMargin = mNativeClientMargin;
    const auto oldClientArea = mClientArea;
    const auto newBounds = Bounds::Compute(this);
++  // Camoufox: on X11 the toplevel's size comes from the X server, the client
++  // area's from the container, which GTK resizes only when it handles the
++  // toplevel's configure. Between the two a client area larger than its
++  // toplevel is the container's old size inside the toplevel's new frame:
++  // leaving fullscreen under openbox the state event can find the toplevel
++  // already restored and the container still screen-sized, and those bounds
++  // are a window that never exists (the screen's client area in a titled
++  // frame). Dispatched, AppWindow took them for the end of the fullscreen
++  // change, which it then finished at once: the page was laid out screen-wide
++  // with the toolbars back before the real resize came. Keep the old bounds;
++  // the container's size-allocate for the toplevel's configure recomputes
++  // them.
++  if (GdkIsX11Display() && mSizeMode != nsSizeMode_Fullscreen && !IsPopup()) {
++    int width = 0, height = 0;
++    gdk_window_get_geometry(toplevel, nullptr, nullptr, &width, &height);
++    if (newBounds.mClientArea.width > width ||
++        newBounds.mClientArea.height > height) {
++      LOG("client area %s does not fit the toplevel's %d x %d yet",
++          ToString(newBounds.mClientArea).c_str(), width, height);
++      return;
++    }
++  }
    mClientArea = newBounds.mClientArea;
 -  mClientMargin = newBounds.mClientMargin;
 +  mNativeClientMargin = newBounds.mClientMargin;
 +  // Camoufox: a claimed frame follows the size mode, and the size mode changes
-+  // before the container has the size the window manager gave the window for
-+  // it: on the way out of fullscreen the client area is still the screen's
-+  // while the toplevel is already the restored window. The new frame around
-+  // the old client area is a window that never exists (screen-sized plus a
-+  // resize border), and one that is not the screen's size, which is how
-+  // AppWindow tells that the widget has not resized yet: it finished the
++  // before the window manager has resized the window for it: into or out of
++  // fullscreen the state event can come before the toplevel's configure, with
++  // the toplevel and the client area both still the old size. The new frame
++  // around the old client area is a window that never exists (screen-sized
++  // plus a resize border), and one that is not the screen's size, which is
++  // how AppWindow tells that the widget has not resized yet: it finished the
 +  // fullscreen change at once and the page was laid out screen-wide with the
 +  // toolbars back. So the frame of the size mode the client area belongs to
-+  // stays until the client area fits the toplevel again.
++  // stays, and the client area belongs to fullscreen exactly when it is its
++  // monitor's size.
 +  const auto claimedMargin = ClaimedClientMargin(mNativeClientMargin);
 +  const bool frameFollowsSizeMode = mSizeMode != mClaimedFrameSizeMode;
 +  const bool clientAreaIsOld = [&] {
-+    if (!frameFollowsSizeMode || claimedMargin == mNativeClientMargin) {
++    if (!frameFollowsSizeMode || claimedMargin == mNativeClientMargin ||
++        (mSizeMode != nsSizeMode_Fullscreen &&
++         mClaimedFrameSizeMode != nsSizeMode_Fullscreen)) {
 +      return false;
 +    }
-+    int width = 0, height = 0;
-+    gdk_window_get_geometry(toplevel, nullptr, nullptr, &width, &height);
-+    return mClientArea.width > width || mClientArea.height > height;
++    GdkScreen* screen = gdk_window_get_screen(toplevel);
++    GdkRectangle monitor{};
++    gdk_screen_get_monitor_geometry(
++        screen, gdk_screen_get_monitor_at_window(screen, toplevel), &monitor);
++    const bool screenSized = mClientArea.width == monitor.width &&
++                             mClientArea.height == monitor.height;
++    return screenSized != (mSizeMode == nsSizeMode_Fullscreen);
 +  }();
 +  if (!clientAreaIsOld) {
 +    mClientMargin = claimedMargin;
@@ -271,7 +300,7 @@ index 07741a3deb..702d44eed9 100644
  
    if (IsPopup()) {
      // Popup windows is not moved by the window manager, and so any change in
-@@ -1709,6 +1852,41 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
+@@ -1709,6 +1881,41 @@
      mLastSizeRequest.height +=
          mClientMargin.TopBottom() - oldMargin.TopBottom();
    }
@@ -313,7 +342,41 @@ index 07741a3deb..702d44eed9 100644
  
    // We need to send WindowMoved even if only the client margins changed
    // so that BrowserParent picks up the new offsets.
-@@ -3834,6 +4012,9 @@ void nsWindow::OnWindowStateEvent(GtkWidget* aWidget,
+@@ -3828,12 +4035,42 @@
+   if (mSizeMode != oldSizeMode) {
+     const bool fullscreenChanging = mSizeMode == nsSizeMode_Fullscreen ||
+                                     oldSizeMode == nsSizeMode_Fullscreen;
+-    if (fullscreenChanging) {
++    // Camoufox: entering fullscreen on X11 the state event can come before
++    // the toplevel's configure, while the toplevel is still its old size
++    // without the frame around it. Those bounds are a window that never
++    // exists, and dispatched, AppWindow took them for the end of the
++    // fullscreen change and finished it at once: the page could be told it
++    // was fullscreen while still laid out at its old size. Leave the bounds
++    // to the container's size-allocate for the toplevel's configure, which
++    // AppWindow waits for.
++    const bool enteringBeforeConfigure = [&] {
++      if (!GdkIsX11Display() || mSizeMode != nsSizeMode_Fullscreen ||
++          IsPopup() || !mShell) {
++        return false;
++      }
++      GdkWindow* toplevel = gtk_widget_get_window(mShell);
++      if (!toplevel) {
++        return false;
++      }
++      int width = 0, height = 0;
++      gdk_window_get_geometry(toplevel, nullptr, nullptr, &width, &height);
++      GdkScreen* screen = gdk_window_get_screen(toplevel);
++      GdkRectangle monitor{};
++      gdk_screen_get_monitor_geometry(
++          screen, gdk_screen_get_monitor_at_window(screen, toplevel), &monitor);
++      return width != monitor.width || height != monitor.height;
++    }();
++    if (enteringBeforeConfigure) {
++      LOG("entering fullscreen before the toplevel's configure, bounds wait");
++    } else if (fullscreenChanging) {
+       // As a special-case when going in / out of fullscreen mode we recompute
+       // bounds synchronously. This avoids spurious resizes when going into
        // fullscreen mode if the relevant configure hasn't happened yet or what
        // not.
        RecomputeBounds();
@@ -323,7 +386,7 @@ index 07741a3deb..702d44eed9 100644
      }
      if (mWidgetListener) {
        mWidgetListener->SizeModeChanged(mSizeMode);
-@@ -4755,6 +4936,20 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+@@ -4755,6 +4992,20 @@
      mGtkWindowAppName = gAppData->name;
    }
  
@@ -344,7 +407,7 @@ index 07741a3deb..702d44eed9 100644
    mCreated = true;
    return NS_OK;
  }
-@@ -4886,7 +5081,7 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
+@@ -4886,7 +5137,7 @@
      // SSD mode expects coordinates with decorations (outer frame)
      // so put the margin offset back.
      if (!ToplevelUsesCSD()) {
@@ -353,7 +416,7 @@ index 07741a3deb..702d44eed9 100644
      }
      return GdkRectangle{cr.x, cr.y, cr.width, cr.height};
    }();
-@@ -4974,11 +5169,16 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
+@@ -4974,11 +5225,16 @@
    // the request is granted.
    bool isOrWillBeVisible = mHasReceivedSizeAllocate || mNeedsShow || mIsShown;
    if (!isOrWillBeVisible || IsPopup()) {
@@ -372,7 +435,7 @@ index 07741a3deb..702d44eed9 100644
        NotifyWindowMoved(mClientArea.TopLeft());
      }
      if (aResized) {
-@@ -7727,8 +7927,9 @@ void nsWindow::InsertEmoji(RefPtr<nsWindow> aToplevelWindow) {
+@@ -7727,8 +7983,9 @@
    auto offset = IsTopLevelWidget()
                      ? DesktopIntPoint()
                      : WidgetToScreenOffsetUnscaled() -
@@ -388,7 +451,7 @@ diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
 index 787e3c4cc3..a817e03de0 100644
 --- a/widget/gtk/nsWindow.h
 +++ b/widget/gtk/nsWindow.h
-@@ -609,6 +609,9 @@ class nsWindow : public nsIWidget {
+@@ -609,6 +609,9 @@
    GtkTextDirection GetTextDirection();
  
    bool DrawsToCSDTitlebar() const;
@@ -398,7 +461,7 @@ index 787e3c4cc3..a817e03de0 100644
    bool ToplevelUsesCSD() const;
  
    void CreateAndPutGdkScrollEvent(mozilla::LayoutDeviceIntPoint aPoint,
-@@ -660,7 +663,18 @@ class nsWindow : public nsIWidget {
+@@ -660,7 +663,18 @@
  
    // See Bounds for these members.
    DesktopIntRect mClientArea;
