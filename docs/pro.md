@@ -521,7 +521,9 @@ any other reason, and `StatePoolSealed` when an older launcher tries to sync a
 warmed profile itself. State written by a newer Firefox than the build's is never
 opened: the launch fails with `StateNewerThanBrowser`.
 
-In Python, profile sync needs the `pro` extra:
+In Python, profile sync needs the `pro` extra, which also brings the `geoip`
+extra's reader: a profile, and a launch behind the lease's own proxy, take
+their timezone and locale from the exit IP:
 
 ```bash
 pip install "camoufox[pro]"
