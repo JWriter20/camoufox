@@ -82,6 +82,7 @@ class FakeApi:
         self.served = []
         # What GET /api/v1/artifacts names as the newest release, and what resolving it answers.
         self.latest = None
+        self.releases = []
         self.artifact = None
 
     def script(self, route, *answers):
@@ -104,7 +105,7 @@ class FakeApi:
             query = parse_qs(urlsplit(path).query)
             return 200, {"os": query["os"][0], "firefox": "156.0.1", "renderers": self.served}
         if path.startswith("/api/v1/artifacts?"):
-            return 200, {"latest": {"version": self.latest} if self.latest else None, "releases": []}
+            return 200, {"latest": {"version": self.latest} if self.latest else None, "releases": self.releases}
         if path.startswith("/api/v1/artifacts/") and self.artifact:
             return 200, self.artifact
         if path == "/api/v1/leases":

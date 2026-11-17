@@ -6,12 +6,14 @@ machine, checks its signature against the public keys this package ships
 (pro-release-public-keys.json) before it downloads anything, and installs it
 beside the public builds.
 
-A Pro release is numbered: `159.0-pro.12` is the twelfth. When a launch points
-at a numbered Pro build and the Camoufox Pro API has published a release with a
-higher number for the same target, the launcher downloads that release, checks
-that it is the one the API signed, installs it in the camoufox cache and
-launches it in place of the build it was pointed at. The build the launch
-points at is never modified. See docs/pro.md.
+A Pro release is numbered: `159.0-pro.12` is the twelfth, and a development
+build `159.0-dev.398` is the 398th. Releases are ordered by Firefox version
+first, then by number. When a launch points at a numbered Pro build and the
+Camoufox Pro API has published a later release of the same kind (`pro` or
+`dev`) for the same target, the launcher downloads that release, checks that it
+is the one the API signed, installs it in the camoufox cache and launches it in
+place of the build it was pointed at. The build the launch points at is never
+modified. See docs/pro.md.
 """
 
 import base64
@@ -28,7 +30,7 @@ import time
 import zipfile
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -49,7 +51,8 @@ from .pkgman import (
     webdl,
 )
 
-RELEASE_NUMBER = re.compile(r"(?:^|[-+.])pro\.(\d+)$")
+# `<Firefox version>...-pro.<n>` (a release) or `...-dev.<n>` (a development build).
+RELEASE_NUMBER = re.compile(r"(\d+(?:\.\d+)*)(?:[-+.].*)?[-+.](pro|dev)\.(\d+)")
 # A release's version as an install is named: `<Firefox version>-<build>`.
 VERSION = re.compile(r"(\d+(?:\.\d+)*)-([0-9A-Za-z]+(?:[.+][0-9A-Za-z]+)*)")
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -74,10 +77,16 @@ ABANDONED_S = 24 * 3600
 DOWNLOAD_TIMEOUT_S = 600
 
 
-def release_number(version: str) -> Optional[int]:
-    """The `<n>` of a version ending `pro.<n>`; None for a build that is not a numbered release."""
-    match = RELEASE_NUMBER.search(version)
-    return int(match.group(1)) if match else None
+def release_key(version: str) -> Optional[Tuple[str, Tuple[int, ...], int]]:
+    """
+    `(kind, Firefox version, n)` of a version ending `pro.<n>` or `dev.<n>`, which orders releases of one
+    kind; None for a build that is not a numbered release.
+    """
+    match = RELEASE_NUMBER.fullmatch(version)
+    if match is None:
+        return None
+    firefox, kind, number = match.groups()
+    return kind, tuple(int(part) for part in firefox.split(".")), int(number)
 
 
 def store() -> Path:
@@ -232,8 +241,8 @@ def _install(artifact: Dict[str, Any], installed: Path) -> None:
 
 def _prune(browsers: Path) -> None:
     releases = sorted(
-        (entry for entry in browsers.iterdir() if entry.is_dir() and release_number(entry.name) is not None),
-        key=lambda entry: release_number(entry.name) or 0,
+        (entry for entry in browsers.iterdir() if entry.is_dir() and release_key(entry.name) is not None),
+        key=lambda entry: release_key(entry.name)[1:],  # type: ignore[index]
     )
     # An install that was killed half way leaves its directory behind.
     abandoned = [
@@ -250,16 +259,21 @@ def newest(build: pro.ProBuild, executable: str, key: Optional[str] = None) -> s
     The executable to launch for a launch pointed at `executable`, whose build is `build`: itself,
     or the same file of a newer release of its target, installed first if it is not yet.
     """
-    mine = release_number(build.version)
+    mine = release_key(build.version)
     if mine is None:
         return executable
     key = pro.resolve_key(key)
     base = pro.api_base(build)
-    latest = (pro.call("GET", f"/api/v1/artifacts?target={build.target}", key=key, base=base).get("latest") or {}).get(
-        "version"
-    )
-    theirs = release_number(str(latest or ""))
-    if theirs is None or theirs <= mine:
+    catalogue = pro.call("GET", f"/api/v1/artifacts?target={build.target}", key=key, base=base)
+    # A `pro.<n>` release follows the release the API names as the latest; a `dev.<n>` build, which
+    # is never that, the newest `dev.<n>` build the API lists.
+    if mine[0] == "pro":
+        named = [(catalogue.get("latest") or {}).get("version")]
+    else:
+        named = [release.get("version") for release in catalogue.get("releases") or []]
+    keyed = [(theirs, str(version)) for version in named if (theirs := release_key(str(version or "")))]
+    theirs, latest = max((entry for entry in keyed if entry[0][0] == mine[0]), default=(mine, ""))
+    if theirs <= mine:
         return executable
     installed = store() / str(latest)
     if installed.parent != store():
