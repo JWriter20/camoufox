@@ -1,0 +1,51 @@
+diff --git a/browser/base/content/browser-fullScreenAndPointerLock.js b/browser/base/content/browser-fullScreenAndPointerLock.js
+--- a/browser/base/content/browser-fullScreenAndPointerLock.js
++++ b/browser/base/content/browser-fullScreenAndPointerLock.js
+@@ -607,6 +607,7 @@
+     // that the content document handles the pending request. Doing so
+     // before the check is fine since we also check the activeness of
+     // the requesting document in content-side handling code.
++    let sendEntered = null;
+     if (this._isRemoteBrowser(aBrowser)) {
+       // The cached message recipient in actor is used for fullscreen state
+       // cleanup, we should not use it while entering fullscreen.
+@@ -624,11 +625,20 @@
+       // Record that the actor is waiting for its child to enter
+       // fullscreen so that if it dies we can abort.
+       targetActor.waitingForChildEnterFullscreen = true;
+-      targetActor.sendAsyncMessage("DOMFullscreen:Entered", {
+-        remoteFrameBC: inProcessBC,
+-      });
++      // Camoufox: the remote browser's new size otherwise goes out with the
++      // next paint, and the content process could enter fullscreen, and fire
++      // fullscreenchange, while still laid out at its old size (or with the
++      // toolbox still showing). So the message goes once the chrome has its
++      // fullscreen layout, right after that size.
++      sendEntered = () => {
++        document.synchronouslyUpdateRemoteBrowserDimensions();
++        targetActor.sendAsyncMessage("DOMFullscreen:Entered", {
++          remoteFrameBC: inProcessBC,
++        });
++      };
+ 
+       if (inProcessBC) {
++        sendEntered();
+         // We aren't messaging the request origin yet, skip this time.
+         return;
+       }
+@@ -645,6 +655,7 @@
+       // full-screen was made. Cancel full-screen.
+       Services.focus.activeWindow != window
+     ) {
++      sendEntered?.();
+       this._abortEnterFullscreen(aActor);
+       return;
+     }
+@@ -668,6 +679,7 @@
+       "fullscreenNavToolboxHidden",
+       true
+     );
++    sendEntered?.();
+ 
+     XULBrowserWindow.onEnterDOMFullscreen();
+ 
