@@ -537,9 +537,12 @@ pip install "camoufox[pro]"
 
 When the lease includes captcha solving, the browser (or persistent context)
 carries it as `.pro.captcha`: `endpoint`, `remaining` and `expires_at`.
-`endpoint` is an OpenAI-compatible API base URL. Call it with your Camoufox Pro
-key (`cfp_live_...`), the one the launch signed in with. It accepts no other
-key, and the lease carries none:
+`endpoint` is the base URL of a CaptchaKraken solve API (`/pointer`, `/models`,
+`/solve-outcome`), not an OpenAI chat-completions endpoint. Solve with the
+CaptchaKraken client (`pip install captchakraken`, 4.2.0 or newer) pointed at
+it: `VLLM_BASE_URL` set to `endpoint`, `CAPTCHA_KRAKEN_API_KEY` to your Camoufox
+Pro key (`cfp_live_...`), the one the launch signed in with. It accepts no
+other key, and the lease carries none:
 
 ```ts
 const browser = await Camoufox({ executable_path: "/path/to/camoufox-pro/camoufox-bin" });

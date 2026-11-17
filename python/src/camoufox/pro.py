@@ -469,9 +469,9 @@ class ProSession:
     """What a Pro browser or persistent context exposes of its lease, as `.pro`."""
 
     lease_id: str
-    # The captcha solver the lease grants: `endpoint` is an OpenAI-compatible API
-    # base URL, called with your Camoufox Pro key (docs/pro.md). None when the
-    # lease does not grant it.
+    # The captcha solver the lease grants: `endpoint` is the base URL of a
+    # CaptchaKraken solve API, for the CaptchaKraken client with your Camoufox
+    # Pro key (docs/pro.md). None when the lease does not grant it.
     captcha: Optional[Dict[str, Any]]
 
 
