@@ -85,8 +85,11 @@ class Channel:
 
         return Response()
 
-    def publish(self, archive, version=NEWER, signer=None, kid=1, **changed):
-        """Publish `archive` as `version`; `changed` replaces fields of the answer after it is signed."""
+    def publish(self, archive, version=NEWER, signer=None, kid=1, release_channel="stable", **changed):
+        """
+        Publish `archive` as `version` on `release_channel`; `changed` replaces fields of the answer after it
+        is signed. Only a stable release is the catalogue's `latest`, as on the API.
+        """
         url = f"https://releases.test/{version}.zip"
         artifact = {
             "version": version,
@@ -98,7 +101,9 @@ class Channel:
         }
         message = pro_update.DOMAIN + "\n".join(str(artifact[name]) for name in pro_update.SIGNED_FIELDS).encode()
         signature = (signer or self.signer).sign(message).signature
-        self.api.latest = version
+        if release_channel == "stable":
+            self.api.latest = version
+        self.api.releases.insert(0, {"version": version, "channel": release_channel, "targets": ["linux-x86_64"]})
         self.api.artifact = {**artifact, "url": url, "signature": {"kid": kid, "ed25519": b64(signature)}, **changed}
         self.served[self.api.artifact["url"]] = archive
 
@@ -210,3 +215,46 @@ def test_the_release_before_the_newest_is_kept_and_older_ones_go(api, pro_build,
         channel.publish(archive_of(build_files(version)), version=version)
         launch(pro_build, monkeypatch)
     assert installed() == ["156.0.1-pro.3", "156.0.1-pro.4"]
+
+
+def declare(pro_build, version):
+    declared = {"build_hash": NEWER_HASH, "version": version, "target": "linux-x86_64"}
+    (pro_build.parent / "pro-build.json").write_text(json.dumps(declared))
+
+
+def test_a_dev_release_launches_the_newest_dev_release_of_its_firefox_or_a_later_one(
+    api, pro_build, channel, monkeypatch  # noqa: F811
+):
+    declare(pro_build, "159.0-dev.398")
+    # A stable release is not a dev build's update, whatever its number.
+    channel.publish(archive_of(build_files("159.0-pro.900")), version="159.0-pro.900")
+    # Firefox first: a later run of an older Firefox is not newer.
+    channel.publish(archive_of(build_files("158.0-dev.500")), version="158.0-dev.500", release_channel="dev")
+    channel.publish(archive_of(build_files("159.0-dev.397")), version="159.0-dev.397", release_channel="dev")
+    # The fake API resolves the last release published; the launcher must ask for this one.
+    channel.publish(archive_of(build_files("159.0-dev.399")), version="159.0-dev.399", release_channel="dev")
+
+    newest = pro_update.store() / "159.0-dev.399" / "camoufox-bin"
+    assert launch(pro_build, monkeypatch)["executable_path"] == str(newest)
+    assert installed() == ["159.0-dev.399"]
+
+    declare(pro_build, "159.0-dev.399")
+    channel.publish(archive_of(build_files("160.0-dev.12")), version="160.0-dev.12", release_channel="dev")
+    assert launch(pro_build, monkeypatch)["executable_path"] == str(pro_update.store() / "160.0-dev.12" / "camoufox-bin")
+
+
+@pytest.mark.parametrize("newer", ["159.0-dev.397", "159.0-dev.398", "158.0-dev.999"])
+def test_a_dev_release_is_never_replaced_by_an_older_one(api, pro_build, channel, monkeypatch, newer):  # noqa: F811
+    declare(pro_build, "159.0-dev.398")
+    channel.publish(archive_of(build_files(newer)), version=newer, release_channel="dev")
+    assert launch(pro_build, monkeypatch)["executable_path"] == str(pro_build)
+    assert api.calls(RESOLVE) == [] and installed() == []
+
+
+def test_releases_are_ordered_firefox_first_then_by_number():
+    order = ["158.0-pro.40", "159.0-pro.3", "159.0-pro.12", "159.0.1-pro.1", "160.0-pro.2"]
+    assert sorted(reversed(order), key=pro_update.release_key) == order
+    assert pro_update.release_key("159.0-dev.398") < pro_update.release_key("159.0-dev.399")
+    assert pro_update.release_key("159.0-dev.398")[0] != pro_update.release_key("159.0-pro.398")[0]
+    for local in ("159.0-pro.dev", "159.0", "pro.3", "159.0-dev"):
+        assert pro_update.release_key(local) is None

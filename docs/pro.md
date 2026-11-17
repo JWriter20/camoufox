@@ -202,11 +202,15 @@ as a lease you manage yourself and mints nothing.
 
 ### Updates
 
-A Pro release is numbered: `159.0-pro.12` is the twelfth. When the Python
-launcher is pointed at a numbered Pro release and Camoufox Pro has published a
-later one for the same platform, the launch downloads the later release once and
-launches it in place of the build it was pointed at. Nothing is asked of you, and
-the build at `executable_path` is never modified.
+A Pro release is numbered: `159.0-pro.12` is the twelfth. A development build
+is numbered the same way, `159.0-dev.398`. Releases are ordered by Firefox
+version first, then by number. When the Python launcher is pointed at a
+numbered Pro release and Camoufox Pro has published a later one for the same
+platform, the launch downloads the later release once and launches it in place
+of the build it was pointed at. A `pro.<n>` release follows the release the API
+names as the latest; a `dev.<n>` build follows the newest `dev.<n>` build the
+API lists. Nothing is asked of you, and the build at `executable_path` is never
+modified.
 
 - The release is installed in the camoufox cache, under `pro/browsers/<version>/`
   (`~/.cache/camoufox/` on Linux). The newest two are kept; older ones are
