@@ -183,6 +183,12 @@ which also covers porting patches to a new Firefox and porting Playwright. Keep
 the `Makefile` diff minimal: host dependencies belong in
 `browser/scripts/install-deps.sh`.
 
+A patch never changes a file listed in
+`browser/scripts/data/contentaccessible-manifest-<os>.json`: pages can load
+those, so one changed byte tells them this is not stock Firefox
+(`contentaccessible-parity` fails). Put the change in a file pages cannot load,
+such as the actor or C++ that calls into it.
+
 ## Testing
 
 `ci/` is the whole pipeline. It runs the same way locally and on a pull request

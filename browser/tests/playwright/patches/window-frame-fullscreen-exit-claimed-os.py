@@ -37,6 +37,10 @@ window-frame-claimed-os.patch leaves the bounds to the configure while the
 toplevel is not yet its monitor's size, and
 dom-fullscreen-entered-after-resize.patch sends the remote browser's size,
 after the chrome has its fullscreen layout, ahead of `DOMFullscreen:Entered`.
+It does so in the DOMFullscreen actor, holding the message the chrome's
+FullScreen.enterDomFullscreen sends: pages can load
+browser-fullScreenAndPointerLock.js, so a byte changed there is a tell
+(contentaccessible-parity.py).
 
 The claimed screen is the display's, as it is wherever the launcher sizes the
 display: Gecko compares the window with the screen it is told about.
