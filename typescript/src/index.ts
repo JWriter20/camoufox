@@ -50,7 +50,6 @@ export {
 	type Engine,
 	engine,
 	type HumanizeSetting,
-	notches,
 	raw,
 	type SeededRng,
 	seededRng,

@@ -1,0 +1,99 @@
+diff --git a/widget/headless/HeadlessScreenHelper.cpp b/widget/headless/HeadlessScreenHelper.cpp
+--- a/widget/headless/HeadlessScreenHelper.cpp
++++ b/widget/headless/HeadlessScreenHelper.cpp
+@@ -4,6 +4,8 @@
+ 
+ #include "HeadlessScreenHelper.h"
+ 
++#include "MaskConfig.hpp"
++#include "mozilla/StaticPrefs_layout.h"
+ #include "mozilla/RefPtr.h"
+ #include "mozilla/dom/DOMTypes.h"
+ #include "nsTArray.h"
+@@ -24,14 +26,52 @@
+   if (ev) {
+     height = atoi(ev);
+   }
++  // Camoufox: the screen is the one the identity claims, in the device
++  // pixels its CSS pixels map to, as on the launcher's virtual display
++  // (ScreenHelperGTK). Firefox sizes and places windows inside this screen --
++  // a maximized or fullscreen window, window.open's clamp, a popup next to
++  // its anchor -- and with the fixed 1366x768 a pop-up asked to be larger
++  // than the screen came out 1366x768 whatever screen the identity claimed.
++  if (auto claimed = ClaimedRect("screen.width", "screen.height")) {
++    return *claimed;
++  }
+   return LayoutDeviceIntRect(0, 0, width, height);
+ }
+ 
++// A rect the identity claims in CSS pixels, at the origin when aLeft and aTop
++// are not given, in device pixels.
++/* static */
++Maybe<LayoutDeviceIntRect> HeadlessScreenHelper::ClaimedRect(
++    const char* aWidth, const char* aHeight, const char* aLeft,
++    const char* aTop) {
++  auto width = MaskConfig::GetUint32(aWidth);
++  auto height = MaskConfig::GetUint32(aHeight);
++  if (!width || !*width || !height || !*height) {
++    return Nothing();
++  }
++  const double pref = StaticPrefs::layout_css_devPixelsPerPx();
++  const double scale = pref > 0.0 ? pref : 1.0;
++  auto at = [&](const char* aKey) {
++    return aKey ? NSToIntRound(MaskConfig::GetUint32(aKey).value_or(0) * scale)
++                : 0;
++  };
++  return Some(LayoutDeviceIntRect(at(aLeft), at(aTop),
++                                  NSToIntRound(*width * scale),
++                                  NSToIntRound(*height * scale)));
++}
++
+ HeadlessScreenHelper::HeadlessScreenHelper() {
+   AutoTArray<RefPtr<Screen>, 1> screenList;
+   LayoutDeviceIntRect rect = GetScreenRect();
++  // Camoufox: the work area the identity claims (screen.avail*), which a
++  // maximized window fills.
++  LayoutDeviceIntRect availRect =
++      ClaimedRect("screen.availWidth", "screen.availHeight",
++                  "screen.availLeft", "screen.availTop")
++          .valueOr(rect)
++          .Intersect(rect);
+   auto ret = MakeRefPtr<Screen>(
+-      rect, rect, 24, 24, 0, DesktopToLayoutDeviceScale(),
++      rect, availRect, 24, 24, 0, DesktopToLayoutDeviceScale(),
+       CSSToLayoutDeviceScale(), 96.0f, Screen::IsPseudoDisplay::No,
+       Screen::IsHDR::No, 80.0f, 1000.0f);
+   screenList.AppendElement(ret.forget());
+diff --git a/widget/headless/HeadlessScreenHelper.h b/widget/headless/HeadlessScreenHelper.h
+--- a/widget/headless/HeadlessScreenHelper.h
++++ b/widget/headless/HeadlessScreenHelper.h
+@@ -5,6 +5,7 @@
+ #ifndef mozilla_widget_HeadlessScreenHelper_h
+ #define mozilla_widget_HeadlessScreenHelper_h
+ 
++#include "mozilla/Maybe.h"
+ #include "mozilla/widget/ScreenManager.h"
+ 
+ namespace mozilla {
+@@ -17,6 +18,10 @@
+ 
+  private:
+   static LayoutDeviceIntRect GetScreenRect();
++  static Maybe<LayoutDeviceIntRect> ClaimedRect(const char* aWidth,
++                                                const char* aHeight,
++                                                const char* aLeft = nullptr,
++                                                const char* aTop = nullptr);
+ };
+ 
+ }  // namespace widget
+diff --git a/widget/headless/moz.build b/widget/headless/moz.build
+--- a/widget/headless/moz.build
++++ b/widget/headless/moz.build
+@@ -8,6 +8,7 @@
+ DIRS += ["tests"]
+ 
+ LOCAL_INCLUDES += [
++    "/camoucfg",
+     "/widget",
+     "/widget/headless",
+ ]

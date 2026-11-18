@@ -28,7 +28,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, handle_window_size, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, font_unit_families, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, fit_window_to_caller_screen, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, place_window, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, font_unit_families, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, fit_window_to_caller_screen, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence, pro
 from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
 from .humanize import HumanizeSetting, humanize_config
@@ -1379,11 +1379,6 @@ def viewport_screen_bound(
     )
 
 
-def _fingerprint_user_agent(fingerprint: Dict[str, Any]) -> str:
-    ua = (fingerprint.get('navigator') or {}).get('userAgent') or ''
-    return ua[0] if isinstance(ua, list) and ua else str(ua)
-
-
 def context_screen_bound(browser: Any, os: Optional[str], context_kwargs: Dict[str, Any]) -> Optional[Screen]:
     """A bound on the screen a NewContext() identity draws, so that it holds
     the context's pages: the viewport the caller asks for, with the recorded
@@ -1681,11 +1676,11 @@ def launch_options(
             Name of the GeoIP database to use (e.g., "GeoIP AIO by daijro").
             If not specified, uses the one chosen with `camoufox set --geoip`, or the default.
         humanize (Optional[Union[bool, float, dict]]):
-            Humanize mouse, keyboard and scroll input, per channel.
-            `True` uses the best engine the build offers on every channel; a number is the
-            MAX duration in seconds of a cursor movement (typically up to 1.5 seconds across
-            the window); a dict picks an engine per channel with the factories in
-            `camoufox.humanize`, e.g. `{"mouse": cursory(max_time=1.0), "scroll": raw(), "seed": 1234}`.
+            Plan mouse, keyboard and scroll input, per channel. The browser delivers input
+            as the driver sends it; a dict gives a channel a client-side engine with
+            `camoufox.humanize.custom`, e.g. `{"mouse": custom(fn), "seed": 1234}`.
+            `True`, a number and the in-browser engines (`cursory()`) work only on an older build
+            that lists them, and raise HumanizeEngineUnavailable on this one.
         locale (Optional[Union[str, List[str]]]):
             Locale(s) to use in Camoufox. The first listed locale will be used for the Intl API.
         addons (Optional[List[str]]):
@@ -1913,7 +1908,8 @@ def launch_options(
     # What the lease adds to the environment, after every launch rule.
     pro_env: Dict[str, str] = {}
 
-    if profile is not None and pro_build is not None:
+    profiled = profile is not None and pro_build is not None
+    if profiled:
         if not isinstance(os, str):
             raise ValueError("A profile launch needs `os`: the one OS its identity presents.")
         check_valid_os(os)
@@ -1927,6 +1923,15 @@ def launch_options(
                 "A profile carries its own identity and browser state: pass no config, fingerprint, "
                 "fingerprint_preset or user_data_dir with it."
             )
+    if leased:
+        # A newer release of the same target, when one is published, is the build that launches.
+        from .pro_update import newest
+
+        newer = newest(pro_build, browser_binary, pro_key)
+        if newer != browser_binary:
+            executable_path, browser_binary = Path(newer), newer
+            pro_build = pro.read_build(build_file(browser_binary, "pro-build.json"))
+    if profiled:
         _HELD.lease = pro.acquire(pro_build, _OS_CODE[os], pro_key, pro_request)
         from .pro_profile import open_profile
 
@@ -2056,9 +2061,6 @@ def launch_options(
             window=window,
             os=os,
         )
-        if fit_viewport and window is None:
-            chrome_w, chrome_h = RECORDED_WINDOW_CHROME[determine_ua_os(_fingerprint_user_agent(fingerprint))]
-            handle_window_size(fingerprint, launch_viewport[0] + chrome_w, launch_viewport[1] + chrome_h)
 
     if not _used_preset and fingerprint is not None:
         # Inject the generated fingerprint into the config
@@ -2088,7 +2090,27 @@ def launch_options(
             except (TypeError, ValueError):
                 caller_scale = -1.0
             config['window.devicePixelRatio'] = drawn_dpr
-            coherence.repair_device_pixel_ratio(config, target_os, caller_scale if caller_scale > 0 else None)
+            scale = caller_scale if caller_scale > 0 else None
+            if fit_viewport and scale is None:
+                # The screen was drawn to hold the viewport's window at the drawn ratio, and a
+                # larger one shrinks it: the nearest display mode at which it still does.
+                floor = screen_floor(
+                    target_os, {'width': launch_viewport[0], 'height': launch_viewport[1]},
+                    window and {'width': window[0], 'height': window[1]},
+                )
+                holding = [
+                    step for step in coherence.PLAUSIBLE_DPR[target_os]
+                    if all(round(config[f'screen.{axis}'] * drawn_dpr / step) >= least
+                           for axis, least in zip(('width', 'height'), floor))
+                ]
+                scale = min(holding, key=lambda step: abs(step - drawn_dpr), default=None)
+            coherence.repair_device_pixel_ratio(config, target_os, scale)
+
+    # After the ratio moved, which rescales every CSS size: the viewport is in
+    # the pixels the page reports, so its window is placed in them too.
+    if fit_viewport and window is None:
+        chrome_w, chrome_h = RECORDED_WINDOW_CHROME[target_os]
+        place_window(config, launch_viewport[0] + chrome_w, launch_viewport[1] + chrome_h)
 
     if leased and _HELD.lease is None and pro_request.get("gpu") is not False and not block_webgl:
         # The farm draws only the GPUs it has, so the identity claims one of them, and the mint names
@@ -2298,6 +2320,15 @@ def launch_options(
         firefox_user_prefs.setdefault('ui.useOverlayScrollbars', 1 if windows_11 else 0)
     else:
         firefox_user_prefs.setdefault('ui.useOverlayScrollbars', 1)
+
+    # Colour scheme: on its own OS the browser follows the desktop like stock
+    # Firefox. An identity of another OS has no desktop to follow -- a window
+    # reads the host's theme and headless reads none, so the two modes disagree
+    # on a dark desktop -- so it gets the claimed OS's out-of-the-box setting,
+    # light on Windows, macOS and GNOME alike. color_scheme= or the pref
+    # overrides it.
+    if target_os != _host_os_key():
+        firefox_user_prefs.setdefault('ui.systemUsesDarkTheme', 0)
 
     # Stock doubles a wheel's lines on Windows and Linux and never on macOS, and
     # a page reads the result in deltaY (docs/input-dispatch.md).
@@ -2590,9 +2621,7 @@ def launch_options(
     set_into(config, 'voices:blockIfNotDefined', True)
 
     # Pass the humanize option, checked against the engines the build ships
-    for key, value in humanize_config(
-        humanize, _load_humanize_engines(executable_path), i_know_what_im_doing
-    ).items():
+    for key, value in humanize_config(humanize, _load_humanize_engines(executable_path)).items():
         set_into(config, key, value)
 
     # Enable the main world context creation

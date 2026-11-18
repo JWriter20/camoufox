@@ -16,6 +16,8 @@ import re
 import shutil
 import sqlite3
 import stat
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -155,6 +157,8 @@ class FakeCloud:
         for route, queue in self.scripted.items():
             if re.fullmatch(route, path) and queue:
                 return queue.pop(0)
+        if method == "GET" and path.startswith("/api/v1/artifacts?"):
+            return 200, {"latest": None, "releases": []}
         if method == "GET" and path.startswith("/api/v1/gpus?"):
             return 200, {"os": parse_qs(urlparse(path).query)["os"][0], "firefox": "156.0.1", "renderers": self.renderers}
         if path == "/api/v1/leases":
@@ -410,6 +414,21 @@ def realistic_profile(directory):
     (directory / ".parentlock").write_text("")
     (directory / "times.json").write_text('{"created":1}')
     (directory / "big-at-root.bin").write_bytes(stream(2 << 20, "big"))
+    # A Windows profile's font cache: the persisted cache and its warm marker, beside files remade each launch.
+    cache = directory / "fontcache" / "cache"
+    cache.mkdir(parents=True)
+    (cache / "FontCache-S-1-5-21.dat").write_bytes(stream(2 << 20, "fontcache"))
+    (cache / "~FontCache-S-1-5-21.dat").write_bytes(b"live")
+    (cache / ".holo-warmed").write_text("")
+    (cache / ".holo-warm-progress").write_text("12")
+    (directory / "fontcache" / "warmup.tsv").write_text("Arial\t400\n")
+
+
+# What realistic_profile() holds that does not travel.
+LEFT_BEHIND = (
+    "cache2", "user.js", "big-at-root.bin", "cookies.sqlite-wal", "cookies.sqlite-shm",
+    "fontcache/cache/~FontCache-S-1-5-21.dat", "fontcache/cache/.holo-warm-progress", "fontcache/warmup.tsv",
+)  # fmt: skip
 
 
 def test_capture_keeps_what_the_policy_keeps_and_folds_the_wal_in(tmp_path):
@@ -418,6 +437,8 @@ def test_capture_keeps_what_the_policy_keeps_and_folds_the_wal_in(tmp_path):
     snapshot = pro_state.capture(directory)
     assert [f.path for f in snapshot.files] == [
         "cookies.sqlite",
+        "fontcache/cache/.holo-warmed",
+        "fontcache/cache/FontCache-S-1-5-21.dat",
         "prefs.js",
         "storage/default/https+++example.com/ls/data.sqlite",
         "times.json",
@@ -487,7 +508,7 @@ def test_state_starts_empty_syncs_on_close_and_restores(bundle, tmp_path):
     (commit,) = cloud.calls("PUT", f"/api/v1/profiles/{PROFILE_ID}/state")
     assert {k: commit["body"][k] for k in ("lease_id", "base_version", "version", "release", "file_count", "ff_version", "integrity")} == {
         "lease_id": first.lease_id, "base_version": 0, "version": 1, "release": True,
-        "file_count": 4, "ff_version": "152.0.4", "integrity": "ok",
+        "file_count": 6, "ff_version": "152.0.4", "integrity": "ok",
     }  # fmt: skip
     # The commit released the lease; no second release, and nothing left behind.
     assert cloud.calls("POST", ".*/release") == []
@@ -499,7 +520,7 @@ def test_state_starts_empty_syncs_on_close_and_restores(bundle, tmp_path):
     expected_dir = tmp_path / "expected"
     realistic_profile(expected_dir)
     pro_state.capture(expected_dir)
-    for name in ("cache2", "user.js", "big-at-root.bin", "cookies.sqlite-wal", "cookies.sqlite-shm"):
+    for name in LEFT_BEHIND:
         target = expected_dir / name
         if target.is_dir():
             shutil.rmtree(target)
@@ -617,7 +638,7 @@ def test_a_warmed_profile_s_state_is_served_and_committed_through_the_api(bundle
     expected_dir = tmp_path / "expected"
     realistic_profile(expected_dir)
     pro_state.capture(expected_dir)
-    for name in ("cache2", "user.js", "big-at-root.bin", "cookies.sqlite-wal", "cookies.sqlite-shm"):
+    for name in LEFT_BEHIND:
         target = expected_dir / name
         if target.is_dir():
             shutil.rmtree(target)
@@ -629,6 +650,58 @@ def test_a_warmed_profile_s_state_is_served_and_committed_through_the_api(bundle
     assert tree(reopened) == tree(expected_dir)
     second.close()
     assert cloud.head == 2 and cloud.archive_commits[-1]["base_version"] == "1"
+
+
+# Firefox as it shuts down: it holds the profile's lock, writes its last state, then lets go by exiting.
+EXITING_BROWSER = """
+import fcntl, sys, time
+from pathlib import Path
+profile = Path(sys.argv[1])
+lock = open(profile / ".parentlock", "w")
+fcntl.lockf(lock, fcntl.LOCK_EX)
+print("held", flush=True)
+time.sleep(float(sys.argv[2]))
+(profile / "times.json").write_text('{"created":1,"closed":2}')
+"""
+
+
+def exiting_browser(directory, seconds):
+    browser = subprocess.Popen(
+        [sys.executable, "-c", EXITING_BROWSER, str(directory), str(seconds)], stdout=subprocess.PIPE, text=True
+    )
+    assert browser.stdout.readline() == "held\n"
+    return browser
+
+
+def test_state_is_captured_once_the_browser_has_let_go_of_the_profile(bundle):
+    first = profile_lease()
+    _, user_data_dir = pro_profile.open_profile(first, "152.0.4")
+    realistic_profile(user_data_dir)
+    browser = exiting_browser(user_data_dir, 1)
+    first.close()
+    assert browser.wait() == 0
+
+    second = profile_lease()
+    _, reopened = pro_profile.open_profile(second, "152.0.4")
+    assert json.loads((reopened / "times.json").read_text()) == {"created": 1, "closed": 2}
+    second.release()
+
+
+def test_a_browser_that_never_lets_go_fails_the_sync_and_keeps_the_state(bundle, monkeypatch):
+    monkeypatch.setattr(pro_profile, "BROWSER_EXIT_SECONDS", 0.2)
+    first = profile_lease()
+    _, user_data_dir = pro_profile.open_profile(first, "152.0.4")
+    realistic_profile(user_data_dir)
+    browser = exiting_browser(user_data_dir, 30)
+    try:
+        with pytest.raises(TimeoutError, match="still holds"):
+            first.close()
+    finally:
+        browser.kill()
+        browser.wait()
+    assert bundle.head == 0
+    kept = pro_profile._profile_home(PROFILE_ID) / "pending"
+    assert [path.name for path in kept.glob("*/cookies.sqlite")] == ["cookies.sqlite"]
 
 
 def test_served_state_that_would_write_outside_its_directory_is_refused(bundle):

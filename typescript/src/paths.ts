@@ -94,6 +94,7 @@ export const DATA_FILES: readonly string[] = [
 	"fpgen.yml",
 	"launcher-constants.json",
 	"media-devices.json",
+	"pro-release-public-keys.json",
 	"repos.yml",
 	"territoryInfo.xml",
 	"voice-manifests.json",

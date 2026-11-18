@@ -53,10 +53,12 @@ be listed there.
 | `timezone-spoofing.patch` | `timezone` |
 | `timer-lateness-claimed-os.patch` | `navigator.platform` (the timer's own context's, through `NavigatorManager::GetSpoofedOS()`) |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints` |
+| `headless-claimed-screen.patch` | `screen.width`, `screen.height`, `screen.avail*` (the headless screen and its work area, scaled by the `layout.css.devPixelsPerPx` pref) |
 | `virtual-display-claimed-screen.patch` | `screen.width`, `screen.height`, `screen.avail*` (the X screen reports the claimed screen when it is smaller) |
 | `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:blockIfNotDefined` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
+| `windows-window-frame-headless.patch` | `navigator.platform` (through `GetSpoofedOS()`), `window.devicePixelRatio` (moves the frame `window-frame-claimed-os.patch` computes into `widget/ClaimedWindowFrame.h`, shared by the GTK and headless widgets) |
 | `windows-lazy-cmaps.patch` | `fonts:windowsCmapLoadMs`, `navigator.platform` (the font group's context's, through `NavigatorManager::GetSpoofedOS()`) |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
 | `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*` (re-orders the getters above so stock's work runs first) |
@@ -85,6 +87,7 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `windows-lazy-cmaps.patch` | `claimed-os-emoji-pref.patch` for `MaskConfig.hpp` in `gfx/thebes/gfxTextRun.cpp`; `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build`; `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId`; `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `virtual-display-claimed-screen.patch` | `windows-keyboard.patch` for `/camoucfg` in `widget/gtk/moz.build` |
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
+| `windows-window-frame-headless.patch` | `headless-claimed-screen.patch` for `/camoucfg` in `widget/headless/moz.build`; `window-frame-claimed-os.patch` and the `windows-*` patches before it for the `widget/gtk/nsWindow.cpp` it rewrites |
 | `per-context-http-user-agent.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetUserAgent()`; `cross-process-storage.patch` for reading the context's value in the parent and worker processes |
 | `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
 

@@ -45,10 +45,10 @@ import {
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
 	getRandomPreset,
-	handleWindowSize,
 	identitySalt,
 	identitySeed,
 	loadOsFonts,
+	placeWindow,
 	RECORDED_WINDOW_CHROME,
 	raiseScreenToModernFloor,
 	Screen,
@@ -1748,11 +1748,6 @@ export function viewportScreenBound(
 	});
 }
 
-function fingerprintUserAgent(fingerprint: Record<string, any>): string {
-	const ua = fingerprint.navigator?.userAgent ?? "";
-	return Array.isArray(ua) ? String(ua[0] ?? "") : String(ua);
-}
-
 /**
  * A bound on the screen a NewContext() identity draws, so that it holds the
  * context's pages: the viewport the caller asks for, with the recorded chrome
@@ -2165,11 +2160,11 @@ export interface LaunchOptions {
 	geoip?: string | boolean;
 	/** Name of the GeoIP database to use (e.g. "GeoIP AIO by daijro"). */
 	geoip_db?: string;
-	/** Humanize mouse, keyboard and scroll input, per channel. `true` uses the
-	 * best engine the build offers on every channel; a number is the MAX
-	 * duration in seconds of a cursor movement; an object picks an engine per
-	 * channel with the factories in humanize.ts, e.g.
-	 * `{ mouse: cursory({ maxTime: 1.0 }), scroll: raw(), seed: 1234 }`. */
+	/** Plan mouse, keyboard and scroll input, per channel. The browser delivers
+	 * input as the driver sends it; an object gives a channel a client-side
+	 * engine with `custom` from humanize.ts, e.g. `{ mouse: custom(fn), seed: 1234 }`.
+	 * `true`, a number and the in-browser engines (`cursory()`) work only on an
+	 * older build that lists them, and throw HumanizeEngineUnavailable on this one. */
 	humanize?: HumanizeSetting;
 	/** Locale(s) to use. The first listed locale is used for the Intl API. */
 	locale?: string | string[];
@@ -2641,17 +2636,6 @@ async function buildLaunchOptions(
 			window,
 			os: targetOsOption,
 		});
-		if (fitViewport && !window && launchViewport) {
-			const [chromeW, chromeH] =
-				RECORDED_WINDOW_CHROME[
-					determineUaOs(fingerprintUserAgent(fingerprint as any))
-				];
-			handleWindowSize(
-				fingerprint as any,
-				launchViewport[0] + chromeW,
-				launchViewport[1] + chromeH,
-			);
-		}
 	}
 
 	if (!usedPreset && fingerprint != null) {
@@ -2690,12 +2674,44 @@ async function buildLaunchOptions(
 				firefox_user_prefs["layout.css.devPixelsPerPx"] ?? -1,
 			);
 			config["window.devicePixelRatio"] = drawnDpr;
-			coherence.repairDevicePixelRatio(
-				config,
-				targetOs,
-				callerScale > 0 ? callerScale : undefined,
-			);
+			let scale = callerScale > 0 ? callerScale : undefined;
+			if (fitViewport && launchViewport && scale === undefined) {
+				// The screen was drawn to hold the viewport's window at the drawn
+				// ratio, and a larger one shrinks it: the nearest display mode at
+				// which it still does.
+				const floor = screenFloor(
+					targetOs,
+					{ width: launchViewport[0], height: launchViewport[1] },
+					window ? { width: window[0], height: window[1] } : null,
+				);
+				for (const step of coherence.PLAUSIBLE_DPR[targetOs]) {
+					const holds = (["width", "height"] as const).every(
+						(axis, at) =>
+							coherence.roundHalfEven(
+								(config[`screen.${axis}`] * drawnDpr) / step,
+							) >= floor[at],
+					);
+					if (
+						holds &&
+						(scale === undefined ||
+							Math.abs(step - drawnDpr) < Math.abs(scale - drawnDpr))
+					)
+						scale = step;
+				}
+			}
+			coherence.repairDevicePixelRatio(config, targetOs, scale);
 		}
+	}
+
+	// After the ratio moved, which rescales every CSS size: the viewport is in
+	// the pixels the page reports, so its window is placed in them too.
+	if (fitViewport && launchViewport && !window) {
+		const [chromeW, chromeH] = RECORDED_WINDOW_CHROME[targetOs];
+		placeWindow(
+			config,
+			launchViewport[0] + chromeW,
+			launchViewport[1] + chromeH,
+		);
 	}
 
 	if (leased) {
@@ -2920,6 +2936,14 @@ async function buildLaunchOptions(
 		setInto(firefox_user_prefs, "ui.useOverlayScrollbars", windows11 ? 1 : 0);
 	} else {
 		setInto(firefox_user_prefs, "ui.useOverlayScrollbars", 1);
+	}
+
+	// Colour scheme: on its own OS the browser follows the desktop like stock
+	// Firefox. An identity of another OS has no desktop to follow (a window reads
+	// the host's theme, headless reads none), so it gets the claimed OS's
+	// out-of-the-box setting, light. colorScheme or the pref overrides it.
+	if (targetOs !== utilsDeps.hostOsKey()) {
+		setInto(firefox_user_prefs, "ui.systemUsesDarkTheme", 0);
 	}
 
 	// Stock doubles a wheel's lines on Windows and Linux and never on macOS, and
@@ -3185,11 +3209,7 @@ async function buildLaunchOptions(
 
 	// Pass the humanize option, checked against the engines the build ships
 	for (const [key, value] of Object.entries(
-		humanizeConfig(
-			humanize,
-			utilsDeps.loadHumanizeEngines(executable_path),
-			i_know_what_im_doing,
-		),
+		humanizeConfig(humanize, utilsDeps.loadHumanizeEngines(executable_path)),
 	)) {
 		setInto(config, key, value);
 	}

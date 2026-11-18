@@ -53,15 +53,7 @@ describe("streams", () => {
 		]);
 	});
 
-	it("match the browser's pin (browser/tests/juggler/rng.test.mjs)", () => {
-		const source = fs.readFileSync(
-			path.join(REPO, "browser", "tests", "juggler", "rng.test.mjs"),
-			"utf-8",
-		);
-		const body = /const PINNED = \{([^}]*)\}/.exec(source)?.[1] ?? "";
-		const pinned = Object.fromEntries(
-			[...body.matchAll(/(\w+): (\d+)/g)].map((m) => [m[1], Number(m[2])]),
-		);
+	it("are pinned for seed 1234, as in the Python launcher", () => {
 		expect(
 			Object.fromEntries(
 				CHANNELS.map((c) => [
@@ -69,10 +61,10 @@ describe("streams", () => {
 					Math.round(channelStream(1234n, c)() * 2 ** 32),
 				]),
 			),
-		).toEqual(pinned);
+		).toEqual({ mouse: 833145829, keyboard: 912731910, scroll: 1748142523 });
 	});
 
-	it("are the browser's, draw for draw (rng-vectors.json)", () => {
+	it("match the vectors, draw for draw (rng-vectors.json)", () => {
 		for (const [seed, value] of VECTORS.splitmix64)
 			expect(splitmix64(BigInt(seed))).toBe(BigInt(value));
 		for (const entry of VECTORS.streams) {
@@ -113,7 +105,7 @@ describe("factory and config", () => {
 		expect(customEngines(true)).toEqual({});
 	});
 
-	it("custom channels run raw in the browser", () => {
+	it("custom channels write no browser key", () => {
 		expect(
 			plain(
 				humanizeConfig(
@@ -126,14 +118,7 @@ describe("factory and config", () => {
 					BASE_MANIFEST,
 				),
 			),
-		).toEqual({
-			humanize: true,
-			"humanize:mouse": "raw",
-			"humanize:mouse:internal": "auto",
-			"humanize:keyboard": "raw",
-			"humanize:scroll": "auto",
-			"humanize:seed": "5",
-		});
+		).toEqual({});
 		expect(
 			plain(
 				humanizeConfig(
@@ -141,18 +126,7 @@ describe("factory and config", () => {
 					BASE_MANIFEST,
 				),
 			),
-		).toEqual({
-			humanize: true,
-			"humanize:mouse": "auto",
-			"humanize:keyboard": "raw",
-			"humanize:scroll": "raw",
-		});
-		const all = humanizeConfig(
-			{ mouse: custom(noop), keyboard: custom(noop), scroll: custom(noop) },
-			BASE_MANIFEST,
-		);
-		expect(all.humanize).toBe(false);
-		expect(all["humanize:mouse:internal"]).toBe("auto");
+		).toEqual({});
 	});
 
 	it("a build without the manifest", () => {

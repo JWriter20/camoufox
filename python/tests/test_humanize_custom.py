@@ -16,7 +16,6 @@ import math
 import os
 import re
 import time
-import warnings
 from pathlib import Path
 
 import pytest
@@ -49,24 +48,20 @@ def noop(page, *args, **kwargs):
 # ---- streams ---------------------------------------------------------------
 
 def test_stream_reference_outputs():
-    # The same reference values as browser/tests/juggler/rng.test.mjs.
     assert splitmix64(0) == 0xE220A8397B1DCDAF
     assert splitmix64(0x9E3779B97F4A7C15) == 0x6E789E6AA1B965F4
     rng = SeededRng(0)
     assert [round(rng() * 2**32) for _ in range(3)] == [1144304738, 1416247, 958946056]
 
 
-def test_stream_derivation_matches_the_browser_pin():
-    # rng.test.mjs pins the browser's first draw per channel for seed 1234.
-    source = (REPO / "browser" / "tests" / "juggler" / "rng.test.mjs").read_text()
-    pinned = dict(
-        (k, int(v)) for k, v in re.findall(r"(\w+): (\d+)", re.search(r"const PINNED = \{([^}]*)\}", source)[1])
-    )
+def test_stream_derivation_is_pinned():
+    # The first draw per channel for seed 1234; the TypeScript launcher pins the same.
+    pinned = {"mouse": 833145829, "keyboard": 912731910, "scroll": 1748142523}
     assert pinned == {c: round(channel_stream(1234, c)() * 2**32) for c in CHANNELS}
 
 
-def test_streams_are_the_browsers_draw_for_draw():
-    # rng-vectors.json is written from the browser's HumanizeRng.js.
+def test_streams_match_the_vectors_draw_for_draw():
+    # rng-vectors.json holds the streams both launchers must draw.
     for seed, value in VECTORS["splitmix64"]:
         assert splitmix64(int(seed)) == int(value)
     for entry in VECTORS["streams"]:
@@ -101,42 +96,12 @@ def test_custom_takes_a_function():
     assert custom_engines(True) == {}
 
 
-def test_custom_channels_run_raw_in_the_browser():
+def test_custom_channels_write_no_browser_key():
     config = humanize_config(
         {"mouse": custom(noop), "keyboard": custom(noop), "scroll": auto(), "seed": 5}, BASE_MANIFEST
     )
-    assert config == {
-        "humanize": True,
-        "humanize:mouse": "raw",
-        "humanize:mouse:internal": "auto",
-        "humanize:keyboard": "raw",
-        "humanize:scroll": "auto",
-        "humanize:seed": "5",
-    }
-    # Only a custom mouse writes mouse:internal.
-    config = humanize_config({"keyboard": custom(noop), "scroll": custom(noop)}, BASE_MANIFEST)
-    assert config == {
-        "humanize": True,
-        "humanize:mouse": "auto",
-        "humanize:keyboard": "raw",
-        "humanize:scroll": "raw",
-    }
-    # Every channel custom: the browser humanizes nothing itself.
-    config = humanize_config({c: custom(noop) for c in CHANNELS}, BASE_MANIFEST)
-    assert config["humanize"] is False and config["humanize:mouse:internal"] == "auto"
-
-
-def test_custom_mouse_does_not_teleport_a_cursor_moving_scroll():
-    manifest = {
-        **BASE_MANIFEST,
-        "scroll": [*BASE_MANIFEST["scroll"], "fancy"],
-        "engines": {**BASE_MANIFEST["engines"], "fancy": {"movesCursor": True}},
-    }
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        humanize_config({"mouse": custom(noop), "scroll": engine("fancy")}, manifest)
-    with pytest.warns(RuntimeWarning, match="single jump"):
-        humanize_config({"mouse": raw(), "scroll": engine("fancy")}, manifest)
+    assert config == {}
+    assert humanize_config({"keyboard": custom(noop), "scroll": custom(noop)}, BASE_MANIFEST) == {}
 
 
 def test_custom_on_a_build_without_the_manifest():

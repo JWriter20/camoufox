@@ -290,11 +290,6 @@ jobs:
         # patch guard.
         run: python3 browser/tests/ucrt-math/check.py
 
-      - name: Juggler input planners and pacing
-        # The humanize seam, its streams and pacer, and the base engines are
-        # plain ES modules, so they run under Node without a browser build.
-        run: node --test browser/tests/juggler/*.test.mjs
-
       - name: CI pipeline self-tests
         # These assert that the pipeline reports honestly: skips carry reasons,
         # shards partition exactly, and nothing identifying a sundial vector
@@ -939,10 +934,13 @@ jobs:
         # windows-keyboard sends real X11 key events. libegl1: a display-less
         # headless launch probes Mesa through EGL (headless-software-webgl.patch).
         # This image has GLX for Xvfb but not libEGL or the software rasterizer.
-        # pulseaudio: audio-output-latency-drawn needs an output stream to open,
-        # and the runner has no sound device; a null sink is one.
+        # pulseaudio: audio-output-latency-drawn checks the latency over a real
+        # backend, and the runner has no sound device; a null sink is one.
+        # audio-runs-without-sound-server points away from it on purpose.
+        # openbox: window-frame-fullscreen-exit-claimed-os needs a window manager
+        # that puts a window back where it was.
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends xdotool x11-xkb-utils libegl1 libgles2 libgl1-mesa-dri pulseaudio pulseaudio-utils
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends xdotool openbox x11-xkb-utils libegl1 libgles2 libgl1-mesa-dri pulseaudio pulseaudio-utils
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=ci_null
           pactl set-default-sink ci_null

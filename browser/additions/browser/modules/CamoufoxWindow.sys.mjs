@@ -230,6 +230,8 @@ function applyWindowSize(win) {
   // also checks on a timer.
   const deadline = Date.now() + 5000;
   let held = null;
+  // The last resize asked for: from which outer size, to which, and when.
+  let asked = null;
   let holdTimer = null;
   const stopHolding = () => {
     win.removeEventListener("sizemodechange", holdStartupSize);
@@ -254,8 +256,27 @@ function applyWindowSize(win) {
     }
     const [dw, dh] = misfit();
     if (dw || dh) {
-      win.resizeBy(dw, dh);
+      const from = [win.outerWidth, win.outerHeight];
+      const to = [from[0] + dw, from[1] + dh];
+      const same = (a, b) => a[0] === b[0] && a[1] === b[1];
+      if (asked && same(asked.from, from) && same(asked.to, to) && Date.now() - asked.at > 300) {
+        // GTK sends the window manager a resize only when it differs from the
+        // last one it sent. When the window manager shrinks the window as it
+        // maps it, the resize pass GTK runs next can compute the size it
+        // already sent, send nothing, and leave no pass to follow, so asking
+        // again never leaves the process. Asking for the size the window has
+        // makes GTK record that as its last request; the identity's size is
+        // asked for on the next check.
+        win.resizeTo(from[0], from[1]);
+        asked = null;
+      } else {
+        if (!asked || !same(asked.from, from) || !same(asked.to, to)) {
+          asked = { from, to, at: Date.now() };
+        }
+        win.resizeBy(dw, dh);
+      }
     } else {
+      asked = null;
       unpin();
     }
     held = [win.outerWidth + dw, win.outerHeight + dh];

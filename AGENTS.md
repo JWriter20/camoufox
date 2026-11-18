@@ -126,7 +126,7 @@ persist a change there as a patch, never as an edit to that tree.
 | `browser/` | The browser build: `Makefile`, `upstream.sh`, `multibuild.py`, `Dockerfile`, and the directories below. |
 | `browser/patches/` | Diffs applied to Firefox: one per behaviour at the top level, plus `playwright/`, `librewolf/` and `ghostery/`. Browser behaviour changes here. |
 | `browser/additions/camoucfg/` | The C++ config layer. `MaskConfig.hpp` reads `CAMOU_CONFIG`, which the patches consult. |
-| `browser/additions/juggler/` | Camoufox's Juggler, Playwright's Firefox protocol. The page agent runs in an isolated world. `input/` holds the Cursory cursor trajectories. |
+| `browser/additions/juggler/` | Camoufox's Juggler, Playwright's Firefox protocol. The page agent runs in an isolated world. `input/MouseDispatch.js` is the one place mouse and wheel events are dispatched. |
 | `browser/settings/` | `camoufox.cfg` (prefs), `properties.json` (every config key and its type; a key the browser stops reading is marked `removed`, never deleted), `humanize-engines.json`, policies. What a build declares to the launchers is in [`docs/launch-rules.md`](docs/launch-rules.md). |
 | `browser/scripts/` | `patch.py` applies patches and writes the mozconfig; `copy-additions.sh`, `package.py`, `install-deps.sh`, font tooling. |
 | `browser/assets/` | Mozconfigs, README images. |
@@ -182,6 +182,12 @@ the tree to unpatched Firefox. Every make target is described in
 which also covers porting patches to a new Firefox and porting Playwright. Keep
 the `Makefile` diff minimal: host dependencies belong in
 `browser/scripts/install-deps.sh`.
+
+A patch never changes a file listed in
+`browser/scripts/data/contentaccessible-manifest-<os>.json`: pages can load
+those, so one changed byte tells them this is not stock Firefox
+(`contentaccessible-parity` fails). Put the change in a file pages cannot load,
+such as the actor or C++ that calls into it.
 
 ## Testing
 

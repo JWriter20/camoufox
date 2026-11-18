@@ -2364,6 +2364,33 @@ export function fromFpgen(
 	return camoufoxData;
 }
 
+/**
+ * handleWindowSize() for a config: its geometry is final, where a drawn
+ * fingerprint's is still rescaled when its devicePixelRatio moves.
+ */
+export function placeWindow(
+	config: Config,
+	outerWidth: number,
+	outerHeight: number,
+): void {
+	for (const [axis, outer, position] of [
+		["Width", outerWidth, "X"],
+		["Height", outerHeight, "Y"],
+	] as const) {
+		const inner = config[`window.inner${axis}`];
+		if (pyTruthy(inner)) {
+			config[`window.inner${axis}`] = Math.max(
+				outer - (config[`window.outer${axis}`] || 0) + inner,
+				0,
+			);
+		}
+		config[`window.outer${axis}`] = outer;
+		config[`window.screen${position}`] = Math.floor(
+			((config[`screen.${axis.toLowerCase()}`] || outer) - outer) / 2,
+		);
+	}
+}
+
 /** Sets a custom outer window size and centers it in the screen (in place). */
 export function handleWindowSize(
 	fp: Record<string, any>,

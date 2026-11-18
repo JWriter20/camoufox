@@ -1,0 +1,25 @@
+{
+  "keys": [
+    {
+      "kid": 0,
+      "generation": 1,
+      "algorithm": "ed25519",
+      "public_key_b64url": "MCowBQYDK2VwAyEAJGn_WjFoBVQWM8E-836HxRnI0FF7IfiO1_czW3wwthQ",
+      "state": "active"
+    },
+    {
+      "kid": 1,
+      "generation": 1,
+      "algorithm": "ed25519",
+      "public_key_b64url": "MCowBQYDK2VwAyEAFOu03WvF4Bqhk_8i1GptEiXzITGW6kqF0zf3VMAORY8",
+      "state": "standby"
+    },
+    {
+      "kid": 2,
+      "generation": 1,
+      "algorithm": "ed25519",
+      "public_key_b64url": "MCowBQYDK2VwAyEAtOEmItg7AR7H2eIErkiZ4oZciwFC9wB8thl8dXjsf-Q",
+      "state": "standby"
+    }
+  ]
+}

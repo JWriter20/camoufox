@@ -56,7 +56,8 @@ pyfastcdc = {version = ">=0.3", optional = true}
 
 [tool.poetry.extras]
 geoip = ["maxminddb"]
-pro = ["pynacl", "zstandard", "pyfastcdc"]
+# A leased launch behind its own proxy, or of a stored profile, turns geoip on.
+pro = ["maxminddb", "pynacl", "zstandard", "pyfastcdc"]
 
 [tool.poetry.scripts]
 camoufox = "camoufox.__main__:cli"

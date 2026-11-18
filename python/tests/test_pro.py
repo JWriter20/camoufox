@@ -80,6 +80,10 @@ class FakeApi:
         self.grants = {}
         # What GET /api/v1/gpus answers: the renderers the farm draws on for the asked OS.
         self.served = []
+        # What GET /api/v1/artifacts names as the newest release, and what resolving it answers.
+        self.latest = None
+        self.releases = []
+        self.artifact = None
 
     def script(self, route, *answers):
         """Answer the next calls to `route` (a regex) with these (status, body) pairs, in order."""
@@ -100,6 +104,10 @@ class FakeApi:
         if path.startswith("/api/v1/gpus?"):
             query = parse_qs(urlsplit(path).query)
             return 200, {"os": query["os"][0], "firefox": "156.0.1", "renderers": self.served}
+        if path.startswith("/api/v1/artifacts?"):
+            return 200, {"latest": {"version": self.latest} if self.latest else None, "releases": self.releases}
+        if path.startswith("/api/v1/artifacts/") and self.artifact:
+            return 200, self.artifact
         if path == "/api/v1/leases":
             lease_id = uuid.uuid4()
             return 201, {
