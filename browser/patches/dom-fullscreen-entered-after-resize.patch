@@ -1,51 +1,72 @@
-diff --git a/browser/base/content/browser-fullScreenAndPointerLock.js b/browser/base/content/browser-fullScreenAndPointerLock.js
---- a/browser/base/content/browser-fullScreenAndPointerLock.js
-+++ b/browser/base/content/browser-fullScreenAndPointerLock.js
-@@ -607,6 +607,7 @@
-     // that the content document handles the pending request. Doing so
-     // before the check is fine since we also check the activeness of
-     // the requesting document in content-side handling code.
-+    let sendEntered = null;
-     if (this._isRemoteBrowser(aBrowser)) {
-       // The cached message recipient in actor is used for fullscreen state
-       // cleanup, we should not use it while entering fullscreen.
-@@ -624,11 +625,20 @@
-       // Record that the actor is waiting for its child to enter
-       // fullscreen so that if it dies we can abort.
-       targetActor.waitingForChildEnterFullscreen = true;
--      targetActor.sendAsyncMessage("DOMFullscreen:Entered", {
--        remoteFrameBC: inProcessBC,
--      });
-+      // Camoufox: the remote browser's new size otherwise goes out with the
-+      // next paint, and the content process could enter fullscreen, and fire
-+      // fullscreenchange, while still laid out at its old size (or with the
-+      // toolbox still showing). So the message goes once the chrome has its
-+      // fullscreen layout, right after that size.
-+      sendEntered = () => {
-+        document.synchronouslyUpdateRemoteBrowserDimensions();
-+        targetActor.sendAsyncMessage("DOMFullscreen:Entered", {
-+          remoteFrameBC: inProcessBC,
-+        });
-+      };
+diff --git a/browser/actors/DOMFullscreenParent.sys.mjs b/browser/actors/DOMFullscreenParent.sys.mjs
+--- a/browser/actors/DOMFullscreenParent.sys.mjs
++++ b/browser/actors/DOMFullscreenParent.sys.mjs
+@@ -2,6 +2,10 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
-       if (inProcessBC) {
-+        sendEntered();
-         // We aren't messaging the request origin yet, skip this time.
-         return;
++// Camoufox: set while FullScreen.enterDomFullscreen runs, to the sends of
++// DOMFullscreen:Entered it made (see enterDomFullscreen below).
++let gHeldEntered = null;
++
+ export class DOMFullscreenParent extends JSWindowActorParent {
+   // These properties get set by browser-fullScreenAndPointerLock.js.
+   // TODO: Bug 1743703 - Consider moving the messaging component of
+@@ -118,6 +122,39 @@
+     this.updateFullscreenWindowReference(window);
+   }
+ 
++  // Camoufox: see enterDomFullscreen.
++  sendAsyncMessage(aName, aData) {
++    if (aName == "DOMFullscreen:Entered" && gHeldEntered) {
++      gHeldEntered.push(() => super.sendAsyncMessage(aName, aData));
++      return;
++    }
++    super.sendAsyncMessage(aName, aData);
++  }
++
++  /**
++   * Camoufox: FullScreen.enterDomFullscreen tells the content process to
++   * enter fullscreen (DOMFullscreen:Entered) before it gives the chrome its
++   * fullscreen layout, and the remote browser's new size would only go out
++   * with the chrome's next paint, so the page could fire fullscreenchange
++   * while still laid out at its old size (or with the toolbox showing). The
++   * message is held until that call returns and goes right after the remote
++   * browser's size. Done here, not in browser-fullScreenAndPointerLock.js:
++   * pages can load that script, so a byte changed there is visible to them.
++   */
++  enterDomFullscreen(aWindow, aBrowser) {
++    gHeldEntered = [];
++    try {
++      aWindow.FullScreen.enterDomFullscreen(aBrowser, this);
++    } finally {
++      const held = gHeldEntered;
++      gHeldEntered = null;
++      if (held.length) {
++        aWindow.document.synchronouslyUpdateRemoteBrowserDimensions();
++        held.forEach(send => send());
++      }
++    }
++  }
++
+   receiveMessage(aMessage) {
+     let topBrowsingContext = this.browsingContext.top;
+     let browser = topBrowsingContext.embedderElement;
+@@ -163,7 +200,7 @@
+         this.manager.fullscreen = true;
+         this.nextMsgRecipient = null;
+         this.waitingForChildEnterFullscreen = false;
+-        window.FullScreen.enterDomFullscreen(browser, this);
++        this.enterDomFullscreen(window, browser);
+         this.updateFullscreenWindowReference(window);
+         break;
        }
-@@ -645,6 +655,7 @@
-       // full-screen was made. Cancel full-screen.
-       Services.focus.activeWindow != window
-     ) {
-+      sendEntered?.();
-       this._abortEnterFullscreen(aActor);
-       return;
-     }
-@@ -668,6 +679,7 @@
-       "fullscreenNavToolboxHidden",
-       true
-     );
-+    sendEntered?.();
+@@ -250,7 +287,7 @@
+         }
  
-     XULBrowserWindow.onEnterDOMFullscreen();
+         this.timerId = Glean.fullscreen.change.start();
+-        window.FullScreen.enterDomFullscreen(browser, this);
++        this.enterDomFullscreen(window, browser);
+         this.updateFullscreenWindowReference(window);
  
+         if (!this.hasBeenDestroyed() && this.requestOrigin) {
