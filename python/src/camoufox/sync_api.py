@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Union, overload
+from typing import Any, Dict, Optional, Tuple, Union, overload
 
 from playwright.sync_api import (
     Browser,
@@ -10,7 +10,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from . import _humanize_custom, driver_defaults, pro
+from . import _humanize_playwright, driver_defaults, pro
 from .fingerprints import generate_context_fingerprint
 from .ip import ExitGeo, Proxy, proxy_exit_geo
 from .utils import (
@@ -24,6 +24,7 @@ from .utils import (
     host_identity,
     launch_geometry,
     launch_options,
+    launch_os,
     needs_exit_geo,
     new_context_options,
     persistent_context_options,
@@ -117,18 +118,18 @@ def NewBrowser(
         **kwargs:
             All other keyword arguments passed to `launch_options()`.
     """
-    # custom() humanize engines run in this process: checked before the launch,
+    # humanize runs in this process: checked before the launch,
     # attached to the browser after it (also with from_options).
-    _humanize_custom.check(kwargs.get('humanize'), is_async=False)
+    _humanize_playwright.check(kwargs.get('humanize'), is_async=False)
     virtual_display, headless = start_virtual_display(headless, debug, kwargs)
     # Everything after the display exists can fail (bad proxy, missing binary,
     # unsatisfiable constraints) before sync/async_attach_vd wires kill() into
     # close, which used to strand one Xvfb and its /tmp/.X<n> lock per failed
     # launch.
     try:
-        browser = _launch(playwright, virtual_display, headless, from_options, persistent_context, debug, kwargs)
-        return _humanize_custom.attach(
-            browser, kwargs.get('humanize'), i_know_what_im_doing=kwargs.get('i_know_what_im_doing')
+        browser, os = _launch(playwright, virtual_display, headless, from_options, persistent_context, debug, kwargs)
+        return _humanize_playwright.attach(
+            browser, kwargs.get('humanize'), os, i_know_what_im_doing=kwargs.get('i_know_what_im_doing')
         )
     except BaseException:
         if virtual_display:
@@ -144,7 +145,8 @@ def _launch(
     persistent_context: bool,
     debug: Optional[bool],
     kwargs: Dict[str, Any],
-) -> Union[Browser, BrowserContext]:
+) -> Tuple[Union[Browser, BrowserContext], str]:
+    """The browser (or persistent context), and its identity's OS."""
     # Options the caller built leave its contexts to the caller (host_identity).
     canvas_noise: Optional[bool] = False
     if not from_options:
@@ -183,7 +185,7 @@ def _launch(
             attach_persistent_geometry(context, from_options)
             if lease:
                 pro.attach_lease(lease, context, 'close')
-            return sync_attach_vd(context, virtual_display)
+            return sync_attach_vd(context, virtual_display), launch_os(from_options)
 
         identity = host_identity(from_options, canvas_noise)
         browser = playwright.firefox.launch(**from_options)
@@ -191,7 +193,7 @@ def _launch(
             pro.attach_lease(lease, browser, 'disconnected')
         attach_context_defaults(browser, no_viewport_default, launch_geometry(from_options))
         browser._camoufox_host_identity = identity
-        return sync_attach_vd(browser, virtual_display)
+        return sync_attach_vd(browser, virtual_display), launch_os(from_options)
     except Exception as error:
         pro.launch_failed(lease, error)
         raise

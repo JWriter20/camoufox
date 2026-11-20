@@ -240,6 +240,86 @@ window size is spoofed, and to the host's own color scheme and motion settings.
 `launchOptions()` returns Playwright's camelCase keys (`executablePath`,
 `firefoxUserPrefs`), and does not handle `headless: "virtual"` or `"virtual-gpu"`.
 
+### Human input
+
+The browser does not humanize input: each Playwright call reaches the page as one native-looking event ([docs/humanize.md](../docs/humanize.md)). Humanization belongs to the driver. The `humanize` option picks an engine per channel, run in your own process:
+
+```ts
+import { Camoufox, myuri, raw } from "camoufox";
+
+// `humanize: true` is myuri() on every channel
+const browser = await Camoufox({
+	humanize: { keyboard: myuri({ wpm: 70 }), scroll: raw(), seed: 1234 },
+});
+await browser.close();
+```
+
+- `myuri()` is [myuri](https://github.com/JWriter20/Myuri)'s smart actions, fitted to recordings of people on each OS and drawn for the launch identity's OS: the path, the press, the typing and the wheel turns, and the decisions around a click (scroll the element into view, choose the point, check that the press lands, try again when it does not). The package depends on it (`@jwriter20/myuri`), pinned to the release it was tested with.
+- `cursory()` is another name for `myuri()`: myuri runs cursory's paths.
+- `raw()` is Playwright as it is.
+- A channel an object leaves out is `myuri()`. `humanize: null` or `false`, the default, is `raw()` everywhere.
+
+### Replacing a part
+
+Each piece of myuri is a part you can replace with a function of yours, in your own process. The rest stay myuri's, so a scroll of your own still serves myuri's clicks, and your move still ends where myuri presses.
+
+```ts
+import { setTimeout as sleep } from "node:timers/promises";
+import { Camoufox, myuri } from "camoufox";
+
+const browser = await Camoufox({
+	humanize: {
+		// a pause to look, then myuri's path
+		mouse: myuri({
+			move: async (page, x, y, { default: path, rng }) => {
+				await sleep(100 + 200 * rng());
+				await path();
+			},
+		}),
+		// Playwright's own scroll; `default()` would be myuri's wheel turns
+		scroll: myuri({
+			intoView: (page, locator) => locator.scrollIntoViewIfNeeded(),
+		}),
+		keyboard: myuri({ wpm: 70 }),
+		seed: 1234,
+	},
+});
+const page = await browser.newPage();
+await page.setContent('<button id="submit" style="margin-top:3000px">Send</button>');
+await page.locator("#submit").click();
+await browser.close();
+```
+
+| Channel | Part | Called as | myuri's part |
+|---|---|---|---|
+| `mouse` | `move` | `fn(page, x, y, ctx)` | a path from the cursor to (x, y) |
+| | `press` | `fn(page, button, clickCount, ctx)` | the dwell, then each press and its hold |
+| | `point` | `fn(page, box, attempt, ctx)`, returns `[x, y]` | where in the element's visible box to aim; `attempt` counts the misses |
+| | `reaches` | `fn(page, locator, x, y, pressing, ctx)`, returns `null` or why it misses | whether a press at (x, y) lands on the element: not covered, enabled |
+| `scroll` | `intoView` | `fn(page, locator, ctx)` | wheel turns until the element is in view, waiting for each scroll to land |
+| | `wheel` | `fn(page, dx, dy, ctx)` | one scroll split into wheel notches |
+| `keyboard` | `type` | `fn(page, text, ctx)` | keys at a person's rhythm, with the mistakes they make |
+| | `key` | `fn(page, key, ctx)` | one key or chord (`"Enter"`, `"Control+a"`) |
+
+`ctx` is `{ default, rng, play }`:
+
+- `default(...args)` runs myuri's part, with the same arguments when given none. A part that only adjusts myuri wraps it.
+- `rng()` returns a float in [0, 1) from the humanize seed's stream: one stream per browser, number for number what the Python launcher draws for that seed.
+- `play(steps)` dispatches steps at their times, in ms from the start of the call: `["move", x, y, t]`, `["down" | "up", button, t]`, `["wheel", dx, dy, t]` (one wheel event each), `["key", key, "down" | "up", t]`, `["text", text, t]`. A slow round trip delays one step and never adds up. Bad steps reject before anything is sent.
+- Playwright calls inside a part are Playwright's own: `page.mouse.move` in a move part moves the mouse once. A part that throws rejects the call.
+
+What each channel drives:
+
+| Channel | For |
+|---|---|
+| `mouse` | `Mouse.move`/`click`/`dblclick`; `click`, `dblclick`, `hover`, `check` and `uncheck` on a `Page`, `Frame` or `Locator`, and the click that focuses a field before `fill` |
+| `keyboard` | `Keyboard.type`/`press`; `fill`, `type`, `press` on a `Page`, `Frame` or `Locator`, and `Locator.pressSequentially` |
+| `scroll` | `Mouse.wheel`, `Locator.scrollIntoViewIfNeeded`, and bringing an element into view before a pointer action, fill or typing |
+
+- A click that never reaches its element rejects with Playwright's `TimeoutError` at the call's timeout, naming what covers the point. `trial: true` goes to Playwright alone, and `force: true` skips the reach check.
+- `ElementHandle` methods, `tap`, `dragAndDrop` and `dragTo` are Playwright's own.
+- The wrappers belong to the browser `Camoufox()` launched. For a browser from `connect()`, launch it without humanize and call `attach(browser, humanize, os)` with its identity's OS. Over a network each event is a round trip, so the launcher warns. `launchServer()` refuses any engine but `raw()`.
+
 ## Launch options
 
 `Camoufox()`, `NewBrowser()`, `launchServer()` and `launchOptions()` take one
@@ -257,7 +337,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first is used for `Intl`. |
-| `humanize` | `boolean \| number \| object` | off | Input shaped by your own `custom(fn)` per channel, in the driver. The browser does not humanize input: `true`, a number or a named engine is refused on this build ([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)). |
+| `humanize` | `boolean \| object` | every channel raw | Driver-side input. `true` is [`myuri()`](#human-input) on every channel; an object picks per channel (`mouse`, `keyboard`, `scroll`) `myuri()`, `myuri({ part: fn })` or `raw()`, an omitted channel being `myuri()`, plus an integer `seed` in [0, 2\*\*32). The browser never humanizes input; a number is refused. |
 | `screen` | `Screen \| { max_width?, max_height?, min_width?, min_height? }` | the real display when headed | Bounds the generated screen. |
 | `window` | `[number, number]` | generated | Fixed outer window size. |
 | `fonts` | `string[]` | none | Extra font families on top of the OS's own. |
@@ -268,7 +348,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `block_webrtc` | `boolean` | `false` | Disable WebRTC entirely. |
 | `block_webgl` | `boolean` | `false` | Disable WebGL. Warns: many WAFs check for it. |
 | `webgl_config` | `[vendor, renderer]` | drawn | Use one GPU fpgen has recorded for Firefox on `os`; any other pair throws. Needs `os`. |
-| `cpu` | `{ arch?: "x86" \| "arm", manufacturer?: string }` | follows the GPU and cores, else x86 drawn | The CPU the identity computes as: canvas, Web Audio, Opus, relaxed-SIMD wasm and NaN signs differ between x86-64 and ARM64, and canvas and Opus between Intel and AMD. A manufacturer alone implies its arch. Per OS: macos x86 `intel`, arm `apple`; windows x86 `intel`/`amd`, arm `qualcomm`; linux x86 `intel`/`amd`, arm `apple`, `qualcomm`, `broadcom`, `nvidia`, `ampere`, `rockchip`, `mediatek`, `amlogic`, `allwinner`. A pair no machine on the OS has, or one the GPU contradicts, throws `ValueError`; without `os`, the OS is drawn among those with a recorded GPU for the CPU. By default an Apple GPU is Apple ARM, an Intel iGPU or Intel Mac Intel, a Radeon iGPU AMD, and 10, 14, 18, 22 or 28 logical cores Intel; otherwise x86, 81% Intel. ARM is emulated on an x86-64 host; an ARM64 host cannot compute as x86. |
+| `cpu` | `{ arch?: "x86" \| "arm", manufacturer?: string }` | follows the GPU and cores, else x86 drawn | The CPU the identity computes as: canvas, Web Audio, Opus, relaxed-SIMD wasm and NaN signs differ between x86-64 and ARM64, and canvas and Opus between Intel and AMD. A manufacturer alone implies its arch. Per OS: macos x86 `intel`, arm `apple`; windows x86 `intel`/`amd`, arm `qualcomm`; linux x86 `intel`/`amd`, arm `apple`, `qualcomm`, `broadcom`, `nvidia`, `ampere`, `rockchip`, `mediatek`, `amlogic`, `allwinner`. A pair no machine on the OS has, or one the GPU contradicts, throws `ValueError`; without `os`, the OS is drawn among those with a recorded GPU for the CPU. By default an Apple GPU is Apple ARM, an Intel iGPU or Intel Mac Intel, a Radeon iGPU AMD, and 10, 14, 18, 22 or 28 logical cores Intel; otherwise x86, 81% Intel. ARM64 is emulated on an x86-64 host, and Intel or AMD x86-64 on an ARM64 host. |
 | `canvas_noise` | `boolean` | on for another OS or GPU | Random canvas and WebGL readback, as in LibreWolf. Warns. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `disable_coop` | `boolean` | `false` | Turn off Cross-Origin-Opener-Policy so elements in cross-origin iframes (such as the Turnstile checkbox) can be clicked. Warns. |
 | `main_world_eval` | `boolean` | `false` | Allow `page.evaluate("mw:...")` and `mw:` init scripts to run in the page's own world. |
@@ -293,41 +373,6 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 `Camoufox()` and `NewBrowser()` also take `persistent_context`, `user_data_dir`
 and `from_options` (an object from `launchOptions()` to use as is).
 `launchServer()` also takes `port` and `ws_path`.
-
-`humanize` takes a function of yours per input channel, wrapped with
-`custom(fn)`. The browser itself does not humanize input: `humanize: true`, a
-number or a named engine throws `HumanizeEngineUnavailable` on this build
-([docs/humanize.md](https://github.com/daijro/camoufox/blob/main/docs/humanize.md)).
-
-A `seed` above `Number.MAX_SAFE_INTEGER` must be passed as a `bigint`.
-
-`custom(fn)` runs a channel with a function of yours in this process (see the
-repository README, "Writing your own engine"). The function receives its
-extras as one object, and `play()` takes arrays:
-
-```ts
-import { Camoufox, custom } from "camoufox";
-
-const browser = await Camoufox({
-	humanize: {
-		keyboard: custom(async (page, text, { original, rng, play, kind }) => {
-			if (kind === "press") return original();
-			let t = 0;
-			const steps = [];
-			for (const ch of text) {
-				steps.push(["key", ch, "down", t]);
-				t += 40 + rng() * 60;
-				steps.push(["key", ch, "up", t]);
-			}
-			return play(steps);
-		}),
-		seed: 1234,
-	},
-});
-```
-
-A scroll function gets `[dx, dy]` for a wheel call, and a `Locator` otherwise.
-The same seed and function give the same events as the Python launcher.
 
 ## CLI
 

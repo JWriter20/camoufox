@@ -46,6 +46,7 @@
       <strong>Special codes for Camoufox users:</strong><br>
       • <code>CAMOUFOX35</code> - 35% off to Mobile and Residential Proxies<br>
       • <code>CAMOUFOX40</code> - 40% off to ISP (Static) Proxies<br>
+      • <code>CAMOUFOX2X</code> - 2X traffic for Black Friday<br>
       Check Nodemaven's new GitHub for more web scraping and automation solutions - https://github.com/nodemaven
     </td>
   </tr>
@@ -214,6 +215,26 @@ Camoufox is intended to be used with rotating proxies (preferably residential IP
 <table>
   <tr>
     <td width="25%" align="center" valign="middle">
+      <a href="https://www.rapidproxy.io/?ref=daijro" target="_blank">
+        <img width="380" alt="rapidproxy" src="https://github.com/user-attachments/assets/140337e0-50d5-452d-8a31-86c6b1761e47"/>
+      </a>
+    </td>
+    <td valign="middle">
+      <a href="https://www.rapidproxy.io/?ref=daijro">RapidProxy</a> - Power Your Data with Premium Proxies.<br>
+      🎁 Try proxies for free  + Use code <strong>RAPID10</strong> for <strong>10% OFF</strong>
+      <br>
+      <strong>Why Choose RapidProxy?</strong><br>
+      • 🌍 90M+ IPs in 200+ countries & regions<br>
+      • ♾️ No expiration on traffic — use anytime, no pressure<br>
+      • 🔥 Unlimited concurrency for maximum performance<br>
+      • 💰 Starting from just &#36;0.65/GB — built for scale<br>
+      • 📍 City-level targeting for precise geo access<br>
+      • 🔄 Flexible session control tailored to your needs<br>
+      Don’t miss out — start your free trial today and experience fast, stable, and scalable proxy performance with <a href="https://www.rapidproxy.io/?ref=daijro">RapidProxy</a>.
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" align="center" valign="middle">
       <a href="https://www.swiftproxy.net/?ref=daijro" target="_blank">
         <img width="380" alt="swiftproxy" src="https://github.com/user-attachments/assets/2f351c5e-f128-4478-83ff-46a261bea221"/>
       </a>
@@ -232,12 +253,12 @@ Camoufox is intended to be used with rotating proxies (preferably residential IP
   </tr>     
   <tr>
     <td width="25%" align="center" valign="middle">
-      <a href="https://mangoproxy.com/?utm_source=github&utm_medium=partner&utm_campaign=daijro" target="_blank">
+      <a href="https://mangoproxy.com/prod-isp-static/?utm_source=daijro&utm_medium=partner&utm_campaign=daijro_github" target="_blank">
         <img width="380" alt="mangoproxy" src="https://github.com/user-attachments/assets/c2cd3ddf-c940-4906-be1b-5505dcdb6e06"/>
       </a>
     </td>
     <td valign="middle">
-      <a href="https://mangoproxy.com/?utm_source=github&utm_medium=partner&utm_campaign=daijro">MangoProxy</a> is a Residential, ISP, Mobile and Datacenter proxy service designed for professional tasks where stability, speed, and anonymity matter.<br>
+      <a href="https://mangoproxy.com/prod-isp-static/?utm_source=daijro&utm_medium=partner&utm_campaign=daijro_github">MangoProxy</a> is a Residential, ISP, Mobile and Datacenter proxy service designed for professional tasks where stability, speed, and anonymity matter.<br>
       Use code DAIJRO for 8% OFF ISP Static Proxies
     </td>
   </tr>
@@ -507,17 +528,21 @@ claims the host's OS. Details are in
 | Playwright's `evaluate`, selectors and init scripts run in an isolated world the page cannot see | Juggler |
 | `navigator.webdriver` is `false` | `playwright/1-leak-fixes` patch |
 | `select_option`, `fill` on date and colour inputs, and `set_input_files` fire trusted events | `trusted-automation-events` patch |
-| `fill` and `keyboard.insert_text` paste the text: the paste shortcut and Firefox's own paste, without the system clipboard | Juggler |
+| `fill` and `keyboard.insert_text` paste the text as a person does: the paste shortcut and Firefox's own paste, without the system clipboard | Juggler |
 | Screenshots leave the page's DOM alone (no caret-hiding style writes) | Launcher |
 | `fill` clicks a text field without focus first, as a person does | Launcher |
-| Mouse moves coalesce per frame as a real mouse's do | Juggler, `input-coalescing-parity` patch |
+| Mouse moves coalesce per frame as a real mouse's do, spaced as a 125 Hz mouse's | Juggler, `input-coalescing-parity` patch |
 | A drag fires `drag` at its source with each motion, as GTK does | Juggler, `drag-source-events` patch |
 | Driver calls define no interfaces on the page's window | `isolated-world-global-order` patch |
 | A SOCKS5 proxy with a username and password works, for the launch and per context: the launcher hands the credentials to Juggler, which Playwright alone refuses | Launcher, Juggler |
 | Headless reports a fine pointer, like a desktop | `force-default-pointer` patch |
 | A headless window has the frame, toolbar height and screen of a window on a desktop: a Windows identity's resize border and caption, and pop-ups and maximized windows fitted to the claimed screen's work area instead of headless Firefox's fixed 1366x768 | `windows-window-frame-headless`, `headless-claimed-screen` patches |
 | An identity of another OS reports the light color scheme in a window and headless alike (the claimed OS's out-of-the-box setting; `color_scheme=` or `ui.systemUsesDarkTheme` overrides it). On its own OS the browser follows the desktop | Launcher |
+| `mouse.wheel()` turns notches, as a physical wheel does: 100 px is one notch, each its own event with a native tick | Juggler, `wheel-native-ticks` patch |
+| A press's click count is the identity's OS's, counted from the presses before it; Playwright's `click_count` is ignored. A held key repeats with that OS's delay and interval | Juggler |
 | Juggler's debugger leaves no side effects content can observe | `debugger-invisible-to-content` patch |
+| A stack the page captures while a driver call runs its code (`focus`, `dispatch_event`, an `mw:` evaluate) holds only the page's frames, never Juggler's, the isolated world's or the code the `mw:` evaluate compiled; a page function's `caller` is never driver code | Juggler, `debugger-invisible-to-content` patch |
+| Code an `mw:` evaluate runs is named after the document, as an inline script is, never `debugger eval code` | Juggler, `debugger-invisible-to-content` patch |
 | Per-context fingerprint setters are gone before page script runs | `window-setter-seal` patch |
 | Popup blocker on, as in stock Firefox | `popup-blocker-parity` patch |
 | On X11, a pointer-locked window partly off the top or left of the screen keeps running (stock Firefox can crash: the X server refuses the cursor barrier and GDK aborts) | `pointer-lock-offscreen` patch |
@@ -528,6 +553,7 @@ claims the host's OS. Details are in
 
 | Feature | How to use it | Where |
 |---|---|---|
+| Human input: none in the browser. Each Playwright input call is one native event of the identity's OS; humanization is the driver's | `humanize=True` runs myuri in the driver; `myuri(part=fn)` replaces any of its parts | [Human input](#human-input) |
 | Run code in the page's own world | `main_world_eval=True`, then `page.evaluate("mw:...")` | Juggler |
 | Finish animations at once so Playwright never waits | `config={"instantAnimations": True}` (detectable; warns) | `no-css-animations` patch |
 | Read closed shadow roots | `config={"forceScopeAccess": True}` | `shadow-root-bypass` patch |
@@ -596,54 +622,100 @@ and anti-bot vendors look for the one that does not. File a
 [detection report](https://github.com/daijro/camoufox/issues/new?template=camoufox-detected.md)
 when you find one.
 
-## Humanized input
+## Human input
 
-The browser delivers input as the driver sends it: it plans no cursor path and
-adds no hold, dwell or pacing ([docs/input-dispatch.md](docs/input-dispatch.md)).
-Humanizing input is the driver's job. `humanize` takes a function of yours per
-input channel (`mouse`, `keyboard`, `scroll`); `humanize=True`, a number of
-seconds or a named engine asks the browser to do it, and on this build raises
-`HumanizeEngineUnavailable` rather than doing nothing
-([docs/humanize.md](docs/humanize.md)).
+The browser does not humanize input. Each Playwright input call reaches the page
+as one event of the shape a real device gives stock Firefox: a `mouse.move` is
+one move, a click is a press and a release, `mouse.wheel(dx, dy)` is one wheel
+event in whole notches (Linux and Windows: 100 px a notch, carried in that one
+event as a fast spin of a notched wheel can be; macOS: one event of 16 px lines),
+and `fill()` is Firefox's own paste. The browser adds no timing, paths, pacing or
+randomness of its own, so how human the input looks is up to the driver: send the
+moves, notches and keys a person would, at a person's times
+([docs/input-dispatch.md](docs/input-dispatch.md) has each event's shape per OS).
 
-### Writing your own engine: `custom(fn)`
-
-A channel can also run a function of yours, in your own process and language. The function plans the input and plays it through Playwright's own input methods, so the page sees the same trusted events as from any Playwright call. Your code never runs inside the browser. A channel without a function is sent as Playwright sends it. `seed` (an integer below 2^64) makes `rng` repeatable; each channel has its own stream, and without a seed every launch draws a new one.
+The `humanize` option picks an engine per channel, run in your own process:
 
 ```python
+from camoufox.humanize import myuri, raw
+
+Camoufox(humanize=True)   # myuri() on every channel
+Camoufox(humanize={"keyboard": myuri(wpm=70), "scroll": raw(), "seed": 1234})
+```
+
+- `myuri()` is [myuri](https://github.com/JWriter20/Myuri)'s smart actions, fitted
+  to recordings of people on each OS and drawn for the launch identity's OS: the
+  path, the press, the typing and the wheel turns, and the decisions around a
+  click (scroll the element into view, choose the point, check that the press
+  lands, try again when it does not). Both packages depend on it, pinned to the
+  release they were tested with.
+- `cursory()` is another name for `myuri()`: myuri runs cursory's paths.
+- `raw()` is Playwright as it is.
+- A channel a dict leaves out is `myuri()`. `humanize=None` or `False`, the
+  default, is `raw()` everywhere.
+
+The engine decides when each event happens; the browser decides what each event
+looks like for the identity's OS ([docs/humanize.md](docs/humanize.md)).
+
+### Replacing a part: `myuri(part=fn)`
+
+Each piece of myuri is a part you can replace with a function of yours, in your own process (Python below; TypeScript in [its README](typescript/README.md#replacing-a-part)). The rest stay myuri's, so a scroll of your own still serves myuri's clicks, and your move still ends where myuri presses.
+
+```python
+import asyncio
+
 from camoufox.async_api import AsyncCamoufox
-from camoufox.humanize import custom
+from camoufox.humanize import myuri
 
-async def my_move(page, x, y, *, original, rng, play):
-    steps = my_model((x, y), rng)                     # [(t_ms, x, y), ...]
-    await play([("move", sx, sy, t) for t, sx, sy in steps])
+async def my_move(page, x, y, *, default, rng, play):
+    await asyncio.sleep(0.1 + 0.2 * rng())            # a pause to look, then myuri's path
+    await default()
 
-async with AsyncCamoufox(humanize={"mouse": custom(my_move), "seed": 1234}) as browser:
+async def my_into_view(page, locator, *, default, rng, play):
+    await locator.scroll_into_view_if_needed()        # Playwright's own scroll
+    # or: await default() for myuri's wheel turns
+
+async with AsyncCamoufox(humanize={
+    "mouse": myuri(move=my_move),
+    "scroll": myuri(into_view=my_into_view),
+    "keyboard": myuri(wpm=70),
+    "seed": 1234,
+}) as browser:
     page = await browser.new_page()
-    await page.locator("#submit").click()             # my_move plans the move, Playwright clicks
+    await page.set_content('<button id="submit" style="margin-top:3000px">Send</button>')
+    await page.locator("#submit").click()             # my_into_view, then myuri's click after my pause
 ```
 
-```ts
-import { Camoufox, custom } from "camoufox";
+| Channel | Part | Called as | myuri's part |
+|---|---|---|---|
+| `mouse` | `move` | `fn(page, x, y, ...)` | a path from the cursor to (x, y) |
+| | `press` | `fn(page, button, click_count, ...)` | the dwell, then each press and its hold |
+| | `point` | `fn(page, box, attempt, ...)`, returns `(x, y)` | where in the element's visible box to aim; `attempt` counts the misses |
+| | `reaches` | `fn(page, locator, x, y, pressing, ...)`, returns `None` or why it misses | whether a press at (x, y) lands on the element: not covered, enabled |
+| `scroll` | `into_view` | `fn(page, locator, ...)` | wheel turns until the element is in view, waiting for each scroll to land |
+| | `wheel` | `fn(page, dx, dy, ...)` | one scroll split into wheel notches |
+| `keyboard` | `type` | `fn(page, text, ...)` | keys at a person's rhythm, with the mistakes they make |
+| | `key` | `fn(page, key, ...)` | one key or chord (`"Enter"`, `"Control+a"`) |
 
-const browser = await Camoufox({ humanize: {
-  mouse: custom(async (page, x, y, { original, rng, play }) => play(myModel([x, y], rng))),
-  seed: 1234,
-} });
-```
+Every part is also called with `default`, `rng` and `play`, as keywords:
 
-| Channel | Called as | For |
-|---|---|---|
-| `mouse` | `fn(page, x, y, *, original, rng, play)` | `Mouse.move`/`click`/`dblclick`, and the move to the point of `click`, `dblclick` and `hover` on a `Page` or `Locator` |
-| `keyboard` | `fn(page, text, *, original, rng, play, kind)` with `kind` `"type"`, `"press"` or `"fill"` | `Keyboard.type`/`press`; `fill`, `type`, `press` on a `Page` or `Locator`, and `Locator.press_sequentially` |
-| `scroll` | `fn(page, target, *, original, rng, play)` with `target` a `Locator` or `(dx, dy)` | `Mouse.wheel`, `Locator.scroll_into_view_if_needed`, and bringing an element that is not in view into view before a click, hover or fill |
+- `default(*args)` runs myuri's part, with the same arguments when given none. A part that only adjusts myuri wraps it.
+- `rng()` returns a float in [0, 1) from the humanize seed's stream: one stream per browser, the same numbers in Python and TypeScript.
+- `play(steps)` dispatches steps at their times, in ms from the start of the call: `("move", x, y, t)`, `("down" | "up", button, t)`, `("wheel", dx, dy, t)` (one wheel event each), `("key", key, "down" | "up", t)`, `("text", text, t)` (pasted, as `keyboard.insert_text` is). It waits until each step is due on a monotonic clock rather than sleeping between steps, so a slow round trip delays one step and never adds up. Bad steps raise `ValueError` before anything is sent.
+- Playwright calls inside a part are Playwright's own: `page.mouse.move` in a move part moves the mouse once.
+- With the sync API a part is a plain function, and `default` and `play` return their result; with the async API they return awaitables, and the part may be `async`. Exceptions reach the caller unchanged.
 
-- `original()` runs Playwright's own behaviour for the call. Calling it is how a function declines.
-- `rng()` returns a float in [0, 1) from the channel's seeded stream. It is the same stream for that seed, number for number, in Python and TypeScript alike.
-- `play(steps)` dispatches steps at their times, in ms from the start of the call: `("move", x, y, t)`, `("down" | "up", button, t)`, `("wheel", dx, dy, t)`, `("key", key, "down" | "up", t)`, `("text", text, t)` (pasted, as `keyboard.insert_text` is). It waits until each step is due on a monotonic clock rather than sleeping between steps, so a slow round trip delays one step and never adds up. Bad steps raise `ValueError` before anything is sent.
-- Playwright's actions run inside its own server, so the wrappers act first: they scroll the element into view and move to the click point, and Playwright's own move then has no distance left. A `fill` selects the field's text first, so your keys replace it.
-- With the sync API the functions are plain functions; with the async API they may be `async`. Exceptions reach the caller unchanged.
-- The wrappers belong to the browser `Camoufox()` launched: other browsers in the same process are untouched. For a browser from `connect()`, call `camoufox.humanize.attach_custom(browser, humanize)` (`attachCustom` in TypeScript). Over a network each event is a round trip, so the launcher warns (`humanize_custom_remote`). `launch_server()` refuses `custom()`.
+What each channel drives:
+
+| Channel | For |
+|---|---|
+| `mouse` | `Mouse.move`/`click`/`dblclick`; `click`, `dblclick`, `hover`, `check`, `uncheck` on a `Page`, `Frame` or `Locator`, and the click that focuses a field before `fill` |
+| `keyboard` | `Keyboard.type`/`press`; `fill`, `type`, `press` on a `Page`, `Frame` or `Locator`, and `Locator.press_sequentially` |
+| `scroll` | `Mouse.wheel`, `Locator.scroll_into_view_if_needed`, and bringing an element into view before a pointer action, fill or typing |
+
+- A click that never reaches its element raises Playwright's `TimeoutError` at the call's timeout, naming what covers the point. `trial=True` goes to Playwright alone, and `force=True` skips the reach check.
+- `ElementHandle` methods, `tap`, `drag_and_drop` and `drag_to` are Playwright's own.
+- The wrappers belong to the browser `Camoufox()` launched: other browsers in the same process are untouched. For a browser from `connect()`, launch it without humanize and call `camoufox.humanize.attach(browser, humanize, os)` with its identity's OS. Over a network each event is a round trip, so the launcher warns (`humanize_remote`). `launch_server()` refuses any engine but `raw()`.
 
 # Building the browser
 
@@ -707,6 +779,7 @@ python3 multibuild.py --target linux windows macos --arch x86_64 arm64
 | `--arch` | `x86_64`, `arm64`, `i686` (one or more; `i686` builds Windows only) |
 | `--bootstrap` | Bootstrap the build system first |
 | `--clean` | Clean the build directory first |
+| `--preflight` | Check that each target builds without building it: configure, the export tiers, and every patched source file (minutes, not hours) |
 
 Artifacts are written to `browser/dist/`.
 
@@ -800,5 +873,7 @@ flowchart TD
 | [LibreWolf](https://gitlab.com/librewolf-community/browser/source) | Debloat patches and the original build system |
 | [BetterFox](https://github.com/yokoffing/BetterFox) | Speed and debloat preferences |
 | [Ghostery](https://github.com/ghostery/user-agent-desktop) | Debloat reference ([disable onboarding](browser/patches/ghostery/Disable-Onboarding-Messages.patch)) |
+| [Vinyzu/cursory](https://github.com/Vinyzu/cursory) | The recorded human mouse movements behind `humanize=True`, which [myuri](https://github.com/JWriter20/Myuri) replays (via [cursory-js](https://github.com/JWriter20/cursory-js) in TypeScript) |
+| [riflosnake/HumanCursor](https://github.com/riflosnake/HumanCursor) | The Bézier cursor Camoufox used before Cursory |
 | [scrapfly/fingerprint-generator](https://github.com/scrapfly/fingerprint-generator) (fpgen) | The device distribution identities are drawn from |
 | [CreepJS](https://github.com/abrahamjuliot/creepjs), [Browserleaks](https://browserleaks.com), [BrowserScan](https://www.browserscan.net/) | Leak testing |

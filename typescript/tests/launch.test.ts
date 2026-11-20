@@ -11,7 +11,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
 	afterAll,
 	afterEach,
@@ -21,7 +20,6 @@ import {
 	it,
 	vi,
 } from "vitest";
-import type { HumanizeManifest, HumanizeSetting } from "../src/humanize.js";
 import {
 	BUNDLE,
 	BUNDLE_EXE,
@@ -37,12 +35,11 @@ import {
 	warnings,
 } from "./launch-host.js";
 
-const { OSError, PyFloat, ValueError } = await import("../src/pycompat.js");
+const { OSError } = await import("../src/pycompat.js");
 const { Version } = await import("../src/pkgman.js");
-const { InvalidPropertyType, UnknownIPLocation, HumanizeEngineUnavailable } =
-	await import("../src/exceptions.js");
-const { auto, cursory, custom, engine, humanizeConfig, raw } = await import(
-	"../src/humanize.js"
+const { cursory, myuri, normalize, raw } = await import("../src/humanize.js");
+const { InvalidPropertyType, UnknownIPLocation } = await import(
+	"../src/exceptions.js"
 );
 const cpuAffinity = await import("../src/cpu_affinity.js");
 const { attachDriverDefaults } = await import("../src/driver_defaults.js");
@@ -51,35 +48,6 @@ const { attachDriverDefaults } = await import("../src/driver_defaults.js");
 const { MODEL } = await import("./fpgen-setup.js");
 
 const deps = utils.utilsDeps;
-// The humanize-engines.json a build of this checkout ships.
-const SHIPPED_MANIFEST = JSON.parse(
-	fs.readFileSync(
-		path.join(
-			path.dirname(fileURLToPath(import.meta.url)),
-			"..",
-			"..",
-			"browser",
-			"settings",
-			"humanize-engines.json",
-		),
-		"utf-8",
-	),
-);
-// What a build that plans cursor paths in the browser ships.
-const OLD_MANIFEST = {
-	version: 1,
-	mouse: ["raw", "cursory"],
-	auto: { mouse: ["cursory"] },
-	engines: {
-		cursory: {
-			module: "resource://gre/modules/juggler/input/CursorTrajectory.js",
-			options: {
-				maxTime: { key: "humanize:maxTime", min: 0 },
-				minTime: { key: "humanize:minTime", min: 0 },
-			},
-		},
-	},
-};
 // The real disk probe, captured before any test stubs it.
 const realQuotaProbe = deps.stockProfileDiskCapacityKb;
 const LINUX_UA =
@@ -300,6 +268,31 @@ describe("test_launch_environment: prefs", () => {
 			const { config, prefs } = await launchOn("lin", WIN_UA);
 			expect(CONFIG_KEYS.filter((k) => !(k in config))).toEqual([]);
 			expect(PREFS.filter((k) => !(k in prefs))).toEqual([]);
+		});
+	});
+
+	describe("custom_fonts_only warning", () => {
+		const TEXT = "Disabling OS-specific fonts";
+		const launchWith = async (opts: Record<string, any>) => {
+			const { error, warnings: caught } = await warnings.recordWarnings(() =>
+				utils.launchOptions({
+					env: { HOME },
+					...ua(LINUX_UA),
+					fonts: ["Arial"],
+					custom_fonts_only: true,
+					...opts,
+				}),
+			);
+			if (error) throw error;
+			return caught.filter((w) => w.message.includes(TEXT));
+		};
+		it("the flag silences it", async () => {
+			expect(await launchWith({ i_know_what_im_doing: true })).toEqual([]);
+		});
+		it("without the flag it warns and names the flag", async () => {
+			const caught = await launchWith({});
+			expect(caught).toHaveLength(1);
+			expect(caught[0].message).toContain("pass `i_know_what_im_doing=True`");
 		});
 	});
 
@@ -1003,294 +996,115 @@ describe("test_humanize", () => {
 		};
 	});
 
-	const launchHumanize = (
-		humanize: HumanizeSetting,
-		manifest: HumanizeManifest | null = null,
-	) => {
-		deps.loadHumanizeEngines = () => manifest;
-		return launch({
-			humanize,
+	const noop = () => undefined;
+	const launchHumanize = (humanize: unknown) =>
+		launch({
+			humanize: humanize as any,
 			block_webgl: true,
 			i_know_what_im_doing: true,
 		}).then(() => captured);
-	};
 
-	it("humanize: 0 is off, as in Python", async () => {
-		const config = await launchHumanize(0);
-		expect("humanize" in config).toBe(false);
+	it.each([
+		null,
+		false,
+		true,
+		{},
+		{ mouse: raw() },
+		{
+			mouse: myuri({ move: noop }),
+			keyboard: myuri({ type: noop, wpm: 70 }),
+			scroll: myuri({ wheel: noop }),
+			seed: 9,
+		},
+		{ keyboard: raw(), seed: 2 ** 32 - 1 },
+	])("no humanize key reaches the browser (%#)", async (humanize) => {
+		const config = await launchHumanize(humanize);
+		expect(Object.keys(config).filter((k) => k.startsWith("humanize"))).toEqual(
+			[],
+		);
 	});
 
-	it("humanize: true sets no duration", async () => {
-		const config = await launchHumanize(true);
-		expect(config.humanize).toBe(true);
-		expect("humanize:maxTime" in config).toBe(false);
+	it("no humanize is raw, and humanize is myuri", () => {
+		for (const off of [null, false])
+			expect(normalize(off)).toEqual({
+				engines: { mouse: raw(), keyboard: raw(), scroll: raw() },
+			});
+		expect(normalize(true)).toEqual({
+			engines: { mouse: myuri(), keyboard: myuri(), scroll: myuri() },
+		});
+		const { engines, seed } = normalize({
+			scroll: myuri({ intoView: noop }),
+			keyboard: { engine: "myuri", options: { wpm: 70 } },
+			seed: 5,
+		});
+		expect(engines.mouse).toEqual(myuri());
+		expect(engines.keyboard).toEqual(myuri({ wpm: 70 }));
+		expect(engines.scroll).toEqual(myuri({ intoView: noop }));
+		expect(seed).toBe(5);
+	});
+
+	it("takes cursory() as myuri()", () => {
+		expect(cursory()).toEqual(myuri());
+		expect(cursory({ move: noop })).toEqual(myuri({ move: noop }));
+		expect(
+			normalize({
+				mouse: { engine: "cursory", options: { move: noop } },
+				scroll: cursory(),
+			}).engines,
+		).toEqual({
+			mouse: myuri({ move: noop }),
+			keyboard: myuri(),
+			scroll: myuri(),
+		});
 	});
 
 	it.each([
-		1, 5, 1.25,
-	])("a duration (%s) is encoded as a double", async (duration) => {
-		const config = await launchHumanize(duration);
-		expect(config.humanize).toBe(true);
-		expect(config["humanize:maxTime"]).toBeInstanceOf(PyFloat);
-		expect(Number(config["humanize:maxTime"])).toBe(duration);
-		// ...and serialized with a floating-point representation.
-		expect(utils.configJson({ t: config["humanize:maxTime"] })).toBe(
-			`{"t":${Number.isInteger(duration) ? `${duration}.0` : duration}}`,
+		0,
+		1.5,
+		2,
+		{ mouse: "cursory" },
+		{ mouse: { engine: "auto", options: {} } },
+		{ mouse: { engine: "custom", options: {} } },
+	])("refuses in-browser humanization (%#)", async (humanize) => {
+		expect(() => normalize(humanize)).toThrow(
+			"the browser does not humanize input",
 		);
-	});
-	it("launchOptions writes the channel keys", async () => {
-		const config = await launchHumanize(
-			{ mouse: cursory({ maxTime: 0.8 }), scroll: raw(), seed: 9 },
-			OLD_MANIFEST,
-		);
-		expect(config.humanize).toBe(true);
-		expect(config["humanize:mouse"]).toBe("cursory");
-		expect(config).not.toHaveProperty("humanize:scroll");
-		expect(config).not.toHaveProperty("humanize:keyboard");
-		expect(Number(config["humanize:maxTime"])).toBe(0.8);
-		expect(config["humanize:seed"]).toBe("9");
-	});
-
-	it("launchOptions refuses an engine the build lacks", async () => {
-		await expect(
-			launchHumanize({ scroll: engine("fancy") }, OLD_MANIFEST),
-		).rejects.toThrow(HumanizeEngineUnavailable);
-	});
-
-	it("launchOptions refuses humanize: true on this build", async () => {
-		await expect(launchHumanize(true, SHIPPED_MANIFEST)).rejects.toThrow(
-			/custom/,
-		);
-	});
-});
-
-describe("test_humanize: per-channel engines (test_humanize.py)", () => {
-	const BASE_MANIFEST = OLD_MANIFEST;
-	// A build that lists keyboard and scroll channels too, with one more
-	// engine, `fancy`, on every channel: its options, their config keys and
-	// ranges come from the manifest alone.
-	const FANCY_MANIFEST = {
-		...BASE_MANIFEST,
-		mouse: [...BASE_MANIFEST.mouse, "fancy"],
-		keyboard: ["raw", "fancy"],
-		scroll: ["raw", "fancy"],
-		engines: {
-			...BASE_MANIFEST.engines,
-			fancy: {
-				module: "chrome://example/fancy.js",
-				options: {
-					budgetSeconds: {
-						key: "humanize:fancy:budgetSeconds",
-						min: 1,
-						max: 20,
-					},
-					speed: { key: "humanize:fancy:speed", min: 0.5, max: 2 },
-				},
-			},
-		},
-	};
-	// Config values as they serialize: PyFloat -> number.
-	const plain = (config: Record<string, unknown>) =>
-		JSON.parse(utils.configJson(config));
-
-	it.each<[HumanizeSetting, Record<string, unknown>]>([
-		[undefined, {}],
-		[false, {}],
-		[0, {}],
-		[true, { humanize: true }],
-		[1.5, { humanize: true, "humanize:maxTime": 1.5 }],
-		[
-			{ mouse: cursory({ maxTime: 0.7 }) },
-			{ humanize: true, "humanize:maxTime": 0.7 },
-		],
-		[{ mouse: raw(), keyboard: raw(), scroll: raw() }, {}],
-	])("a build without the manifest gets the legacy keys (%j)", (humanize, expected) => {
-		expect(plain(humanizeConfig(humanize, null))).toEqual(expected);
-	});
-
-	it.each<[HumanizeSetting, string]>([
-		[{ mouse: raw() }, "mouse"],
-		[{ scroll: raw() }, "scroll"],
-		[{ keyboard: engine("fancy") }, "keyboard"],
-		[{ seed: 5 }, "seed"],
-	])("a build without the manifest refuses what it cannot do (%j)", (humanize, channel) => {
-		expect(() => humanizeConfig(humanize, null)).toThrow(
-			HumanizeEngineUnavailable,
-		);
-		try {
-			humanizeConfig(humanize, null);
-		} catch (e) {
-			expect(
-				(e as InstanceType<typeof HumanizeEngineUnavailable>).channel,
-			).toBe(channel);
-		}
-	});
-
-	it.each<[HumanizeSetting, Record<string, unknown>]>([
-		[false, { humanize: false, "humanize:mouse": "raw" }],
-		[true, { humanize: true, "humanize:mouse": "auto" }],
-		[
-			1.5,
-			{ humanize: true, "humanize:mouse": "cursory", "humanize:maxTime": 1.5 },
-		],
-		[
-			{
-				mouse: cursory({ maxTime: 1, minTime: 0.2 }),
-				scroll: "raw",
-				seed: 2n ** 64n - 1n,
-			},
-			{
-				humanize: true,
-				"humanize:mouse": "cursory",
-				"humanize:maxTime": 1,
-				"humanize:minTime": 0.2,
-				"humanize:seed": "18446744073709551615",
-			},
-		],
-		// Keyboard and scroll have no browser engine: only the mouse turns humanize on.
-		[{ mouse: raw() }, { humanize: false, "humanize:mouse": "raw" }],
-		[{}, { humanize: true, "humanize:mouse": "auto" }],
-	])("every humanize key is written on every launch (case %#)", (humanize, expected) => {
-		const config = plain(humanizeConfig(humanize, BASE_MANIFEST));
-		expect(config).toEqual(expected);
-		expect(Object.keys(config)).toEqual(Object.keys(expected));
-	});
-
-	it("this build lists no engine", () => {
-		expect(SHIPPED_MANIFEST).toEqual({ version: 2, auto: {}, engines: {} });
-	});
-
-	// The browser delivers input as sent and reads no humanize key: nothing
-	// is written, and asking it to humanize is refused, not ignored.
-	it.each<[HumanizeSetting]>([
-		[undefined],
-		[false],
-		[0],
-		[{}],
-		[{ mouse: raw() }],
-		[{ mouse: auto(), seed: 7 }],
-		[{ keyboard: custom(() => undefined) }],
-	])("a build with no engine gets no humanize key (case %#)", (humanize) => {
-		expect(humanizeConfig(humanize, SHIPPED_MANIFEST)).toEqual({});
-	});
-
-	it.each<[HumanizeSetting, string]>([
-		[true, "auto"],
-		[1.5, "cursory"],
-		[{ mouse: cursory() }, "cursory"],
-		[{ mouse: "cursory" }, "cursory"],
-	])("a build with no engine refuses to humanize (case %#)", (humanize, name) => {
-		try {
-			humanizeConfig(humanize, SHIPPED_MANIFEST);
-			expect.unreachable();
-		} catch (e) {
-			const error = e as InstanceType<typeof HumanizeEngineUnavailable>;
-			expect(error).toBeInstanceOf(HumanizeEngineUnavailable);
-			expect([error.channel, error.engine, error.available]).toEqual([
-				"mouse",
-				name,
-				[],
-			]);
-		}
-	});
-
-	it("an engine needs a build that ships it", () => {
-		expect(() =>
-			humanizeConfig({ keyboard: engine("fancy") }, BASE_MANIFEST),
-		).toThrow(
-			"humanize keyboard: fancy is not available in this build; available: []",
+		await expect(launchHumanize(humanize)).rejects.toThrow(
+			"the browser does not humanize input",
 		);
 	});
 
-	it("engine options are written to the keys the manifest declares, as floats", () => {
-		const config = humanizeConfig(
-			{
-				keyboard: engine("fancy", { speed: 1.5 }),
-				scroll: engine("fancy", { budgetSeconds: 6 }),
-			},
-			FANCY_MANIFEST,
-		);
-		expect(utils.configJson(config)).toBe(
-			'{"humanize":true,"humanize:mouse":"auto","humanize:keyboard":"fancy","humanize:scroll":"fancy",' +
-				'"humanize:fancy:speed":1.5,"humanize:fancy:budgetSeconds":6.0}',
-		);
-	});
-
-	it("one option key cannot take two values", () => {
-		expect(() =>
-			humanizeConfig(
-				{
-					keyboard: engine("fancy", { budgetSeconds: 5 }),
-					scroll: engine("fancy", { budgetSeconds: 6 }),
-				},
-				FANCY_MANIFEST,
-			),
-		).toThrow("budgetSeconds twice");
-	});
-
-	it.each<[HumanizeSetting, string]>([
-		[
-			{ keyboard: engine("fancy", { budgetSeconds: 21 }) },
-			"budgetSeconds must be in [1, 20]",
-		],
-		[
-			{ keyboard: engine("fancy", { speed: 0.1 }) },
-			"speed must be in [0.5, 2]",
-		],
-		[{ keyboard: engine("fancy", { wpm: 60 }) }, "has no option 'wpm'"],
-		[{ mouse: cursory({ maxTime: -1 }) }, "maxTime must be at least 0"],
-	])("engine options are checked against the manifest (case %#)", (humanize, message) => {
-		expect(() => humanizeConfig(humanize, FANCY_MANIFEST)).toThrow(message);
-	});
-
-	it.each<[HumanizeSetting, string]>([
-		[{ scroll: engine("notches") }, "scroll: notches is not available"],
-		[{ keyboard: cursory() }, "keyboard: cursory is not available"],
-		[{ mouse: "fast" }, "mouse: fast is not available"],
-	])("an engine the channel does not list is refused (%j)", (humanize, message) => {
-		expect(() => humanizeConfig(humanize, BASE_MANIFEST)).toThrow(message);
-	});
-
-	it.each<[unknown, string]>([
-		[{ touch: auto() }, "no channel"],
-		[{ mouse: 3 }, "must be an engine"],
-		[
-			{ mouse: engine("cursory", { maxTime: "1" as unknown as number }) },
-			"must be a number",
-		],
+	it.each([
+		[{ touch: raw() }, "no channel"],
 		[{ seed: -1 }, "seed"],
-		[{ seed: 2 ** 64 }, "seed"],
-		["yes", "must be None"],
-	])("malformed settings are refused (%j)", (humanize, message) => {
-		expect(() =>
-			humanizeConfig(humanize as HumanizeSetting, BASE_MANIFEST),
-		).toThrow(ValueError);
-		expect(() =>
-			humanizeConfig(humanize as HumanizeSetting, BASE_MANIFEST),
-		).toThrow(message);
-	});
-
-	it("factories return plain data", () => {
-		expect(cursory({ maxTime: 1 })).toEqual({
-			engine: "cursory",
-			options: { maxTime: 1 },
-		});
-		expect(engine("fancy", { speed: 2 })).toEqual({
-			engine: "fancy",
-			options: { speed: 2 },
-		});
-		expect(JSON.parse(JSON.stringify(auto()))).toEqual(auto());
-	});
-
-	it("the manifest is read beside the executable", () => {
-		const dir = fs.mkdtempSync(path.join(SCRATCH, "manifest-"));
-		const binary = path.join(dir, "camoufox-bin");
-		expect(deps.loadHumanizeEngines(binary)).toBeNull();
-		fs.writeFileSync(
-			path.join(dir, "humanize-engines.json"),
-			JSON.stringify(BASE_MANIFEST),
-		);
-		expect(deps.loadHumanizeEngines(binary)).toEqual(BASE_MANIFEST);
+		[{ seed: 2 ** 32 }, "seed"],
+		[{ seed: 1.5 }, "seed"],
+		[{ seed: true }, "seed"],
+		[{ seed: "1" }, "seed"],
+		[{ mouse: 3 }, "is not an engine"],
+		[
+			{ mouse: { engine: "myuri", options: { speed: 1 } } },
+			"myuri() has no part 'speed'",
+		],
+		[
+			{ mouse: { engine: "cursory", options: { maxTime: 1 } } },
+			"myuri() has no part 'maxTime'",
+		],
+		[
+			{ mouse: myuri({ type: noop }) },
+			'humanize["mouse"]: myuri({ type }) is not a mouse part',
+		],
+		[
+			{ mouse: { engine: "myuri", options: { wpm: 70 } } },
+			"myuri({ wpm }) is not a mouse part",
+		],
+		[
+			{ keyboard: { engine: "myuri", options: { type: "fast" } } },
+			"takes the function that replaces the part",
+		],
+		[{ mouse: { engine: "raw", options: { speed: 1 } } }, "takes no options"],
+	])("refuses a malformed setting (%#)", (humanize, message) => {
+		expect(() => normalize(humanize)).toThrow(message);
 	});
 });
 

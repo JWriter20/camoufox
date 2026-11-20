@@ -12,8 +12,11 @@ an invariant stock Firefox 152 holds:
   gum-fake            getUserMedia({audio: true, fake: true}) resolves without a
                       prompt
   storage-partition   a cross-site iframe's document.hasStorageAccess() is false
-  wheel-default       page.mouse.wheel(0, 300) arrives as the one pixel-mode
-                      event the driver sent, deltaY 300
+  wheel-default       page.mouse.wheel(0, 300) arrives as one native wheel
+                      event of 3 notches, wheelDeltaY -360 (docs/input-dispatch.md);
+                      on Linux, as macOS's differs (driven-wheel-notches)
+  wheel-scaled        wheel-default again at layout.css.devPixelsPerPx 2:
+                      still 3 notches, not a count halved by the scale
   query-cost          matchMedia('(color: 8)') and navigator.hardwareConcurrency
                       cost about what matchMedia('(min-width: 1px)') and
                       navigator.userAgent do (no sync IPC per read)
@@ -200,6 +203,22 @@ def run_probes(binary, port):
         return out
 
 
+def probe_wheel(binary, port, prefs=None):
+    """One scroll of 300px, quantised into the notches a physical wheel produces."""
+    from camoufox.sync_api import Camoufox
+
+    with Camoufox(headless=True, executable_path=str(binary), os="linux",
+                  firefox_user_prefs=prefs or {}, i_know_what_im_doing=True) as b:
+        page = b.new_page()
+        page.goto(f"http://localhost:{port}/")
+        # The page is idle first, so the wheel is not queued behind the load.
+        page.evaluate("() => new Promise((r) => requestIdleCallback(() => r(), {timeout: 2000}))")
+        page.mouse.move(200, 200)
+        page.mouse.wheel(0, 300)
+        page.wait_for_timeout(1500)
+        return json.loads(page.evaluate("() => document.body.dataset.wheel || '[]'"))
+
+
 def relaunch_timezones(binary, port):
     from camoufox.sync_api import Camoufox
 
@@ -228,6 +247,7 @@ def main() -> int:
     server, port = serve()
     try:
         out = run_probes(binary, port)
+        out["wheelScaled"] = probe_wheel(binary, port, prefs={"layout.css.devPixelsPerPx": "2"})
         relaunch = relaunch_timezones(binary, port)
     finally:
         server.shutdown()
@@ -259,8 +279,10 @@ def main() -> int:
         failures.append(f"gum-fake: getUserMedia({{fake: true}}) {out['gumFake']}")
     if out["storageAccess"] is not False:
         failures.append(f"storage-partition: cross-site iframe hasStorageAccess() = {out['storageAccess']}")
-    if [(e["dy"], e["mode"]) for e in out["wheel"]] != [(300, 0)]:
-        failures.append(f"wheel-default: wheel(0, 300) gave {out['wheel']}")
+    # 300 px is three notches, in one event, as one 360-unit WM_MOUSEWHEEL.
+    for name, events in (("wheel-default", out["wheel"]), ("wheel-scaled", out["wheelScaled"])):
+        if [e["wd"] for e in events] != [-360]:
+            failures.append(f"{name}: wheel(0, 300) gave {events}")
     # 20000 reads of a value that lives in the config cost ~20 ms here, i.e.
     # ~1 us each: a hash lookup, no IPC. The state this guards against is a sync
     # IPC per read, measured at ~12 us each when it regressed -- 240 ms over the
