@@ -77,6 +77,11 @@ fonts actually available. What differs is how they are gated:
   is no directory gate on those hosts; the allowlist in
   `browser/patches/font-hijacker.patch` is what restricts a lookup. Basenames therefore
   must not collide within a package's group set, which `verify-fonts.py` checks.
+- **On Linux, a launch without the launcher's config gets the host's fonts.**
+  It claims no OS, fontconfig uses the host's own configuration, and
+  `font-hijacker.patch` adds only the files directly in `fonts/` (Firefox's
+  `TwemojiMozilla.ttf`), as stock does, never the group subdirectories.
+  `browser/tests/playwright/patches/bare-launch-host-fonts.py` checks it.
 - **On a macOS host, a file holding a hidden system face (a PostScript name
   starting with `.`) is never activated.** WebRender loads those by name and gets
   the host's copy, so the UI drew wrong glyphs (#918). Check it on a Mac with
@@ -354,8 +359,10 @@ cd python && python3 -m pytest -q -k "font or humanize or launch_environment"
 The full run checks, per OS: `fonts.json[os]` ⊆ what `fc-list` publishes (aliases
 resolved via `fc-match`), no file reachable outside that OS's groups, generics
 resolve to a reportable family, essential / variant / marker ⊆ `fonts.json`,
-20 draws stay inside `fonts.json`, each face stored exactly once, no subfolders,
-and no basename collisions within a package's group set.
+every OS version that reports an alias's target reports the alias, 20 draws stay
+inside `fonts.json`, each face stored exactly once, no subfolders, and no
+basename collisions within a package's group set. The release runs the full
+check; every pull request runs `--quick` on the fonts its build carries.
 
 ## Known residue
 

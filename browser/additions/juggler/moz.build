@@ -27,6 +27,7 @@ FINAL_TARGET_FILES.modules.juggler.content += [
     "content/WorkerMain.js",
 ]
 FINAL_TARGET_FILES.modules.juggler.input += [
+    "input/HumanDelay.js",
     "input/MouseDispatch.js",
 ]
 FINAL_TARGET_FILES.modules.juggler.protocol += [

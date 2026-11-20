@@ -6,9 +6,10 @@ Camoufox dispatches synthesized mouse events inside `activateAndRun()`
 *process-global* promise chain. Each dispatch awaits a `hit-renderer` ack from
 the content process. If an ack never arrives, the callback never returns, the
 global chain never advances, and every later input event in the process hangs
-behind it forever. Two triggers were already fixed: the far edges
-(x==width / y==height, #225; mouse-boundary-sweep.py) and a zero-displacement
-move (noop-mousemove-deadlock.py). This is the third: the *near* edge, y==0.
+behind it forever. Two triggers were already fixed: the far edges (x==width / y==height, #225,
+now swept by mouse-boundary-sweep.py) and a zero-displacement move
+(noop-mousemove-deadlock.py). This is the third: the
+*near* edge, y==0.
 
 MECHANISM
 `sendOne()` in PageHandler.js dispatches at `eventY + boundingBox.top`, so a
@@ -40,6 +41,12 @@ branch silently drops mousedown/mouseup, so widening the check would turn the
 hang into a click that reports success and fires nothing (#752). The fix snaps
 the dispatched coordinate to the first whole pixel inside the browser element,
 which stays within content pixel 0 while landing clear of the boundary.
+
+COVERAGE
+`page.mouse.move(x, 0)` reaches the conversion directly, deterministic on an
+affected chrome offset. (A since-removed in-browser cursor trajectory reached it
+too, by riding the y==0 row from its (0, 0) start; a driver that plans curves
+sends each point as its own move, so this covers it.)
 
 Run against a specific build:
     CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python3 browser/tests/playwright/patches/near-edge-mouse-deadlock.py
@@ -84,7 +91,7 @@ def _deadlock_report(what):
 
 async def _direct_moves() -> bool:
     """A plain move onto the top edge must complete and be seen by the page."""
-    print("\n=== moves onto the top edge ===")
+    print("\n=== direct moves onto the top edge ===")
     for spoofed_os in SPOOFED_OSES:
         async with AsyncCamoufox(**launch_kwargs(os=spoofed_os)) as browser:
             page = await browser.new_page()

@@ -45,9 +45,14 @@ skip:
   # That breaks far less than this section used to claim. test_click.py,
   # test_check.py, test_fill.py, test_focus.py, test_dispatch_event.py and
   # test_element_handle.py were skipped wholesale -- 160 tests -- and all of
-  # them pass.
-  # browser/tests/playwright/patches/driven-input-as-sent.py and
-  # browser/tests/playwright/patches/input-ack-backstop.py assert the behaviour.
+  # them pass. The last two, test_click.py's stable-position tests, were blamed
+  # on humanized travel time; they failed because every animation finished at
+  # once, so the element Playwright waited on never moved. With animations on
+  # stock timing (instantAnimations is now opt-in) they pass too.
+  #
+  # See docs/input-dispatch.md.
+  # browser/tests/playwright/patches/input-ack-backstop.py asserts the behaviour
+  # that replaces them.
 
   - test: tests/async/test_keyboard.py::test_should_send_proper_codes_while_typing
     reason: >-

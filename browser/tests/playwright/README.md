@@ -25,6 +25,18 @@ python3 -m ci.run_patch_guards --binary /path/to/camoufox-bin --group automation
 python3 -m ci.run_patch_guards --binary /path/to/camoufox-bin --only isolated-evaluate
 ```
 
+### `juggler/` — unit tests for Juggler's input modules
+
+The browser plans no input of its own: each Playwright call is one event, and
+humanization is the driver's (docs/humanize.md). What is left to test without a
+build is `browser/additions/juggler/input/HumanDelay.js`, the draw behind the
+paste and auto-Shift modifier timing, a plain ES module that runs under Node.
+`gecko.mjs` supplies the Gecko global it is loaded through.
+
+```bash
+node --test browser/tests/juggler/*.test.mjs
+```
+
 ### `camoufox/` — Camoufox's own Playwright tests
 
 Tests for behaviour upstream Playwright has no equivalent for, or asserts the

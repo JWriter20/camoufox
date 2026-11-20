@@ -8,8 +8,8 @@
  * The one place in the parent process that dispatches synthesized mouse input.
  *
  * It exists because the alternative did not work. Between 2026-04 and 2026-09,
- * four separate deadlocks shipped -- exact-edge coordinates (#225),
- * trajectory points that bypassed the endpoint's guard (#677/#225), a
+ * four separate deadlocks shipped -- exact-edge coordinates (#225), the
+ * since-removed in-browser trajectory's points that bypassed the endpoint's guard (#677/#225), a
  * zero-displacement move, and the top-edge row (#751/#752) -- each fixed by
  * adding one more coordinate guard at one more call site. The guards were
  * correct; the arithmetic behind them was copied per call site, so every new
@@ -46,10 +46,6 @@
  * diagnose. So: well above the slowest legitimate ack, not near the typical one.
  */
 export const kAckDeadlineMs = 5000;
-
-const {Helper} = ChromeUtils.importESModule('resource://gre/modules/juggler/Helper.js');
-const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
-const helper = new Helper();
 
 function warnUndelivered(eventType, x, y, box, deadlineMs) {
   dump(
@@ -93,9 +89,21 @@ export class MouseDispatch {
 
   /**
    * Measure the browser rect again. Every dispatch does this synchronously
-   * before converting its point (docs/input-dispatch.md, "A fresh rect"): the
-   * chrome can move the browser between a MouseDispatch's creation and its
-   * dispatch (a toolbar changing height, the fullscreen toolbox sliding away).
+   * before converting its point (docs/input-dispatch.md, "A fresh rect"): one
+   * MouseDispatch can serve a command for longer than a frame (a click's
+   * press and release), and the browser can move in the window meanwhile.
+   *
+   * Measured 2026-10-31 (~1 in 4 runs): a window smaller
+   * than the chrome plus the viewport, as a 1366x768 screen draw gives a
+   * 1000x700 viewport, leaves Juggler's .browserStack scrolling the browser,
+   * and while it was overflow: auto a wheel turn scrolled it by the overflow
+   * over ~130ms (TargetRegistry.updateViewportSize). A move that started
+   * meanwhile kept the rect from its start, so every later point, the
+   * destination included, reached the page shifted by the scroll (13-84 px):
+   * moves nothing asked for, a move that missed its target, and the
+   * next click's mousedown away from the last mousemove, which a real mouse
+   * never does. The chrome can still move the browser mid-move (a toolbar
+   * changing height, the fullscreen toolbox sliding away).
    */
   _remeasure() {
     if (this._browser)
@@ -117,6 +125,24 @@ export class MouseDispatch {
    */
   isInViewport(x, y) {
     return x >= 0 && y >= 0 && x < this._box.width && y < this._box.height;
+  }
+
+  /**
+   * The device pixels inside the CSS pixel holding relative (x, y), as
+   * relative points: one at a display scale of 1, two or three at 2.5.
+   */
+  devicePointsIn(x, y) {
+    const scale = this._win.devicePixelRatio;
+    const axis = (v, origin) => {
+      // The content area starts on the device pixel nearest its CSS origin.
+      const start = Math.round(origin * scale);
+      const points = [];
+      for (let k = Math.ceil(Math.floor(v) * scale); k < (Math.floor(v) + 1) * scale; k++)
+        points.push((start + k) / scale - origin);
+      return points;
+    };
+    const xs = axis(x, this._box.left);
+    return axis(y, this._box.top).flatMap(py => xs.map(px => ({x: px, y: py})));
   }
 
   /** Relative point -> absolute, snapped clear of both of the element's edges. */
@@ -273,7 +299,7 @@ export class MouseDispatch {
   }
 
   /** Wheel events take the same conversion; they are not acked. */
-  sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY}) {
+  sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY, nativeNotches = false}) {
     const {x: absX, y: absY} = this.toAbsolute(x, y);
     const utils = this._win.windowUtils;
     // The widget reads pixel deltas as device pixels. Scale by the chrome
@@ -291,6 +317,6 @@ export class MouseDispatch {
       this._args.modifiers,
       lineOrPageDeltaX,
       lineOrPageDeltaY,
-      0 /* options */);
+      nativeNotches ? utils.WHEEL_EVENT_NATIVE_NOTCHES : 0);
   }
 }

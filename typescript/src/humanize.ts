@@ -1,447 +1,216 @@
 /**
- * Per-channel input planning: the engine factories and the launch-time config.
- * TypeScript twin of python/src/camoufox/humanize.py.
+ * Per-channel humanized input, run by the driver, never by the browser.
+ * The TypeScript twin of python/src/camoufox/humanize.py.
  *
- *     import { Camoufox, custom } from "camoufox";
- *     await Camoufox({ humanize: { mouse: custom(myMouse), seed: 1234 } });
+ *     import { Camoufox, myuri, raw } from "camoufox";
  *
- * The browser delivers the input a driver sends as it was sent: it plans no
- * cursor path, no typing and no scrolling. A channel (mouse, keyboard, scroll)
- * is raw(), Playwright's own dispatch, or a client-side engine, `custom(fn)`:
- * a function in this process plans the channel's input and plays it through
- * Playwright's own input methods, with schedule pacing and a seeded stream
- * (humanize-custom.ts).
+ *     await Camoufox({ humanize: true });          // myuri on every channel
+ *     await Camoufox({
+ *       humanize: {
+ *         mouse: myuri({ move: myMove }),
+ *         keyboard: myuri({ wpm: 70 }),
+ *         scroll: raw(),
+ *         seed: 1234,
+ *       },
+ *     });
  *
- * A build from before that still plans input in the browser. Which engines it
- * has, and which options each takes, is its humanize-engines.json
- * (docs/humanize.md); `engine(name, options)` names any of them, and asking a
- * build for an engine it does not list throws HumanizeEngineUnavailable. A
- * factory returns plain data, never behaviour.
+ * The browser has no humanization of its own: each Playwright input call
+ * reaches the page as the one native-looking event it asks for, when it is
+ * sent (docs/input-dispatch.md). A channel (mouse, keyboard, scroll) is one of
  *
- * `humanize` itself may also be:
+ *     myuri()     myuri's smart actions (https://github.com/JWriter20/Myuri):
+ *                 paths, clicks, typing and wheel turns as the people it was
+ *                 fitted to make them on the identity's OS, and the decisions
+ *                 around a click (scroll into view, the point, whether it lands)
+ *     raw()       Playwright's own calls, unchanged
  *
- *     undefined / false   every channel raw(): Playwright's own dispatch
- *     true                every channel auto(): throws on a build with no engines
- *     a number            { mouse: cursory({ maxTime: <number> }) }, the rest auto()
- *     an object           per channel; an omitted channel is auto()
+ * cursory() is another name for myuri(), which runs cursory's paths.
+ *
+ * `myuri(parts)` replaces any of myuri's parts on its channel with a function
+ * of yours; the rest stay myuri's (_humanize_playwright.ts). `humanize` may be
+ * null / false (every channel raw), true (every channel myuri), or an object
+ * per channel plus an optional `seed`; an omitted channel is myuri. Nothing
+ * about it reaches the browser's config.
  */
-import { HumanizeEngineUnavailable } from "./exceptions.js";
-import { PyFloat, pyRepr, ValueError } from "./pycompat.js";
+
+import type { BoundingBox, PartContext, Vector } from "@jwriter20/myuri";
+import { pyRepr, ValueError } from "./pycompat.js";
 
 export const CHANNELS = ["mouse", "keyboard", "scroll"] as const;
 export type Channel = (typeof CHANNELS)[number];
 
-export interface Engine {
-	engine: string;
-	options: Record<string, number>;
-	/** The function of a custom() engine. */
-	fn?: CustomEngineFn;
+/** The myuri parts each channel's myuri() may replace (myuri's PARTS). */
+export const CHANNEL_PARTS: Record<Channel, readonly string[]> = {
+	mouse: ["move", "press", "point", "reaches"],
+	keyboard: ["type", "key"],
+	scroll: ["intoView", "wheel"],
+};
+
+/**
+ * What myuri() takes: functions that replace myuri's parts, each called with
+ * the page, the part's arguments and `{ default, rng, play }`, and `wpm` for
+ * the keyboard.
+ */
+export interface MyuriOptions {
+	move?: (page: any, x: number, y: number, ctx: PartContext<void>) => unknown;
+	press?: (
+		page: any,
+		button: "left" | "right" | "middle",
+		clickCount: number,
+		ctx: PartContext<void>,
+	) => unknown;
+	point?: (
+		page: any,
+		box: BoundingBox,
+		attempt: number,
+		ctx: PartContext<Vector>,
+	) => Vector | Promise<Vector>;
+	reaches?: (
+		page: any,
+		locator: any,
+		x: number,
+		y: number,
+		pressing: boolean,
+		ctx: PartContext<string | null>,
+	) => string | null | Promise<string | null>;
+	intoView?: (page: any, locator: any, ctx: PartContext<void>) => unknown;
+	wheel?: (
+		page: any,
+		dx: number,
+		dy: number,
+		ctx: PartContext<void>,
+	) => unknown;
+	type?: (page: any, text: string, ctx: PartContext<void>) => unknown;
+	key?: (page: any, key: string, ctx: PartContext<void>) => unknown;
+	wpm?: number;
 }
 
-/** A client-side engine's function. Per channel it receives:
- *
- *     mouse     (page, x, y, { original, rng, play })
- *     keyboard  (page, text, { original, rng, play, kind })  kind: "type" | "press" | "fill"
- *     scroll    (page, target, { original, rng, play })       target: a Locator or [dx, dy]
- */
-export type CustomEngineFn = (...args: any[]) => unknown;
+export interface Engine {
+	engine: "raw" | "myuri";
+	options: MyuriOptions;
+}
 
 export type HumanizeSetting =
-	| undefined
-	| null
 	| boolean
-	| number
-	| {
-			mouse?: Engine | string;
-			keyboard?: Engine | string;
-			scroll?: Engine | string;
-			seed?: number | bigint;
-	  };
-
-interface OptionSpec {
-	key: string;
-	min?: number;
-	max?: number;
-}
-
-/** A build's humanize-engines.json. */
-export type HumanizeManifest = Partial<Record<Channel, string[]>> & {
-	version?: number;
-	auto?: Partial<Record<Channel, string[]>>;
-	engines?: Record<
-		string,
-		{
-			module?: string;
-			options?: Record<string, OptionSpec>;
-		}
-	>;
-};
-
-// What a build without humanize-engines.json runs. It predates per-channel
-// humanize: it reads only `humanize` (cursory mouse plus notched wheel) and
-// humanize:maxTime / minTime, so it runs every base engine or none.
-export const LEGACY_MANIFEST: HumanizeManifest = {
-	version: 0,
-	mouse: ["raw", "cursory"],
-	keyboard: ["raw"],
-	scroll: ["raw", "notches"],
-	auto: { mouse: ["cursory"], keyboard: ["raw"], scroll: ["notches"] },
-	engines: {
-		cursory: {
-			options: {
-				maxTime: { key: "humanize:maxTime", min: 0 },
-				minTime: { key: "humanize:minTime", min: 0 },
-			},
-		},
-		notches: {},
-	},
-};
-
-const isNumber = (value: unknown): value is number =>
-	typeof value === "number" && !Number.isNaN(value);
-
-/** Any engine the build's humanize-engines.json lists, with its options. The
- *  options are checked against the manifest at launch. */
-export function engine(
-	name: string,
-	options: Record<string, number> = {},
-): Engine {
-	return { engine: name, options };
-}
-
-/** The first engine the build lists for the channel; raw() when it lists none. */
-export function auto(): Engine {
-	return engine("auto");
-}
+	| Record<string, unknown>
+	| null
+	| undefined;
 
 /** Playwright's own dispatch, byte for byte. */
 export function raw(): Engine {
-	return engine("raw");
+	return { engine: "raw", options: {} };
 }
 
-/** Mouse, on a build that lists the engine: replayed human cursor paths
- *  (Cursory), scaled into [minTime, maxTime] seconds. Defaults: 0 and 1.5. */
-export function cursory(
-	options: { maxTime?: number; minTime?: number } = {},
-): Engine {
-	return engine(
-		"cursory",
-		Object.fromEntries(
-			Object.entries(options).filter(([, v]) => v !== undefined && v !== null),
-		) as Record<string, number>,
-	);
-}
-
-/** A client-side engine: `fn` plans the channel's input in this process and
- *  plays it through Playwright. `original` runs Playwright's own behaviour for
- *  the call, `rng` is the channel's seeded stream, and `play(steps)`
- *  dispatches steps on a schedule. */
-export function custom(fn: CustomEngineFn): Engine {
-	if (typeof fn !== "function") {
+/**
+ * myuri's smart actions on the channel. Each key names a part to replace with
+ * your function, called as `fn(page, ...args, { default, rng, play })`:
+ *
+ *     mouse     move(x, y)  press(button, clickCount)  point(box, attempt)
+ *               reaches(locator, x, y, pressing)
+ *     keyboard  type(text)  key(key)
+ *     scroll    intoView(locator)  wheel(dx, dy)
+ *
+ * `default(...args)` runs myuri's part (with the same arguments when given
+ * none), `rng()` draws from the humanize seed's stream, and `play(steps)`
+ * plays a timeline of input. `wpm` (keyboard) sets myuri's typing speed.
+ */
+export function myuri(options: MyuriOptions = {}): Engine {
+	const parts = Object.values(CHANNEL_PARTS).flat();
+	const unknown = Object.keys(options)
+		.filter((key) => key !== "wpm" && !parts.includes(key))
+		.sort();
+	if (unknown.length)
 		throw new ValueError(
-			`custom() takes the function that plans the input, got ${pyRepr(fn)}`,
+			`myuri() has no part '${unknown[0]}'; the parts are ${JSON.stringify(CHANNEL_PARTS)}, and wpm`,
 		);
-	}
-	return { engine: "custom", options: {}, fn };
+	for (const [name, fn] of Object.entries(options))
+		if (name !== "wpm" && typeof fn !== "function")
+			throw new ValueError(
+				`myuri({ ${name} }) takes the function that replaces the part, got ${pyRepr(fn)}`,
+			);
+	return { engine: "myuri", options: { ...options } };
 }
+
+export const cursory = myuri;
+
+const IN_BROWSER =
+	"the browser does not humanize input: each Playwright call is one event. " +
+	"Pass True, or myuri() or raw() per channel (camoufox.humanize)";
 
 function asEngine(channel: Channel, value: unknown): Engine {
-	const candidate = typeof value === "string" ? engine(value) : value;
+	const entry = value as Partial<Engine> | null;
 	if (
-		candidate === null ||
-		typeof candidate !== "object" ||
-		Array.isArray(candidate) ||
-		typeof (candidate as Engine).engine !== "string"
-	) {
+		typeof entry !== "object" ||
+		!["myuri", "cursory", "raw"].includes(entry?.engine as string)
+	)
 		throw new ValueError(
-			`humanize["${channel}"] must be an engine such as auto(), raw(), cursory() or custom(fn), got ${pyRepr(value)}`,
+			`humanize["${channel}"]=${pyRepr(value)} is not an engine; ${IN_BROWSER}`,
 		);
+	const options = entry?.options ?? {};
+	if (entry?.engine === "raw") {
+		if (Object.keys(options).length)
+			throw new ValueError(`humanize["${channel}"]: raw() takes no options`);
+		return raw();
 	}
-	const name = (candidate as Engine).engine;
-	if (name === "custom") {
-		const fn = (candidate as Engine).fn;
-		if (typeof fn !== "function") {
-			throw new ValueError(
-				`humanize["${channel}"]: a custom engine needs its function, as custom(fn)`,
-			);
-		}
-		if (Object.keys((candidate as Engine).options ?? {}).length) {
-			throw new ValueError(
-				`humanize["${channel}"]: custom() takes no options; the function is the engine`,
-			);
-		}
-		return { engine: "custom", options: {}, fn };
-	}
-	const options = { ...((candidate as Engine).options ?? {}) };
-	for (const [key, option] of Object.entries(options)) {
-		if (!isNumber(option)) {
-			throw new ValueError(
-				`${name}() option ${key} must be a number, got ${pyRepr(option)}`,
-			);
-		}
-	}
-	return { engine: name, options };
+	const engine = myuri(options);
+	const allowed = [
+		...CHANNEL_PARTS[channel],
+		...(channel === "keyboard" ? ["wpm"] : []),
+	];
+	const misplaced = Object.keys(options)
+		.filter((key) => !allowed.includes(key))
+		.sort();
+	if (misplaced.length)
+		throw new ValueError(
+			`humanize["${channel}"]: myuri({ ${misplaced[0]} }) is not a ${channel} part; ` +
+				`the ${channel} parts are ${allowed.join(", ")}`,
+		);
+	return engine;
 }
 
-/** The four channel values of a `humanize` setting: the engine per channel, and
- *  the seed (undefined when not given). */
-export function normalize(humanize: HumanizeSetting): {
+/** The engine per channel of a `humanize` setting, and the seed if given. */
+export function normalize(humanize: unknown): {
 	engines: Record<Channel, Engine>;
-	seed?: bigint;
+	seed?: number;
 } {
-	const all = (make: () => Engine) =>
-		Object.fromEntries(CHANNELS.map((c) => [c, make()])) as Record<
+	const every = (engine: () => Engine) => ({
+		engines: Object.fromEntries(CHANNELS.map((c) => [c, engine()])) as Record<
 			Channel,
 			Engine
-		>;
-	const isObject =
-		typeof humanize === "object" &&
-		humanize !== null &&
-		!Array.isArray(humanize);
-	if (!humanize && !isObject) return { engines: all(raw) };
-	if (humanize === true) return { engines: all(auto) };
-	if (isNumber(humanize)) {
-		return {
-			engines: {
-				mouse: cursory({ maxTime: humanize }),
-				keyboard: auto(),
-				scroll: auto(),
-			},
-		};
-	}
-	if (!isObject) {
-		throw new ValueError(
-			`humanize must be None, a bool, a number or a dict, got ${pyRepr(humanize)}`,
-		);
-	}
+		>,
+	});
+	if (humanize === null || humanize === undefined || humanize === false)
+		return every(raw);
+	if (humanize === true) return every(myuri);
+	if (typeof humanize !== "object" || Array.isArray(humanize))
+		throw new ValueError(`humanize=${pyRepr(humanize)}: ${IN_BROWSER}`);
 	const setting = humanize as Record<string, unknown>;
-	const unknown = Object.keys(setting)
-		.filter((k) => !(CHANNELS as readonly string[]).includes(k) && k !== "seed")
-		.sort();
-	if (unknown.length) {
+	const unknown = Object.keys(setting).filter(
+		(key) => !(CHANNELS as readonly string[]).includes(key) && key !== "seed",
+	);
+	if (unknown.length)
 		throw new ValueError(
-			`humanize has no channel ${pyRepr(unknown)}; the channels are ('mouse', 'keyboard', 'scroll') and "seed"`,
+			`humanize has no channel ${JSON.stringify(unknown)}; the channels are ${CHANNELS.join(", ")} and "seed"`,
 		);
-	}
-	let seed: bigint | undefined;
-	const rawSeed = setting.seed;
-	if (rawSeed !== undefined && rawSeed !== null) {
-		const valid =
-			(typeof rawSeed === "bigint" && rawSeed >= 0n && rawSeed < 2n ** 64n) ||
-			(typeof rawSeed === "number" &&
-				Number.isSafeInteger(rawSeed) &&
-				rawSeed >= 0);
-		if (!valid) {
-			throw new ValueError(
-				`humanize["seed"] must be an integer in [0, 2**64), got ${pyRepr(rawSeed)}`,
-			);
-		}
-		seed = BigInt(rawSeed as number | bigint);
-	}
+	const seed = (setting.seed ?? undefined) as number | undefined;
+	if (
+		seed !== undefined &&
+		(!Number.isInteger(seed) || seed < 0 || seed >= 2 ** 32)
+	)
+		throw new ValueError(
+			`humanize.seed must be an integer in [0, 2**32), got ${String(seed)}`,
+		);
 	const engines = Object.fromEntries(
-		CHANNELS.map((c) => [c, asEngine(c, setting[c] ?? "auto")]),
+		CHANNELS.map((c) => [
+			c,
+			asEngine(c, setting[c] === undefined ? myuri() : setting[c]),
+		]),
 	) as Record<Channel, Engine>;
 	return { engines, seed };
 }
 
-/** An engine's options as config keys, checked against what the manifest declares. */
-function optionKeys(
-	name: string,
-	options: Record<string, number>,
-	manifest: HumanizeManifest,
-): Record<string, number> {
-	const declared = manifest.engines?.[name]?.options ?? {};
-	const keys: Record<string, number> = {};
-	for (const [option, value] of Object.entries(options)) {
-		const spec = declared[option];
-		if (!spec) {
-			throw new ValueError(
-				`${name}() has no option ${pyRepr(option)}; it takes ${pyRepr(Object.keys(declared).sort())}`,
-			);
-		}
-		const low = spec.min ?? 0;
-		const high = spec.max;
-		if (value < low || (high !== undefined && value > high)) {
-			const bounds =
-				high !== undefined ? `in [${low}, ${high}]` : `at least ${low}`;
-			throw new ValueError(
-				`${name}() ${option} must be ${bounds}, got ${pyRepr(value)}`,
-			);
-		}
-		keys[spec.key] = value;
-	}
-	return keys;
-}
-
-/**
- * The camoucfg keys for a `humanize` setting on a build whose
- * humanize-engines.json is `manifest` (null for a build without one).
- *
- * Throws HumanizeEngineUnavailable for an engine the build does not ship,
- * and for `humanize: true` on a build that ships none.
- */
-export function humanizeConfig(
-	humanize: HumanizeSetting,
-	manifest: HumanizeManifest | null,
-): Record<string, unknown> {
-	const { engines, seed } = normalize(humanize);
-	// A custom channel runs client-side, so the browser runs it raw.
-	const names = Object.fromEntries(
-		CHANNELS.map((c) => [
-			c,
-			engines[c].engine === "custom" ? "raw" : engines[c].engine,
-		]),
-	) as Record<Channel, string>;
-	const legacy = manifest === null;
-	const available = manifest ?? LEGACY_MANIFEST;
-
-	for (const channel of CHANNELS) {
-		const listed = available[channel] ?? [];
-		const name = names[channel];
-		if (name !== "auto" && name !== "raw" && !listed.includes(name)) {
-			throw new HumanizeEngineUnavailable(channel, name, listed);
-		}
-	}
-
-	if (!CHANNELS.some((c) => c in available)) {
-		// The build plans no input and reads no humanize key.
-		if (humanize === true) {
-			throw new HumanizeEngineUnavailable(
-				"mouse",
-				"auto",
-				[],
-				"this build delivers input as the driver sends it; plan a channel with custom(fn)",
-			);
-		}
-		return {};
-	}
-
-	const options: Record<string, number> = {};
-	for (const channel of CHANNELS) {
-		const keys = optionKeys(
-			names[channel],
-			engines[channel].options,
-			available,
-		);
-		for (const [key, value] of Object.entries(keys)) {
-			const existing = options[key];
-			if (existing !== undefined && existing !== value) {
-				throw new ValueError(
-					`humanize sets ${key} twice, to ${pyRepr(new PyFloat(existing))} and ${pyRepr(new PyFloat(value))}`,
-				);
-			}
-			options[key] = value;
-		}
-	}
-	// Python writes these as floats: 1 -> 1.0.
-	const floats = Object.fromEntries(
-		Object.entries(options).map(([k, v]) => [k, new PyFloat(v)]),
-	);
-
-	// A channel the build has no engines for runs raw whatever it is set to.
-	const enabled = CHANNELS.some((c) => c in available && names[c] !== "raw");
-	if (legacy) {
-		const on = Object.fromEntries(
-			CHANNELS.map((c) => [c, available.auto?.[c]?.[0] ?? "raw"]),
-		) as Record<Channel, string>;
-		const unsupported = CHANNELS.find(
-			(c) => names[c] !== "auto" && names[c] !== on[c],
-		);
-		if (enabled && unsupported) {
-			throw new HumanizeEngineUnavailable(
-				unsupported,
-				names[unsupported],
-				[on[unsupported]],
-				"this build predates per-channel humanize: it runs every base engine or none",
-			);
-		}
-		if (seed !== undefined) {
-			throw new HumanizeEngineUnavailable(
-				"seed",
-				String(seed),
-				[],
-				"this build predates per-channel humanize and has no seeded input",
-			);
-		}
-		return enabled ? { humanize: true, ...floats } : {};
-	}
-
-	// Every key on every launch, so nothing depends on what an earlier launch set.
-	const config: Record<string, unknown> = { humanize: enabled };
-	for (const channel of CHANNELS)
-		if (channel in available) config[`humanize:${channel}`] = names[channel];
-	Object.assign(config, floats);
-	if (seed !== undefined) {
-		// A string: Juggler reads config numbers as doubles, which cannot hold
-		// every 64-bit seed exactly.
-		config["humanize:seed"] = String(seed);
-	}
-	return config;
-}
-
-/** The functions of a `humanize` setting's custom channels, by channel. */
-export function customEngines(
-	humanize: HumanizeSetting,
-): Partial<Record<Channel, CustomEngineFn>> {
+/** The channels of a `humanize` setting that an engine in this process drives. */
+export function drivenChannels(humanize: unknown): Channel[] {
 	const { engines } = normalize(humanize);
-	return Object.fromEntries(
-		CHANNELS.filter((c) => engines[c].engine === "custom").map((c) => [
-			c,
-			engines[c].fn as CustomEngineFn,
-		]),
-	);
-}
-
-// The seeded streams, one per channel (vectors: browser/tests/humanize/rng-vectors.json):
-//
-//   stream(channel) = Mulberry32(splitmix64(seed ^ TAG[channel]) & 0xffffffff)
-
-const MASK64 = (1n << 64n) - 1n;
-
-export const CHANNEL_TAGS: Readonly<Record<Channel, bigint>> = Object.freeze({
-	mouse: 0x6d6f7573n,
-	keyboard: 0x6b657962n,
-	scroll: 0x7363726fn,
-});
-
-/** One splitmix64 output for the 64-bit state `x`. */
-export function splitmix64(x: bigint): bigint {
-	let z = (BigInt.asUintN(64, x) + 0x9e3779b97f4a7c15n) & MASK64;
-	z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & MASK64;
-	z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & MASK64;
-	return z ^ (z >> 31n);
-}
-
-/** Mulberry32 over a 32-bit seed. Calling it returns a float in [0, 1), bit
- *  for bit what the Python launcher's stream returns; `position` counts the draws. */
-export interface SeededRng {
-	(): number;
-	random(): number;
-	uniform(low: number, high: number): number;
-	position: number;
-}
-
-export function seededRng(seed32: number): SeededRng {
-	let a = seed32 | 0;
-	const rng = (() => {
-		rng.position++;
-		a = (a + 0x6d2b79f5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	}) as SeededRng;
-	rng.position = 0;
-	rng.random = () => rng();
-	rng.uniform = (low, high) => low + (high - low) * rng();
-	return rng;
-}
-
-/** The stream a channel draws from for the 64-bit master `seed`. */
-export function channelStream(seed: bigint, channel: Channel): SeededRng {
-	const tag = CHANNEL_TAGS[channel];
-	if (tag === undefined)
-		throw new ValueError(`unknown humanize channel: ${channel}`);
-	return seededRng(
-		Number(splitmix64(BigInt.asUintN(64, seed) ^ tag) & 0xffffffffn),
-	);
+	return CHANNELS.filter((c) => engines[c].engine !== "raw");
 }
