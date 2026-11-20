@@ -1,302 +1,141 @@
 """
-Per-channel input planning: the engine factories and the launch-time config.
+Per-channel humanized input, run by the driver, never by the browser.
 
-    from camoufox.humanize import custom
+    from camoufox.humanize import myuri, raw
 
+    Camoufox(humanize=True)                     # myuri on every channel
     Camoufox(humanize={
-        "mouse": custom(my_mouse),
+        "mouse": myuri(move=my_move),
+        "keyboard": myuri(wpm=70),
+        "scroll": raw(),
         "seed": 1234,
     })
 
-The browser delivers the input a driver sends as it was sent: it plans no
-cursor path, no typing and no scrolling. A channel (mouse, keyboard, scroll)
-is raw(), Playwright's own dispatch, or a client-side engine, `custom(fn)`: a
-function in this process plans the channel's input and plays it through
-Playwright's own input methods, with schedule pacing and a seeded stream
-(camoufox._humanize_custom).
+The browser has no humanization of its own: each Playwright input call reaches
+the page as the one native-looking event (or click, or key) it asks for, when
+it is sent (docs/input-dispatch.md). How a person moves, types and scrolls is
+the driver's job. A channel (mouse, keyboard, scroll) is one of
 
-A build from before that still plans input in the browser. Which engines it
-has, and which options each takes, is its humanize-engines.json
-(docs/humanize.md); `engine(name, **options)` names any of them, and asking a
-build for an engine it does not list raises HumanizeEngineUnavailable. A
-factory returns plain data, never behaviour, so a humanize setting can also
-come from JSON.
+    myuri()     myuri's smart actions (https://github.com/JWriter20/Myuri):
+                paths, clicks, typing and wheel turns as the people it was
+                fitted to make them on the identity's OS, and the decisions
+                around a click (scroll into view, the point, whether it lands)
+    raw()       Playwright's own calls, unchanged
 
-`humanize` itself may also be:
+cursory() is another name for myuri(), which runs cursory's paths.
 
-    None / False    every channel raw(): Playwright's own dispatch
-    True            every channel auto(): raises on a build with no engines
-    a number        {"mouse": cursory(max_time=<number>)}, the rest auto()
-    a dict          per channel; an omitted channel is auto()
+`myuri(**parts)` replaces any of myuri's parts on its channel with a function
+of yours; the rest stay myuri's (camoufox._humanize_playwright).
+
+`humanize` may be None / False (every channel raw), True (every channel myuri),
+or a dict per channel plus an optional "seed"; an omitted channel is myuri.
+Nothing about it reaches the browser's config.
 """
 
-from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
-
-from .exceptions import HumanizeEngineUnavailable
+from typing import Any, Dict, Mapping, Optional, Tuple, Union
 
 CHANNELS = ('mouse', 'keyboard', 'scroll')
 
-# What a build without humanize-engines.json runs. It predates per-channel
-# humanize: it reads only `humanize` (cursory mouse plus notched wheel) and
-# humanize:maxTime / minTime, so it runs every base engine or none.
-LEGACY_MANIFEST: Dict[str, Any] = {
-    'version': 0,
-    'mouse': ['raw', 'cursory'],
-    'keyboard': ['raw'],
-    'scroll': ['raw', 'notches'],
-    'auto': {'mouse': ['cursory'], 'keyboard': ['raw'], 'scroll': ['notches']},
-    'engines': {
-        'cursory': {
-            'options': {
-                'maxTime': {'key': 'humanize:maxTime', 'min': 0},
-                'minTime': {'key': 'humanize:minTime', 'min': 0},
-            }
-        },
-        'notches': {},
-    },
+# The myuri parts each channel's myuri() may replace (myuri.PARTS).
+CHANNEL_PARTS = {
+    'mouse': ('move', 'press', 'point', 'reaches'),
+    'keyboard': ('type', 'key'),
+    'scroll': ('into_view', 'wheel'),
 }
 
 Engine = Dict[str, Any]
-HumanizeSetting = Union[None, bool, float, int, Mapping[str, Any]]
-
-
-def engine(name: str, **options: float) -> Engine:
-    """Any engine the build's humanize-engines.json lists, with its options.
-    The options are checked against the manifest at launch."""
-    return {'engine': name, 'options': options}
-
-
-def auto() -> Engine:
-    """The first engine the build lists for the channel; raw() when it lists none."""
-    return engine('auto')
+HumanizeSetting = Union[None, bool, Mapping[str, Any]]
 
 
 def raw() -> Engine:
     """Playwright's own dispatch, byte for byte."""
-    return engine('raw')
+    return {'engine': 'raw', 'options': {}}
 
 
-def cursory(max_time: Optional[float] = None, min_time: Optional[float] = None) -> Engine:
-    """Mouse, on a build that lists the engine: replayed human cursor paths
-    (Cursory), scaled into [min_time, max_time] seconds. Defaults: 0 and 1.5."""
-    options = {'maxTime': max_time, 'minTime': min_time}
-    return engine('cursory', **{k: v for k, v in options.items() if v is not None})
-
-
-def custom(fn: Callable[..., Any]) -> Engine:
+def myuri(**options: Any) -> Engine:
     """
-    A client-side engine: `fn` plans the channel's input in this process and
-    plays it through Playwright. Its signature, per channel:
+    myuri's smart actions on the channel. Each keyword names a part to replace
+    with your function, called as `fn(page, *args, default, rng, play)`:
 
-        mouse     fn(page, x, y, *, original, rng, play)
-        keyboard  fn(page, text, *, original, rng, play, kind)   kind: 'type', 'press' or 'fill'
-        scroll    fn(page, target, *, original, rng, play)       target: a Locator or (dx, dy)
+        mouse     move(x, y)  press(button, click_count)  point(box, attempt)
+                  reaches(locator, x, y, pressing)
+        keyboard  type(text)  key(key)
+        scroll    into_view(locator)  wheel(dx, dy)
 
-    `original` runs Playwright's own behaviour for the call, `rng` is the
-    channel's seeded stream, and `play(steps)` dispatches steps on a schedule.
-    With the async API `fn` may be async.
+    `default(*args)` runs myuri's part (with the same arguments when given
+    none), `rng()` draws from the humanize seed's stream, and `play(steps)`
+    plays a timeline of input. With the async API each returns an awaitable,
+    and the part may be async. `wpm` (keyboard) sets myuri's typing speed.
     """
-    if not callable(fn):
-        raise ValueError(f'custom() takes the function that plans the input, got {fn!r}')
-    return {'engine': 'custom', 'options': {}, 'fn': fn}
+    unknown = set(options) - {part for parts in CHANNEL_PARTS.values() for part in parts} - {'wpm'}
+    if unknown:
+        raise ValueError(f'myuri() has no part {sorted(unknown)[0]!r}; the parts are {CHANNEL_PARTS}, and wpm')
+    for name, fn in options.items():
+        if name != 'wpm' and not callable(fn):
+            raise ValueError(f'myuri({name}=...) takes the function that replaces the part, got {fn!r}')
+    return {'engine': 'myuri', 'options': dict(options)}
+
+
+cursory = myuri
+
+
+_IN_BROWSER = (
+    'the browser does not humanize input: each Playwright call is one event. '
+    'Pass True, or myuri() or raw() per channel (camoufox.humanize)'
+)
 
 
 def _as_engine(channel: str, value: Any) -> Engine:
-    candidate = engine(value) if isinstance(value, str) else value
-    if not isinstance(candidate, Mapping) or not isinstance(candidate.get('engine'), str):
-        raise ValueError(
-            f'humanize["{channel}"] must be an engine such as auto(), raw(), cursory() or custom(fn), got {value!r}'
-        )
-    if candidate['engine'] == 'custom':
-        if not callable(candidate.get('fn')):
-            raise ValueError(f'humanize["{channel}"]: a custom engine needs its function, as custom(fn)')
-        if candidate.get('options'):
-            raise ValueError(f'humanize["{channel}"]: custom() takes no options; the function is the engine')
-        return {'engine': 'custom', 'options': {}, 'fn': candidate['fn']}
-    options = dict(candidate.get('options') or {})
-    for key, option in options.items():
-        if isinstance(option, bool) or not isinstance(option, (int, float)):
-            raise ValueError(f'{candidate["engine"]}() option {key} must be a number, got {option!r}')
-    return {'engine': candidate['engine'], 'options': options}
+    if not isinstance(value, Mapping) or value.get('engine') not in ('myuri', 'cursory', 'raw'):
+        raise ValueError(f'humanize["{channel}"]={value!r} is not an engine; {_IN_BROWSER}')
+    options = value.get('options') or {}
+    if value['engine'] == 'raw':
+        if options:
+            raise ValueError(f'humanize["{channel}"]: raw() takes no options')
+        return raw()
+    engine = myuri(**options)
+    allowed = CHANNEL_PARTS[channel] + (('wpm',) if channel == 'keyboard' else ())
+    misplaced = sorted(set(options) - set(allowed))
+    if misplaced:
+        raise ValueError(f'humanize["{channel}"]: myuri({misplaced[0]}=...) is not a {channel} part; '
+                         f'the {channel} parts are {allowed}')
+    return engine
 
 
 def normalize(humanize: HumanizeSetting) -> Tuple[Dict[str, Engine], Optional[int]]:
-    """The four channel values of a `humanize` setting: the engine per channel,
-    and the seed (None when not given)."""
-    if not humanize and not isinstance(humanize, Mapping):
+    """The engine per channel of a `humanize` setting, and the seed (None when
+    not given)."""
+    if humanize is None or humanize is False:
         return {channel: raw() for channel in CHANNELS}, None
     if humanize is True:
-        return {channel: auto() for channel in CHANNELS}, None
-    if isinstance(humanize, (int, float)):
-        return {'mouse': cursory(max_time=humanize), 'keyboard': auto(), 'scroll': auto()}, None
+        return {channel: myuri() for channel in CHANNELS}, None
     if not isinstance(humanize, Mapping):
-        raise ValueError(f'humanize must be None, a bool, a number or a dict, got {humanize!r}')
+        raise ValueError(f'humanize={humanize!r}: {_IN_BROWSER}')
     unknown = set(humanize) - {*CHANNELS, 'seed'}
     if unknown:
         raise ValueError(f'humanize has no channel {sorted(unknown)}; the channels are {CHANNELS} and "seed"')
     seed = humanize.get('seed')
-    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**64):
-        raise ValueError(f'humanize["seed"] must be an integer in [0, 2**64), got {seed!r}')
-    engines = {channel: _as_engine(channel, humanize.get(channel, 'auto')) for channel in CHANNELS}
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32):
+        raise ValueError(f'humanize["seed"] must be an integer in [0, 2**32), got {seed!r}')
+    engines = {channel: _as_engine(channel, humanize.get(channel, myuri())) for channel in CHANNELS}
     return engines, seed
 
 
-def _option_keys(name: str, options: Mapping[str, float], manifest: Mapping[str, Any]) -> Dict[str, float]:
-    """An engine's options as config keys, checked against what the manifest declares."""
-    declared = (manifest.get('engines', {}).get(name) or {}).get('options', {})
-    keys = {}
-    for option, value in options.items():
-        spec = declared.get(option)
-        if spec is None:
-            raise ValueError(f'{name}() has no option {option!r}; it takes {sorted(declared)}')
-        low, high = spec.get('min', 0), spec.get('max')
-        if value < low or (high is not None and value > high):
-            bounds = f'in [{low}, {high}]' if high is not None else f'at least {low}'
-            raise ValueError(f'{name}() {option} must be {bounds}, got {value!r}')
-        keys[spec['key']] = float(value)
-    return keys
-
-
-def humanize_config(
-    humanize: HumanizeSetting,
-    manifest: Optional[Mapping[str, Any]],
-) -> Dict[str, Any]:
+def attach(
+    target: Any, humanize: HumanizeSetting, os: str, i_know_what_im_doing: Optional[bool] = None
+) -> Any:
     """
-    The camoucfg keys for a `humanize` setting on a build whose
-    humanize-engines.json is `manifest` (None for a build without one).
-
-    Raises HumanizeEngineUnavailable for an engine the build does not ship,
-    and for `humanize=True` on a build that ships none.
+    Run the engines of `humanize` on a Browser or BrowserContext that camoufox
+    did not launch in this process, e.g. one from `connect()`. Launch that
+    browser without humanize; `os` ('macos', 'windows' or 'linux') is its
+    identity's. Camoufox()/NewBrowser() call this themselves.
     """
-    engines, seed = normalize(humanize)
-    # A custom channel runs client-side, so the browser runs it raw.
-    names = {channel: _binary_name(engines[channel]) for channel in CHANNELS}
-    legacy = manifest is None
-    available = LEGACY_MANIFEST if legacy else manifest
+    from ._humanize_playwright import attach as attach_engines
 
-    for channel in CHANNELS:
-        if names[channel] not in ('auto', 'raw') and names[channel] not in available.get(channel, ()):
-            raise HumanizeEngineUnavailable(channel, names[channel], list(available.get(channel, ())))
-
-    if not any(channel in available for channel in CHANNELS):
-        # The build plans no input and reads no humanize key.
-        if humanize is True:
-            raise HumanizeEngineUnavailable(
-                'mouse',
-                'auto',
-                [],
-                'this build delivers input as the driver sends it; plan a channel with custom(fn)',
-            )
-        return {}
-
-    options: Dict[str, float] = {}
-    for channel in CHANNELS:
-        for key, value in _option_keys(names[channel], engines[channel]['options'], available).items():
-            if options.get(key, value) != value:
-                raise ValueError(f'humanize sets {key} twice, to {options[key]} and {value}')
-            options[key] = value
-
-    # A channel the build has no engines for runs raw whatever it is set to.
-    enabled = any(names[channel] != 'raw' for channel in CHANNELS if channel in available)
-    if legacy:
-        on = {channel: available['auto'][channel][0] for channel in CHANNELS}
-        unsupported = [c for c in CHANNELS if names[c] not in ('auto', on[c])]
-        if enabled and unsupported:
-            channel = unsupported[0]
-            raise HumanizeEngineUnavailable(
-                channel,
-                names[channel],
-                [on[channel]],
-                'this build predates per-channel humanize: it runs every base engine or none',
-            )
-        if seed is not None:
-            raise HumanizeEngineUnavailable(
-                'seed', str(seed), [], 'this build predates per-channel humanize and has no seeded input'
-            )
-        return {'humanize': True, **options} if enabled else {}
-
-    # Every key on every launch, so nothing depends on what an earlier launch set.
-    config: Dict[str, Any] = {'humanize': enabled}
-    for channel in CHANNELS:
-        if channel in available:
-            config[f'humanize:{channel}'] = names[channel]
-    config.update(options)
-    if seed is not None:
-        # A string: Juggler reads config numbers as doubles, which cannot hold
-        # every 64-bit seed exactly.
-        config['humanize:seed'] = str(seed)
-    return config
+    return attach_engines(target, humanize, os, i_know_what_im_doing=i_know_what_im_doing)
 
 
-def attach_custom(target: Any, humanize: HumanizeSetting, i_know_what_im_doing: Optional[bool] = None) -> Any:
-    """
-    Run the custom() engines of `humanize` on a Browser or BrowserContext that
-    camoufox did not launch in this process, e.g. one from `connect()`. Launch
-    that browser with raw() on those channels. Camoufox()/NewBrowser() call this
-    themselves.
-    """
-    from ._humanize_custom import attach
-
-    return attach(target, humanize, i_know_what_im_doing=i_know_what_im_doing)
-
-
-def _binary_name(entry: Engine) -> str:
-    return 'raw' if entry['engine'] == 'custom' else entry['engine']
-
-
-def custom_engines(humanize: HumanizeSetting) -> Dict[str, Callable[..., Any]]:
-    """The functions of a `humanize` setting's custom channels, by channel."""
+def driven_channels(humanize: HumanizeSetting) -> Tuple[str, ...]:
+    """The channels of a `humanize` setting that an engine in this process drives."""
     engines, _seed = normalize(humanize)
-    return {channel: engines[channel]['fn'] for channel in CHANNELS if engines[channel]['engine'] == 'custom'}
-
-
-# The seeded streams, one per channel (vectors: browser/tests/humanize/rng-vectors.json):
-#
-#   stream(channel) = Mulberry32(splitmix64(seed ^ TAG[channel]) & 0xffffffff)
-
-_MASK32 = 0xFFFFFFFF
-_MASK64 = 0xFFFFFFFFFFFFFFFF
-CHANNEL_TAGS = {'mouse': 0x6D6F7573, 'keyboard': 0x6B657962, 'scroll': 0x7363726F}
-
-
-def splitmix64(x: int) -> int:
-    """One splitmix64 output for the 64-bit state `x`."""
-    z = ((x & _MASK64) + 0x9E3779B97F4A7C15) & _MASK64
-    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
-    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _MASK64
-    return z ^ (z >> 31)
-
-
-class SeededRng:
-    """
-    Mulberry32 over a 32-bit seed. Calling it (or `random()`) returns a float
-    in [0, 1), bit for bit what the browser's stream returns; `position`
-    counts the draws.
-    """
-
-    __slots__ = ('_a', 'position')
-
-    def __init__(self, seed32: int) -> None:
-        self._a = seed32 & _MASK32
-        self.position = 0
-
-    def random(self) -> float:
-        self.position += 1
-        a = self._a = (self._a + 0x6D2B79F5) & _MASK32
-        t = ((a ^ (a >> 15)) * (1 | a)) & _MASK32
-        t = ((t + (((t ^ (t >> 7)) * (61 | t)) & _MASK32)) & _MASK32) ^ t
-        return ((t ^ (t >> 14)) & _MASK32) / 4294967296
-
-    __call__ = random
-
-    def uniform(self, low: float, high: float) -> float:
-        """low + (high - low) * one draw."""
-        return low + (high - low) * self.random()
-
-
-def channel_stream(seed: int, channel: str) -> SeededRng:
-    """The stream a channel draws from for the 64-bit master `seed`."""
-    tag = CHANNEL_TAGS.get(channel)
-    if tag is None:
-        raise ValueError(f'unknown humanize channel: {channel}')
-    return SeededRng(splitmix64((seed & _MASK64) ^ tag) & _MASK32)
+    return tuple(channel for channel in CHANNELS if engines[channel]['engine'] != 'raw')

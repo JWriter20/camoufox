@@ -5,10 +5,10 @@ This replaces hand-picked edge targets, which are what let four deadlocks
 through. Each of the earlier tests probed the coordinates that had just been
 found broken, so the next variant was always outside the list:
 
-    one probed the right and bottom edges only, so the near edge (#751)
-    passed it cleanly
-    one pinned os="linux", the one spoofed OS whose chrome offset is immune
-    to #751
+    the far-edge test           probed the right and bottom edges only, so the
+                                near edge (#751) passed it cleanly
+    the trajectory test         pinned os="linux", the one spoofed OS whose
+                                chrome offset is immune to #751
 
 The failure they all share: a synthesized event that hit-tests outside the
 content widget fires as an exit event rather than eMouseMove, no
@@ -35,7 +35,8 @@ sweep dies there, reporting one point instead of the whole failing set.
 Run against a specific build:
     CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python3 browser/tests/playwright/patches/mouse-boundary-sweep.py
 
-What PASS means: every ring coordinate, on every spoofed OS, was acked and seen by the page; and input is still live at the end of each run.
+What PASS means: every ring coordinate, on every spoofed OS,
+was acked and seen by the page; and input is still live at the end of each run.
 """
 
 import asyncio

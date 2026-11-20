@@ -31,7 +31,7 @@ from .exceptions import (
 from .fingerprints import BASELINE_TASKBAR_HEIGHT, RECORDED_WINDOW_CHROME, Screen, draw_screen, place_window, screen_floor, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, font_unit_families, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, fit_window_to_caller_screen, raise_screen_to_modern_floor, set_media_devices_defaults, set_host_ipv6_default, set_output_latency_default, set_windows_alias_load_default, set_location_setting_default, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence, pro
 from .geolocation import ALLOW_GEOIP, geoip_allowed, get_geolocation
-from .humanize import HumanizeSetting, humanize_config
+from .humanize import HumanizeSetting, normalize as normalize_humanize
 from .ip import ExitGeo, Proxy, proxy_auth_env, proxy_auth_init_script, public_ip, public_ipv6, socks5_auth, valid_ipv4, valid_ipv6
 from .managed import Managed, managed_request
 from .proxy_session import ProxySession
@@ -392,17 +392,6 @@ def _load_properties(path: Optional[Path] = None) -> Dict[str, Dict[str, str]]:
         prop_dict = orjson.loads(f.read())
 
     return {prop['property']: prop for prop in prop_dict}
-
-
-def _load_humanize_engines(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    """
-    Loads humanize-engines.json, found the same way as properties.json. None
-    for a build that predates it.
-    """
-    manifest = Path(build_file(path, "humanize-engines.json") if path else get_path("humanize-engines.json"))
-    if not manifest.exists():
-        return None
-    return orjson.loads(manifest.read_bytes())
 
 
 def validate_config(config_map: Dict[str, Any], path: Optional[Path] = None) -> None:
@@ -890,6 +879,13 @@ def _camou_config_blob(from_options: Dict[str, Any]) -> str:
     env = from_options.get('env') or {}
     chunks = [(int(k.rsplit('_', 1)[1]), v) for k, v in env.items() if k.startswith('CAMOU_CONFIG_')]
     return ''.join(v for _, v in sorted(chunks))
+
+
+def launch_os(from_options: Dict[str, Any]) -> str:
+    """The OS ('macos', 'windows' or 'linux') of the identity these launch
+    options claim, the host's when they claim no user agent."""
+    blob = _camou_config_blob(from_options)
+    return OS_NAMES[get_target_os(orjson.loads(blob) if blob else {})]
 
 
 def pinned_core_count(from_options: Dict[str, Any]) -> Optional[int]:
@@ -1675,12 +1671,12 @@ def launch_options(
         geoip_db (Optional[str]):
             Name of the GeoIP database to use (e.g., "GeoIP AIO by daijro").
             If not specified, uses the one chosen with `camoufox set --geoip`, or the default.
-        humanize (Optional[Union[bool, float, dict]]):
-            Plan mouse, keyboard and scroll input, per channel. The browser delivers input
-            as the driver sends it; a dict gives a channel a client-side engine with
-            `camoufox.humanize.custom`, e.g. `{"mouse": custom(fn), "seed": 1234}`.
-            `True`, a number and the in-browser engines (`cursory()`) work only on an older build
-            that lists them, and raise HumanizeEngineUnavailable on this one.
+        humanize (Optional[Union[bool, dict]]):
+            Driver-side humanization. True is `myuri()` on every channel; a dict takes
+            `myuri()` or `raw()` from `camoufox.humanize` per channel (an omitted channel is
+            `myuri()`), e.g. `{"mouse": myuri(move=my_move), "scroll": raw(), "seed": 1234}`;
+            `myuri(**parts)` replaces parts of myuri's with your functions.
+            The browser never humanizes input itself; each Playwright call is one event.
         locale (Optional[Union[str, List[str]]]):
             Locale(s) to use in Camoufox. The first listed locale will be used for the Intl API.
         addons (Optional[List[str]]):
@@ -2234,7 +2230,7 @@ def launch_options(
     if custom_fonts_only:
         firefox_user_prefs['gfx.bundled-fonts.activate'] = 0
         if fonts:
-            LeakWarning.warn('custom_fonts_only')
+            LeakWarning.warn('custom_fonts_only', i_know_what_im_doing)
         else:
             raise ValueError('No custom fonts were passed, but `custom_fonts_only` is enabled.')
     elif not _user_set_fonts or not config.get('fonts'):
@@ -2620,9 +2616,9 @@ def launch_options(
     # leaves an explicit caller value alone.
     set_into(config, 'voices:blockIfNotDefined', True)
 
-    # Pass the humanize option, checked against the engines the build ships
-    for key, value in humanize_config(humanize, _load_humanize_engines(executable_path)).items():
-        set_into(config, key, value)
+    # humanize runs in the driver (camoufox._humanize_playwright): checked here,
+    # and nothing of it reaches the browser's config.
+    normalize_humanize(humanize)
 
     # Enable the main world context creation
     if main_world_eval:

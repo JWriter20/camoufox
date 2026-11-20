@@ -71,11 +71,7 @@ import {
 	hostGpu,
 	setWebgpu,
 } from "./host_rendering.js";
-import {
-	type HumanizeManifest,
-	type HumanizeSetting,
-	humanizeConfig,
-} from "./humanize.js";
+import { type HumanizeSetting, normalize } from "./humanize.js";
 import {
 	type ProxyConfig,
 	ProxyHelper,
@@ -180,6 +176,7 @@ type EnvVars = Record<string, string | number | boolean>;
 
 /** The OS names Camoufox takes, by target_os key. */
 const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
+export type OsName = (typeof OS_NAMES)[TargetOS];
 
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
@@ -297,20 +294,6 @@ function stockProfileDiskCapacityKb(): number | null {
 }
 
 /**
- * Loads humanize-engines.json, found the same way as properties.json. null for
- * a build that predates it.
- */
-function loadHumanizeEngines(
-	executablePath?: string | null,
-): HumanizeManifest | null {
-	const manifest = executablePath
-		? buildFile(executablePath, "humanize-engines.json")
-		: utilsDeps.getPath("humanize-engines.json");
-	if (!fs.existsSync(manifest)) return null;
-	return JSON.parse(fs.readFileSync(manifest, "utf-8"));
-}
-
-/**
  * The font.* prefs that make a build for `buildOs` resolve fonts the way stock
  * Firefox does on `targetOs` (font-prefs.json, from all.js by
  * browser/scripts/gen-font-prefs.py): the target's values where they differ,
@@ -361,7 +344,6 @@ export const utilsDeps = {
 	getPath,
 	launchPath,
 	selectedLaunchPath,
-	loadHumanizeEngines,
 	identitySalt,
 	identitySeed,
 	generateFingerprint: async (
@@ -1335,6 +1317,13 @@ export function camouConfigBlob(fromOptions: Record<string, any>): string {
 		.join("");
 }
 
+/** The OS of the identity these launch options claim, the host's when they
+ * claim no user agent. */
+export function launchOs(fromOptions: Record<string, any>): OsName {
+	const blob = camouConfigBlob(fromOptions);
+	return OS_NAMES[getTargetOs(blob ? JSON.parse(blob) : {})];
+}
+
 /**
  * The core count the browser must be pinned to for these launch options, or
  * null: the identity's navigator.hardwareConcurrency when this host can honour
@@ -2160,11 +2149,7 @@ export interface LaunchOptions {
 	geoip?: string | boolean;
 	/** Name of the GeoIP database to use (e.g. "GeoIP AIO by daijro"). */
 	geoip_db?: string;
-	/** Plan mouse, keyboard and scroll input, per channel. The browser delivers
-	 * input as the driver sends it; an object gives a channel a client-side
-	 * engine with `custom` from humanize.ts, e.g. `{ mouse: custom(fn), seed: 1234 }`.
-	 * `true`, a number and the in-browser engines (`cursory()`) work only on an
-	 * older build that lists them, and throw HumanizeEngineUnavailable on this one. */
+	/** Driver-side humanization per channel, `{ mouse, keyboard, scroll, seed }` of myuri() or raw(); `true` is myuri() on every channel, and a channel the object omits is myuri(). The browser never humanizes input itself. */
 	humanize?: HumanizeSetting;
 	/** Locale(s) to use. The first listed locale is used for the Intl API. */
 	locale?: string | string[];
@@ -2188,8 +2173,9 @@ export interface LaunchOptions {
 	/** Firefox version to use. Defaults to the current Camoufox version. */
 	ff_version?: number;
 	/** Whether to run the browser in headless mode. Defaults to false.
-	 * NewBrowser and launchServer run headless: true on Linux on Xvfb when available;
-	 * launchOptions() alone starts no display. */
+	 * `true` is Firefox's own headless mode and starts no display; only
+	 * `"virtual"` and `"virtual-gpu"` (Camoufox, NewBrowser and launchServer)
+	 * start one. launchOptions() alone starts no display. */
 	headless?: boolean;
 	/** Whether to enable running scripts in the main world ("mw:" prefix). */
 	main_world_eval?: boolean;
@@ -2214,7 +2200,7 @@ export interface LaunchOptions {
 	i_know_what_im_doing?: boolean;
 	/** Prints the config being sent to Camoufox. */
 	debug?: boolean;
-	/** Virtual display number, e.g. ":99". Handled by Camoufox & NewBrowser. */
+	/** Virtual display number, e.g. ":99". Handled by Camoufox, NewBrowser and launchServer. */
 	virtual_display?: string;
 	/** Pin the browser to navigator.hardwareConcurrency cores (Linux/Windows).
 	 * OFF by default -- it costs real CPU and serializes concurrent launches. */
@@ -2831,7 +2817,7 @@ async function buildLaunchOptions(
 	if (custom_fonts_only) {
 		firefox_user_prefs["gfx.bundled-fonts.activate"] = 0;
 		if (fonts?.length) {
-			LeakWarning.warn("custom_fonts_only");
+			LeakWarning.warn("custom_fonts_only", i_know_what_im_doing);
 		} else {
 			throw new ValueError(
 				"No custom fonts were passed, but `custom_fonts_only` is enabled.",
@@ -3207,12 +3193,9 @@ async function buildLaunchOptions(
 	// it. setInto leaves an explicit caller value alone.
 	setInto(config, "voices:blockIfNotDefined", true);
 
-	// Pass the humanize option, checked against the engines the build ships
-	for (const [key, value] of Object.entries(
-		humanizeConfig(humanize, utilsDeps.loadHumanizeEngines(executable_path)),
-	)) {
-		setInto(config, key, value);
-	}
+	// humanize runs in the driver (_humanize_playwright.ts): checked here, and
+	// nothing about it reaches the browser's config.
+	normalize(humanize);
 
 	// Enable the main world context creation
 	if (main_world_eval) {

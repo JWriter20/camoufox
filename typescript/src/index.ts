@@ -6,6 +6,7 @@
 // First: fail with the Node.js floor before any module needs it.
 import "./node-floor.js";
 
+export { attach } from "./_humanize_playwright.js";
 export type { DefaultAddon } from "./addons.js";
 export { DefaultAddons } from "./addons.js";
 export {
@@ -42,26 +43,12 @@ export {
 	Screen,
 } from "./fingerprints.js";
 export {
-	auto,
-	type CustomEngineFn,
-	channelStream,
 	cursory,
-	custom,
-	type Engine,
-	engine,
 	type HumanizeSetting,
+	type MyuriOptions,
+	myuri,
 	raw,
-	type SeededRng,
-	seededRng,
-	splitmix64,
 } from "./humanize.js";
-export {
-	attach as attachCustom,
-	type CustomEngineContext,
-	type Play,
-	type PlayRecord,
-	type PlayStep,
-} from "./humanize-custom.js";
 export {
 	type Managed,
 	ProxyDimension,
