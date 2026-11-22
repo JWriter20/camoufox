@@ -23,7 +23,8 @@ what the proxy has to do for it to hold.
 proxy. A context given its own proxy (`NewContext(proxy=...)`,
 `new_context(proxy=...)`) is always in the `exit` column: the browser has one
 DoH client, which uses the launch proxy, and a context's names must not be
-asked through another context's exit.
+asked through another context's exit. A persistent context
+(`persistent_context=True`) has the launch proxy, in the launch's column.
 
 ## `doh`: the browser resolves, through the proxy
 
