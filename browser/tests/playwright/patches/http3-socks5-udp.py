@@ -569,7 +569,7 @@ async def main() -> int:
 
     failed = 0
     for name, ok, detail in checks:
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}" + ("" if ok else f"  {json.dumps(detail, default=str)}"))
+        print(f"  {'PASS' if ok else 'FAIL'}  {name}  {json.dumps(detail, default=str)}")
         failed += not ok
     print(f"\n{len(checks) - failed}/{len(checks)} checks passed")
     tmp.cleanup()
