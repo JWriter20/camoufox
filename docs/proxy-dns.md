@@ -94,10 +94,14 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
   and none to migrate to. The handshake starts when the relay is granted, so a
   slow proxy delays it rather than losing its first packets.
 - **A proxy without UDP is a network without UDP.** If the proxy refuses the
-  association, or the control connection closes, the connection's datagrams
-  are dropped silently. Firefox then does what it does on a network that
-  blocks UDP: the TCP connection it races wins, and HTTP/3 is not tried again
-  for that origin for a while.
+  association, the connection's datagrams are dropped silently. Firefox then
+  does what it does on a network that blocks UDP: the TCP connection it races
+  wins, and HTTP/3 is not tried again for that origin for a while.
+- **An association lost in use ends its connection.** When the control
+  connection closes under a relay that was carrying datagrams, the QUIC
+  connection is reset as it is when its socket fails, and its requests are
+  sent again over TCP. Left open, it would hold each of them for the 30
+  second idle timeout.
 - **The server sees stock's packets.** The framing is added below neqo, on the
   socket a direct connection uses, so transport parameters, Initial padding,
   datagram sizes, ECN marks and batching are the ones of a direct connection.

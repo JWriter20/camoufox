@@ -28,7 +28,8 @@ What PASS means:
     * a WebTransport session opens through the relay and echoes a datagram;
     * a proxy that refuses UDP ASSOCIATE, and one that drops the association
       once it is in use, leave the page loading over TCP, as a machine whose
-      UDP is blocked does;
+      UDP is blocked does, and no request waits out a QUIC connection that
+      has lost its relay;
     * a persistent context, whose launch proxy Playwright also sets on the
       context, is carried the same way;
     * a SOCKS5 proxy given names (a context's own proxy), and an HTTP proxy,
@@ -47,6 +48,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from aioquic.asyncio import QuicConnectionProtocol, serve
@@ -64,6 +66,11 @@ from helpers import Marionette, free_port, marionette_args, marionette_env, own_
 DOH_ONLY = {"network.trr.mode": 3, "network.trr.uri": "https://doh.invalid/dns-query"}
 # Firefox speaks no HTTP/3 to a certificate from an authority a user added.
 PREFS = {**DOH_ONLY, "network.http.http3.disable_when_third_party_roots_found": False}
+
+# Firefox gives up a QUIC connection that hears nothing for this long
+# (network.http.http3.idle_timeout). The twenty requests of FETCH take ten
+# seconds on TCP, and ten minutes when each one waits it out.
+QUIC_IDLE_SECONDS = 30
 
 # Fetch until the origin answers over HTTP/3 (the first answer carries Alt-Svc,
 # and the mapping is validated in the background), then report every answer.
@@ -530,12 +537,15 @@ async def main() -> int:
         blocked_origin = await origin()
         proxy = Socks5Proxy(host, **kwargs)
         browser = await launch(await proxy.start())
+        started = time.monotonic()
         seen = await load(browser, blocked_origin)
+        took = round(time.monotonic() - started)
         await browser.close()
-        checks.append((f"a proxy that {label} leaves the page on TCP",
+        checks.append((f"a proxy that {label} leaves the page on TCP, with no request waiting on QUIC",
                        seen and set(seen) == {"tcp"} and not blocked_origin.h3_peers
-                       and (proxy.refused > 0 if not proxy.udp else len(proxy.relays) > 0),
-                       (seen[:6], proxy.refused, len(proxy.relays))))
+                       and (proxy.refused > 0 if not proxy.udp else len(proxy.relays) > 0)
+                       and took < 2 * QUIC_IDLE_SECONDS,
+                       (seen[:6], proxy.refused, len(proxy.relays), took)))
         proxy.close()
         blocked_origin.close()
 
