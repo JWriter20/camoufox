@@ -21,6 +21,10 @@ What PASS means:
       same browser with no proxy: the relay header is not taken out of them;
     * each QUIC connection has an association of its own, as each has a UDP
       socket of its own without a proxy;
+    * a relay reached over a link that carries the QUIC datagram but not the
+      datagram with the relay header on it (a 1280-byte link: a VPN, a tunnel)
+      still carries HTTP/3, at the same sizes: the datagram to the relay may
+      be fragmented, where the one a direct browser sends may not;
     * a WebTransport session opens through the relay and echoes a datagram;
     * a proxy that refuses UDP ASSOCIATE, and one that drops the association
       once it is in use, leave the page loading over TCP, as a machine whose
@@ -33,6 +37,8 @@ What PASS means:
 
 import asyncio
 import json
+import os
+import shutil
 import socket
 import ssl
 import struct
@@ -222,13 +228,73 @@ class Exit(asyncio.DatagramProtocol):
         self.relay.from_exit(data, addr)
 
 
+# The relay half of a SOCKS5 proxy, for a host of its own: datagrams in on one
+# port, each client's out of a socket of its own.
+REMOTE_RELAY = r"""
+import select, socket, struct
+clients = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+clients.bind(("0.0.0.0", 1080))
+exits = {}
+print("READY", flush=True)
+while True:
+    for sock in select.select([clients, *exits.values()], [], [])[0]:
+        data, addr = sock.recvfrom(65535)
+        if sock is clients:
+            if len(data) < 10 or data[:4] != b"\0\0\0\x01":
+                continue
+            if addr not in exits:
+                exits[addr] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            exits[addr].sendto(data[10:], (socket.inet_ntoa(data[4:8]), struct.unpack("!H", data[8:10])[0]))
+        else:
+            client = next(c for c, e in exits.items() if e is sock)
+            clients.sendto(b"\0\0\0\x01" + socket.inet_aton(addr[0]) + struct.pack("!H", addr[1]) + data, client)
+"""
+
+
+class NarrowLinkRelay:
+    """A UDP relay on another host, over a link of MTU 1280: a container on a
+    docker network of its own. A 1252-byte QUIC datagram is a 1280-byte IPv4
+    packet, so the link carries what a direct browser sends and not the same
+    datagram behind a 10-byte relay header."""
+
+    IMAGE = "python:3-alpine"
+    MTU = 1280
+
+    def __init__(self) -> None:
+        self.name = f"http3-guard-relay-{os.getpid()}"
+        self.logs = None
+        subprocess.run(["docker", "network", "create", "-o", f"com.docker.network.driver.mtu={self.MTU}",
+                        self.name], check=True, stdout=subprocess.DEVNULL)
+        try:
+            subprocess.run(["docker", "run", "-d", "--rm", "--name", self.name, "--network", self.name,
+                            self.IMAGE, "python3", "-u", "-c", REMOTE_RELAY], check=True, stdout=subprocess.DEVNULL)
+            self.host = subprocess.run(
+                ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                 self.name], check=True, capture_output=True, text=True).stdout.strip()
+            self.logs = subprocess.Popen(["docker", "logs", "-f", self.name],
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if self.logs.stdout.readline().strip() != "READY":
+                raise RuntimeError("the relay container did not start")
+        except BaseException:
+            self.close()
+            raise
+        self.address = (self.host, 1080)
+
+    def close(self) -> None:
+        subprocess.run(["docker", "rm", "-f", self.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if self.logs:
+            self.logs.wait(timeout=10)
+        subprocess.run(["docker", "network", "rm", self.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 class Socks5Proxy:
     """A SOCKS5 proxy on loopback. CONNECT is piped to where it names;
-    `udp=False` refuses UDP ASSOCIATE, and `hang_up_after` drops an association
-    (control connection and relay) after that many datagrams."""
+    `udp=False` refuses UDP ASSOCIATE, `hang_up_after` drops an association
+    (control connection and relay) after that many datagrams, and `relay_at`
+    names a relay on another host for every association."""
 
-    def __init__(self, host: str, udp: bool = True, hang_up_after: int = 0) -> None:
-        self.host, self.udp, self.hang_up_after = host, udp, hang_up_after
+    def __init__(self, host: str, udp: bool = True, hang_up_after: int = 0, relay_at: tuple = None) -> None:
+        self.host, self.udp, self.hang_up_after, self.relay_at = host, udp, hang_up_after, relay_at
         self.connects = []  # (atyp, host, port) of every CONNECT
         self.refused = 0
         self.atyps = set()  # address type of every relayed datagram
@@ -272,6 +338,12 @@ class Socks5Proxy:
         if cmd != 3 or not self.udp:
             self.refused += 1
             writer.write(b"\x05\x07\x00\x01" + bytes(6))
+            return
+        if self.relay_at:
+            writer.write(b"\x05\x00\x00\x01" + socket.inet_aton(self.relay_at[0])
+                         + struct.pack("!H", self.relay_at[1]))
+            await writer.drain()
+            await reader.read()
             return
         loop = asyncio.get_running_loop()
         _, relay = await loop.create_datagram_endpoint(lambda: Relay(self, writer), local_addr=("127.0.0.1", 0))
@@ -329,6 +401,9 @@ def initial_sizes(sizes: list) -> list:
 async def main() -> int:
     from camoufox.async_api import AsyncCamoufox
 
+    if shutil.which("docker") is None:
+        print("  FAIL docker is needed to put a relay behind a narrow link")
+        return 1
     host = own_address()
     tmp = tempfile.TemporaryDirectory()
     # Firefox keeps an alternative service only when its certificate verified,
@@ -457,6 +532,23 @@ async def main() -> int:
     checks.append(("an HTTP proxy is sent no QUIC",
                    http_seen and set(http_seen) == {"tcp"} and not http_origin.datagrams and bool(http_connects),
                    (http_seen[:6], sorted(http_origin.datagrams))))
+
+    # A relay behind a link that fits the QUIC datagram and not its relay header.
+    narrow_origin = await origin()
+    narrow = NarrowLinkRelay()
+    try:
+        proxy = Socks5Proxy(host, relay_at=narrow.address)
+        browser = await launch(await proxy.start())
+        narrow_seen = await load(browser, narrow_origin)
+        await browser.close()
+        proxy.close()
+    finally:
+        narrow.close()
+    narrow_sizes = next(iter(narrow_origin.datagrams.values()), [])
+    checks.append(("a relay behind a 1280-byte link carries HTTP/3 at the sizes of no proxy",
+                   narrow_seen.count("h3") >= 2 and bool(narrow_origin.datagrams)
+                   and initial_sizes(narrow_sizes) == initial_sizes(direct_origin.datagrams[direct_sources[0]]),
+                   (narrow_seen[:6], narrow_sizes[:4])))
 
     failed = 0
     for name, ok, detail in checks:

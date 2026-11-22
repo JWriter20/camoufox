@@ -1080,6 +1080,25 @@ rules:
       of them set up the runner through .github/actions/build-host. Linking
       and packaging the cross-compiled targets is all a release does first.
 
+  - id: relay-hop-may-fragment
+    title: A QUIC datagram to a SOCKS5 relay may be fragmented on the way there, and is never made smaller
+    check: manual   # browser/tests/playwright/patches/http3-socks5-udp.py (the relay behind a 1280-byte link)
+    evidence:
+      - "stock Firefox 159 on its QUIC socket: HttpConnectionUDP sets PR_SockOpt_DontFrag on IPv4 (IP_PMTUDISC_DO on Linux, IP_DONTFRAG on macOS, IP_DONTFRAGMENT on Windows), then quinn-udp 0.5.15 sets IP_MTU_DISCOVER=IP_PMTUDISC_PROBE and, on IPv6, IPV6_MTU_DISCOVER=IPV6_PMTUDISC_PROBE and IPV6_DONTFRAG on Linux, IP_DONTFRAG and IPV6_DONTFRAG on macOS, IP_DONTFRAGMENT and IPV6_DONTFRAG on Windows; network.http.http3.pmtud is false, so a datagram is 1252 bytes to an IPv4 peer and 1232 to an IPv6 one"
+      - "the packet to the relay: payload plus a 10-byte (IPv4 peer) or 22-byte (IPv6 peer) header plus 28 (IPv4 relay) or 48 (IPv6 relay) bytes of IP and UDP: 1290, 1310, 1282 or 1302 bytes, all over 1280. A name is never the destination of a datagram: a proxy given names is sent no QUIC"
+      - "2026-11-21, a relay reached over a 1280-byte link, www.cloudflare.com/cdn-cgi/trace with proxy_dns='doh': http=http/2 on all four requests with don't-fragment kept, six sendmsg calls failing EMSGSIZE; the same with don't-fragment cleared and sends still segmented (UDP_SEGMENT 1262); http=http/3 from the second request with one datagram per send"
+      - "http3-socks5-udp.py, the relay in a container behind a docker network of MTU 1280: 13 of 14 checks pass before the change and the narrow-link one fails with every answer over TCP; the origin's first flight after it is 1252, 1252, as with no proxy"
+    rationale: >-
+      Shrinking the datagram to fit the hop would change what the server
+      receives, which is the one thing the relay must not change. Keeping
+      don't-fragment means no HTTP/3 behind any link under 1310 bytes, which
+      a direct Firefox on that link has. So the hop to the relay, which no
+      server sees, gives up don't-fragment (IP_PMTUDISC_DONT on Linux IPv4;
+      IPV6_PMTUDISC_WANT and no IPV6_DONTFRAG on IPv6, where only the sender
+      fragments) and segmented sends, which the kernel refuses to fragment.
+      The relay sends the datagram on whole, with don't-fragment set
+      (docs/proxy-dns.md).
+
   - id: socks5-proxy-resolves-by-doh
     title: Behind a SOCKS5 launch proxy the browser resolves names itself, by DoH through the proxy
     check: manual   # browser/tests/playwright/patches/http3-socks5-udp.py, python/tests/test_proxy_dns.py
