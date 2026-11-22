@@ -1,7 +1,8 @@
 diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFontList.cpp
+index b8957becb8..8a7808c351 100644
 --- a/gfx/thebes/gfxFcPlatformFontList.cpp
 +++ b/gfx/thebes/gfxFcPlatformFontList.cpp
-@@ -2781,7 +2781,21 @@
+@@ -2786,7 +2786,21 @@ bool gfxFcPlatformFontList::FindAndAddFamiliesLocked(
    nsAutoCString familyName(aFamily);
    ToLowerCase(familyName);
  
@@ -22,19 +23,9 @@ diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFont
 +  if (!(aFlags & FindFamiliesFlags::eQuotedFamilyName) &&
 +      (cssGeneric || !windowsIdentity)) {
      // deprecated generic names are explicitly converted to standard generics
-     bool isDeprecatedGeneric = false;
      if (familyName.EqualsLiteral("sans") ||
-@@ -2794,8 +2808,7 @@
-     }
- 
-     // fontconfig generics? use fontconfig to determine the family for lang
--    if (isDeprecatedGeneric ||
--        mozilla::StyleSingleFontFamily::Parse(familyName).IsGeneric()) {
-+    if (isDeprecatedGeneric || cssGeneric) {
-       PrefFontList* prefFonts =
-           FindGenericFamilies(aFontVisibilityProvider, familyName, aLanguage);
-       if (prefFonts && !prefFonts->IsEmpty()) {
-@@ -2806,16 +2819,19 @@
+         familyName.EqualsLiteral("sans serif")) {
+@@ -2810,16 +2824,19 @@ bool gfxFcPlatformFontList::FindAndAddFamiliesLocked(
      }
    }
  
