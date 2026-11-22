@@ -1160,6 +1160,36 @@ rules:
       HTTP proxy is left as Firefox has it, because nothing would reach the
       origin (docs/proxy-dns.md).
 
+  - id: http3-is-raced-on-the-exits-clock
+    title: Behind a SOCKS5 relay, the timers that start TCP beside QUIC wait for what the proxy cost
+    check: manual   # browser/tests/playwright/patches/http3-https-record-socks5.py
+    evidence:
+      - "Firefox 160 release, netwerk/protocol/http/nsHttpTransaction.cpp: OnHTTPSRRAvailable arms mFastFallbackTimer for network.dns.httpssvc.http3_fast_fallback_timeout (50 ms) and OnFastFallbackTimer opens a TCP connection; an Alt-Svc route has mHttp3BackupTimer, network.http.http3.backup_timer_delay (100 ms). OnBackupConnectionReady moves the request to TCP if QUIC has not connected. Happy Eyeballs v3 is off in release (network.http.happy_eyeballs_enabled)"
+      - "behind a SOCKS5 proxy the first QUIC datagram leaves after the UDP ASSOCIATE (a TCP connect, greeting and request: two or three round trips to the proxy), so both timers ran out before QUIC had sent anything"
+      - "an origin with an HTTPS record (alpn h3,h2) and a SOCKS5 proxy 50 ms away each way, same build: with no proxy each of 3 names saw one QUIC connection and no TCP connection; behind the proxy each also saw a TCP connection; with proxy_optimistic_data the requests of new names went over TCP in 5 of 5 runs, and a QUIC connection closed before its relay was ready sent one datagram carrying only CONNECTION_CLOSE; with the association granted after a second, no QUIC at all"
+      - "once a TCP connection to the origin exists the backup is ready the moment the timer fires, so every later HTTP/3 attempt was closed before its relay was ready: one lone datagram each, on an association of its own"
+      - "a navigation behind the proxy opened two QUIC connections to its origin and one with no proxy: nsHttpHandler::SpeculativeConnectInternal keys the connection with the page's partition key, and a proxied request's connection has none (StoragePrincipalHelper::GetOriginAttributesForHttpConnection, privacy.partition.network_state.connection_with_proxy false), so the speculative connection was never used"
+      - "http3-https-record-socks5.py, 2026-11-22: 4 of 7 checks pass before the change and 7 of 7 after; an origin that answers nothing over QUIC is reached over TCP by the same connections either way"
+    rationale: >-
+      An origin sees which connections arrive, not only which one carries the
+      request: a TCP connection beside every QUIC one, or a request over
+      HTTP/2 to an origin whose record says h3, is what a Firefox at the
+      proxy's exit does only when QUIC is slow there. The timers measure the
+      origin's QUIC against a head start, so behind a relay they wait for
+      what the proxy added: the time the relay took to set up, and one round
+      trip to the proxy, measured on the UDP ASSOCIATE request. Do not turn
+      the timers off behind a proxy, and do not lengthen them by a constant:
+      an origin with no working QUIC must still be reached over TCP, as late
+      as the exit would reach it and no later than the proxy makes it. A
+      QUIC connection given up before its relay is ready sends nothing; its
+      only datagram would announce the close of a connection the origin never
+      saw. The speculative connection of a proxied request is keyed as the
+      request's is, without a partition key. What is not matched: timers
+      inside QUIC and TLS run on the whole path's round trip, so an origin
+      that rejects ECH, whose QUIC connection takes three probe timeouts to
+      close, is still raced over TCP sooner than at the exit
+      (docs/proxy-dns.md).
+
   - id: optimistic-data-is-opt-in-and-tls-only
     title: A TLS ClientHello may travel behind the SOCKS5 CONNECT request, only when the launch asks for it
     check: manual   # browser/tests/playwright/patches/socks5-optimistic-data.py, python/tests/test_proxy_dns.py
@@ -1169,7 +1199,7 @@ rules:
       - "socks5-optimistic-data.py on Firefox 160.0.1, 2026-11-22, a proxy that holds its reply until it has a whole ClientHello or 3 seconds pass: with the option every TLS connection's ClientHello (1869 bytes to an address, 1900 to a name, 2392 and 2455 when resuming) is at the proxy and at the origin before the reply, a speculative connection's included; without it no connection sends a byte before the reply; the ClientHello's size and extension list are equal either way; a plain HTTP connection sends nothing early; 20 of 20 checks"
       - "the same guard on a build without the patch (Firefox 159, the pref set and unknown): no connection sends a byte before the reply, 10 of 20 checks pass"
       - "a refused CONNECT: NS_ERROR_CONNECTION_REFUSED with and without; one navigation asks the proxy 5 times without the option and 3 with it, because the retry of a failed connect belongs to the connection attempt, which has ended by then"
-      - "a proxy that discards the early bytes and then replies: with network.http.tls-handshake-timeout at Firefox's 30 seconds the navigation had not failed after 200 seconds and 6 CONNECTs; at 5 seconds it failed with NS_ERROR_NET_TIMEOUT after 17 seconds and 2"
+      - "a proxy that discards the early bytes and then replies: with network.http.tls-handshake-timeout at Firefox's 30 seconds the navigation had not failed after 200 seconds and 6 CONNECTs; at 5 seconds it failed with NS_ERROR_NET_TIMEOUT after 25 seconds, or had not after 30, with 2; a navigation with no proxy to an origin that never answers a ClientHello had not failed after 60 seconds and 2 connections (before the speculative connection was keyed as the request's, the proxied one failed after 17 seconds)"
       - "RFC 1928 section 6 says nothing of bytes that follow a request before its reply; a proxy that reads the request and then pipes forwards them, one that reads through a buffer it drops, or answers from a different process than the one that pipes, loses them, and the browser cannot tell a lost ClientHello from a slow server"
     rationale: >-
       The gap is on every TLS connection and no page script is needed to see

@@ -29,8 +29,8 @@ What PASS means, for a launch proxy given addresses and one given names:
     * a CONNECT the proxy refuses fails the navigation with the same error,
       with or without, and is asked no more often with;
     * a proxy that discards what it received before its reply leaves the TLS
-      handshake unanswered: the navigation fails with a timeout, not before
-      the handshake's own has run out, and does not hang.
+      handshake unanswered: the navigation does not load, waits at least the
+      handshake's own timeout, and no connection is tried without the bytes.
 
     python browser/tests/playwright/patches/socks5-optimistic-data.py
 """
@@ -348,8 +348,9 @@ async def main() -> int:
             (f"[{given}] a refused CONNECT is the same error with and without, and is asked no more often",
              on["refused"] == off["refused"] != "loaded" and 0 < len(on["refusals"]) <= len(off["refusals"]),
              (on["refused"], off["refused"], len(on["refusals"]), len(off["refusals"]))),
-            (f"[{given}] a proxy that discards the early bytes leaves the handshake to time out",
-             on["discarded"] == "NS_ERROR_NET_TIMEOUT" and on["discarded_seconds"] >= TLS_TIMEOUT_SECONDS,
+            (f"[{given}] a proxy that discards the early bytes leaves the handshake waiting, and nothing is retried without them",
+             on["discarded"] != "loaded" and on["discarded_seconds"] >= TLS_TIMEOUT_SECONDS
+             and bool(on["discards"]) and all(c["early"] for c in on["discards"]),
              (on["discarded"], on["discarded_seconds"], len(on["discards"]))),
         ]
         # Compared within a mode: a connection by name carries the name, one by address does not.

@@ -88,6 +88,12 @@ by DoH and its HTTPS record is used, as for any connection. In `exit` mode the
 proxy is sent the name and no record is asked. As in stock, no speculative
 connection is opened to an address the browser knows to be private.
 
+The connection is keyed as the request's will be. Firefox partitions a
+connection by the site of the page that asked for it, except behind a proxy
+(`privacy.partition.network_state.connection_with_proxy`), so the speculative
+one is not partitioned either. Keyed apart, it was never used, and a
+navigation opened two connections where stock opens one.
+
 Behind an HTTP proxy there are still none: a speculative connection carries no
 request, so it would reach the proxy and stop there.
 
@@ -144,7 +150,9 @@ Every HTTPS navigation hangs: each handshake waits out
 `network.http.tls-handshake-timeout` (30 seconds) and Firefox opens another,
 as it does with a server that never answers. Measured, one navigation had not
 failed after 200 seconds and six connections; with the timeout set to 5
-seconds it failed with `NS_ERROR_NET_TIMEOUT` after 17 seconds and two. The
+seconds it failed with `NS_ERROR_NET_TIMEOUT` after 25 seconds or more and
+two. A navigation with no proxy, to an origin that never answers a
+ClientHello, had not failed after 60. The
 browser cannot tell a lost ClientHello from a slow server, and does not retry
 without the option: that retry would be one more connection the origin sees
 ([`optimistic-data-is-opt-in-and-tls-only`](../ci/tribal-rules.yml)).
@@ -161,6 +169,23 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
 - **Nothing leaves around the relay.** There is no direct path to fall back to
   and none to migrate to. The handshake starts when the relay is granted, so a
   slow proxy delays it rather than losing its first packets.
+- **TCP is raced when a Firefox at the exit would race it.** Firefox gives a
+  QUIC connection a head start before it also opens a TCP one: 50 ms when
+  HTTP/3 is known from an HTTPS record
+  (`network.dns.httpssvc.http3_fast_fallback_timeout`), 100 ms from Alt-Svc
+  (`network.http.http3.backup_timer_delay`). Whichever is ready first carries
+  the request, and an origin that answers QUIC in time sees no TCP connection
+  at all. Behind the proxy QUIC's first datagram waits for the association,
+  and its answer crosses the proxy, so a timer that runs out starts again for
+  what that cost: the time the relay took to set up, and one round trip to
+  the proxy, measured on the UDP ASSOCIATE request. Without that the origin
+  got a TCP connection stock never opens, and the request went over it
+  whenever TCP won, which `proxy_optimistic_data` made the rule for a proxy
+  more than 50 ms away
+  ([`http3-is-raced-on-the-exits-clock`](../ci/tribal-rules.yml)).
+- **A connection closed before its relay is ready sends nothing.** All it
+  has to say by then is that it closed, in the first datagram of a
+  connection its peer never saw.
 - **A proxy without UDP is a network without UDP.** If the proxy refuses the
   association, the connection's datagrams are dropped silently. Firefox then
   does what it does on a network that blocks UDP: the TCP connection it races
@@ -223,6 +248,13 @@ For the claim "a Firefox at the exit" to hold, a SOCKS5 proxy has to:
   receives, and is fragmented on a link too small for it. A network between
   the browser and the proxy that drops IP fragments loses those datagrams, and
   the browser falls back to TCP.
+- A TCP connection raced against QUIC starts later than it does at the exit,
+  by the delay of the proxy. An origin whose QUIC is slow or blocked sees the
+  TCP connection that much later.
+- Timers inside QUIC and TLS run on the round trip of the whole path, the
+  proxy's included. An origin whose record offers an ECH configuration it
+  rejects sees more TCP connections than it does from its exit: the QUIC
+  connection takes three probe timeouts to close, and TCP is raced meanwhile.
 - Datagrams to a relay are sent one per system call. Nothing past the browser's
   own machine sees that.
 - Path MTU discovery is off in Firefox 159 (`network.http.http3.pmtud`). If

@@ -1,5 +1,5 @@
 diff --git a/netwerk/base/nsIOService.cpp b/netwerk/base/nsIOService.cpp
-index 31b794135b..4573ea9e03 100644
+index 58b4f9d56e..43d655a388 100644
 --- a/netwerk/base/nsIOService.cpp
 +++ b/netwerk/base/nsIOService.cpp
 @@ -42,6 +42,7 @@
@@ -50,10 +50,10 @@ index 31b794135b..4573ea9e03 100644
      speculativeHandler->SpeculativeConnectWithOriginAttributesNative(
          uri, std::move(mOriginAttributes.ref()), mCallbacks, anonymous);
 diff --git a/netwerk/base/nsSocketTransport2.cpp b/netwerk/base/nsSocketTransport2.cpp
-index 12c77533a5..fe57ec7fe5 100644
+index 1fb9a3a7cf..25f4c49ba5 100644
 --- a/netwerk/base/nsSocketTransport2.cpp
 +++ b/netwerk/base/nsSocketTransport2.cpp
-@@ -1394,8 +1394,15 @@ nsresult nsSocketTransport::InitiateSocket() {
+@@ -1402,8 +1402,15 @@ nsresult nsSocketTransport::InitiateSocket() {
  
    // Hosts/Proxy Hosts that are Local IP Literals should not be speculatively
    // connected - Bug 853423.
@@ -72,10 +72,10 @@ index 12c77533a5..fe57ec7fe5 100644
          ("nsSocketTransport::InitiateSocket skipping "
           "speculative connection for host [%s:%d] proxy "
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
-index 9c8c631197..92c1e91968 100644
+index 3ec2937f08..31571e8150 100644
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp
-@@ -2516,7 +2516,8 @@ nsHttpHandler::Observe(nsISupports* subject, const char* topic,
+@@ -2515,7 +2515,8 @@ nsHttpHandler::Observe(nsISupports* subject, const char* topic,
  nsresult nsHttpHandler::SpeculativeConnectInternal(
      nsIURI* aURI, nsIPrincipal* aPrincipal,
      Maybe<OriginAttributes>&& aOriginAttributes,
@@ -85,7 +85,7 @@ index 9c8c631197..92c1e91968 100644
    if (IsNeckoChild()) {
      nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(aCallbacks);
  
-@@ -2528,6 +2529,10 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
+@@ -2527,6 +2528,10 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
  
    if (!mHandlerActive) return NS_OK;
  
@@ -96,7 +96,22 @@ index 9c8c631197..92c1e91968 100644
    MOZ_ASSERT(NS_IsMainThread());
  
    nsISiteSecurityService* sss = gHttpHandler->GetSSService();
-@@ -2594,7 +2599,7 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
+@@ -2555,7 +2560,13 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
+     }
+   }
+ 
+-  if (!aOriginAttributes) {
++  if (proxyInfo && !proxyInfo->IsDirect() &&
++      !StaticPrefs::privacy_partition_network_state_connection_with_proxy()) {
++    // Camoufox: a request's connection through a proxy is not partitioned
++    // (StoragePrincipalHelper::GetOriginAttributesForHttpConnection), and
++    // one keyed by a partition would never be used.
++    originAttributes.mPartitionKey.Truncate();
++  } else if (!aOriginAttributes) {
+     // We must update the originAttributes with the network state first party
+     // domain **after** we upgrade aURI to https.
+     // Otherwise the speculative connection will be keyed by a http URL
+@@ -2593,7 +2604,7 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
    aURI->GetUsername(username);
  
    RefPtr<AltSvcMapping> mapping;
@@ -105,7 +120,7 @@ index 9c8c631197..92c1e91968 100644
      mapping = gHttpHandler->GetAltServiceMapping(
          scheme, host, port, originAttributes.IsPrivateBrowsing(),
          originAttributes, true, true);
-@@ -2602,9 +2607,10 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
+@@ -2601,9 +2612,10 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
  
    RefPtr<nsHttpConnectionInfo> ci;
    if (mapping) {
@@ -118,7 +133,7 @@ index 9c8c631197..92c1e91968 100644
                                    originAttributes, aURI->SchemeIs("https"));
    }
    ci = ci->Mutate()
-@@ -2635,7 +2641,9 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
+@@ -2634,7 +2646,9 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
      }
    }
  
@@ -130,7 +145,7 @@ index 9c8c631197..92c1e91968 100644
      ci = ci->Mutate().SetHappyEyeballsEnabled(true).Finalize();
      // When HE is enabled, HTTPS RR lookups are handled by
 diff --git a/netwerk/protocol/http/nsHttpHandler.h b/netwerk/protocol/http/nsHttpHandler.h
-index d054e108a6..9006617836 100644
+index bb745251d8..965366bdc1 100644
 --- a/netwerk/protocol/http/nsHttpHandler.h
 +++ b/netwerk/protocol/http/nsHttpHandler.h
 @@ -311,6 +311,18 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
@@ -152,7 +167,7 @@ index d054e108a6..9006617836 100644
    [[nodiscard]] nsresult SpeculativeConnect(nsHttpConnectionInfo* ci,
                                              nsIInterfaceRequestor* callbacks,
                                              uint32_t caps,
-@@ -789,7 +801,8 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
+@@ -798,7 +810,8 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
    [[nodiscard]] nsresult SpeculativeConnectInternal(
        nsIURI* aURI, nsIPrincipal* aPrincipal,
        Maybe<OriginAttributes>&& aOriginAttributes,

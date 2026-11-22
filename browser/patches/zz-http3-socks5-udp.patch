@@ -215,7 +215,7 @@ diff --git a/dom/media/webrtc/transport/WebrtcUdpAssociation.cpp b/netwerk/base/
 similarity index 72%
 rename from dom/media/webrtc/transport/WebrtcUdpAssociation.cpp
 rename to netwerk/base/Socks5UdpAssociation.cpp
-index 4f6fb48fdb..d8378ff849 100644
+index 4f6fb48fdb..9803c67c94 100644
 --- a/dom/media/webrtc/transport/WebrtcUdpAssociation.cpp
 +++ b/netwerk/base/Socks5UdpAssociation.cpp
 @@ -2,14 +2,9 @@
@@ -366,7 +366,20 @@ index 4f6fb48fdb..d8378ff849 100644
                          this, mInBuf[1]);
            return Fail("the proxy refused UDP ASSOCIATE");
          }
-@@ -300,17 +250,17 @@ void WebrtcUdpAssociation::Parse() {
+@@ -286,6 +236,7 @@ void WebrtcUdpAssociation::Parse() {
+           relay.inet.port = port;
+         }
+         mInBuf.Clear();
++        mRoundTrip = TimeStamp::Now() - mAsked;
+         mStep = Step::Associated;
+         mOwner->OnRelayReady(relay);
+         return;
+@@ -296,21 +247,22 @@ void WebrtcUdpAssociation::Parse() {
+     }
+     // UDP ASSOCIATE, from a sending address the client does not know yet.
+     mStep = Step::Reply;
++    mAsked = TimeStamp::Now();
+     Send(nsTArray<uint8_t>{5, 3, 0, 1, 0, 0, 0, 0, 0, 0});
    }
  }
  
@@ -390,10 +403,10 @@ index 4f6fb48fdb..d8378ff849 100644
    mStep = Step::Done;
 diff --git a/netwerk/base/Socks5UdpAssociation.h b/netwerk/base/Socks5UdpAssociation.h
 new file mode 100644
-index 0000000000..0f6a369ecf
+index 0000000000..65eaee8c4e
 --- /dev/null
 +++ b/netwerk/base/Socks5UdpAssociation.h
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,83 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this file,
 + * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -401,6 +414,7 @@ index 0000000000..0f6a369ecf
 +#ifndef mozilla_net_Socks5UdpAssociation_h
 +#define mozilla_net_Socks5UdpAssociation_h
 +
++#include "mozilla/TimeStamp.h"
 +#include "mozilla/net/DNS.h"
 +#include "nsCOMPtr.h"
 +#include "nsIAsyncInputStream.h"
@@ -446,6 +460,9 @@ index 0000000000..0f6a369ecf
 +  void Connect(const nsACString& aType, const nsACString& aHost, int32_t aPort,
 +               const nsACString& aUsername, const nsACString& aPassword);
 +  void Close();
++  // How long the proxy took to answer the UDP ASSOCIATE request: one round
++  // trip to it. Zero until the relay is ready.
++  TimeDuration RoundTrip() const { return mRoundTrip; }
 +
 + private:
 +  ~Socks5UdpAssociation();
@@ -465,6 +482,8 @@ index 0000000000..0f6a369ecf
 +  nsCOMPtr<nsIAsyncOutputStream> mOut;
 +  nsTArray<uint8_t> mInBuf;
 +  nsTArray<uint8_t> mOutBuf;
++  TimeStamp mAsked;
++  TimeDuration mRoundTrip;
 +};
 +
 +}  // namespace net
@@ -472,7 +491,7 @@ index 0000000000..0f6a369ecf
 +
 +#endif  // mozilla_net_Socks5UdpAssociation_h
 diff --git a/netwerk/base/moz.build b/netwerk/base/moz.build
-index dde0f0da60..228fe2baea 100644
+index 9f9b338136..0cae900504 100644
 --- a/netwerk/base/moz.build
 +++ b/netwerk/base/moz.build
 @@ -176,6 +176,7 @@ EXPORTS.mozilla.net += [
@@ -530,7 +549,7 @@ index 70621a068d..135b88b0b8 100644
  
    static void SerializeProxyInfo(nsProxyInfo* aProxyInfo,
 diff --git a/netwerk/protocol/http/AlternateServices.cpp b/netwerk/protocol/http/AlternateServices.cpp
-index 91cc428d47..10b8b47b92 100644
+index 289b877ccb..1afd7f639b 100644
 --- a/netwerk/protocol/http/AlternateServices.cpp
 +++ b/netwerk/protocol/http/AlternateServices.cpp
 @@ -905,7 +905,8 @@ void AltSvcCache::UpdateAltServiceMapping(
@@ -544,10 +563,27 @@ index 91cc428d47..10b8b47b92 100644
        LOG(
            ("AltSvcCache::UpdateAltServiceMapping %p map %p ignored h3 because "
 diff --git a/netwerk/protocol/http/ConnectionEntry.cpp b/netwerk/protocol/http/ConnectionEntry.cpp
-index 82a56487ab..26bfc9599c 100644
+index 82a56487ab..02177ad3e8 100644
 --- a/netwerk/protocol/http/ConnectionEntry.cpp
 +++ b/netwerk/protocol/http/ConnectionEntry.cpp
-@@ -1048,7 +1048,7 @@ bool ConnectionEntry::MaybeProcessCoalescingKeys(nsIDNSAddrRecord* dnsRecord,
+@@ -69,6 +69,16 @@ bool ConnectionEntry::HasActiveH3Connection() const {
+          mConnectionAttemptPool->UnconnectedUDPConnsLength() > 0;
+ }
+ 
++Maybe<TimeDuration> ConnectionEntry::Http3RelayLag() const {
++  for (const auto& conn : mActiveConns) {
++    RefPtr<HttpConnectionUDP> connUDP = do_QueryObject(conn);
++    if (connUDP && connUDP->RelayLag()) {
++      return connUDP->RelayLag();
++    }
++  }
++  return Nothing();
++}
++
+ bool ConnectionEntry::AvailableForDispatchNow() {
+   if (mIdleConns.Length() && mIdleConns[0]->CanReuseLikely()) {
+     return true;
+@@ -1048,7 +1058,7 @@ bool ConnectionEntry::MaybeProcessCoalescingKeys(nsIDNSAddrRecord* dnsRecord,
  bool ConnectionEntry::MaybeProcessCoalescingKeys(
      const nsTArray<NetAddr>& aAddresses, bool aIsHttp3) {
    if (!mConnInfo || !mConnInfo->EndToEndSSL() || (!aIsHttp3 && !AllowHttp2()) ||
@@ -556,8 +592,22 @@ index 82a56487ab..26bfc9599c 100644
      return false;
    }
  
+diff --git a/netwerk/protocol/http/ConnectionEntry.h b/netwerk/protocol/http/ConnectionEntry.h
+index 86760ca45f..e4e305f2ca 100644
+--- a/netwerk/protocol/http/ConnectionEntry.h
++++ b/netwerk/protocol/http/ConnectionEntry.h
+@@ -238,6 +238,9 @@ class ConnectionEntry : public SupportsWeakPtr {
+   // HasUsableH3Connection(), or an h3 connection attempt still in flight.
+   bool HasActiveH3Connection() const;
+ 
++  // Camoufox: HttpConnectionUDP::RelayLag() of this entry's h3 connection.
++  Maybe<TimeDuration> Http3RelayLag() const;
++
+   bool RemoveTransFromPendingQ(nsHttpTransaction* aTrans);
+ 
+   // Notify that a transaction was removed directly from a per-window pending
 diff --git a/netwerk/protocol/http/DnsAndConnectSocket.cpp b/netwerk/protocol/http/DnsAndConnectSocket.cpp
-index 4d572c6f2a..b4ef8b3a5e 100644
+index 869dc9799f..22b6602150 100644
 --- a/netwerk/protocol/http/DnsAndConnectSocket.cpp
 +++ b/netwerk/protocol/http/DnsAndConnectSocket.cpp
 @@ -70,7 +70,7 @@ DnsAndConnectSocket::DnsAndConnectSocket(nsHttpConnectionInfo* ci,
@@ -592,10 +642,10 @@ index 92fe5508d5..b9d38b1703 100644
      self->ResetDownstreamState();
      return NS_OK;
 diff --git a/netwerk/protocol/http/Http3Session.cpp b/netwerk/protocol/http/Http3Session.cpp
-index 6c3d72d113..0b02b1c5a9 100644
+index c9194c225a..665a71218c 100644
 --- a/netwerk/protocol/http/Http3Session.cpp
 +++ b/netwerk/protocol/http/Http3Session.cpp
-@@ -2646,7 +2646,7 @@ bool Http3Session::RealJoinConnection(const nsACString& hostname, int32_t port,
+@@ -2669,7 +2669,7 @@ bool Http3Session::RealJoinConnection(const nsACString& hostname, int32_t port,
    }
  
    nsHttpConnectionInfo* ci = ConnectionInfo();
@@ -605,10 +655,10 @@ index 6c3d72d113..0b02b1c5a9 100644
                 "RealJoinConnection should not be called when using proxy");
      return false;
 diff --git a/netwerk/protocol/http/Http3Session.h b/netwerk/protocol/http/Http3Session.h
-index 430e0cb9d0..9145ab1571 100644
+index cd8b2a8e29..79f8a1f8a1 100644
 --- a/netwerk/protocol/http/Http3Session.h
 +++ b/netwerk/protocol/http/Http3Session.h
-@@ -340,6 +340,14 @@ class Http3Session final : public Http3SessionBase,
+@@ -348,6 +348,14 @@ class Http3Session final : public Http3SessionBase,
        PRIntervalTime aRtt, bool aIsExtendedCONNECT);
    void SetIsInTunnel() { mIsInTunnel = true; }
  
@@ -624,10 +674,10 @@ index 430e0cb9d0..9145ab1571 100644
  
   private:
 diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/HttpBaseChannel.cpp
-index 65b731a68c..ef81d9dc7b 100644
+index 9e54d6d8bf..7f5af63091 100644
 --- a/netwerk/protocol/http/HttpBaseChannel.cpp
 +++ b/netwerk/protocol/http/HttpBaseChannel.cpp
-@@ -6760,7 +6760,8 @@ void HttpBaseChannel::DoDiagnosticAssertWhenOnStopNotCalledOnDestroy() {}
+@@ -6777,7 +6777,8 @@ void HttpBaseChannel::DoDiagnosticAssertWhenOnStopNotCalledOnDestroy() {}
  
  bool HttpBaseChannel::Http3Allowed() const {
    bool allowedProxyInfo =
@@ -638,7 +688,7 @@ index 65b731a68c..ef81d9dc7b 100644
                   : true;
    // TODO: When mUpgradeProtocolCallback is not null, we should allow HTTP/3 for
 diff --git a/netwerk/protocol/http/HttpConnectionUDP.cpp b/netwerk/protocol/http/HttpConnectionUDP.cpp
-index c662beac36..9e9ea667d5 100644
+index c662beac36..527a915f03 100644
 --- a/netwerk/protocol/http/HttpConnectionUDP.cpp
 +++ b/netwerk/protocol/http/HttpConnectionUDP.cpp
 @@ -20,6 +20,7 @@
@@ -660,7 +710,7 @@ index c662beac36..9e9ea667d5 100644
    MOZ_ASSERT(mQueuedHttpConnectTransaction.IsEmpty(),
               "Should not have any queued transactions");
    MOZ_ASSERT(mQueuedConnectUdpTransaction.IsEmpty(),
-@@ -299,6 +304,87 @@ nsresult HttpConnectionUDP::InitWithSocket(nsHttpConnectionInfo* info,
+@@ -299,6 +304,104 @@ nsresult HttpConnectionUDP::InitWithSocket(nsHttpConnectionInfo* info,
    return InitCommon(aSocket, aPeerAddr, callbacks, caps, true);
  }
  
@@ -696,7 +746,15 @@ index c662beac36..9e9ea667d5 100644
 +// which is the proxy's and not always the peer's.
 +void HttpConnectionUDP::OnRelayReady(const NetAddr& aRelay) {
 +  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
++  mRelayPending = false;
 +  if (!mHttp3Session || !mSocket) {
++    return;
++  }
++  if (mHttp3Session->IsClosing()) {
++    // Closed before it could send: all it has to say is that it closed, to a
++    // peer that never heard of it. With no proxy the peer has its first
++    // flight by then.
++    mHttp3Session->Socks5Failed();
 +    return;
 +  }
 +  NetAddr peer;
@@ -725,11 +783,20 @@ index c662beac36..9e9ea667d5 100644
 +    replaced->Close();
 +  }
 +  mRelayReady = true;
++  mRelayLag = TimeStamp::Now() - mRelayAsked + mSocks5->RoundTrip();
 +  (void)SendData();
++}
++
++Maybe<TimeDuration> HttpConnectionUDP::RelayLag() const {
++  if (mRelayPending) {
++    return Some(TimeDuration::Forever());
++  }
++  return mRelayReady ? Some(mRelayLag) : Nothing();
 +}
 +
 +void HttpConnectionUDP::OnRelayFailed() {
 +  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
++  mRelayPending = false;
 +  if (!mHttp3Session) {
 +    return;
 +  }
@@ -748,29 +815,29 @@ index c662beac36..9e9ea667d5 100644
  nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
                                         const NetAddr& aPeerAddr,
                                         nsIInterfaceRequestor* callbacks,
-@@ -314,32 +400,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -314,32 +417,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
      mSocket->MarkAsTRRServiceChannel();
    }
  
 -  NetAddr local;
 -  local.raw.family = aPeerAddr.raw.family;
 -  nsresult rv = mSocket->InitWithAddress(&local, nullptr, false, 1);
-+  nsresult rv = BindSocket(mSocket, aPeerAddr.raw.family);
-   if (NS_FAILED(rv)) {
-     mSocket = nullptr;
-     return rv;
-   }
- 
--  rv = mSocket->SetRecvBufferSize(
--      StaticPrefs::network_http_http3_recvBufferSize());
 -  if (NS_FAILED(rv)) {
--    LOG(("HttpConnectionUDP::InitCommon SetRecvBufferSize failed %d [this=%p]",
--         static_cast<uint32_t>(rv), this));
--    mSocket->Close();
 -    mSocket = nullptr;
 -    return rv;
 -  }
 -
+-  rv = mSocket->SetRecvBufferSize(
+-      StaticPrefs::network_http_http3_recvBufferSize());
++  nsresult rv = BindSocket(mSocket, aPeerAddr.raw.family);
+   if (NS_FAILED(rv)) {
+-    LOG(("HttpConnectionUDP::InitCommon SetRecvBufferSize failed %d [this=%p]",
+-         static_cast<uint32_t>(rv), this));
+-    mSocket->Close();
+     mSocket = nullptr;
+     return rv;
+   }
+ 
 -  if (aPeerAddr.raw.family == AF_INET) {
 -    rv = mSocket->SetDontFragment(true);
 -    if (NS_FAILED(rv)) {
@@ -782,7 +849,7 @@ index c662beac36..9e9ea667d5 100644
    // get the resulting socket address.
    rv = mSocket->GetLocalAddr(getter_AddRefs(mSelfAddr));
    if (NS_FAILED(rv)) {
-@@ -389,6 +455,15 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -389,6 +472,15 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
    mIsInTunnel = isInTunnel;
    if (mIsInTunnel) {
      mHttp3Session->SetIsInTunnel();
@@ -798,12 +865,14 @@ index c662beac36..9e9ea667d5 100644
    }
  
    ChangeConnectionState(ConnectionState::INITED);
-@@ -403,6 +478,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -403,6 +495,14 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
      return rv;
    }
  
 +  if (mSocks5) {
 +    nsProxyInfo* proxy = mConnInfo->ProxyInfo();
++    mRelayPending = true;
++    mRelayAsked = TimeStamp::Now();
 +    mSocks5->Connect(nsDependentCString(proxy->Type()), proxy->Host(),
 +                     proxy->Port(), proxy->Username(), proxy->Password());
 +  }
@@ -811,7 +880,7 @@ index c662beac36..9e9ea667d5 100644
    return NS_OK;
  }
  
-@@ -416,7 +497,7 @@ nsresult HttpConnectionUDP::Activate(nsAHttpTransaction* trans, uint32_t caps,
+@@ -416,7 +516,7 @@ nsresult HttpConnectionUDP::Activate(nsAHttpTransaction* trans, uint32_t caps,
    nsHttpTransaction* hTrans = trans->QueryHttpTransaction();
    nsHttpConnectionInfo* transCI = trans->ConnectionInfo();
    NetAddr peerAddr;
@@ -820,7 +889,7 @@ index c662beac36..9e9ea667d5 100644
        NS_SUCCEEDED(GetPeerAddr(&peerAddr))) {
      // set the targetIpAddressSpace in the transaction object, this might be
      // needed by the channel for determining the kind of LNA permissions and/or
-@@ -697,6 +778,9 @@ void HttpConnectionUDP::Close(nsresult reason, bool aIsShutdown) {
+@@ -697,6 +797,9 @@ void HttpConnectionUDP::Close(nsresult reason, bool aIsShutdown) {
    if (socket) {
      socket->Close();
    }
@@ -830,7 +899,7 @@ index c662beac36..9e9ea667d5 100644
    if (mHttp3Session) {
      mHttp3Session->SetCleanShutdown(true);
      mHttp3Session->Close(reason);
-@@ -1265,6 +1349,10 @@ NS_IMETHODIMP HttpConnectionUDP::OnPacketReceived(nsIUDPSocket* aSocket) {
+@@ -1265,6 +1368,10 @@ NS_IMETHODIMP HttpConnectionUDP::OnPacketReceived(nsIUDPSocket* aSocket) {
  
  NS_IMETHODIMP HttpConnectionUDP::OnStopListening(nsIUDPSocket* aSocket,
                                                   nsresult aStatus) {
@@ -842,7 +911,7 @@ index c662beac36..9e9ea667d5 100644
    // true to ensure that mHttp3Session is also closed.
    CloseTransaction(mHttp3Session, aStatus, true);
 diff --git a/netwerk/protocol/http/HttpConnectionUDP.h b/netwerk/protocol/http/HttpConnectionUDP.h
-index b401912ab9..002a784acf 100644
+index b401912ab9..3411c73b75 100644
 --- a/netwerk/protocol/http/HttpConnectionUDP.h
 +++ b/netwerk/protocol/http/HttpConnectionUDP.h
 @@ -11,6 +11,7 @@
@@ -863,17 +932,23 @@ index b401912ab9..002a784acf 100644
   private:
    virtual ~HttpConnectionUDP();
  
-@@ -59,6 +61,9 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+@@ -59,6 +61,15 @@ class HttpConnectionUDP final : public HttpConnectionBase,
  
    HttpConnectionUDP();
  
 +  void OnRelayReady(const NetAddr& aRelay) override;
 +  void OnRelayFailed() override;
++  // Camoufox: how much later than a connection with no proxy this one could
++  // hear from its peer: the time its relay took to set up, and one round trip
++  // to the proxy. Forever while the relay is being set up, Nothing with no
++  // relay. The timers that give up on HTTP/3 wait this much longer
++  // (nsHttpTransaction::FallbackWaitsForRelay).
++  Maybe<TimeDuration> RelayLag() const;
 +
    [[nodiscard]] nsresult Init(nsHttpConnectionInfo* info,
                                nsIDNSRecord* dnsRecord, nsresult status,
                                nsIInterfaceRequestor* callbacks, uint32_t caps);
-@@ -118,6 +123,7 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+@@ -118,6 +129,7 @@ class HttpConnectionUDP final : public HttpConnectionBase,
    nsresult InitCommon(nsIUDPSocket* aSocket, const NetAddr& aPeerAddr,
                        nsIInterfaceRequestor* callbacks, uint32_t caps,
                        bool isInTunnel);
@@ -881,7 +956,7 @@ index b401912ab9..002a784acf 100644
    [[nodiscard]] nsresult OnTransactionDone(nsresult reason);
    nsresult RecvData();
    nsresult SendData();
-@@ -146,6 +152,10 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+@@ -146,6 +158,13 @@ class HttpConnectionUDP final : public HttpConnectionBase,
  
    PRIntervalTime mLastRequestBytesSentTime = 0;
    nsCOMPtr<nsIUDPSocket> mSocket;
@@ -889,14 +964,17 @@ index b401912ab9..002a784acf 100644
 +  // every datagram of this connection. Nothing is sent around it.
 +  RefPtr<Socks5UdpAssociation> mSocks5;
 +  bool mRelayReady = false;
++  bool mRelayPending = false;
++  TimeStamp mRelayAsked;
++  TimeDuration mRelayLag;
  
    nsCOMPtr<nsINetAddr> mSelfAddr;
    nsCOMPtr<nsINetAddr> mPeerAddr;
 diff --git a/netwerk/protocol/http/TlsHandshaker.cpp b/netwerk/protocol/http/TlsHandshaker.cpp
-index 5110e0af4a..0623bc8ab0 100644
+index 14fe3c54ec..d16bbb191a 100644
 --- a/netwerk/protocol/http/TlsHandshaker.cpp
 +++ b/netwerk/protocol/http/TlsHandshaker.cpp
-@@ -132,7 +132,8 @@ nsresult TlsHandshaker::InitSSLParams(bool connectingToProxy,
+@@ -138,7 +138,8 @@ nsresult TlsHandshaker::InitSSLParams(bool connectingToProxy,
    }
  
    // If proxy is use or 0RTT is excluded for a origin, don't use early-data.
@@ -906,7 +984,7 @@ index 5110e0af4a..0623bc8ab0 100644
      ssl->DisableEarlyData();
    }
  
-@@ -282,7 +283,7 @@ void TlsHandshaker::Check0RttEnabled(nsITLSSocketControl* ssl) {
+@@ -288,7 +289,7 @@ void TlsHandshaker::Check0RttEnabled(nsITLSSocketControl* ssl) {
      }
    }
  
@@ -984,8 +1062,129 @@ index 2c272acae9..b5cd8b67ed 100644
    // Returns true when proxying over HTTP or HTTPS
    bool UsingHttpProxy() const { return mUsingHttpProxy || mUsingHttpsProxy; }
  
+diff --git a/netwerk/protocol/http/nsHttpConnectionMgr.cpp b/netwerk/protocol/http/nsHttpConnectionMgr.cpp
+index 9f7500a340..36d2edf18e 100644
+--- a/netwerk/protocol/http/nsHttpConnectionMgr.cpp
++++ b/netwerk/protocol/http/nsHttpConnectionMgr.cpp
+@@ -4223,6 +4223,13 @@ void nsHttpConnectionMgr::CheckTransInPendingQueue(nsHttpTransaction* aTrans) {
+   MOZ_ASSERT(!foundInPendingQ);
+ }
+ 
++Maybe<TimeDuration> nsHttpConnectionMgr::Http3RelayLag(
++    nsHttpConnectionInfo* ci) {
++  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
++  ConnectionEntry* ent = mCT.GetWeak(ci->HashKey());
++  return ent ? ent->Http3RelayLag() : Nothing();
++}
++
+ bool nsHttpConnectionMgr::AllowToRetryDifferentIPFamilyForHttp3(
+     nsHttpConnectionInfo* ci, nsresult aError) {
+   ConnectionEntry* ent = mCT.GetWeak(ci->HashKey());
+diff --git a/netwerk/protocol/http/nsHttpConnectionMgr.h b/netwerk/protocol/http/nsHttpConnectionMgr.h
+index a89e066c25..9540c62dbe 100644
+--- a/netwerk/protocol/http/nsHttpConnectionMgr.h
++++ b/netwerk/protocol/http/nsHttpConnectionMgr.h
+@@ -213,6 +213,8 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
+   // connection
+   bool BeConservativeIfProxied(nsIProxyInfo* proxy);
+ 
++  // Camoufox: ConnectionEntry::Http3RelayLag() of ci's entry.
++  Maybe<TimeDuration> Http3RelayLag(nsHttpConnectionInfo* ci);
+   bool AllowToRetryDifferentIPFamilyForHttp3(nsHttpConnectionInfo* ci,
+                                              nsresult aError);
+   void SetRetryDifferentIPFamilyForHttp3(nsHttpConnectionInfo* ci,
+diff --git a/netwerk/protocol/http/nsHttpTransaction.cpp b/netwerk/protocol/http/nsHttpTransaction.cpp
+index 69c3e9c2cd..acc62d6825 100644
+--- a/netwerk/protocol/http/nsHttpTransaction.cpp
++++ b/netwerk/protocol/http/nsHttpTransaction.cpp
+@@ -4002,12 +4002,51 @@ static void CreateBackupConnection(
+   gHttpHandler->ConnMgr()->DoFallbackConnection(trans, false);
+ }
+ 
++// Camoufox: the timers that start a TCP connection beside an HTTP/3 one give
++// QUIC that long to answer. Behind a SOCKS5 proxy QUIC's first datagram waits
++// for the relay, and its answer crosses the proxy, so a timer that ran out
++// starts again for what that cost (HttpConnectionUDP::RelayLag): TCP is tried
++// when a Firefox at the proxy's exit would try it. aDelay, the timer's own
++// length, is how often a relay still being set up is looked at again; the
++// lag is longer than that, so the look after the relay is ready comes before
++// the timer is due.
++bool nsHttpTransaction::FallbackWaitsForRelay(nsCOMPtr<nsITimer>& aTimer,
++                                              uint32_t aDelay) {
++  if (mFallbackWaitedForRelay || !mConnInfo->ProxyCarriesUdp()) {
++    return false;
++  }
++  Maybe<TimeDuration> lag = gHttpHandler->ConnMgr()->Http3RelayLag(mConnInfo);
++  if (!lag) {
++    return false;
++  }
++  const TimeStamp now = TimeStamp::Now();
++  if (mFallbackDue.IsNull()) {
++    mFallbackDue = now;
++  }
++  if (*lag == TimeDuration::Forever()) {
++    CreateAndStartTimer(aTimer, this, aDelay);
++    return !!aTimer;
++  }
++  mFallbackWaitedForRelay = true;
++  const double left = (mFallbackDue + *lag - now).ToMilliseconds();
++  if (left < 1) {
++    return false;
++  }
++  CreateAndStartTimer(aTimer, this, static_cast<uint32_t>(left));
++  return !!aTimer;
++}
++
+ void nsHttpTransaction::OnHttp3BackupTimer() {
+   LOG(("nsHttpTransaction::OnHttp3BackupTimer [%p]", this));
+   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+   MOZ_ASSERT(mConnInfo->IsHttp3() || mConnInfo->IsHttp3ProxyConnection());
+ 
+   mHttp3BackupTimer = nullptr;
++  if (FallbackWaitsForRelay(
++          mHttp3BackupTimer,
++          StaticPrefs::network_http_http3_backup_timer_delay())) {
++    return;
++  }
+ 
+   if (mConnInfo->IsHttp3ProxyConnection()) {
+     mBackupConnInfo = mConnInfo->CreateConnectUDPFallbackConnInfo();
+@@ -4068,6 +4107,11 @@ void nsHttpTransaction::OnFastFallbackTimer() {
+        mConnected));
+ 
+   mFastFallbackTimer = nullptr;
++  if (FallbackWaitsForRelay(
++          mFastFallbackTimer,
++          StaticPrefs::network_dns_httpssvc_http3_fast_fallback_timeout())) {
++    return;
++  }
+ 
+   MOZ_ASSERT(mHTTPSSVCRecord && mOrigConnInfo);
+   if (!mHTTPSSVCRecord || !mOrigConnInfo) {
+diff --git a/netwerk/protocol/http/nsHttpTransaction.h b/netwerk/protocol/http/nsHttpTransaction.h
+index 675ebefd97..1b91d6c36f 100644
+--- a/netwerk/protocol/http/nsHttpTransaction.h
++++ b/netwerk/protocol/http/nsHttpTransaction.h
+@@ -644,6 +644,8 @@ class nsHttpTransaction final : public nsAHttpTransaction,
+   // Starts the timer that opens a TCP backup connection if this HTTP/3
+   // transaction is not connected in time. Only the first call has an effect.
+   void MaybeStartHttp3BackupTimer();
++  // Camoufox: see the definition.
++  bool FallbackWaitsForRelay(nsCOMPtr<nsITimer>& aTimer, uint32_t aDelay);
+ 
+  private:
+   TransactionObserverFunc mTransactionObserver;
+@@ -692,6 +694,8 @@ class nsHttpTransaction final : public nsAHttpTransaction,
+   nsCOMPtr<nsITimer> mFastFallbackTimer;
+   nsCOMPtr<nsITimer> mHttp3BackupTimer;
+   nsCOMPtr<nsITimer> mHttp3TunnelFallbackTimer;
++  TimeStamp mFallbackDue;
++  bool mFallbackWaitedForRelay = false;
+   RefPtr<nsHttpConnectionInfo> mBackupConnInfo;
+   // The value of mConnInfo when this transaction was activated.
+   // Describes the server that the associated connection is connected to.
 diff --git a/netwerk/socket/neqo_glue/NeqoHttp3Conn.h b/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
-index 262d273b38..0c579e2857 100644
+index 9ab8ba7234..a296794a47 100644
 --- a/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
 +++ b/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
 @@ -51,6 +51,14 @@ class NeqoHttp3Conn final {
@@ -1004,7 +1203,7 @@ index 262d273b38..0c579e2857 100644
      return neqo_http3conn_tls_info(this, aSecInfo);
    }
 diff --git a/netwerk/socket/neqo_glue/src/lib.rs b/netwerk/socket/neqo_glue/src/lib.rs
-index 1a83cf7735..6d6f75ed9e 100644
+index 60be32d98a..11dd6880c3 100644
 --- a/netwerk/socket/neqo_glue/src/lib.rs
 +++ b/netwerk/socket/neqo_glue/src/lib.rs
 @@ -63,6 +63,8 @@ use winapi::{
