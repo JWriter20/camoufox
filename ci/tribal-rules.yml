@@ -1087,7 +1087,7 @@ rules:
       - "stock Firefox 159 on its QUIC socket: HttpConnectionUDP sets PR_SockOpt_DontFrag on IPv4 (IP_PMTUDISC_DO on Linux, IP_DONTFRAG on macOS, IP_DONTFRAGMENT on Windows), then quinn-udp 0.5.15 sets IP_MTU_DISCOVER=IP_PMTUDISC_PROBE and, on IPv6, IPV6_MTU_DISCOVER=IPV6_PMTUDISC_PROBE and IPV6_DONTFRAG on Linux, IP_DONTFRAG and IPV6_DONTFRAG on macOS, IP_DONTFRAGMENT and IPV6_DONTFRAG on Windows; network.http.http3.pmtud is false, so a datagram is 1252 bytes to an IPv4 peer and 1232 to an IPv6 one"
       - "the packet to the relay: payload plus a 10-byte (IPv4 peer) or 22-byte (IPv6 peer) header plus 28 (IPv4 relay) or 48 (IPv6 relay) bytes of IP and UDP: 1290, 1310, 1282 or 1302 bytes, all over 1280. A name is never the destination of a datagram: a proxy given names is sent no QUIC"
       - "2026-11-21, a relay reached over a 1280-byte link, www.cloudflare.com/cdn-cgi/trace with proxy_dns='doh': http=http/2 on all four requests with don't-fragment kept, six sendmsg calls failing EMSGSIZE; the same with don't-fragment cleared and sends still segmented (UDP_SEGMENT 1262); http=http/3 from the second request with one datagram per send"
-      - "http3-socks5-udp.py, the relay in a container behind a docker network of MTU 1280: 13 of 14 checks pass before the change and the narrow-link one fails with every answer over TCP; the origin's first flight after it is 1252, 1252, as with no proxy"
+      - "http3-socks5-udp.py, the relay in a container behind a docker network of MTU 1280: 13 of 14 checks pass before the change and the narrow-link one fails with every answer over TCP; after it the first datagrams the origin receives are 1252, 1252, 1252 and 285 bytes, and with no proxy 1252, 1252, 1252 and 284 (the guard compares the first two)"
     rationale: >-
       Shrinking the datagram to fit the hop would change what the server
       receives, which is the one thing the relay must not change. Keeping
@@ -1118,3 +1118,24 @@ rules:
       elsewhere. proxy_dns='exit' keeps the old behaviour for a proxy that
       cannot carry DoH (docs/proxy-dns.md). A context's own proxy stays on
       'exit': the browser has one DoH client, on the launch proxy.
+
+  - id: speculative-connects-go-through-the-proxy
+    title: Behind a SOCKS proxy a speculative connection is opened, through the proxy
+    check: manual   # browser/tests/playwright/patches/link-preconnect-through-proxy.py
+    evidence:
+      - "Firefox 159, netwerk/base/nsIOService.cpp: IOServiceProxyCallback::OnProxyAvailable returns before the handler is called for any proxy type but 'direct' ('proxies dont do speculative connect'), and nsHttpHandler::SpeculativeConnectInternal builds its connection info with no proxy, so the gate is also what keeps that connection from going around the proxy"
+      - "every trigger goes through that one function: link rel=preconnect and a link's mousedown from a content process (NeckoParent::RecvSpeculativeConnect), a 103 Early Hints preconnect, the urlbar, and Juggler's own at a top-level navigation (PageHandler.js)"
+      - "2026-11-21, a page with link rel=preconnect to an https origin never otherwise used, the origin recording arrivals: stock Firefox 159 with no proxy opened the connection and sent a ClientHello in 5 of 6 launches; Camoufox behind a SOCKS5 proxy in 0 of 21 (9 with proxy_dns='doh', 12 with 'exit')"
+      - "the same page after the change: 9 of 9 launches with proxy_dns='doh' and 12 of 12 with 'exit', stock 6 of 6, the ClientHello's JA4 equal to stock's in every one, every connection arriving from the proxy's exit, and no name asked of this host's resolver"
+      - "nsSocketTransport::InitiateSocket refuses a speculative connection whose address is local (bug 853423); for a proxy given the name that address is the any address, which counts as local, so the refusal has to look at the host instead"
+      - "behind an HTTP proxy the speculative connection carries no request, so it would stop at the proxy with no CONNECT sent (measured: a TCP connection to the proxy and nothing after it)"
+    rationale: >-
+      Any page can put a preconnect link to an origin it controls and see
+      whether the connection arrives, so a browser that never opens one is
+      marked as proxied by one line of HTML. A SOCKS proxy carries a
+      connection as the network does, so the speculative one is opened as
+      stock opens it, with the connection info the request's channel will
+      build, proxy included: it cannot leave around the proxy, and the request
+      finds it. No HTTPS record is asked for a name the proxy resolves. An
+      HTTP proxy is left as Firefox has it, because nothing would reach the
+      origin (docs/proxy-dns.md).

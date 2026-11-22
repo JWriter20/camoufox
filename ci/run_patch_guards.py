@@ -137,6 +137,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "juggler-initial-blank-context",
         "juggler-input-gate",
         "juggler-viewport-window",
+        "link-preconnect-through-proxy",
         "media-track-capabilities-identity",
         "menulist-keyboard-claimed-os",
         "mousemove-same-point-claimed-os",

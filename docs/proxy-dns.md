@@ -18,6 +18,7 @@ what the proxy has to do for it to hold.
 | WebRTC UDP | over UDP ASSOCIATE | over UDP ASSOCIATE | none |
 | TLS early data, connection coalescing | as with no proxy | off, as Firefox has them behind any proxy | off |
 | `domainLookupStart`/`End` in Resource Timing | a lookup's, as with no proxy | equal: no lookup happened | equal |
+| Speculative connections (`<link rel=preconnect>`) | opened, through the proxy | opened, through the proxy | none, as Firefox has behind any proxy |
 
 `proxy_dns` is a launch option of both packages. It applies to the launch
 proxy. A context given its own proxy (`NewContext(proxy=...)`,
@@ -62,6 +63,23 @@ authoritative server sees is the exit's. The cost is the right-hand side of
 the table: no HTTPS records, so no real ECH and no HTTP/3, and Resource Timing
 shows no lookup. Use it for a proxy that cannot carry the DoH request, or when
 the exit's own resolver matters more than the rest.
+
+## Speculative connections
+
+Firefox opens a connection ahead of the request for a `<link rel=preconnect>`,
+for a navigation, and for a link as it is pressed. The origin sees that connection arrive, and its TLS handshake, whether or not a
+request follows. Firefox opens none of them once a proxy is set, so a page
+with one preconnect link to its own origin could tell a proxied browser from
+an unproxied one.
+
+Behind a SOCKS proxy Camoufox opens them, through the proxy the request will
+use (`zz-proxy-speculative-connect.patch`). In `doh` mode the name is resolved
+by DoH and its HTTPS record is used, as for any connection. In `exit` mode the
+proxy is sent the name and no record is asked. As in stock, no speculative
+connection is opened to an address the browser knows to be private.
+
+Behind an HTTP proxy there are still none: a speculative connection carries no
+request, so it would reach the proxy and stop there.
 
 ## QUIC through UDP ASSOCIATE
 
@@ -121,6 +139,7 @@ For the claim "a Firefox at the exit" to hold, a SOCKS5 proxy has to:
 - The DoH requests travel over TCP. Stock tries HTTP/3 first with Cloudflare;
   only the DoH provider can tell.
 - In `exit` mode and behind an HTTP proxy, the table's right-hand columns.
+- Behind an HTTP proxy, a `<link rel=preconnect>` opens no connection.
 - The first hop is 10 or 22 bytes larger per datagram than what the server
   receives, and is fragmented on a link too small for it. A network between
   the browser and the proxy that drops IP fragments loses those datagrams, and
