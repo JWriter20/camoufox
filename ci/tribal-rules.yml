@@ -1119,6 +1119,26 @@ rules:
       cannot carry DoH (docs/proxy-dns.md). A context's own proxy stays on
       'exit': the browser has one DoH client, on the launch proxy.
 
+  - id: doh-mode-keeps-firefox-resolver-timeouts
+    title: proxy_dns='doh' keeps Firefox's DoH-only timeouts, and its HTTP/3 fallback timers
+    check: manual   # measured with a local SOCKS5 relay and DoH server that delay or refuse
+    evidence:
+      - "netwerk/dns/TRRService.cpp, GetRequestTimeout (Firefox 159): with network.trr.mode 3 a request waits network.trr.request_timeout_mode_trronly_ms (30000), not the 1500 of network.trr.request_timeout_ms; mode 3 also turns confirmation off (CONFIRM_DISABLED) and never blocklists a name"
+      - "2026-11-22, Firefox 159 build behind a local SOCKS5 relay: the CONNECT to the DoH host granted 8 s late, the page loads after 8.1 s; each DoH answer 8 s late, it loads after 16.1 s; the CONNECT refused with reply 2, the navigation fails with NS_ERROR_UNKNOWN_HOST at once (8 refused CONNECTs), and one started after the relay grants it loads"
+      - "same day, 60 new contexts per case, 30 ms and 60 ms each way between browser and relay, against the same delay to the origin with no proxy: with an HTTPS record (alpn=h3) the navigation was HTTP/3 in 60 of 60 in all four cases; with Alt-Svc alone the first HTTP/3 answer was the second fetch in 59 or 60 of 60 in all four"
+      - "same relay granting UDP ASSOCIATE 40, 120 and 300 ms later than a CONNECT: the navigation was HTTP/3 in 20 of 20 each time"
+    rationale: >-
+      A page that fails with NS_ERROR_UNKNOWN_HOST behind a proxy looks like a
+      DoH timeout that is too short. It is not: DoH alone waits 30 seconds,
+      longer than a system resolver, and the fast failure is a proxy refusing
+      the CONNECT to the DoH host, which no timeout or retry in the browser
+      answers. The HTTP/3 race is not shifted by the relay either: the
+      association costs the round trips a CONNECT costs, so QUIC keeps the
+      lead it has with no proxy. Leave network.trr.* timeouts and
+      network.http.http3.backup_timer_delay and
+      network.dns.httpssvc.http3_fast_fallback_timeout at Firefox's values
+      (docs/proxy-dns.md).
+
   - id: speculative-connects-go-through-the-proxy
     title: Behind a SOCKS proxy a speculative connection is opened, through the proxy
     check: manual   # browser/tests/playwright/patches/link-preconnect-through-proxy.py
