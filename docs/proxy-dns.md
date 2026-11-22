@@ -51,6 +51,16 @@ providers). Elsewhere stock asks the network's own resolver, and a Firefox
 user there who turned DoH on is the population this matches. Pass your own
 `network.trr.uri` in `firefox_user_prefs` to use another resolver.
 
+The resolver's timeouts are the ones Firefox has with DoH alone, and the
+launcher changes none of them. A lookup waits up to 30 seconds for its answer
+(`network.trr.request_timeout_mode_trronly_ms`), longer than a system resolver
+waits, so a slow proxy delays a page rather than failing it. A proxy that
+refuses the CONNECT to the DoH host leaves no resolver at all: every
+navigation fails at once with `NS_ERROR_UNKNOWN_HOST`, and lookups succeed
+again once the proxy accepts it. That error on every page means the proxy is
+refusing or cannot reach the DoH host, not that the name is wrong
+([`doh-mode-keeps-firefox-resolver-timeouts`](../ci/tribal-rules.yml)).
+
 The browser now picks the address family, so it has to know whether the exit
 has IPv6. When the launch looks the exit up (`geoip`), it also asks an
 IPv6-only host through the proxy, and sets `network:ipv4Only` when that fails.
