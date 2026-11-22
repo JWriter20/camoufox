@@ -605,17 +605,18 @@ index 6c3d72d113..0b02b1c5a9 100644
                 "RealJoinConnection should not be called when using proxy");
      return false;
 diff --git a/netwerk/protocol/http/Http3Session.h b/netwerk/protocol/http/Http3Session.h
-index 430e0cb9d0..b65c2620a0 100644
+index 430e0cb9d0..9145ab1571 100644
 --- a/netwerk/protocol/http/Http3Session.h
 +++ b/netwerk/protocol/http/Http3Session.h
-@@ -340,6 +340,13 @@ class Http3Session final : public Http3SessionBase,
+@@ -340,6 +340,14 @@ class Http3Session final : public Http3SessionBase,
        PRIntervalTime aRtt, bool aIsExtendedCONNECT);
    void SetIsInTunnel() { mIsInTunnel = true; }
  
 +  // Camoufox: see HttpConnectionUDP::mSocks5.
 +  nsresult Socks5() { return mHttp3Connection->Socks5(); }
-+  nsresult Socks5Relay(const NetAddr& aRelay, int64_t aSocket) {
-+    return mHttp3Connection->Socks5Relay(aRelay, aSocket);
++  nsresult Socks5Relay(const NetAddr& aRelay, int64_t aSocket,
++                       bool aReplaced) {
++    return mHttp3Connection->Socks5Relay(aRelay, aSocket, aReplaced);
 +  }
 +  void Socks5Failed() { mHttp3Connection->Socks5Failed(); }
 +
@@ -637,7 +638,7 @@ index 65b731a68c..ef81d9dc7b 100644
                   : true;
    // TODO: When mUpgradeProtocolCallback is not null, we should allow HTTP/3 for
 diff --git a/netwerk/protocol/http/HttpConnectionUDP.cpp b/netwerk/protocol/http/HttpConnectionUDP.cpp
-index c662beac36..65d79cbe16 100644
+index c662beac36..52aac2473e 100644
 --- a/netwerk/protocol/http/HttpConnectionUDP.cpp
 +++ b/netwerk/protocol/http/HttpConnectionUDP.cpp
 @@ -20,6 +20,7 @@
@@ -659,7 +660,7 @@ index c662beac36..65d79cbe16 100644
    MOZ_ASSERT(mQueuedHttpConnectTransaction.IsEmpty(),
               "Should not have any queued transactions");
    MOZ_ASSERT(mQueuedConnectUdpTransaction.IsEmpty(),
-@@ -299,6 +304,78 @@ nsresult HttpConnectionUDP::InitWithSocket(nsHttpConnectionInfo* info,
+@@ -299,6 +304,77 @@ nsresult HttpConnectionUDP::InitWithSocket(nsHttpConnectionInfo* info,
    return InitCommon(aSocket, aPeerAddr, callbacks, caps, true);
  }
  
@@ -701,7 +702,6 @@ index c662beac36..65d79cbe16 100644
 +  NetAddr peer;
 +  mPeerAddr->GetNetAddr(&peer);
 +  nsCOMPtr<nsIUDPSocket> replaced;
-+  int64_t fd = -1;
 +  if (aRelay.raw.family != peer.raw.family) {
 +    nsresult rv;
 +    nsCOMPtr<nsIUDPSocket> socket =
@@ -716,9 +716,9 @@ index c662beac36..65d79cbe16 100644
 +    }
 +    replaced = std::move(mSocket);
 +    mSocket = socket;
-+    fd = mSocket->GetFileDescriptor();
 +  }
-+  if (NS_FAILED(mHttp3Session->Socks5Relay(aRelay, fd))) {
++  if (NS_FAILED(mHttp3Session->Socks5Relay(
++          aRelay, mSocket->GetFileDescriptor(), !!replaced))) {
 +    return OnRelayFailed();
 +  }
 +  if (replaced) {
@@ -738,7 +738,7 @@ index c662beac36..65d79cbe16 100644
  nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
                                         const NetAddr& aPeerAddr,
                                         nsIInterfaceRequestor* callbacks,
-@@ -314,32 +391,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -314,32 +390,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
      mSocket->MarkAsTRRServiceChannel();
    }
  
@@ -772,7 +772,7 @@ index c662beac36..65d79cbe16 100644
    // get the resulting socket address.
    rv = mSocket->GetLocalAddr(getter_AddRefs(mSelfAddr));
    if (NS_FAILED(rv)) {
-@@ -389,6 +446,15 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -389,6 +445,15 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
    mIsInTunnel = isInTunnel;
    if (mIsInTunnel) {
      mHttp3Session->SetIsInTunnel();
@@ -788,7 +788,7 @@ index c662beac36..65d79cbe16 100644
    }
  
    ChangeConnectionState(ConnectionState::INITED);
-@@ -403,6 +469,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -403,6 +468,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
      return rv;
    }
  
@@ -801,7 +801,7 @@ index c662beac36..65d79cbe16 100644
    return NS_OK;
  }
  
-@@ -416,7 +488,7 @@ nsresult HttpConnectionUDP::Activate(nsAHttpTransaction* trans, uint32_t caps,
+@@ -416,7 +487,7 @@ nsresult HttpConnectionUDP::Activate(nsAHttpTransaction* trans, uint32_t caps,
    nsHttpTransaction* hTrans = trans->QueryHttpTransaction();
    nsHttpConnectionInfo* transCI = trans->ConnectionInfo();
    NetAddr peerAddr;
@@ -810,7 +810,7 @@ index c662beac36..65d79cbe16 100644
        NS_SUCCEEDED(GetPeerAddr(&peerAddr))) {
      // set the targetIpAddressSpace in the transaction object, this might be
      // needed by the channel for determining the kind of LNA permissions and/or
-@@ -697,6 +769,9 @@ void HttpConnectionUDP::Close(nsresult reason, bool aIsShutdown) {
+@@ -697,6 +768,9 @@ void HttpConnectionUDP::Close(nsresult reason, bool aIsShutdown) {
    if (socket) {
      socket->Close();
    }
@@ -820,7 +820,7 @@ index c662beac36..65d79cbe16 100644
    if (mHttp3Session) {
      mHttp3Session->SetCleanShutdown(true);
      mHttp3Session->Close(reason);
-@@ -1265,6 +1340,10 @@ NS_IMETHODIMP HttpConnectionUDP::OnPacketReceived(nsIUDPSocket* aSocket) {
+@@ -1265,6 +1339,10 @@ NS_IMETHODIMP HttpConnectionUDP::OnPacketReceived(nsIUDPSocket* aSocket) {
  
  NS_IMETHODIMP HttpConnectionUDP::OnStopListening(nsIUDPSocket* aSocket,
                                                   nsresult aStatus) {
@@ -974,17 +974,18 @@ index 2c272acae9..b5cd8b67ed 100644
    bool UsingHttpProxy() const { return mUsingHttpProxy || mUsingHttpsProxy; }
  
 diff --git a/netwerk/socket/neqo_glue/NeqoHttp3Conn.h b/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
-index 262d273b38..9f36c019a4 100644
+index 262d273b38..0c579e2857 100644
 --- a/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
 +++ b/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
-@@ -51,6 +51,13 @@ class NeqoHttp3Conn final {
+@@ -51,6 +51,14 @@ class NeqoHttp3Conn final {
  
    void Close(uint64_t aError) { neqo_http3conn_close(this, aError); }
  
 +  // Camoufox: the connection's datagrams go through a SOCKS5 UDP relay.
 +  nsresult Socks5() { return neqo_http3conn_socks5(this); }
-+  nsresult Socks5Relay(const NetAddr& aRelay, int64_t aSocket) {
-+    return neqo_http3conn_socks5_relay(this, &aRelay, aSocket);
++  nsresult Socks5Relay(const NetAddr& aRelay, int64_t aSocket,
++                       bool aReplaced) {
++    return neqo_http3conn_socks5_relay(this, &aRelay, aSocket, aReplaced);
 +  }
 +  void Socks5Failed() { neqo_http3conn_socks5_failed(this); }
 +
@@ -992,7 +993,7 @@ index 262d273b38..9f36c019a4 100644
      return neqo_http3conn_tls_info(this, aSecInfo);
    }
 diff --git a/netwerk/socket/neqo_glue/src/lib.rs b/netwerk/socket/neqo_glue/src/lib.rs
-index 1a83cf7735..15bdb61814 100644
+index 1a83cf7735..6d6f75ed9e 100644
 --- a/netwerk/socket/neqo_glue/src/lib.rs
 +++ b/netwerk/socket/neqo_glue/src/lib.rs
 @@ -63,6 +63,8 @@ use winapi::{
@@ -1200,7 +1201,7 @@ index 1a83cf7735..15bdb61814 100644
                              let single = datagram::Batch::from(single.to_owned());
                              if let Err(e) = socket.send(&single) {
                                  qwarn!("failed to resend datagram without GSO: {e}");
-@@ -1518,6 +1554,55 @@ pub extern "C" fn neqo_http3conn_process_output_and_send(
+@@ -1518,6 +1554,60 @@ pub extern "C" fn neqo_http3conn_process_output_and_send(
      }
  }
  
@@ -1215,9 +1216,9 @@ index 1a83cf7735..15bdb61814 100644
 +    NS_OK
 +}
 +
-+/// Camoufox: the UDP ASSOCIATE was granted. `socket` is the socket that
-+/// reaches the relay when that is not the one the connection was made with
-+/// (the relay's address family differs from the peer's), else -1.
++/// Camoufox: the UDP ASSOCIATE was granted. `socket` reaches the relay, and
++/// `replaced` says it is not the one the connection was made with (the relay's
++/// address family differs from the peer's).
 +///
 +/// # Safety
 +///
@@ -1227,16 +1228,21 @@ index 1a83cf7735..15bdb61814 100644
 +    conn: &mut NeqoHttp3Conn,
 +    relay: *const NetAddr,
 +    socket: i64,
++    replaced: bool,
 +) -> nsresult {
 +    let relay = match netaddr_to_socket_addr(relay) {
 +        Ok(relay) => relay,
 +        Err(e) => return e,
 +    };
-+    if socket != -1 {
++    if replaced {
 +        match borrow_socket(socket) {
 +            Ok(s) => conn.socket = Some(s),
 +            Err(e) => return e,
 +        }
++    }
++    // After the socket is borrowed: borrowing forbids fragmenting.
++    if let Err(e) = socks5::allow_fragmenting(socket, relay.is_ipv4()) {
++        qwarn!("the socket to the SOCKS5 relay keeps don't-fragment: {e}");
 +    }
 +    let Some(socks5) = conn.socks5.as_mut() else {
 +        return NS_ERROR_UNEXPECTED;
@@ -1258,10 +1264,10 @@ index 1a83cf7735..15bdb61814 100644
      conn.conn.close(Instant::now(), error, "");
 diff --git a/netwerk/socket/neqo_glue/src/socks5.rs b/netwerk/socket/neqo_glue/src/socks5.rs
 new file mode 100644
-index 0000000000..454e7b45a7
+index 0000000000..682969c355
 --- /dev/null
 +++ b/netwerk/socket/neqo_glue/src/socks5.rs
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,190 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -1274,16 +1280,18 @@ index 0000000000..454e7b45a7
 +//! direct connection uses.
 +
 +use std::{
++    io,
 +    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 +    num::NonZeroUsize,
 +};
 +
++use libc::c_int;
 +use neqo_common::datagram;
 +
-+/// The most segments a batch can have and still be one segmented send (64 KiB)
-+/// with a 22-byte header on each. A segment is 1500 bytes at most: path MTU
-+/// discovery is off (`network.http.http3.pmtud`).
-+pub const MAX_SEGMENTS: usize = 43;
++/// One datagram to a send: the kernel refuses a segmented send whose segments
++/// do not fit the link, where a single datagram is fragmented
++/// (`allow_fragmenting`).
++pub const MAX_SEGMENTS: usize = 1;
 +
 +const ATYP_IPV4: u8 = 1;
 +const ATYP_IPV6: u8 = 4;
@@ -1388,6 +1396,62 @@ index 0000000000..454e7b45a7
 +        }
 +        Some((SocketAddr::new(ip, u16::from_be_bytes(port)), payload))
 +    }
++}
++
++/// Lets a datagram to the relay be fragmented, undoing what the QUIC socket
++/// is set up with. The peer must receive the datagram a direct connection
++/// sends it, so it is not made smaller; with the relay header on it, it no
++/// longer fits a link that carries it bare (1252 bytes of QUIC is a 1280-byte
++/// IPv4 packet). Only the hop to the relay may fragment: the relay sends on a
++/// whole datagram.
++pub fn allow_fragmenting(socket: i64, ipv4: bool) -> io::Result<()> {
++    #[cfg(any(target_os = "linux", target_os = "android"))]
++    let options: &[(c_int, c_int, c_int)] = if ipv4 {
++        &[(libc::IPPROTO_IP, libc::IP_MTU_DISCOVER, libc::IP_PMTUDISC_DONT)]
++    } else {
++        &[
++            (libc::IPPROTO_IPV6, libc::IPV6_MTU_DISCOVER, libc::IPV6_PMTUDISC_WANT),
++            (libc::IPPROTO_IPV6, libc::IPV6_DONTFRAG, 0),
++        ]
++    };
++    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
++    let options: &[(c_int, c_int, c_int)] = if ipv4 {
++        &[(libc::IPPROTO_IP, libc::IP_DONTFRAG, 0)]
++    } else {
++        &[(libc::IPPROTO_IPV6, libc::IPV6_DONTFRAG, 0)]
++    };
++    // Winsock's IP_DONTFRAGMENT and IPV6_DONTFRAG are both 14.
++    #[cfg(windows)]
++    let options: &[(c_int, c_int, c_int)] = if ipv4 { &[(0, 14, 0)] } else { &[(41, 14, 0)] };
++
++    for (level, name, value) in options {
++        #[cfg(unix)]
++        // SAFETY: `value` is a c_int that outlives the call.
++        let failed = unsafe {
++            libc::setsockopt(
++                socket as c_int,
++                *level,
++                *name,
++                std::ptr::from_ref(value).cast(),
++                size_of::<c_int>() as libc::socklen_t,
++            )
++        } != 0;
++        #[cfg(windows)]
++        // SAFETY: `value` is a 4-byte integer that outlives the call.
++        let failed = unsafe {
++            winapi::um::winsock2::setsockopt(
++                socket as winapi::um::winsock2::SOCKET,
++                *level,
++                *name,
++                std::ptr::from_ref(value).cast(),
++                size_of::<c_int>() as c_int,
++            )
++        } != 0;
++        if failed {
++            return Err(io::Error::last_os_error());
++        }
++    }
++    Ok(())
 +}
 +
 +/// A dual-stack socket reports an IPv4 sender as an IPv4-mapped address.

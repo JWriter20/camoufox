@@ -84,6 +84,15 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
   datagram sizes, ECN marks and batching are the ones of a direct connection.
   The relay header (10 bytes for IPv4, 22 for IPv6) is on the hop to the proxy
   only.
+- **The hop to the relay may fragment; the datagram is never made smaller.**
+  Firefox forbids fragmenting on its QUIC socket and sends 1252 bytes to an
+  IPv4 peer, 1232 to an IPv6 one. With the header on, and the relay's own IP
+  and UDP headers, that is a packet of 1282 to 1310 bytes, which a 1280-byte
+  link (a VPN or a tunnel to the proxy) does not carry. So the socket that
+  reaches a relay allows fragmenting, and sends each datagram on its own: a
+  segmented send cannot fragment. The relay reassembles and sends the peer the
+  datagram a direct browser sends
+  ([`relay-hop-may-fragment`](../ci/tribal-rules.yml)).
 - **SOCKS5 only.** SOCKS4 and HTTP proxies carry no UDP, and are sent none.
 
 ## What the proxy must do
@@ -95,8 +104,11 @@ For the claim "a Firefox at the exit" to hold, a SOCKS5 proxy has to:
 2. Send an association's datagrams from the address its CONNECTs exit from.
 3. Give each association an exit port of its own and keep it for the
    association's life.
-4. Relay datagrams of at least 1500 bytes whole. A fragmented or truncated one
-   is a lost one.
+4. Relay datagrams of at least 1500 bytes whole, in both directions, and send
+   each to its destination as one unfragmented packet with don't-fragment set,
+   as the browser's own socket would. On the hop to the client, accept
+   fragments and fragment what does not fit: that hop carries the relay header
+   too.
 5. Copy the ECN bits of each datagram, in both directions. QUIC marks ECT(0)
    and validates the path; a relay that clears the bits makes every connection
    look like one on an ECN-bleaching path.
@@ -109,7 +121,10 @@ For the claim "a Firefox at the exit" to hold, a SOCKS5 proxy has to:
   only the DoH provider can tell.
 - In `exit` mode and behind an HTTP proxy, the table's right-hand columns.
 - The first hop is 10 or 22 bytes larger per datagram than what the server
-  receives. A link to the proxy with an MTU under 1302 bytes drops full-size
-  QUIC datagrams, and the browser falls back to TCP.
+  receives, and is fragmented on a link too small for it. A network between
+  the browser and the proxy that drops IP fragments loses those datagrams, and
+  the browser falls back to TCP.
+- Datagrams to a relay are sent one per system call. Nothing past the browser's
+  own machine sees that.
 - Path MTU discovery is off in Firefox 159 (`network.http.http3.pmtud`). If
   Mozilla turns it on, probes would measure the path through the relay.
