@@ -70,3 +70,27 @@ def test_exit_ipv6_is_not_asked_when_already_known(monkeypatch):
     for known in ({"webrtc:ipv6": "2001:db8::7"}, {"network:ipv4Only": False}):
         assert _apply(None, SOCKS, exit_looked_up=True, config=dict(known))[0] == known
     assert _apply("exit", SOCKS, exit_looked_up=True)[0] == {}
+
+
+OPTIMISTIC = {"network.proxy.socks5_optimistic_data": True}
+
+
+@pytest.mark.parametrize("proxy", [SOCKS, None])
+def test_optimistic_data_sets_the_pref(proxy):
+    # With no launch proxy it is for a context's own SOCKS5 proxy.
+    prefs = {}
+    utils.apply_proxy_optimistic_data(True, proxy, prefs)
+    assert prefs == OPTIMISTIC
+
+
+@pytest.mark.parametrize("enabled", [None, False])
+def test_optimistic_data_is_off_unless_asked_for(enabled):
+    prefs = {}
+    utils.apply_proxy_optimistic_data(enabled, SOCKS, prefs)
+    assert prefs == {}
+
+
+@pytest.mark.parametrize("server", ["http://proxy.example:8080", "socks4://proxy.example:1080"])
+def test_optimistic_data_needs_a_socks5_proxy(server):
+    with pytest.raises(ValueError, match="socks5"):
+        utils.apply_proxy_optimistic_data(True, {"server": server}, {})

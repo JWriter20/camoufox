@@ -1,0 +1,171 @@
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index 35cf157961..cf83cce670 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -16268,6 +16268,14 @@
+   value: true
+   mirror: always
+ 
++# Whether a TLS ClientHello is sent behind the SOCKS5 CONNECT request, before
++# the proxy's reply. Only for a proxy that forwards what it received before it
++# connected: one that discards it leaves every TLS handshake unanswered.
++- name: network.proxy.socks5_optimistic_data
++  type: RelaxedAtomicBool
++  value: false
++  mirror: always
++
+ # Whether the SOCKS4 proxy should be in charge of DNS resolution. Making it a
+ # SOCKS4a proxy.
+ - name: network.proxy.socks_remote_dns
+diff --git a/netwerk/base/nsSocketTransport2.cpp b/netwerk/base/nsSocketTransport2.cpp
+index fe57ec7fe5..25f4c49ba5 100644
+--- a/netwerk/base/nsSocketTransport2.cpp
++++ b/netwerk/base/nsSocketTransport2.cpp
+@@ -1171,6 +1171,14 @@ nsresult nsSocketTransport::BuildSocket(PRFileDesc*& fd, bool& proxyTransparent,
+       nsSocketProviderService::GetOrCreate();
+   nsCOMPtr<nsIProxyInfo> proxyInfo = mProxyInfo;
+ 
++  // A TLS layer's first write is its ClientHello, which waits for an answer
++  // whatever the proxy does with it. Nothing else is sent ahead of the reply.
++  uint32_t socksFlags = 0;
++  if (StaticPrefs::network_proxy_socks5_optimistic_data() &&
++      mTypes[0].EqualsLiteral("socks") && mTypes.Contains("ssl"_ns)) {
++    socksFlags = nsISocketProvider::SOCKS_OPTIMISTIC_DATA;
++  }
++
+   uint32_t i;
+   for (i = 0; i < mTypes.Length(); ++i) {
+     nsCOMPtr<nsISocketProvider> provider;
+@@ -1210,7 +1218,7 @@ nsresult nsSocketTransport::BuildSocket(PRFileDesc*& fd, bool& proxyTransparent,
+           mNetAddr.raw.family,
+           mHttpsProxy ? mProxyHost.get() : socketProviderHost,
+           mHttpsProxy ? mProxyPort : socketProviderPort, proxyInfo,
+-          mOriginAttributes, controlFlags, mTlsFlags, &fd,
++          mOriginAttributes, controlFlags | socksFlags, mTlsFlags, &fd,
+           getter_AddRefs(tlsSocketControl));
+ 
+       if (NS_SUCCEEDED(rv) && !fd) {
+diff --git a/netwerk/socket/nsISocketProvider.idl b/netwerk/socket/nsISocketProvider.idl
+index debb332c66..e229f47873 100644
+--- a/netwerk/socket/nsISocketProvider.idl
++++ b/netwerk/socket/nsISocketProvider.idl
+@@ -141,4 +141,12 @@ interface nsISocketProvider : nsISupports
+      * set only when DoH is used via the TRR.
+      */
+     const unsigned long USED_PRIVATE_DNS = (1 << 12);
++
++    /**
++     * For a SOCKS5 socket: report the connection made once the CONNECT
++     * request is sent, so that what the layer above writes first travels
++     * behind the request instead of waiting for the proxy's reply. Set only
++     * when that is a TLS ClientHello, and the proxy is known to forward it.
++     */
++    const unsigned long SOCKS_OPTIMISTIC_DATA = (1 << 13);
+ };
+diff --git a/netwerk/socket/nsSOCKSIOLayer.cpp b/netwerk/socket/nsSOCKSIOLayer.cpp
+index e169d1e4ff..a466a4b03c 100644
+--- a/netwerk/socket/nsSOCKSIOLayer.cpp
++++ b/netwerk/socket/nsSOCKSIOLayer.cpp
+@@ -73,6 +73,13 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
+   PRStatus DoHandshake(PRFileDesc* fd, int16_t oflags = -1);
+   int16_t GetPollFlags() const;
+   bool IsConnected() const { return mState == SOCKS_CONNECTED; }
++  // With optimistic data, the CONNECT request is sent and the layer above may
++  // write behind it. The proxy's reply is read when that layer first reads.
++  bool AwaitsReply() const {
++    return mOptimisticData && (mState == SOCKS5_READ_CONNECT_RESPONSE_TOP ||
++                               mState == SOCKS5_READ_CONNECT_RESPONSE_BOTTOM);
++  }
++  bool CarriesData() const { return IsConnected() || AwaitsReply(); }
+   bool HasPendingError() const { return mPendingError != 0; }
+   void ForgetFD() { mFD = nullptr; }
+   void SetNamedPipeFD(PRFileDesc* fd) { mFD = fd; }
+@@ -202,6 +209,7 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
+   PRErrorCode mPendingError{0};
+   int32_t mPendingOSError{0};
+   bool mProxyConnectAttempted{false};
++  bool mOptimisticData{false};
+   PRFileDesc* mFD{nullptr};
+ 
+   nsCString mDestinationHost;
+@@ -353,6 +361,10 @@ void nsSOCKSSocketInfo::Init(int32_t version, int32_t family,
+   mFlags = flags;
+   mTlsFlags = tlsFlags;
+   mProxy->GetUsername(mProxyUsername);  // cache
++  // A local proxy's handshake runs in blocking mode on Windows.
++  mOptimisticData = version == 5 &&
++                    (flags & nsISocketProvider::SOCKS_OPTIMISTIC_DATA) &&
++                    !IsLocalProxy();
+ }
+ 
+ NS_IMPL_ISUPPORTS(nsSOCKSSocketInfo, nsIDNSListener)
+@@ -1303,7 +1315,7 @@ static PRStatus nsSOCKSIOLayerConnect(PRFileDesc* fd, const PRNetAddr* addr,
+ 
+   do {
+     status = info->DoHandshake(fd, -1);
+-  } while (status == PR_SUCCESS && !info->IsConnected());
++  } while (status == PR_SUCCESS && !info->CarriesData());
+ 
+   return status;
+ }
+@@ -1316,7 +1328,7 @@ static PRStatus nsSOCKSIOLayerConnectContinue(PRFileDesc* fd, int16_t oflags) {
+ 
+   do {
+     status = info->DoHandshake(fd, oflags);
+-  } while (status == PR_SUCCESS && !info->IsConnected());
++  } while (status == PR_SUCCESS && !info->CarriesData());
+ 
+   return status;
+ }
+@@ -1326,7 +1338,7 @@ static int16_t nsSOCKSIOLayerPoll(PRFileDesc* fd, int16_t in_flags,
+   nsSOCKSSocketInfo* info = (nsSOCKSSocketInfo*)fd->secret;
+   if (info == nullptr) return PR_FAILURE;
+ 
+-  if (!info->IsConnected()) {
++  if (!info->CarriesData()) {
+     // No readiness follows a pending error, so report ready to surface it.
+     if (info->HasPendingError()) {
+       *out_flags = in_flags;
+@@ -1339,6 +1351,33 @@ static int16_t nsSOCKSIOLayerPoll(PRFileDesc* fd, int16_t in_flags,
+   return fd->lower->methods->poll(fd->lower, in_flags, out_flags);
+ }
+ 
++// Reads the proxy's reply to a CONNECT request that data was sent behind. It
++// is the handshake's and never reaches the layer above. A refusal is the error
++// nsSocketTransport reports for one met while connecting.
++static bool ReadAwaitedReply(PRFileDesc* fd) {
++  nsSOCKSSocketInfo* info = (nsSOCKSSocketInfo*)fd->secret;
++  while (info && info->AwaitsReply()) {
++    if (info->DoHandshake(fd->lower) != PR_SUCCESS) {
++      if (PR_GetError() == PR_UNKNOWN_ERROR && PR_GetOSError()) {
++        PR_SetError(PR_GetOSError(), 0);
++      }
++      return false;
++    }
++  }
++  return true;
++}
++
++static int32_t nsSOCKSIOLayerRead(PRFileDesc* fd, void* buf, int32_t amount) {
++  if (!ReadAwaitedReply(fd)) return -1;
++  return fd->lower->methods->read(fd->lower, buf, amount);
++}
++
++static int32_t nsSOCKSIOLayerRecv(PRFileDesc* fd, void* buf, int32_t amount,
++                                  int flags, PRIntervalTime timeout) {
++  if (!ReadAwaitedReply(fd)) return -1;
++  return fd->lower->methods->recv(fd->lower, buf, amount, flags, timeout);
++}
++
+ static PRStatus nsSOCKSIOLayerClose(PRFileDesc* fd) {
+   nsSOCKSSocketInfo* info = (nsSOCKSSocketInfo*)fd->secret;
+   PRDescIdentity id = PR_GetLayersIdentity(fd);
+@@ -1430,6 +1469,8 @@ nsresult nsSOCKSIOLayerAddToSocket(int32_t family, const char* host,
+     nsSOCKSIOLayerMethods.connect = nsSOCKSIOLayerConnect;
+     nsSOCKSIOLayerMethods.connectcontinue = nsSOCKSIOLayerConnectContinue;
+     nsSOCKSIOLayerMethods.poll = nsSOCKSIOLayerPoll;
++    nsSOCKSIOLayerMethods.read = nsSOCKSIOLayerRead;
++    nsSOCKSIOLayerMethods.recv = nsSOCKSIOLayerRecv;
+     nsSOCKSIOLayerMethods.bind = nsSOCKSIOLayerBind;
+     nsSOCKSIOLayerMethods.acceptread = nsSOCKSIOLayerAcceptRead;
+     nsSOCKSIOLayerMethods.getsockname = nsSOCKSIOLayerGetName;

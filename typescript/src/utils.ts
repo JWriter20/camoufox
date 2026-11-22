@@ -1273,6 +1273,25 @@ export async function applyProxyDns(
 }
 
 /**
+ * Send a connection's TLS ClientHello behind its SOCKS5 CONNECT request,
+ * before the proxy's reply. Only for a proxy that forwards what it has
+ * received once it has connected (docs/proxy-dns.md).
+ */
+export function applyProxyOptimisticData(
+	enabled: boolean | undefined | null,
+	proxy: ProxyConfig | undefined | null,
+	firefoxUserPrefs: Record<string, any>,
+): void {
+	if (!enabled) {
+		return;
+	}
+	if (proxy != null && socks5Host(proxy) === null) {
+		throw new ValueError("proxy_optimistic_data needs a socks5:// proxy.");
+	}
+	firefoxUserPrefs["network.proxy.socks5_optimistic_data"] = true;
+}
+
+/**
  * Whether this host has a public IPv6 address that geolocates where the IPv4
  * identity does. Warns when it has one that does not.
  */
@@ -2268,6 +2287,12 @@ export interface LaunchOptions {
 	 * by DoH through the proxy; "exit", the proxy. See docs/proxy-dns.md.
 	 */
 	proxy_dns?: "doh" | "exit";
+	/**
+	 * Send the TLS ClientHello behind the SOCKS5 CONNECT request, before the
+	 * proxy's reply. Only for a proxy that forwards those bytes; behind one
+	 * that discards them every HTTPS connection hangs. See docs/proxy-dns.md.
+	 */
+	proxy_optimistic_data?: boolean;
 	/** Cache previous pages, requests, etc (uses more memory). */
 	enable_cache?: boolean;
 	/** Arguments to pass to the browser. */
@@ -2397,6 +2422,7 @@ async function buildLaunchOptions(
 		firefox_user_prefs,
 		proxy,
 		proxy_dns,
+		proxy_optimistic_data,
 		enable_cache,
 		args,
 		env,
@@ -3209,6 +3235,7 @@ async function buildLaunchOptions(
 		firefox_user_prefs,
 		pyTruthy(geoip),
 	);
+	applyProxyOptimisticData(proxy_optimistic_data, proxy, firefox_user_prefs);
 
 	// After geoip, which decides whether the machine has IPv6 at all.
 	setHostIpv6Default(config, salt);

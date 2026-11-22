@@ -32,6 +32,8 @@ What PASS means:
       has lost its relay;
     * a persistent context, whose launch proxy Playwright also sets on the
       context, is carried the same way;
+    * with proxy_optimistic_data, which sends a TCP connection's ClientHello
+      ahead of the proxy's reply, HTTP/3 is reached through the relay as before;
     * a SOCKS5 proxy given names (a context's own proxy), and an HTTP proxy,
       are sent no QUIC: their requests stay on TCP.
 
@@ -530,6 +532,18 @@ async def main() -> int:
                    persistent_seen.count("h3") >= 2 and {c[0] for c in proxy.connects} == {1}
                    and set(persistent_origin.datagrams) <= proxy.exits(), (persistent_seen, proxy.connects[:2])))
     persistent_origin.close()
+    proxy.close()
+
+    optimistic_origin = await origin()
+    proxy = Socks5Proxy(host)
+    browser = await launch(await proxy.start(), proxy_optimistic_data=True)
+    optimistic_seen = await load(browser, optimistic_origin)
+    await browser.close()
+    checks.append(("with proxy_optimistic_data the origin is reached over TCP, then over HTTP/3 through a relay",
+                   optimistic_seen.count("h3") >= 2 and optimistic_origin.tcp_requests >= 1
+                   and bool(optimistic_origin.datagrams) and set(optimistic_origin.datagrams) <= proxy.exits(),
+                   (optimistic_seen, optimistic_origin.tcp_requests)))
+    optimistic_origin.close()
     proxy.close()
 
     for label, kwargs in (("refuses UDP ASSOCIATE", {"udp": False}),
