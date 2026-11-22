@@ -192,14 +192,20 @@ PROXY_LOOKUP_FAILED = (
 
 
 @lru_cache(maxsize=None)
-def public_ipv6() -> Optional[str]:
+def public_ipv6(proxy: Optional[str] = None) -> Optional[str]:
     """
-    This host's public IPv6 address, or None when it has none it can reach the
-    internet from. The hosts have AAAA records only, so an answer proves the route.
+    This host's public IPv6 address, or the exit's behind `proxy`; None when it
+    has none it can reach the internet from. The hosts have AAAA records only,
+    so an answer proves the route.
     """
     for url in ("https://api6.ipify.org", "https://v6.ident.me"):
         try:
-            resp = requests.get(url, timeout=DIRECT_IP_TIMEOUT, verify=True)
+            resp = requests.get(
+                url,
+                proxies=Proxy.as_requests_proxy(proxy) if proxy else None,
+                timeout=PROXIED_IP_TIMEOUT if proxy else DIRECT_IP_TIMEOUT,
+                verify=True,
+            )
             resp.raise_for_status()
         except requests.RequestException:
             continue

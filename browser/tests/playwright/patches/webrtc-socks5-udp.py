@@ -511,7 +511,8 @@ async def main() -> int:
         opened = await a.evaluate(FINISH, srflx_only(answer))
         messages = (await a.evaluate("mw:received"), await b.evaluate("mw:received")) if opened else (None, None)
 
-    async with AsyncCamoufox(proxy={"server": socks(launched)}, **launch) as browser:
+    # The proxy resolves the page's name, which no DoH resolver knows.
+    async with AsyncCamoufox(proxy={"server": socks(launched)}, proxy_dns="exit", **launch) as browser:
         launch_context = await browser.new_context()
         launch_blank = await launch_context.new_page()
         via_launch_blank = await gather_through(launch_blank)

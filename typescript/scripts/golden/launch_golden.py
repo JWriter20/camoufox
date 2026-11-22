@@ -113,6 +113,8 @@ HOST = {
     'host_gpu': None,
     'display': [1600, 900],
     'public_ip': '81.2.69.160',
+    # Neither this host nor a proxy's exit has IPv6.
+    'public_ipv6': None,
     'locale_uniform': 0.5,
     # The per-launch timing draws (audio output open delay, Windows alias
     # load time): real values move per launch; the golden pins the draw.
@@ -133,6 +135,7 @@ def _display():
 
 utils.largest_display = _display
 utils.public_ip = lambda proxy=None: HOST['public_ip']
+utils.public_ipv6 = lambda proxy=None: HOST['public_ipv6']
 
 _real_salt = utils.identity_salt
 utils.identity_salt = lambda pinned=None: _real_salt(pinned) if pinned is not None else HOST['fresh_salt']

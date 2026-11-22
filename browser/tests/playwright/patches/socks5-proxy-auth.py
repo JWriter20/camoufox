@@ -161,7 +161,8 @@ async def main() -> int:
     async def launch(password: str, contexts=()):
         launch_proxy = {"server": server, "username": USERS[0], "password": password}
         try:
-            async with AsyncCamoufox(proxy=launch_proxy, **options) as browser:
+            # The proxy resolves the page's name, which no DoH resolver knows.
+            async with AsyncCamoufox(proxy=launch_proxy, proxy_dns="exit", **options) as browser:
                 results = {"launch": await load(await browser.new_context())}
                 for name, user, pw in contexts:
                     context = await browser.new_context(

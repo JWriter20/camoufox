@@ -155,6 +155,13 @@ per-context proxy filter then picks that context's proxy. The SOCKS5 control
 connection (`WebrtcUdpAssociation`) runs in the socket process, so the relay
 sees the control connection and the datagrams come from the same address.
 
+`zz-http3-socks5-udp.patch` applies after all three. It moves the association
+`webrtc-socks5-udp.patch` adds (`WebrtcUdpAssociation`) to
+`netwerk/base/Socks5UdpAssociation`, where WebRTC and HTTP/3 both use it, and
+sends each QUIC connection through an association of its own
+([docs/proxy-dns.md](../../docs/proxy-dns.md)). It also edits
+`network-patches.patch`'s neighbourhood in `netwerk/protocol/http/`.
+
 ## Backports
 
 These patches carry upstream Firefox changes that `browser/upstream.sh`'s
