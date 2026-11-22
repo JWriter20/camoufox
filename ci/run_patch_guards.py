@@ -133,6 +133,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "gfx-probes-packaged",
         "headless-claimed-screen",
         "headless-software-webgl",
+        "http3-https-record-socks5",
         "http3-socks5-udp",
         "juggler-initial-blank-context",
         "juggler-input-gate",
