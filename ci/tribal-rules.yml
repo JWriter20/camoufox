@@ -1079,3 +1079,23 @@ rules:
       and compile the patched sources for every other release target, and all
       of them set up the runner through .github/actions/build-host. Linking
       and packaging the cross-compiled targets is all a release does first.
+
+  - id: socks5-proxy-resolves-by-doh
+    title: Behind a SOCKS5 launch proxy the browser resolves names itself, by DoH through the proxy
+    check: manual   # browser/tests/playwright/patches/http3-socks5-udp.py, python/tests/test_proxy_dns.py
+    evidence:
+      - "crypto.cloudflare.com/cdn-cgi/trace, 2026-11-21, one build and one SOCKS5 proxy: sni=encrypted with no proxy and with proxy_dns='doh', sni=plaintext with proxy_dns='exit'"
+      - "www.cloudflare.com/cdn-cgi/trace, same day: http=http/3 with no proxy and with proxy_dns='doh'; a proxy given names is sent no QUIC (http3-socks5-udp.py)"
+      - "MOZ_LOG=nsHostResolver:5 over a proxy_dns='doh' session: no getaddrinfo call, and the one name the proxy was sent is the DoH host"
+      - "Remote Settings doh-config on 2026-11-21: rolloutEnabled for US, CA, RU and UA, each listing cloudflare-global (https://mozilla.cloudflare-dns.com/dns-query)"
+    rationale: >-
+      A proxy that is handed names leaves the browser without HTTPS records,
+      so it sends GREASE ECH where the same Firefox with no proxy sends a real
+      one, and never starts HTTP/3: both are visible to the server on every
+      connection. Resolving by DoH through the proxy removes both, and its
+      cost is that the resolver an authoritative DNS server sees is
+      Cloudflare's rather than the exit network's, which is what stock shows
+      in the rollout countries and what a user who turned DoH on shows
+      elsewhere. proxy_dns='exit' keeps the old behaviour for a proxy that
+      cannot carry DoH (docs/proxy-dns.md). A context's own proxy stays on
+      'exit': the browser has one DoH client, on the launch proxy.

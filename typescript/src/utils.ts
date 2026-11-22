@@ -181,6 +181,11 @@ export type OsName = (typeof OS_NAMES)[TargetOS];
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
 
+// Behind a SOCKS5 proxy with proxy_dns "doh": names are resolved by DoH alone,
+// at the resolver Firefox's own DoH rollout uses (docs/proxy-dns.md).
+export const PROXY_DOH_PREFS: Record<string, any> =
+	LAUNCHER_CONSTANTS.proxyDohPrefs;
+
 /**
  * Whether the dynamic linker can find a system libavcodec, which Linux
  * Firefox loads for H.264 (as Python's ctypes.util.find_library('avcodec')).
@@ -1199,6 +1204,74 @@ export function isDomainSet(
 	return false;
 }
 
+/** The host of a SOCKS5 proxy, or null when `proxy` is not one. */
+export function socks5Host(
+	proxy: ProxyConfig | undefined | null,
+): string | null {
+	if (!proxy) {
+		return null;
+	}
+	let url: URL;
+	try {
+		url = new URL(String(proxy.server ?? ""));
+	} catch {
+		return null;
+	}
+	// URL keeps the brackets of an IPv6 host; Python's urlsplit drops them.
+	return url.protocol === "socks5:"
+		? url.hostname.replace(/^\[|\]$/g, "")
+		: null;
+}
+
+/**
+ * Who resolves the names a proxied browser visits (docs/proxy-dns.md).
+ *
+ * "doh", the default behind a SOCKS5 proxy: the browser, by DoH through the
+ * proxy, as a Firefox at the exit resolves its own. It gets HTTPS records, so
+ * it sends ECH and starts HTTP/3 where that Firefox does, and the proxy is
+ * given addresses. "exit": the proxy is given names. An HTTP proxy is always
+ * given names.
+ */
+export async function applyProxyDns(
+	proxyDns: string | undefined | null,
+	proxy: ProxyConfig | undefined | null,
+	config: Record<string, any>,
+	firefoxUserPrefs: Record<string, any>,
+	exitLookedUp: boolean,
+): Promise<void> {
+	if (proxyDns != null && proxyDns !== "doh" && proxyDns !== "exit") {
+		throw new ValueError(
+			`proxy_dns must be 'doh' or 'exit', not ${JSON.stringify(proxyDns)}.`,
+		);
+	}
+	const host = socks5Host(proxy);
+	if (host === null) {
+		if (proxyDns === "doh") {
+			throw new ValueError("proxy_dns='doh' needs a socks5:// proxy.");
+		}
+		return;
+	}
+	if (proxyDns === "exit") {
+		return;
+	}
+	mergeInto(firefoxUserPrefs, PROXY_DOH_PREFS);
+	// The proxy's own name cannot be asked through the proxy.
+	if (!(validIPv4(host) || validIPv6(host))) {
+		setInto(firefoxUserPrefs, "network.trr.excluded-domains", host);
+	}
+	// The browser picks the address now, so it has to know whether the exit
+	// can reach an IPv6 one. Asked only of an exit the launch looks up (geoip).
+	if (
+		exitLookedUp &&
+		!("network:ipv4Only" in config) &&
+		!("webrtc:ipv6" in config) &&
+		(await utilsDeps.publicIpv6(ProxyHelper.asString(proxy as ProxyConfig))) ===
+			null
+	) {
+		config["network:ipv4Only"] = true;
+	}
+}
+
 /**
  * Whether this host has a public IPv6 address that geolocates where the IPv4
  * identity does. Warns when it has one that does not.
@@ -2190,6 +2263,11 @@ export interface LaunchOptions {
 	firefox_user_prefs?: Record<string, any>;
 	/** Proxy to use for the browser. */
 	proxy?: ProxyConfig;
+	/**
+	 * Who resolves names behind a SOCKS5 proxy: "doh" (default), the browser,
+	 * by DoH through the proxy; "exit", the proxy. See docs/proxy-dns.md.
+	 */
+	proxy_dns?: "doh" | "exit";
 	/** Cache previous pages, requests, etc (uses more memory). */
 	enable_cache?: boolean;
 	/** Arguments to pass to the browser. */
@@ -2318,6 +2396,7 @@ async function buildLaunchOptions(
 		browser,
 		firefox_user_prefs,
 		proxy,
+		proxy_dns,
 		enable_cache,
 		args,
 		env,
@@ -3122,6 +3201,14 @@ async function buildLaunchOptions(
 	) {
 		LeakWarning.warn("proxy_without_geoip");
 	}
+
+	await applyProxyDns(
+		proxy_dns,
+		proxy,
+		config,
+		firefox_user_prefs,
+		pyTruthy(geoip),
+	);
 
 	// After geoip, which decides whether the machine has IPv6 at all.
 	setHostIpv6Default(config, salt);

@@ -144,6 +144,7 @@ export interface LauncherConstants {
 	recordedWindowChrome: Record<"win" | "mac" | "lin", [number, number]>;
 	windowsUiColors: Record<string, string>;
 	cachePrefs: Record<string, any>;
+	proxyDohPrefs: Record<string, any>;
 	windowsBehaviourPrefs: Record<string, any>;
 }
 export const LAUNCHER_CONSTANTS: Readonly<LauncherConstants> = loadDataFile(
