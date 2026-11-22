@@ -154,6 +154,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "startup-size-hold-yields",
         "select-popup-claimed-os",
         "serializer-line-break-claimed-os",
+        "socks5-optimistic-data",
         "stock-gpu-parity",
         "stock-parity-probes",
         "system-font-size-windows",

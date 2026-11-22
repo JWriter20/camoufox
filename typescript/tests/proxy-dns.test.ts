@@ -3,7 +3,12 @@
  * (docs/proxy-dns.md).
  */
 import { afterEach, expect, it, vi } from "vitest";
-import { applyProxyDns, PROXY_DOH_PREFS, utilsDeps } from "../src/utils.js";
+import {
+	applyProxyDns,
+	applyProxyOptimisticData,
+	PROXY_DOH_PREFS,
+	utilsDeps,
+} from "../src/utils.js";
 
 const SOCKS = {
 	server: "socks5://proxy.example:1080",
@@ -97,4 +102,31 @@ it("the exit's IPv6 is not asked when already known", async () => {
 	}
 	expect((await apply("exit", SOCKS, true))[0]).toEqual({});
 	expect(asked).not.toHaveBeenCalled();
+});
+
+const OPTIMISTIC = { "network.proxy.socks5_optimistic_data": true };
+
+it.each([SOCKS, undefined])("optimistic data sets the pref (%s)", (proxy) => {
+	// With no launch proxy it is for a context's own SOCKS5 proxy.
+	const prefs = {};
+	applyProxyOptimisticData(true, proxy, prefs);
+	expect(prefs).toEqual(OPTIMISTIC);
+});
+
+it.each([
+	undefined,
+	false,
+])("optimistic data is off unless asked for (%s)", (enabled) => {
+	const prefs = {};
+	applyProxyOptimisticData(enabled, SOCKS, prefs);
+	expect(prefs).toEqual({});
+});
+
+it.each([
+	"http://proxy.example:8080",
+	"socks4://proxy.example:1080",
+])("optimistic data needs a SOCKS5 proxy (%s)", (server) => {
+	expect(() => applyProxyOptimisticData(true, { server }, {})).toThrow(
+		/socks5/,
+	);
 });

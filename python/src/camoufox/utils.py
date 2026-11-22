@@ -827,6 +827,21 @@ def apply_proxy_dns(
         config['network:ipv4Only'] = True
 
 
+def apply_proxy_optimistic_data(
+    enabled: Optional[bool], proxy: Optional[Dict[str, Any]], firefox_user_prefs: Dict[str, Any]
+) -> None:
+    """
+    Send a connection's TLS ClientHello behind its SOCKS5 CONNECT request,
+    before the proxy's reply. Only for a proxy that forwards what it has
+    received once it has connected (docs/proxy-dns.md).
+    """
+    if not enabled:
+        return
+    if proxy is not None and socks5_host(proxy) is None:
+        raise ValueError("proxy_optimistic_data needs a socks5:// proxy.")
+    firefox_user_prefs['network.proxy.socks5_optimistic_data'] = True
+
+
 def _keeps_ipv6(
     geo_config: Dict[str, Any], geoip_db: Optional[str], i_know_what_im_doing: bool
 ) -> bool:
@@ -1681,6 +1696,7 @@ def launch_options(
     firefox_user_prefs: Optional[Dict[str, Any]] = None,
     proxy: Optional[Dict[str, str]] = None,
     proxy_dns: Optional[Literal["doh", "exit"]] = None,
+    proxy_optimistic_data: Optional[bool] = None,
     enable_cache: Optional[bool] = None,
     args: Optional[List[str]] = None,
     env: Optional[Dict[str, Union[str, float, bool]]] = None,
@@ -1785,6 +1801,10 @@ def launch_options(
         proxy_dns (Optional[Literal["doh", "exit"]]):
             Who resolves names behind a SOCKS5 proxy: 'doh' (default), the browser, by DoH
             through the proxy; 'exit', the proxy. See docs/proxy-dns.md.
+        proxy_optimistic_data (Optional[bool]):
+            Send the TLS ClientHello behind the SOCKS5 CONNECT request, before the proxy's
+            reply. Only for a proxy that forwards those bytes; behind one that discards
+            them every HTTPS connection hangs. See docs/proxy-dns.md.
         enable_cache (Optional[bool]):
             Cache previous pages, requests, etc (uses more memory).
         args (Optional[List[str]]):
@@ -2601,6 +2621,7 @@ def launch_options(
         LeakWarning.warn('proxy_without_geoip')
 
     apply_proxy_dns(proxy_dns, proxy, config, firefox_user_prefs, exit_looked_up=bool(geoip))
+    apply_proxy_optimistic_data(proxy_optimistic_data, proxy, firefox_user_prefs)
 
     # After geoip, which decides whether the machine has IPv6 at all.
     set_host_ipv6_default(config, _identity_salt)

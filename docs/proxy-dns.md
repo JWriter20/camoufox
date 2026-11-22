@@ -91,6 +91,64 @@ connection is opened to an address the browser knows to be private.
 Behind an HTTP proxy there are still none: a speculative connection carries no
 request, so it would reach the proxy and stop there.
 
+## Optimistic data: the ClientHello behind the CONNECT request
+
+A Firefox with no proxy sends its ClientHello as soon as the TCP handshake is
+done: an origin measured it 0.4 to 1.5 ms behind the handshake's last ACK.
+Behind a SOCKS proxy the exit does that handshake, tells the browser, and the
+browser sends the ClientHello then. The origin sees it one round trip between
+the exit and the browser later, 37 to 70 ms in the same measurement, on every
+TLS connection.
+
+`proxy_optimistic_data=True` (a launch option of both packages, off by default)
+sets `network.proxy.socks5_optimistic_data`. The SOCKS5 layer then reports the
+connection made once it has sent the CONNECT request, after the method and
+username/password exchange, instead of when the proxy's reply has arrived
+(`zz-socks5-optimistic-data.patch`). TLS starts at once, so the ClientHello
+is on its way to the proxy before the proxy has connected, and a proxy that
+keeps it can send it the moment its own handshake with the destination is
+done. The proxy's reply is read, and consumed, by the SOCKS5 layer when TLS
+first reads; what follows it is the ServerHello.
+
+- **Only a TLS connection's first flight.** A connection with no TLS layer
+  (plain HTTP) waits for the reply as before, as does SOCKS4, an HTTP proxy,
+  and a UDP ASSOCIATE. A speculative connection behind a SOCKS5 proxy is a TLS
+  connection like any other.
+- **The origin receives the bytes it receives today.** The ClientHello is
+  NSS's, written as NSS writes it with no proxy. On the hop to the proxy the
+  request and the ClientHello are separate writes on a socket with Nagle's
+  algorithm off, so separate segments. The origin sees neither: the exit's own
+  TCP stack segments what the exit writes.
+- **A refused CONNECT is the error it is without the option**
+  (`NS_ERROR_CONNECTION_REFUSED` and the others of RFC 1928 §6). The bytes
+  sent ahead went nowhere. It is asked fewer times, though: a refusal met
+  while connecting is retried by the connection attempt itself, and this one
+  arrives after it (one navigation to a refusing destination: 5 CONNECTs
+  without the option, 3 with).
+- **The connection counts as made earlier.** Resource Timing's `connectEnd`
+  is when the request was sent, and the exit's handshake with the destination
+  is inside the TLS time that follows. What runs only while connecting stops
+  earlier too: the backup connection Firefox opens after 250 ms without one
+  (`network.http.connection-retry-timeout`), the 90 second connect timeout
+  (`network.http.connection-timeout`), and trying a name's next address after
+  a refusal. A destination that never answers is given up when the proxy
+  says so or when the TLS handshake times out
+  (`network.http.tls-handshake-timeout`, 30 seconds).
+- **It applies to every SOCKS5 proxy of the browser**, a context's own too:
+  it is a pref, not a property of one proxy.
+
+Turn it on only for a proxy that is known to forward those bytes, on every
+hop. A proxy that discards what it received before its reply answers the
+CONNECT, and the handshake then waits for a ServerHello that cannot come.
+Every HTTPS navigation hangs: each handshake waits out
+`network.http.tls-handshake-timeout` (30 seconds) and Firefox opens another,
+as it does with a server that never answers. Measured, one navigation had not
+failed after 200 seconds and six connections; with the timeout set to 5
+seconds it failed with `NS_ERROR_NET_TIMEOUT` after 17 seconds and two. The
+browser cannot tell a lost ClientHello from a slow server, and does not retry
+without the option: that retry would be one more connection the origin sees
+([`optimistic-data-is-opt-in-and-tls-only`](../ci/tribal-rules.yml)).
+
 ## QUIC through UDP ASSOCIATE
 
 `zz-http3-socks5-udp.patch` sends every datagram of a QUIC connection through a
@@ -147,12 +205,19 @@ For the claim "a Firefox at the exit" to hold, a SOCKS5 proxy has to:
    look like one on an ECN-bleaching path.
 6. Accept IPv4 and IPv6 destinations, and relay to IPv6 where the exit has it.
 7. Resolve names for `exit` mode and for the DoH request, from the exit.
+8. For `proxy_optimistic_data` only: keep every byte that arrives on a CONNECT's
+   connection after the request, send it to the destination as soon as the
+   destination is connected, in the order received and as one write, and only
+   then reply. A chain of proxies has to do this on every hop.
 
 ## Differences from stock that remain
 
 - The DoH requests travel over TCP. Stock tries HTTP/3 first with Cloudflare;
   only the DoH provider can tell.
 - In `exit` mode and behind an HTTP proxy, the table's right-hand columns.
+- Without `proxy_optimistic_data`, a TLS connection's ClientHello reaches the
+  origin a round trip between the exit and the browser after the TCP
+  handshake. With it, `connectEnd` no longer marks the end of that handshake.
 - Behind an HTTP proxy, a `<link rel=preconnect>` opens no connection.
 - The first hop is 10 or 22 bytes larger per datagram than what the server
   receives, and is fragmented on a link too small for it. A network between
