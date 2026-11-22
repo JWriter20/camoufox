@@ -1,8 +1,8 @@
 diff --git a/services/settings/Utils.sys.mjs b/services/settings/Utils.sys.mjs
-index 70f77c9fcb..6193e123e5 100644
+index a5277e213c..c765d8d9a6 100644
 --- a/services/settings/Utils.sys.mjs
 +++ b/services/settings/Utils.sys.mjs
-@@ -105,10 +105,9 @@ function _isUndefined(value) {
+@@ -108,10 +108,9 @@ function _isUndefined(value) {
  
  export var Utils = {
    get SERVER_URL() {
@@ -16,10 +16,13 @@ index 70f77c9fcb..6193e123e5 100644
    },
  
    CHANGES_PATH: "/buckets/monitor/collections/changes/changeset",
-@@ -119,13 +118,9 @@ export var Utils = {
+@@ -122,16 +121,9 @@ export var Utils = {
    log,
  
    get shouldSkipRemoteActivity() {
+-    if (REMOTE_ACTIVITY_DISABLED) {
+-      return true;
+-    }
 -    if (
 -      (lazy.isRunningTests || Cu.isInAutomation) &&
 -      this.SERVER_URL == "data:,#remote-settings-dummy/v1"
@@ -33,7 +36,7 @@ index 70f77c9fcb..6193e123e5 100644
    },
  
    get CERT_CHAIN_ROOT_IDENTIFIER() {
-@@ -149,11 +144,8 @@ export var Utils = {
+@@ -155,11 +147,8 @@ export var Utils = {
    },
  
    get LOAD_DUMPS() {
@@ -48,7 +51,7 @@ index 70f77c9fcb..6193e123e5 100644
  
    get PREVIEW_MODE() {
 diff --git a/services/settings/dumps/main/moz.build b/services/settings/dumps/main/moz.build
-index 88e740b90e..398cfe6556 100644
+index 2fc8928278..da06616ed2 100644
 --- a/services/settings/dumps/main/moz.build
 +++ b/services/settings/dumps/main/moz.build
 @@ -45,6 +45,21 @@ FINAL_TARGET_FILES.defaults.settings.main += [
