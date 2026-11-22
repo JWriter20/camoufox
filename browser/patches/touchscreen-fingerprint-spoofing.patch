@@ -1,8 +1,8 @@
 diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
-index d02c530cd5..bd48a0f323 100644
+index 66b81c4912..ef7c5915a3 100644
 --- a/dom/base/Navigator.cpp
 +++ b/dom/base/Navigator.cpp
-@@ -974,6 +974,21 @@ bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
+@@ -969,6 +969,21 @@ bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
  //*****************************************************************************
  
  uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
@@ -57,12 +57,12 @@ index 7d72211e35..d68cd15f0e 100644
                   aDocShell, RFPTarget::PointerEvents)) {
  #ifdef MOZ_WIDGET_COCOA
 diff --git a/dom/events/moz.build b/dom/events/moz.build
-index 1426931797..d4a3f0c618 100644
+index 62865ffa79..962403e6a4 100644
 --- a/dom/events/moz.build
 +++ b/dom/events/moz.build
-@@ -189,3 +189,6 @@ LOCAL_INCLUDES += [
-     "/layout/xul",
-     "/layout/xul/tree/",
+@@ -196,3 +196,6 @@ SOURCE_HEADERS += [
+     "ContentEventHandler.h",
+     "EventListenerService.h",
  ]
 +
 +# DOM Mask

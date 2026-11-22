@@ -21,7 +21,7 @@ index df93d763dd..780c9ef7e3 100644
  vpx_codec_error
  vpx_codec_error_detail
 diff --git a/dom/media/encoder/OpusTrackEncoder.cpp b/dom/media/encoder/OpusTrackEncoder.cpp
-index d23e27a0ab..b90cca3b71 100644
+index 7ee125710b..0854edf55e 100644
 --- a/dom/media/encoder/OpusTrackEncoder.cpp
 +++ b/dom/media/encoder/OpusTrackEncoder.cpp
 @@ -4,6 +4,7 @@
@@ -118,7 +118,7 @@ index 274a5afc5a..73a5341684 100644
      return MediaResult(
          NS_ERROR_DOM_MEDIA_FATAL_ERR,
 diff --git a/dom/media/platforms/ffmpeg/ffvpx/FFVPXRuntimeLinker.cpp b/dom/media/platforms/ffmpeg/ffvpx/FFVPXRuntimeLinker.cpp
-index 99a6bd76a2..3db8111363 100644
+index 4d3eaf7529..e0382c7f63 100644
 --- a/dom/media/platforms/ffmpeg/ffvpx/FFVPXRuntimeLinker.cpp
 +++ b/dom/media/platforms/ffmpeg/ffvpx/FFVPXRuntimeLinker.cpp
 @@ -7,6 +7,7 @@
@@ -129,8 +129,8 @@ index 99a6bd76a2..3db8111363 100644
  #include "mozilla/ToString.h"
  #include "nsLocalFile.h"
  #include "nsXPCOMPrivate.h"
-@@ -180,6 +181,29 @@ void FFVPXRuntimeLinker::GetFFTFuncs(FFmpegFFTFuncs* aOutFuncs) {
-                      "ffvpx loaded without av_tx_init/av_tx_uninit");
+@@ -175,6 +176,29 @@ void FFVPXRuntimeLinker::GetFFTFuncs(FFmpegFFTFuncs* aOutFuncs) {
+   MOZ_ASSERT(sFFVPXLib.av_tx_init && sFFVPXLib.av_tx_uninit);
    aOutFuncs->init = sFFVPXLib.av_tx_init;
    aOutFuncs->uninit = sFFVPXLib.av_tx_uninit;
 +#if defined(__x86_64__) || defined(_M_X64)
@@ -821,10 +821,10 @@ index 0000000000..64dc7b48f8
 +template struct Engine<X86EmuArch>;
 +}  // namespace mozilla
 diff --git a/dom/media/webaudio/moz.build b/dom/media/webaudio/moz.build
-index 3bd802d715..826259a617 100644
+index a0c59ff0b0..9baef15371 100644
 --- a/dom/media/webaudio/moz.build
 +++ b/dom/media/webaudio/moz.build
-@@ -130,11 +130,14 @@ if CONFIG["TARGET_CPU"] == "aarch64" or CONFIG["BUILD_ARM_NEON"]:
+@@ -131,11 +131,14 @@ if CONFIG["TARGET_CPU"] == "aarch64" or CONFIG["BUILD_ARM_NEON"]:
      LOCAL_INCLUDES += ["/third_party/xsimd/include"]
      SOURCES += ["AudioNodeEngineNEON.cpp"]
      SOURCES["AudioNodeEngineNEON.cpp"].flags += CONFIG["NEON_FLAGS"]
@@ -841,7 +841,7 @@ index 3bd802d715..826259a617 100644
      SOURCES["AudioNodeEngineSSE2.cpp"].flags += CONFIG["SSE2_FLAGS"]
      if CONFIG["SSE4_2_FLAGS"]:
 diff --git a/gfx/skia/moz.build b/gfx/skia/moz.build
-index 7c81493630..449db70aa9 100644
+index 5dacf12c57..aec66514dc 100644
 --- a/gfx/skia/moz.build
 +++ b/gfx/skia/moz.build
 @@ -508,6 +508,7 @@ SOURCES += [
@@ -1591,7 +1591,7 @@ index 7ae979a931..0f45ce3d08 100644
          steps.fFlags.encode) {
          return false;
 diff --git a/gfx/skia/skia/src/core/SkOpts.cpp b/gfx/skia/skia/src/core/SkOpts.cpp
-index adfbdc30f0..6245760d93 100644
+index adfbdc30f0..b62468b668 100644
 --- a/gfx/skia/skia/src/core/SkOpts.cpp
 +++ b/gfx/skia/skia/src/core/SkOpts.cpp
 @@ -4,6 +4,7 @@
@@ -1884,7 +1884,7 @@ index 0000000000..747ae8cd9f
 +
 +#include "src/opts/SkOpts_ml3.cpp"
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..711a5501b6 100644
+index 9a0edd9594..8a85848f74 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 @@ -108,7 +108,11 @@ using NoCtx = const void*;
@@ -2203,10 +2203,10 @@ index 8d1b3bf5df..17cc64a164 100644
  
    if (kind == ParseNodeKind::ModExpr) {
 diff --git a/js/src/jit/CacheIRCompiler.cpp b/js/src/jit/CacheIRCompiler.cpp
-index 1cf65a9bc4..9a3e787441 100644
+index 969e69087f..17b0073b26 100644
 --- a/js/src/jit/CacheIRCompiler.cpp
 +++ b/js/src/jit/CacheIRCompiler.cpp
-@@ -8252,6 +8252,9 @@ bool CacheIRCompiler::emitStoreDataViewValueResult(
+@@ -8248,6 +8248,9 @@ bool CacheIRCompiler::emitStoreDataViewValueResult(
    if (Scalar::isFloatingType(elementType) && js::SupportDifferentialTesting()) {
      masm.canonicalizeDoubleNaN(floatScratch0);
    }
@@ -2217,10 +2217,10 @@ index 1cf65a9bc4..9a3e787441 100644
    // Load the value into a gpr register.
    switch (elementType) {
 diff --git a/js/src/jit/CodeGenerator.cpp b/js/src/jit/CodeGenerator.cpp
-index ed329aea64..6a743cf124 100644
+index 87cfcffb6a..886d9afc69 100644
 --- a/js/src/jit/CodeGenerator.cpp
 +++ b/js/src/jit/CodeGenerator.cpp
-@@ -19892,16 +19892,19 @@ void CodeGenerator::visitStoreDataViewElement(LStoreDataViewElement* lir) {
+@@ -19903,16 +19903,19 @@ void CodeGenerator::visitStoreDataViewElement(LStoreDataViewElement* lir) {
        break;
      case Scalar::Float16: {
        FloatRegister fvalue = ToFloatRegister(value);
@@ -2241,7 +2241,7 @@ index ed329aea64..6a743cf124 100644
        break;
      }
 diff --git a/js/src/jit/JitOptions.cpp b/js/src/jit/JitOptions.cpp
-index 64a142b361..0e85da2441 100644
+index bcbcc93e97..a7abf2607e 100644
 --- a/js/src/jit/JitOptions.cpp
 +++ b/js/src/jit/JitOptions.cpp
 @@ -58,6 +58,9 @@ T overrideDefault(const char* param, T dflt) {
@@ -2255,7 +2255,7 @@ index 64a142b361..0e85da2441 100644
    // Whether to perform expensive graph-consistency DEBUG-only assertions.
    // It can be useful to disable this to reduce DEBUG-compile time of large
 diff --git a/js/src/jit/JitOptions.h b/js/src/jit/JitOptions.h
-index 62a4a22b4d..d1fabe5a63 100644
+index 8c65a030b4..cbb61e984f 100644
 --- a/js/src/jit/JitOptions.h
 +++ b/js/src/jit/JitOptions.h
 @@ -5,6 +5,7 @@
@@ -2266,7 +2266,7 @@ index 62a4a22b4d..d1fabe5a63 100644
  #include "mozilla/Maybe.h"
  
  #include "jit/IonTypes.h"
-@@ -187,6 +188,44 @@ struct DefaultJitOptions {
+@@ -188,6 +189,44 @@ struct DefaultJitOptions {
  
  extern DefaultJitOptions JitOptions;
  
@@ -2333,7 +2333,7 @@ index 2ae8a015fb..822c8b30da 100644
      case MDefinition::Opcode::Div:
        ret = NumberDiv(lhs, rhs);
 diff --git a/js/src/jit/MacroAssembler.cpp b/js/src/jit/MacroAssembler.cpp
-index 7c7c55fff1..e85aa3d56e 100644
+index 7e899bda03..e53eb8398f 100644
 --- a/js/src/jit/MacroAssembler.cpp
 +++ b/js/src/jit/MacroAssembler.cpp
 @@ -75,11 +75,29 @@ TrampolinePtr MacroAssembler::preBarrierTrampoline(MIRType type) {
@@ -2367,10 +2367,10 @@ index 7c7c55fff1..e85aa3d56e 100644
      case Scalar::Float16:
        storeFloat16(value, dest, temp, volatileLiveRegs);
 diff --git a/js/src/jit/MacroAssembler.h b/js/src/jit/MacroAssembler.h
-index 5be27d414b..a0ebd97651 100644
+index 0208852b76..3e07df63c6 100644
 --- a/js/src/jit/MacroAssembler.h
 +++ b/js/src/jit/MacroAssembler.h
-@@ -5521,6 +5521,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
+@@ -5525,6 +5525,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
      }
    }
  
@@ -2381,10 +2381,10 @@ index 5be27d414b..a0ebd97651 100644
    void storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value,
                                const T& dest, Register temp,
 diff --git a/js/src/jit/arm64/CodeGenerator-arm64.cpp b/js/src/jit/arm64/CodeGenerator-arm64.cpp
-index 3bc935b7de..4d976e6f71 100644
+index f21260a92e..7fdae98d95 100644
 --- a/js/src/jit/arm64/CodeGenerator-arm64.cpp
 +++ b/js/src/jit/arm64/CodeGenerator-arm64.cpp
-@@ -1484,18 +1484,19 @@ void CodeGenerator::visitMathD(LMathD* math) {
+@@ -1466,18 +1466,19 @@ void CodeGenerator::visitMathD(LMathD* math) {
    ARMFPRegister rhs(ToFloatRegister(math->rhs()), 64);
    ARMFPRegister output(ToFloatRegister(math->output()), 64);
  
@@ -2408,7 +2408,7 @@ index 3bc935b7de..4d976e6f71 100644
        break;
      default:
        MOZ_CRASH("unexpected opcode");
-@@ -1507,18 +1508,19 @@ void CodeGenerator::visitMathF(LMathF* math) {
+@@ -1489,18 +1490,19 @@ void CodeGenerator::visitMathF(LMathF* math) {
    ARMFPRegister rhs(ToFloatRegister(math->rhs()), 32);
    ARMFPRegister output(ToFloatRegister(math->output()), 32);
  
@@ -2694,10 +2694,10 @@ index 5833d445f3..dc7cb16a98 100644
    Add(GetStackPointer64(), GetStackPointer64(), ARMRegister(src, 64));
    // Given that required invariant SP <= PSP, this is probably pointless,
 diff --git a/js/src/jit/arm64/MacroAssembler-arm64.cpp b/js/src/jit/arm64/MacroAssembler-arm64.cpp
-index ea14f0b663..3a5dc64cf6 100644
+index d6ca5d1026..899a1faf2f 100644
 --- a/js/src/jit/arm64/MacroAssembler-arm64.cpp
 +++ b/js/src/jit/arm64/MacroAssembler-arm64.cpp
-@@ -3891,5 +3891,288 @@ CodeOffset MacroAssembler::wasmMarkedSlowCall(const wasm::CallSiteDesc& desc,
+@@ -3926,5 +3926,288 @@ CodeOffset MacroAssembler::wasmMarkedSlowCall(const wasm::CallSiteDesc& desc,
  
  //}}} check_macroassembler_style
  
@@ -3681,7 +3681,7 @@ index 2702836452..0781b26392 100644
      return ConvertNumber<T>(d);
    }
 diff --git a/js/src/vm/TypedArrayObject.cpp b/js/src/vm/TypedArrayObject.cpp
-index 3cf414d3cd..516eb1cf53 100644
+index 849d2c7aa9..9278a713b7 100644
 --- a/js/src/vm/TypedArrayObject.cpp
 +++ b/js/src/vm/TypedArrayObject.cpp
 @@ -37,6 +37,7 @@
@@ -3692,7 +3692,7 @@ index 3cf414d3cd..516eb1cf53 100644
  #include "jit/TrampolineNatives.h"
  #include "js/Conversions.h"
  #include "js/experimental/TypedData.h"  // JS_GetArrayBufferViewType, JS_GetTypedArray{Length,ByteOffset,ByteLength}, JS_IsTypedArrayObject
-@@ -1276,6 +1277,7 @@ bool TypedArrayObjectTemplate<NativeType>::convertValue(JSContext* cx,
+@@ -1282,6 +1283,7 @@ bool TypedArrayObjectTemplate<NativeType>::convertValue(JSContext* cx,
        // See the comment in ElementSpecific::doubleToNative.
        d = JS::CanonicalizeNaN(d);
      }
@@ -3700,7 +3700,7 @@ index 3cf414d3cd..516eb1cf53 100644
    }
  
    // Assign based on characteristics of the destination type
-@@ -3117,6 +3119,7 @@ static NativeType ConvertToNativeType(const Value& value) {
+@@ -3123,6 +3125,7 @@ static NativeType ConvertToNativeType(const Value& value) {
        // See the comment in ElementSpecific::doubleToNative.
        d = JS::CanonicalizeNaN(d);
      }
@@ -3708,7 +3708,7 @@ index 3cf414d3cd..516eb1cf53 100644
  
      return ConvertNumber<NativeType>(d);
    } else if constexpr (std::is_same_v<NativeType, int64_t>) {
-@@ -3953,6 +3956,7 @@ static void TypedArraySliceCopySlowSet(TypedArrayObject* tarray, size_t index,
+@@ -3959,6 +3962,7 @@ static void TypedArraySliceCopySlowSet(TypedArrayObject* tarray, size_t index,
        // See the comment in ElementSpecific::doubleToNative.
        value = JS::CanonicalizeNaN(value);
      }
@@ -3717,7 +3717,7 @@ index 3cf414d3cd..516eb1cf53 100644
    TypedArrayObjectTemplate<NativeType>::setIndex(
        *tarray, index, ConvertNumber<NativeType>(value));
 diff --git a/js/xpconnect/src/nsXPConnect.cpp b/js/xpconnect/src/nsXPConnect.cpp
-index e9b93e5e8d..bd323ebf5a 100644
+index fd650a5266..3a4f887e40 100644
 --- a/js/xpconnect/src/nsXPConnect.cpp
 +++ b/js/xpconnect/src/nsXPConnect.cpp
 @@ -16,6 +16,7 @@
@@ -3742,7 +3742,7 @@ index e9b93e5e8d..bd323ebf5a 100644
      (defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_X86))
    // Update static engine preferences, such as AVX, before
 diff --git a/media/ffvpx/libavutil/aarch64/moz.build b/media/ffvpx/libavutil/aarch64/moz.build
-index 5094c525ca..da952cf385 100644
+index fe486a27f2..a4572d9a15 100644
 --- a/media/ffvpx/libavutil/aarch64/moz.build
 +++ b/media/ffvpx/libavutil/aarch64/moz.build
 @@ -7,7 +7,8 @@ SOURCES += [
@@ -26992,7 +26992,7 @@ index d3fcdbf563..be8d29c27f 100644
  extern const FFTXCodelet * const ff_tx_codelet_list_double_c      [];
  
 diff --git a/media/ffvpx/libavutil/x86/moz.build b/media/ffvpx/libavutil/x86/moz.build
-index 8a2116cdc4..8de0a5d45d 100644
+index 5422310361..2e7bf50eff 100644
 --- a/media/ffvpx/libavutil/x86/moz.build
 +++ b/media/ffvpx/libavutil/x86/moz.build
 @@ -17,6 +17,7 @@ SOURCES += [
@@ -27455,7 +27455,7 @@ index 2e7c32aeec..7ac5c476a9 100644
      /* Randomly downgrade the architecture. */
      arch = rand()%(arch+1);
 diff --git a/media/libopus/moz.build b/media/libopus/moz.build
-index e140171d13..eaae48b464 100644
+index a75086caa3..07fe834307 100644
 --- a/media/libopus/moz.build
 +++ b/media/libopus/moz.build
 @@ -7,6 +7,7 @@ with Files("*"):
@@ -27500,7 +27500,7 @@ index e140171d13..eaae48b464 100644
      if not CONFIG["MOZ_SAMPLE_TYPE_FLOAT32"]:
          SOURCES += silk_sources_fixed_sse4_1
      for f in SOURCES:
-@@ -153,6 +167,14 @@ if CONFIG["TARGET_CPU"] == "aarch64" and CONFIG["CC_TYPE"] in ("clang", "gcc"):
+@@ -154,6 +168,14 @@ if CONFIG["TARGET_CPU"] == "aarch64" and CONFIG["CC_TYPE"] in ("clang", "gcc"):
      if CONFIG["MOZ_SAMPLE_TYPE_FLOAT32"]:
          DEFINES["OPUS_ARM_MAY_HAVE_NEON"] = True
          DEFINES["OPUS_ARM_MAY_HAVE_NEON_INTR"] = True
@@ -27590,7 +27590,7 @@ index 39ad75276c..121a3de75b 100644
  
  #endif
 diff --git a/media/libspeex_resampler/src/moz.build b/media/libspeex_resampler/src/moz.build
-index ebf13f631f..fab61a2e9e 100644
+index a9e65c36db..19d96c0893 100644
 --- a/media/libspeex_resampler/src/moz.build
 +++ b/media/libspeex_resampler/src/moz.build
 @@ -33,6 +33,19 @@ if CONFIG['INTEL_ARCHITECTURE']:
@@ -28167,10 +28167,10 @@ index a1006fa938..561edacd6f 100644
      'libvpx/vp9/encoder/vp9_tpl_model.c',
      'libvpx/vp9/encoder/vp9_treewriter.c',
 diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
-index 80be46d83c..07d8b06f02 100644
+index 4261b6733f..7a8a54a882 100644
 --- a/modules/libpref/init/StaticPrefList.yaml
 +++ b/modules/libpref/init/StaticPrefList.yaml
-@@ -7101,6 +7101,20 @@
+@@ -7157,6 +7157,20 @@
  # Prefs starting with "general."
  #---------------------------------------------------------------------------
  
@@ -28191,7 +28191,7 @@ index 80be46d83c..07d8b06f02 100644
  - name: general.aboutConfig.enable
    type: bool
    value: true
-@@ -13552,6 +13566,15 @@
+@@ -13750,6 +13764,15 @@
    mirror: always
  
  # WebM

@@ -8,6 +8,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src chrome:; img-src chrome:; object-src 'none'">
     <meta charset="utf-8">
     <meta name="color-scheme" content="light dark">
+    <meta name="viewport" content="width=device-width">
     <title>Licenses</title>
     <link rel="stylesheet" href="chrome://global/skin/in-content/info-pages.css">
     <link rel="stylesheet" href="chrome://global/skin/aboutLicense.css">
@@ -102,8 +103,12 @@
       <li><a href="#libevent">libevent License</a></li>
       <li><a href="#libffi">libffi License</a></li>
       <li><a href="#libjingle">libjingle License</a></li>
+      <li><a href="#libjpeg">libjpeg-turbo License</a></li>
       <li><a href="#libnestegg">libnestegg License</a></li>
+      <li><a href="#libogg">libogg License</a></li>
+      <li><a href="#libpng">libpng License</a></li>
       <li><a href="#libsoundtouch">libsoundtouch License</a></li>
+      <li><a href="#libvorbis">libvorbis License</a></li>
       <li><a href="#libyuv">libyuv License</a></li>
       <li><a href="#hunspell-lt">Lithuanian Spellchecking Dictionary License</a></li>
       <li><a href="#lodash">lodash License</a></li>
@@ -132,7 +137,9 @@
       <li><a href="#sctp">SCTP Licenses</a></li>
       <li><a href="#skia">Skia License</a></li>
       <li><a href="#snappy">Snappy License</a></li>
+      <li><a href="#speex-resampler">Speex Resampler License</a></li>
       <li><a href="#sprintf.js">sprintf.js License</a></li>
+      <li><a href="#sqlite">SQLite Public Domain Dedication</a></li>
       <li><a href="#sunsoft">SunSoft License</a></li>
       <li><a href="#superfasthash">SuperFastHash License</a></li>
       <li><a href="#twemoji">Twemoji License</a></li>
@@ -145,8 +152,8 @@
       <li><a href="#vtune">VTune License</a></li>
       <li><a href="#webrtc">WebRTC License</a></li>
       <li><a href="#x264">x264 License</a></li>
-      <li><a href="#xiph">Xiph.org Foundation License</a></li>
       <li><a href="#xxhash">xxHash License</a></li>
+      <li><a href="#zlib">zlib License</a></li>
     </ul>
 
     <ul>
@@ -2102,28 +2109,31 @@ POSSIBILITY OF SUCH DAMAGE.
           <td>
             <div class="license-meta">
             
-<p>This license, with different copyright holders, applies to certain files in the directory <code>gfx/cairo/</code>.
+<p>This license, with different copyright holders, applies to certain files of cairo.
             The copyright holders and the applicable ranges of dates are as follows:</p>
             <ul>
-              <li>2004 Richard D. Worth
-              <li>2004, 2005 Red Hat, Inc.
-              <li>2003 USC, Information Sciences Institute
-              <li>2004 David Reveman
-              <li>2005 Novell, Inc.
-              <li>2004 David Reveman, Peter Nilsson
-              <li>2000 Keith Packard, member of The XFree86 Project, Inc.
-              <li>2005 Lars Knoll &amp; Zack Rusin, Trolltech
-              <li>1998, 2000, 2002, 2004 Keith Packard
-              <li>2004 Nicholas Miell
-              <li>2005 Trolltech AS
+              <li>2000 Keith Packard
               <li>2000 SuSE, Inc.
-              <li>2003 Carl Worth
-              <li>1987, 1988, 1989, 1998 The Open Group
-              <li>1987, 1988, 1989 Digital Equipment Corporation, Maynard, Massachusetts.
-              <li>1998 Keith Packard
-              <li>2003 Richard Henderson
+              <li>2004 David Reveman
+              <li>2005, 2006 Red Hat, Inc.
+              <li>2006 Mozilla Corporation
+              <li>2006, 2010 Joonas Pihlaja
+              <li>2007 Netlabs
+              <li>2011 Andrea Canciani
             </ul>
 
+            <p>This license applies to the following paths:</p>
+            <ul class="license-paths">
+              <li><code>gfx/cairo/cairo/src/cairo-freelist-private.h</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-freelist-type-private.h</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-freelist.c</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-pattern.c</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-time-private.h</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-time.c</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-xcb-resources.c</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-xlib-screen.c</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-xlib-xrender-private.h</code></li>
+            </ul>
             </div>
           </td>
           <td class="license-text">
@@ -3189,25 +3199,38 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
           </td>
           <td>
             <div class="license-meta">
-            
-<p>This license, with different copyright holders, applies to the files in the directory <code>gfx/harfbuzz/</code>.
-            The copyright holders and the applicable ranges of dates are as follows:</p>
-            <ul>
-                <li>1998-2004  David Turner and Werner Lemberg</li>
-                <li>2004, 2007, 2008, 2009, 2010  Red Hat, Inc.</li>
-                <li>2006  Behdad Esfahbod</li>
-                <li>2007  Chris Wilson</li>
-                <li>2009  Keith Stribley &lt;devel@thanlwinsoft.org&gt;</li>
-                <li>2010  Mozilla Foundation</li>
+            <p>This license applies to the following paths:</p>
+            <ul class="license-paths">
+              <li><code>gfx/harfbuzz</code></li>
             </ul>
-
             </div>
           </td>
           <td class="license-text">
             <pre>
-Copyright (C) &lt;date&gt; &lt;copyright holder&gt;
+HarfBuzz is licensed under the so-called "Old MIT" license.  Details follow.
+For parts of HarfBuzz that are licensed under different licenses see individual
+files names COPYING in subdirectories where applicable.
 
-This is part of HarfBuzz, an OpenType Layout engine library.
+Copyright © 2010-2022  Google, Inc.
+Copyright © 2015-2020  Ebrahim Byagowi
+Copyright © 2019,2020  Facebook, Inc.
+Copyright © 2012,2015  Mozilla Foundation
+Copyright © 2011  Codethink Limited
+Copyright © 2008,2010  Nokia Corporation and/or its subsidiary(-ies)
+Copyright © 2009  Keith Stribley
+Copyright © 2011  Martin Hosken and SIL International
+Copyright © 2007  Chris Wilson
+Copyright © 2005,2006,2020,2021,2022,2023  Behdad Esfahbod
+Copyright © 2004,2007,2008,2009,2010,2013,2021,2022,2023  Red Hat, Inc.
+Copyright © 1998-2005  David Turner and Werner Lemberg
+Copyright © 2016  Igalia S.L.
+Copyright © 2022  Matthias Clasen
+Copyright © 2018,2021  Khaled Hosny
+Copyright © 2018,2019,2020  Adobe, Inc
+Copyright © 2013-2015  Alexei Podtelezhnikov
+
+For full copyright notices consult the individual files in the package.
+
 
 Permission is hereby granted, without written agreement and without
 license or royalty fees, to use, copy, modify, and distribute this
@@ -3695,6 +3718,158 @@ SUCH DAMAGE.
         </tr>
         <tr>
           <td>
+            <h2><a id="libjpeg"></a>libjpeg-turbo License</h2>
+          </td>
+          <td>
+            <div class="license-meta">
+            <p>This license applies to the following paths:</p>
+            <ul class="license-paths">
+              <li><code>media/libjpeg</code></li>
+            </ul>
+            </div>
+          </td>
+          <td class="license-text">
+            <pre>
+libjpeg-turbo Licenses
+======================
+
+libjpeg-turbo is covered by two compatible BSD-style open source licenses:
+
+- The IJG (Independent JPEG Group) License, which is listed in
+  [README.ijg](README.ijg)
+
+  This license applies to the libjpeg API library and associated programs,
+  including any code inherited from libjpeg and any modifications to that
+  code.  Note that the libjpeg-turbo SIMD source code bears the
+  [zlib License](https://opensource.org/licenses/Zlib), but in the context of
+  the overall libjpeg API library, the terms of the zlib License are subsumed
+  by the terms of the IJG License.
+
+- The Modified (3-clause) BSD License, which is listed below
+
+  This license applies to the TurboJPEG API library and associated programs, as
+  well as the build system.  Note that the TurboJPEG API library wraps the
+  libjpeg API library, so in the context of the overall TurboJPEG API library,
+  both the terms of the IJG License and the terms of the Modified (3-clause)
+  BSD License apply.
+
+
+Complying with the libjpeg-turbo Licenses
+=========================================
+
+This section provides a roll-up of the libjpeg-turbo licensing terms, to the
+best of our understanding.  This is not a license in and of itself.  It is
+intended solely for clarification.
+
+1.  If you are distributing a modified version of the libjpeg-turbo source,
+    then:
+
+    1.  You cannot alter or remove any existing copyright or license notices
+        from the source.
+
+        **Origin**
+        - Clause 1 of the IJG License
+        - Clause 1 of the Modified BSD License
+        - Clauses 1 and 3 of the zlib License
+
+    2.  You must add your own copyright notice to the header of each source
+        file you modified, so others can tell that you modified that file.  (If
+        there is not an existing copyright header in that file, then you can
+        simply add a notice stating that you modified the file.)
+
+        **Origin**
+        - Clause 1 of the IJG License
+        - Clause 2 of the zlib License
+
+    3.  You must include the IJG README file, and you must not alter any of the
+        copyright or license text in that file.
+
+        **Origin**
+        - Clause 1 of the IJG License
+
+2.  If you are distributing only libjpeg-turbo binaries without the source, or
+    if you are distributing an application that statically links with
+    libjpeg-turbo, then:
+
+    1.  Your product documentation must include a message stating:
+
+        This software is based in part on the work of the Independent JPEG
+        Group.
+
+        **Origin**
+        - Clause 2 of the IJG license
+
+    2.  If your binary distribution includes or uses the TurboJPEG API, then
+        your product documentation must include the text of the Modified BSD
+        License (see below.)
+
+        **Origin**
+        - Clause 2 of the Modified BSD License
+
+3.  You cannot use the name of the IJG or The libjpeg-turbo Project or the
+    contributors thereof in advertising, publicity, etc.
+
+    **Origin**
+    - IJG License
+    - Clause 3 of the Modified BSD License
+
+4.  The IJG and The libjpeg-turbo Project do not warrant libjpeg-turbo to be
+    free of defects, nor do we accept any liability for undesirable
+    consequences resulting from your use of the software.
+
+    **Origin**
+    - IJG License
+    - Modified BSD License
+    - zlib License
+
+
+The Modified (3-clause) BSD License
+===================================
+
+Copyright (C) 2009-2026 D. R. Commander.  All Rights Reserved.
+Copyright (C) 2015 Viktor Szathmáry.  All Rights Reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+- Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+- Neither the name of the libjpeg-turbo Project nor the names of its
+  contributors may be used to endorse or promote products derived from this
+  software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS",
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+
+Why Two Licenses?
+=================
+
+The zlib License could have been used instead of the Modified (3-clause) BSD
+License, and since the IJG License effectively subsumes the distribution
+conditions of the zlib License, this would have effectively placed
+libjpeg-turbo binary distributions under the IJG License.  However, the IJG
+License specifically refers to the Independent JPEG Group and does not extend
+attribution and endorsement protections to other entities.  Thus, it was
+desirable to choose a license that granted us the same protections for new code
+that were granted to the IJG for code derived from their software.
+</pre>
+          </td>
+        </tr>
+        <tr>
+          <td>
             <h2><a id="libnestegg"></a>libnestegg License</h2>
           </td>
           <td>
@@ -3719,6 +3894,202 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+</pre>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <h2><a id="libogg"></a>libogg License</h2>
+          </td>
+          <td>
+            <div class="license-meta">
+            <p>This license applies to the following paths:</p>
+            <ul class="license-paths">
+              <li><code>media/libogg</code></li>
+            </ul>
+            </div>
+          </td>
+          <td class="license-text">
+            <pre>
+Copyright (c) 2002, Xiph.org Foundation
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of the Xiph.org Foundation nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <h2><a id="libpng"></a>libpng License</h2>
+          </td>
+          <td>
+            <div class="license-meta">
+            <p>This license applies to the following paths:</p>
+            <ul class="license-paths">
+              <li><code>media/libpng</code></li>
+            </ul>
+            </div>
+          </td>
+          <td class="license-text">
+            <pre>
+COPYRIGHT NOTICE, DISCLAIMER, and LICENSE
+=========================================
+
+PNG Reference Library License version 2
+---------------------------------------
+
+ * Copyright (c) 1995-2026 The PNG Reference Library Authors.
+ * Copyright (c) 2018-2026 Cosmin Truta.
+ * Copyright (c) 2000-2002, 2004, 2006-2018 Glenn Randers-Pehrson.
+ * Copyright (c) 1996-1997 Andreas Dilger.
+ * Copyright (c) 1995-1996 Guy Eric Schalnat, Group 42, Inc.
+
+The software is supplied "as is", without warranty of any kind,
+express or implied, including, without limitation, the warranties
+of merchantability, fitness for a particular purpose, title, and
+non-infringement.  In no event shall the Copyright owners, or
+anyone distributing the software, be liable for any damages or
+other liability, whether in contract, tort or otherwise, arising
+from, out of, or in connection with the software, or the use or
+other dealings in the software, even if advised of the possibility
+of such damage.
+
+Permission is hereby granted to use, copy, modify, and distribute
+this software, or portions hereof, for any purpose, without fee,
+subject to the following restrictions:
+
+ 1. The origin of this software must not be misrepresented; you
+    must not claim that you wrote the original software.  If you
+    use this software in a product, an acknowledgment in the product
+    documentation would be appreciated, but is not required.
+
+ 2. Altered source versions must be plainly marked as such, and must
+    not be misrepresented as being the original software.
+
+ 3. This Copyright notice may not be removed or altered from any
+    source or altered source distribution.
+
+
+PNG Reference Library License version 1 (for libpng 0.5 through 1.6.35)
+-----------------------------------------------------------------------
+
+libpng versions 1.0.7, July 1, 2000, through 1.6.35, July 15, 2018 are
+Copyright (c) 2000-2002, 2004, 2006-2018 Glenn Randers-Pehrson, are
+derived from libpng-1.0.6, and are distributed according to the same
+disclaimer and license as libpng-1.0.6 with the following individuals
+added to the list of Contributing Authors:
+
+    Simon-Pierre Cadieux
+    Eric S. Raymond
+    Mans Rullgard
+    Cosmin Truta
+    Gilles Vollant
+    James Yu
+    Mandar Sahastrabuddhe
+    Google Inc.
+    Vadim Barkov
+
+and with the following additions to the disclaimer:
+
+    There is no warranty against interference with your enjoyment of
+    the library or against infringement.  There is no warranty that our
+    efforts or the library will fulfill any of your particular purposes
+    or needs.  This library is provided with all faults, and the entire
+    risk of satisfactory quality, performance, accuracy, and effort is
+    with the user.
+
+Some files in the "contrib" directory and some configure-generated
+files that are distributed with libpng have other copyright owners, and
+are released under other open source licenses.
+
+libpng versions 0.97, January 1998, through 1.0.6, March 20, 2000, are
+Copyright (c) 1998-2000 Glenn Randers-Pehrson, are derived from
+libpng-0.96, and are distributed according to the same disclaimer and
+license as libpng-0.96, with the following individuals added to the
+list of Contributing Authors:
+
+    Tom Lane
+    Glenn Randers-Pehrson
+    Willem van Schaik
+
+libpng versions 0.89, June 1996, through 0.96, May 1997, are
+Copyright (c) 1996-1997 Andreas Dilger, are derived from libpng-0.88,
+and are distributed according to the same disclaimer and license as
+libpng-0.88, with the following individuals added to the list of
+Contributing Authors:
+
+    John Bowler
+    Kevin Bracey
+    Sam Bushell
+    Magnus Holmgren
+    Greg Roelofs
+    Tom Tanner
+
+Some files in the "scripts" directory have other copyright owners,
+but are released under this license.
+
+libpng versions 0.5, May 1995, through 0.88, January 1996, are
+Copyright (c) 1995-1996 Guy Eric Schalnat, Group 42, Inc.
+
+For the purposes of this copyright and license, "Contributing Authors"
+is defined as the following set of individuals:
+
+    Andreas Dilger
+    Dave Martindale
+    Guy Eric Schalnat
+    Paul Schmidt
+    Tim Wegner
+
+The PNG Reference Library is supplied "AS IS".  The Contributing
+Authors and Group 42, Inc. disclaim all warranties, expressed or
+implied, including, without limitation, the warranties of
+merchantability and of fitness for any purpose.  The Contributing
+Authors and Group 42, Inc. assume no liability for direct, indirect,
+incidental, special, exemplary, or consequential damages, which may
+result from the use of the PNG Reference Library, even if advised of
+the possibility of such damage.
+
+Permission is hereby granted to use, copy, modify, and distribute this
+source code, or portions hereof, for any purpose, without fee, subject
+to the following restrictions:
+
+ 1. The origin of this source code must not be misrepresented.
+
+ 2. Altered versions must be plainly marked as such and must not
+    be misrepresented as being the original source.
+
+ 3. This Copyright notice may not be removed or altered from any
+    source or altered source distribution.
+
+The Contributing Authors and Group 42, Inc. specifically permit,
+without fee, and encourage the use of this source code as a component
+to supporting the PNG file format in commercial products.  If you use
+this source code in a product, acknowledgment is not required but would
+be appreciated.
 </pre>
           </td>
         </tr>
@@ -3751,6 +4122,51 @@ Lesser General Public License for more details.
 You should have received a copy of the GNU Lesser General Public
 License along with this library; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+</pre>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <h2><a id="libvorbis"></a>libvorbis License</h2>
+          </td>
+          <td>
+            <div class="license-meta">
+            <p>This license applies to the following paths:</p>
+            <ul class="license-paths">
+              <li><code>media/libvorbis</code></li>
+            </ul>
+            </div>
+          </td>
+          <td class="license-text">
+            <pre>
+Copyright (c) 2002-2020 Xiph.org Foundation
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of the Xiph.org Foundation nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 </pre>
           </td>
         </tr>
@@ -3974,6 +4390,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
               <li><code>devtools/shared/natural-sort.js</code></li>
               <li><code>devtools/shared/node-properties/node-properties.js</code></li>
               <li><code>extensions/spellcheck/hunspell</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-clip-tor-scan-converter.c</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-mono-scan-converter.c</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-spans-private.h</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-spans.c</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-tor-scan-converter.c</code></li>
+              <li><code>gfx/cairo/cairo/src/cairo-tor22-scan-converter.c</code></li>
               <li><code>gfx/pixman/pixman</code></li>
               <li><code>js/src/vm/Float16.h</code></li>
               <li><code>js/src/xsum</code></li>
@@ -5087,6 +5509,58 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         </tr>
         <tr>
           <td>
+            <h2><a id="speex-resampler"></a>Speex Resampler License</h2>
+          </td>
+          <td>
+            <div class="license-meta">
+            <p>This license applies to the following paths:</p>
+            <ul class="license-paths">
+              <li><code>media/libspeex_resampler</code></li>
+            </ul>
+            </div>
+          </td>
+          <td class="license-text">
+            <pre>
+Copyright 2002-2008 	Xiph.org Foundation
+Copyright 2002-2008 	Jean-Marc Valin
+Copyright 2005-2007	Analog Devices Inc.
+Copyright 2005-2008	Commonwealth Scientific and Industrial Research
+                        Organisation (CSIRO)
+Copyright 1993, 2002, 2006 David Rowe
+Copyright 2003 		EpicGames
+Copyright 1992-1994	Jutta Degener, Carsten Bormann
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of the Xiph.org Foundation nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre>
+          </td>
+        </tr>
+        <tr>
+          <td>
             <h2><a id="sprintf.js"></a>sprintf.js License</h2>
           </td>
           <td>
@@ -5122,6 +5596,108 @@ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
 ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <h2><a id="sqlite"></a>SQLite Public Domain Dedication</h2>
+          </td>
+          <td>
+            <div class="license-meta">
+            <p>This license applies to the following paths:</p>
+            <ul class="license-paths">
+              <li><code>third_party/sqlite3/src</code></li>
+            </ul>
+            </div>
+          </td>
+          <td class="license-text">
+            <pre>
+License Information
+===================
+
+SQLite Is Public Domain
+-----------------------
+
+The SQLite source code, including all of the files in the directories
+listed in the bullets below are 
+[Public Domain](https://sqlite.org/copyright.html).
+The authors have submitted written affidavits releasing their work to
+the public for any use.  Every byte of the public-domain code can be
+traced back to the original authors.  The files of this repository
+that are public domain include the following:
+
+  *  All of the primary SQLite source code files found in the
+     [src/ directory](https://sqlite.org/src/tree/src?type=tree&amp;expand)
+  *  All of the test cases and testing code in the
+     [test/ directory](https://sqlite.org/src/tree/test?type=tree&amp;expand)
+  *  All of the SQLite extension source code and test cases in the
+     [ext/ directory](https://sqlite.org/src/tree/ext?type=tree&amp;expand)
+  *  All code that ends up in the "sqlite3.c" and "sqlite3.h" build products
+     that actually implement the SQLite RDBMS.
+  *  All of the code used to compile the
+     [command-line interface](https://sqlite.org/cli.html)
+  *  All of the code used to build various utility programs such as
+     "sqldiff", "sqlite3_rsync", and "sqlite3_analyzer".
+
+
+The public domain source files usually contain a header comment
+similar to the following to make it clear that the software is
+public domain.
+
+&gt; The author disclaims copyright to this source code.  In place of
+&gt; a legal notice, here is a blessing:
+&gt; 
+&gt;   *   May you do good and not evil.
+&gt;   *   May you find forgiveness for yourself and forgive others.
+&gt;   *   May you share freely, never taking more than you give.
+
+Almost every file you find in this source repository will be
+public domain.  But there are a small number of exceptions:
+
+Non-Public-Domain Code Included With This Source Repository AS A Convenience
+----------------------------------------------------------------------------
+
+This repository contains a (relatively) small amount of non-public-domain
+code used to help implement the configuration and build logic.  In other
+words, there are some non-public-domain files used to implement:
+
+&gt; ./configure &amp;&amp; make
+
+In all cases, the non-public-domain files included with this
+repository have generous BSD-style licenses.  So anyone is free to
+use any of the code in this source repository for any purpose, though
+attribution may be required to reuse or republish the configure and
+build scripts.  None of the non-public-domain code ever actually reaches
+the build products, such as "sqlite3.c", however, so no attribution is
+required to use SQLite itself.  The non-public-domain code consists of
+scripts used to help compile SQLite.  The non-public-domain code is
+technically not part of SQLite.  The non-public-domain code is
+included in this repository as a convenience to developers, so that those
+who want to build SQLite do not need to go download a bunch of
+third-party build scripts in order to compile SQLite.
+
+Non-public-domain code included in this respository includes:
+
+  *  The ["autosetup"](http://msteveb.github.io/autosetup/) configuration
+     system that is contained (mostly) in the autosetup/ directory, but also
+     includes the "./configure" script at the top-level of this archive.
+     Autosetup has a separate BSD-style license.  See the
+     [autosetup/LICENSE](http://msteveb.github.io/autosetup/license/)
+     for details.
+
+  *  There are BSD-style licenses on some of the configuration
+     software found in the legacy autoconf/ directory and its
+     subdirectories.
+
+The following unix shell command can be run from the top-level
+of this source repository in order to remove all non-public-domain
+code:
+
+&gt; rm -rf configure autosetup autoconf
+
+If you unpack this source repository and then run the command above, what
+is left will be 100% public domain.
 </pre>
           </td>
         </tr>
@@ -6059,52 +6635,6 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
         </tr>
         <tr>
           <td>
-            <h2><a id="xiph"></a>Xiph.org Foundation License</h2>
-          </td>
-          <td>
-            <div class="license-meta">
-            
-<p>The Xiph.org Foundation copyright year is 2002 for <code>media/libogg/</code>,
-2002-2004 for <code>media/libvorbis/</code> and 2002-2008 for
-<code>media/libspeex_resampler/</code>.</p>
-
-            </div>
-          </td>
-          <td class="license-text">
-            <pre>
-Copyright (c) &lt;year&gt;, Xiph.org Foundation
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-- Redistributions of source code must retain the above copyright
-notice, this list of conditions and the following disclaimer.
-
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-
-- Neither the name of the Xiph.org Foundation nor the names of its
-contributors may be used to endorse or promote products derived from
-this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION
-OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-</pre>
-          </td>
-        </tr>
-        <tr>
-          <td>
             <h2><a id="xxhash"></a>xxHash License</h2>
           </td>
           <td>
@@ -6146,6 +6676,45 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 </pre>
           </td>
         </tr>
+        <tr>
+          <td>
+            <h2><a id="zlib"></a>zlib License</h2>
+          </td>
+          <td>
+            <div class="license-meta">
+            <p>This license applies to the following paths:</p>
+            <ul class="license-paths">
+              <li><code>modules/zlib</code></li>
+            </ul>
+            </div>
+          </td>
+          <td class="license-text">
+            <pre>
+Copyright notice:
+
+ (C) 1995-2026 Jean-loup Gailly and Mark Adler
+
+  This software is provided 'as-is', without any express or implied
+  warranty.  In no event will the authors be held liable for any damages
+  arising from the use of this software.
+
+  Permission is granted to anyone to use this software for any purpose,
+  including commercial applications, and to alter it and redistribute it
+  freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+     claim that you wrote the original software. If you use this software
+     in a product, an acknowledgment in the product documentation would be
+     appreciated but is not required.
+  2. Altered source versions must be plainly marked as such, and must not be
+     misrepresented as being the original software.
+  3. This notice may not be removed or altered from any source distribution.
+
+  Jean-loup Gailly        Mark Adler
+  jloup@gzip.org          madler@alumni.caltech.edu
+</pre>
+          </td>
+        </tr>
       </tbody>
     </table>
 
@@ -6158,20 +6727,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     people and projects for their contributions:</p>
 
     <ul>
-      <li>This software is based in part on the work of the Independent
-          JPEG Group.</li>
-      <li>Portions of the Android version of this software are copyright
-          &copy; 1996-2026
-          <a href="https://www.freetype.org/">The FreeType Project</a>.
-          All rights reserved.</li>
-      <li>The <a href="https://www.zlib.net/">zlib</a> compression library
-          (Jean-loup Gailly, Mark Adler and team)</li>
-      <li>The <a href="http://www.libpng.org/pub/png/">libpng</a> graphics library
-          (Glenn Randers-Pehrson and team)</li>
-      <li>The <a href="https://www.sqlite.org/">sqlite</a> database engine
-          (D. Richard Hipp and team)</li>
-      <li>The <a href="http://nsis.sourceforge.net/">Nullsoft Scriptable Install System</a>
-          (Amir Szekely and team)</li>
+      <li>This software is based in part on the work of the Independent JPEG Group.</li>
+      <li>The <a href="http://www.libpng.org/pub/png/">libpng</a> graphics library (Glenn Randers-Pehrson and team)</li>
+      <li>The <a href="https://www.sqlite.org/">sqlite</a> database engine (D. Richard Hipp and team)</li>
+      <li>The <a href="https://www.zlib.net/">zlib</a> compression library (Jean-loup Gailly, Mark Adler and team)</li>
     </ul>
 
     <hr>

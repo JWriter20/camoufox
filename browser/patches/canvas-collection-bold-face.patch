@@ -1,7 +1,8 @@
 diff --git a/gfx/2d/ScaledFontFontconfig.cpp b/gfx/2d/ScaledFontFontconfig.cpp
+index 6e13be5766..d5eea88003 100644
 --- a/gfx/2d/ScaledFontFontconfig.cpp
 +++ b/gfx/2d/ScaledFontFontconfig.cpp
-@@ -537,6 +537,27 @@ already_AddRefed<UnscaledFont> UnscaledFontFontconfig::CreateFromFontDescriptor(
+@@ -535,6 +535,27 @@ already_AddRefed<UnscaledFont> UnscaledFontFontconfig::CreateFromFontDescriptor(
    }
    nsCString path((const char*)aData, aDataLength);
  
@@ -27,5 +28,5 @@ diff --git a/gfx/2d/ScaledFontFontconfig.cpp b/gfx/2d/ScaledFontFontconfig.cpp
 +  }
 +
    // Use the given pathname/index in a fontconfig lookup to confirm this is a
-   // known font; if not, we'll use whatever fallback it provides instead.
+   // known font file; if not, we'll use whatever fallback it provides instead.
    FcPattern* pattern = FcPatternCreate();

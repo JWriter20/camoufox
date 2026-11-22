@@ -1,4 +1,5 @@
 diff --git a/xpfe/appshell/AppWindow.cpp b/xpfe/appshell/AppWindow.cpp
+index 33bd818a97..9b63406cf8 100644
 --- a/xpfe/appshell/AppWindow.cpp
 +++ b/xpfe/appshell/AppWindow.cpp
 @@ -7,6 +7,7 @@
@@ -9,7 +10,7 @@ diff --git a/xpfe/appshell/AppWindow.cpp b/xpfe/appshell/AppWindow.cpp
  #include <algorithm>
  
  // Helper classes
-@@ -1334,6 +1335,47 @@ bool AppWindow::UpdateWindowStateFromMiscXULAttributes() {
+@@ -1325,6 +1326,47 @@ bool AppWindow::UpdateWindowStateFromMiscXULAttributes() {
    return true;
  }
  
@@ -57,7 +58,7 @@ diff --git a/xpfe/appshell/AppWindow.cpp b/xpfe/appshell/AppWindow.cpp
  /* Stagger windows of the same type so they don't appear on top of each other.
     This code does have a scary double loop -- it'll keep passing through
     the entire list of open windows until it finds a non-collision. Doesn't
-@@ -2439,8 +2481,36 @@ void AppWindow::SizeShell() {
+@@ -2430,8 +2472,36 @@ void AppWindow::SizeShell() {
    // on the resolution of the screen we're on. But positioning needs to
    // know the size so that it can constrain to screen bounds.... as an
    // initial guess here, we'll use the specified size (if any).
@@ -95,8 +96,9 @@ diff --git a/xpfe/appshell/AppWindow.cpp b/xpfe/appshell/AppWindow.cpp
 +  }
  
    if (gotSize) {
-     SetSpecifiedSize(specWidth, specHeight);
+     SetSpecifiedSize(CSSIntSize(specWidth, specHeight));
 diff --git a/xpfe/appshell/AppWindow.h b/xpfe/appshell/AppWindow.h
+index b758859f6e..65c4270d6e 100644
 --- a/xpfe/appshell/AppWindow.h
 +++ b/xpfe/appshell/AppWindow.h
 @@ -195,6 +195,7 @@ class AppWindow final : public nsIBaseWindow,
@@ -108,6 +110,7 @@ diff --git a/xpfe/appshell/AppWindow.h b/xpfe/appshell/AppWindow.h
                         int32_t aSpecWidth, int32_t aSpecHeight);
    bool LoadPositionFromXUL(int32_t aSpecWidth, int32_t aSpecHeight);
 diff --git a/xpfe/appshell/moz.build b/xpfe/appshell/moz.build
+index b7b25be176..467d46077a 100644
 --- a/xpfe/appshell/moz.build
 +++ b/xpfe/appshell/moz.build
 @@ -37,6 +37,7 @@ XPCOM_MANIFESTS += [

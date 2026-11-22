@@ -1,17 +1,17 @@
 diff --git a/browser/components/about/AboutRedirector.cpp b/browser/components/about/AboutRedirector.cpp
-index cea04ed..f817d0d 100644
+index 2f6517d7a8..0544985b7d 100644
 --- a/browser/components/about/AboutRedirector.cpp
 +++ b/browser/components/about/AboutRedirector.cpp
-@@ -166,13 +166,15 @@ static const RedirEntry kRedirMap[] = {
+@@ -165,13 +165,15 @@ static const RedirEntry kRedirMap[] = {
      {"welcomeback", "chrome://browser/content/aboutWelcomeBack.xhtml",
       nsIAboutModule::ALLOW_SCRIPT | nsIAboutModule::HIDE_FROM_ABOUTABOUT |
           nsIAboutModule::IS_SECURE_CHROME_UI},
 -#ifdef MOZ_NORMANDY
 +    // Camoufox: registered as in stock although Normandy is built out (its
-+    // content still ships as resource://normandy-content). Without it a page's
++    // content still ships, from browser/components/nimbus). Without it a page's
 +    // Worker, XHR or stylesheet to about:studies throws synchronously where
 +    // stock fails asynchronously.
-     {"studies", "resource://normandy-content/about-studies/about-studies.html",
+     {"studies", "chrome://nimbus/content/about-studies/about-studies.html",
       nsIAboutModule::ALLOW_SCRIPT | nsIAboutModule::IS_SECURE_CHROME_UI |
           nsIAboutModule::URI_CAN_LOAD_IN_PRIVILEGEDABOUT_PROCESS |
           nsIAboutModule::URI_MUST_LOAD_IN_CHILD |
@@ -21,7 +21,7 @@ index cea04ed..f817d0d 100644
      {"deleteprofile", "chrome://browser/content/profiles/delete-profile.html",
       nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
 diff --git a/browser/components/about/components.conf b/browser/components/about/components.conf
-index f76be11..ffe1363 100644
+index f76be11e93..ffe1363806 100644
 --- a/browser/components/about/components.conf
 +++ b/browser/components/about/components.conf
 @@ -36,8 +36,8 @@ pages = [
@@ -36,7 +36,7 @@ index f76be11..ffe1363 100644
  if buildconfig.substs.get('MOZ_SELECTABLE_PROFILES'):
      pages += [
 diff --git a/docshell/base/nsAboutRedirector.cpp b/docshell/base/nsAboutRedirector.cpp
-index 1ec396c..5e5af7f 100644
+index 1ec396c84c..5e5af7f6d3 100644
 --- a/docshell/base/nsAboutRedirector.cpp
 +++ b/docshell/base/nsAboutRedirector.cpp
 @@ -111,10 +111,12 @@ static const RedirEntry kRedirMap[] = {
@@ -55,7 +55,7 @@ index 1ec396c..5e5af7f 100644
       nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
           nsIAboutModule::URI_MUST_LOAD_IN_CHILD},
 diff --git a/docshell/build/components.conf b/docshell/build/components.conf
-index 1f86eca..5bcb9e2 100644
+index baa3c995b8..5613e36e53 100644
 --- a/docshell/build/components.conf
 +++ b/docshell/build/components.conf
 @@ -36,8 +36,8 @@ about_pages = [

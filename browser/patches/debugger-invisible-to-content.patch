@@ -1,8 +1,8 @@
 diff --git a/js/src/builtin/Promise.cpp b/js/src/builtin/Promise.cpp
-index dff04f721c..303b02594d 100644
+index b8bc1115ec..f0abdbf80f 100644
 --- a/js/src/builtin/Promise.cpp
 +++ b/js/src/builtin/Promise.cpp
-@@ -6725,7 +6725,7 @@ static MOZ_ALWAYS_INLINE bool IsPromiseThenOrCatchRetValImplicitlyUsed(
+@@ -6746,7 +6746,7 @@ static MOZ_ALWAYS_INLINE bool IsPromiseThenOrCatchRetValImplicitlyUsed(
    }
  
    // If devtools is opened, the current realm will become debuggee.
@@ -27,7 +27,7 @@ index cb1998358d..58ec7e549f 100644
     * Return true if the given global is being observed by at least one
     * Debugger that is tracking allocations.
 diff --git a/js/src/debugger/Debugger.cpp b/js/src/debugger/Debugger.cpp
-index 7349049205..a53674b18d 100644
+index 222011945d..c61197e8b4 100644
 --- a/js/src/debugger/Debugger.cpp
 +++ b/js/src/debugger/Debugger.cpp
 @@ -405,6 +405,11 @@ bool js::ParseEvalOptions(JSContext* cx, HandleValue value,
@@ -144,7 +144,7 @@ index 7349049205..a53674b18d 100644
                    setCollectCoverageInfo),
      JS_DEBUG_PSGS("exclusiveDebuggerOnEval", getExclusiveDebuggerOnEval,
 diff --git a/js/src/debugger/Debugger.h b/js/src/debugger/Debugger.h
-index 50438c8f63..8dc5e4859d 100644
+index d333c71913..a471955e9b 100644
 --- a/js/src/debugger/Debugger.h
 +++ b/js/src/debugger/Debugger.h
 @@ -426,6 +426,7 @@ class MOZ_RAII EvalOptions {
@@ -155,15 +155,15 @@ index 50438c8f63..8dc5e4859d 100644
    bool allowRedeclaringExistingLexicalBinding_ = false;
    EnvKind kind_;
  
-@@ -436,6 +437,7 @@ class MOZ_RAII EvalOptions {
+@@ -437,6 +438,7 @@ class MOZ_RAII EvalOptions {
    unsigned lineno() const { return lineno_; }
    bool hideFromDebugger() const { return hideFromDebugger_; }
    bool bypassCSP() const { return bypassCSP_; }
 +  bool hideFromContent() const { return hideFromContent_; }
-   EnvKind kind() const { return kind_; }
    bool allowRedeclaringExistingLexicalBinding() const {
      return allowRedeclaringExistingLexicalBinding_;
-@@ -450,6 +452,7 @@ class MOZ_RAII EvalOptions {
+   }
+@@ -446,6 +448,7 @@ class MOZ_RAII EvalOptions {
    void setLineno(unsigned lineno) { lineno_ = lineno; }
    void setHideFromDebugger(bool hide) { hideFromDebugger_ = hide; }
    void setBypassCSP(bool bypass) { bypassCSP_ = bypass; }
@@ -345,7 +345,7 @@ index 239b31ee4c..96b04883a0 100644
      JSScript* script, JS::LimitedColumnNumberOneOrigin* columnp = nullptr);
  
 diff --git a/js/src/vm/Realm.cpp b/js/src/vm/Realm.cpp
-index 08d20f419c..677aae8f3c 100644
+index 1351351208..51b3bc5b8a 100644
 --- a/js/src/vm/Realm.cpp
 +++ b/js/src/vm/Realm.cpp
 @@ -26,6 +26,7 @@
@@ -386,7 +386,7 @@ index 08d20f419c..677aae8f3c 100644
  void Realm::updateDebuggerObservesFlag(unsigned flag) {
    MOZ_ASSERT(isDebuggee());
    MOZ_ASSERT(flag == DebuggerObservesAllExecution ||
-@@ -664,7 +688,7 @@ bool Realm::shouldCaptureStackForThrow() {
+@@ -655,7 +679,7 @@ bool Realm::shouldCaptureStackForThrow() {
    // To match other browsers, we always capture a stack trace if the realm is a
    // debuggee (this includes the devtools console being open) or if unlimited
    // stack traces have been enabled for this realm (used in automation).
@@ -396,7 +396,7 @@ index 08d20f419c..677aae8f3c 100644
    }
  
 diff --git a/js/src/vm/Realm.h b/js/src/vm/Realm.h
-index 15ff9f089c..9ca9f980d8 100644
+index 6caac71cbb..f0c06ebdb0 100644
 --- a/js/src/vm/Realm.h
 +++ b/js/src/vm/Realm.h
 @@ -38,6 +38,7 @@ class LCovRealm;
@@ -407,7 +407,7 @@ index 15ff9f089c..9ca9f980d8 100644
  class DateTimeInfo;
  class Debugger;
  class GlobalObject;
-@@ -417,6 +418,9 @@ class JS::Realm : public JS::shadow::Realm {
+@@ -415,6 +416,9 @@ class JS::Realm : public JS::shadow::Realm {
      DebuggerObservesCoverage = 1 << 2,
      DebuggerObservesWasm = 1 << 3,
      DebuggerObservesNativeCall = 1 << 4,
@@ -417,7 +417,7 @@ index 15ff9f089c..9ca9f980d8 100644
    };
    uint32_t debugModeBits_ = 0;
    friend class js::AutoRestoreRealmDebugMode;
-@@ -743,6 +747,21 @@ class JS::Realm : public JS::shadow::Realm {
+@@ -741,6 +745,21 @@ class JS::Realm : public JS::shadow::Realm {
    // object.
    bool isDebuggee() const { return !!(debugModeBits_ & IsDebuggee); }
  
@@ -439,7 +439,7 @@ index 15ff9f089c..9ca9f980d8 100644
    void setIsDebuggee();
    void unsetIsDebuggee();
  
-@@ -754,6 +773,7 @@ class JS::Realm : public JS::shadow::Realm {
+@@ -752,6 +771,7 @@ class JS::Realm : public JS::shadow::Realm {
      isTracingExecution_ = true;
      setIsDebuggee();
      updateDebuggerObservesAllExecution();
@@ -447,7 +447,7 @@ index 15ff9f089c..9ca9f980d8 100644
    }
  
    void disableExecutionTracing() {
-@@ -767,6 +787,8 @@ class JS::Realm : public JS::shadow::Realm {
+@@ -765,6 +785,8 @@ class JS::Realm : public JS::shadow::Realm {
      updateDebuggerObservesAllExecution();
      if (!hasDebuggers()) {
        unsetIsDebuggee();

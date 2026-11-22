@@ -1,5 +1,5 @@
 diff --git a/dom/media/MediaManager.cpp b/dom/media/MediaManager.cpp
-index 07725888a4..043d67c750 100644
+index a3d6a13aa5..68d3b690c1 100644
 --- a/dom/media/MediaManager.cpp
 +++ b/dom/media/MediaManager.cpp
 @@ -44,6 +44,7 @@
@@ -23,7 +23,7 @@ index 07725888a4..043d67c750 100644
  nsresult LocalMediaDevice::Allocate(const MediaTrackConstraints& aConstraints,
                                      const MediaEnginePrefs& aPrefs,
                                      uint64_t aWindowID,
-@@ -2138,7 +2145,11 @@ MediaManager::CreateEnumerationParams(dom::MediaSourceEnum aVideoInputType,
+@@ -2174,7 +2181,11 @@ MediaManager::CreateEnumerationParams(dom::MediaSourceEnum aVideoInputType,
    MOZ_ASSERT_IF(!MediaEngineSource::IsAudio(aAudioInputType),
                  aAudioInputType == dom::MediaSourceEnum::Other);
    const bool forceFakes = aFlags.contains(EnumerationFlag::ForceFakes);
@@ -36,7 +36,7 @@ index 07725888a4..043d67c750 100644
    Maybe<VideoDeviceEnumerationParams> videoParams;
    Maybe<DeviceEnumerationParams> audioParams;
    nsAutoCString audioDev;
-@@ -2335,7 +2346,10 @@ MediaManager::EnumerateRawDevices(EnumerationParams aParams) {
+@@ -2371,7 +2382,10 @@ MediaManager::EnumerateRawDevices(EnumerationParams aParams) {
    // Only enumerate what's asked for, and only fake cams and mics.
    RefPtr<MediaEngine> fakeBackend, realBackend;
    if (aParams.HasFakeCams() || aParams.HasFakeMics()) {
@@ -48,7 +48,7 @@ index 07725888a4..043d67c750 100644
    }
    if (aParams.RealDeviceRequested()) {
      MediaManager* manager = MediaManager::GetIfExists();
-@@ -2376,9 +2390,17 @@ MediaManager::EnumerateRawDevices(EnumerationParams aParams) {
+@@ -2412,9 +2426,17 @@ MediaManager::EnumerateRawDevices(EnumerationParams aParams) {
    }
    if (aParams.mFlags.contains(EnumerationFlag::EnumerateAudioOutputs)) {
      MediaDeviceSet outputs;
@@ -69,7 +69,7 @@ index 07725888a4..043d67c750 100644
      speakers = Some(MediaDeviceSet());
      speakers->AppendElements(outputs);
      devices->AppendElements(std::move(outputs));
-@@ -4907,7 +4929,7 @@ bool DeviceListener::CapturingVideo() const {
+@@ -4942,7 +4964,7 @@ bool DeviceListener::CapturingVideo() const {
    MOZ_ASSERT(NS_IsMainThread());
    return Activated() && mDeviceState && !mDeviceState->mStopped &&
           MediaEngineSource::IsVideo(GetDevice()->GetMediaSource()) &&
@@ -78,7 +78,7 @@ index 07725888a4..043d67c750 100644
            Preferences::GetBool("media.navigator.permission.fake"));
  }
  
-@@ -4915,7 +4937,7 @@ bool DeviceListener::CapturingAudio() const {
+@@ -4950,7 +4972,7 @@ bool DeviceListener::CapturingAudio() const {
    MOZ_ASSERT(NS_IsMainThread());
    return Activated() && mDeviceState && !mDeviceState->mStopped &&
           MediaEngineSource::IsAudio(GetDevice()->GetMediaSource()) &&
@@ -87,7 +87,7 @@ index 07725888a4..043d67c750 100644
            Preferences::GetBool("media.navigator.permission.fake"));
  }
  
-@@ -4933,7 +4955,7 @@ CaptureState DeviceListener::CapturingSource(MediaSourceEnum aSource) const {
+@@ -4968,7 +4990,7 @@ CaptureState DeviceListener::CapturingSource(MediaSourceEnum aSource) const {
  
    if ((aSource == MediaSourceEnum::Camera ||
         aSource == MediaSourceEnum::Microphone) &&
@@ -678,13 +678,13 @@ index cd9c407af5..0bcfe65c0c 100644
  
  }  // namespace mozilla
 diff --git a/dom/media/webrtc/moz.build b/dom/media/webrtc/moz.build
-index a40204e475..d0644be504 100644
+index 00548f1fef..cc01df633b 100644
 --- a/dom/media/webrtc/moz.build
 +++ b/dom/media/webrtc/moz.build
-@@ -136,3 +136,6 @@ FINAL_LIBRARY = "xul"
- 
- # Add libFuzzer configuration directives
- include("/tools/fuzzing/libfuzzer-config.mozbuild")
+@@ -146,3 +146,6 @@ SOURCE_HEADERS += [
+     "WebrtcGlobal.h",
+     "WebrtcIPCTraits.h",
+ ]
 +
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
