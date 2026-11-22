@@ -29,6 +29,8 @@ What PASS means:
     * a proxy that refuses UDP ASSOCIATE, and one that drops the association
       once it is in use, leave the page loading over TCP, as a machine whose
       UDP is blocked does;
+    * a persistent context, whose launch proxy Playwright also sets on the
+      context, is carried the same way;
     * a SOCKS5 proxy given names (a context's own proxy), and an HTTP proxy,
       are sent no QUIC: their requests stay on TCP.
 
@@ -427,12 +429,13 @@ async def main() -> int:
         await o.start()
         return o
 
-    async def launch(proxy=None):
+    async def launch(proxy=None, **options):
         port = free_port()
         browser = await AsyncCamoufox(
             headless=True, executable_path=str(resolve_binary()), geoip=False, i_know_what_im_doing=True,
             args=marionette_args(), env=marionette_env(),
             firefox_user_prefs={**PREFS, "marionette.port": port}, proxy={"server": proxy} if proxy else None,
+            **options,
         ).__aenter__()
 
         def trust_authority() -> None:
@@ -507,7 +510,21 @@ async def main() -> int:
          and {c[0] for c in naming.connects} == {3}, (named_seen, naming.connects[:2])),
     ]
 
-    # Proxies that carry no UDP: the page reads a machine whose UDP is blocked.
+    # A persistent context: Playwright gives it the launch proxy as its own, too.
+    persistent_origin = await origin()
+    proxy = Socks5Proxy(host)
+    with tempfile.TemporaryDirectory() as profile:
+        context = await launch(await proxy.start(), persistent_context=True, user_data_dir=profile)
+        page = await context.new_page()
+        await page.goto(persistent_origin.url)
+        persistent_seen = await page.evaluate(FETCH, persistent_origin.url)
+        await context.close()
+    checks.append(("a persistent context's launch proxy is given addresses and carries HTTP/3",
+                   persistent_seen.count("h3") >= 2 and {c[0] for c in proxy.connects} == {1}
+                   and set(persistent_origin.datagrams) <= proxy.exits(), (persistent_seen, proxy.connects[:2])))
+    persistent_origin.close()
+    proxy.close()
+
     for label, kwargs in (("refuses UDP ASSOCIATE", {"udp": False}),
                           ("drops the association in use", {"hang_up_after": 3})):
         blocked_origin = await origin()

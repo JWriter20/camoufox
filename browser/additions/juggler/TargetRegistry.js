@@ -1465,6 +1465,13 @@ class BrowserContext {
   setProxy(proxy) {
     // Clear AuthCache.
     Services.obs.notifyObservers(null, "net:clear-active-logins");
+    // Camoufox: Playwright gives a persistent context the launch proxy a
+    // second time, as the context's. It is the launch proxy, with its
+    // credentials and its name resolution (docs/proxy-dns.md).
+    if (this === this._registry._defaultContext) {
+      this._registry.setBrowserProxy(proxy);
+      return;
+    }
     this._proxy = withProxyAuth(proxy, this._proxyAuth);
     recordProxied(this.userContextId);
     this._registry._updateProxiesWithSameAuthCacheAndDifferentCredentials();
