@@ -1,15 +1,14 @@
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index 82a49c2d26..ac1d2ddbf4 100644
+index b844cdbea5..44887af66a 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -667,3 +667,6 @@ GeneratedFile(
-         "/servo/components/style/properties/counted_unknown_properties.py",
-     ],
- )
+@@ -704,3 +704,6 @@ SOURCE_HEADERS += [
+     "WindowDestroyedEvent.h",
+     "WindowNamedPropertiesHandler.h",
+ ]
 +
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
-\ No newline at end of file
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
 index 095b2f6fd4..bb0c62cd48 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
@@ -181,14 +180,13 @@ index 50dbb0847d..567e832a35 100644
    MOZ_ASSERT(rts);
  
 diff --git a/dom/workers/moz.build b/dom/workers/moz.build
-index f5ec1301a7..294a1c7a03 100644
+index cfa7b84392..4c181d6cfd 100644
 --- a/dom/workers/moz.build
 +++ b/dom/workers/moz.build
-@@ -110,3 +110,6 @@ MARIONETTE_MANIFESTS += ["test/marionette/manifest.toml"]
- XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell/xpcshell.toml"]
- 
- BROWSER_CHROME_MANIFESTS += ["test/browser.toml"]
+@@ -118,3 +118,6 @@ SOURCE_HEADERS += [
+     "WorkerEventTarget.h",
+     "WorkerThread.h",
+ ]
 +
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
-\ No newline at end of file

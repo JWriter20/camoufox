@@ -1,8 +1,8 @@
 diff --git a/dom/media/mediacapabilities/MediaCapabilities.cpp b/dom/media/mediacapabilities/MediaCapabilities.cpp
-index 9f08fa9175..a724f8f879 100644
+index dcc29c372b..b859148135 100644
 --- a/dom/media/mediacapabilities/MediaCapabilities.cpp
 +++ b/dom/media/mediacapabilities/MediaCapabilities.cpp
-@@ -11,6 +11,7 @@
+@@ -14,6 +14,7 @@
  #include "MP4Decoder.h"
  #include "MediaCapabilitiesValidation.h"
  #include "MediaInfo.h"
@@ -10,7 +10,7 @@ index 9f08fa9175..a724f8f879 100644
  #include "MediaRecorder.h"
  #include "PDMFactorySupport.h"
  #include "VPXDecoder.h"
-@@ -1101,9 +1102,14 @@ void MediaCapabilities::CreateNonWebRTCDecodingInfo(
+@@ -1241,9 +1242,14 @@ void MediaCapabilities::CreateNonWebRTCDecodingInfo(
                  return;
                }
  
@@ -28,7 +28,7 @@ index 9f08fa9175..a724f8f879 100644
                      aConfiguration, drmInfo);
                  promise->MaybeResolve(std::move(drmInfo));
                  return;
-@@ -1132,6 +1138,29 @@ void MediaCapabilities::CreateNonWebRTCDecodingInfo(
+@@ -1272,6 +1278,29 @@ void MediaCapabilities::CreateNonWebRTCDecodingInfo(
      return;
    }
  
@@ -59,13 +59,13 @@ index 9f08fa9175..a724f8f879 100644
    nsTArray<RefPtr<CapabilitiesPromise>> promises;
  
 diff --git a/dom/media/mediacapabilities/moz.build b/dom/media/mediacapabilities/moz.build
-index 786b87a910..74e3855f1a 100644
+index 880fb1184a..d229290cf1 100644
 --- a/dom/media/mediacapabilities/moz.build
 +++ b/dom/media/mediacapabilities/moz.build
-@@ -14,3 +14,6 @@ UNIFIED_SOURCES += [
- include("/ipc/chromium/chromium-config.mozbuild")
- 
- FINAL_LIBRARY = "xul"
+@@ -18,3 +18,6 @@ FINAL_LIBRARY = "xul"
+ SOURCE_HEADERS += [
+     "MediaCapabilitiesValidation.h",
+ ]
 +
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
@@ -108,7 +108,7 @@ index 88956ccea8..296b168ded 100644
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/dom/media/webm/MatroskaDecoder.cpp b/dom/media/webm/MatroskaDecoder.cpp
-index ca63eb884a..a2b99cfdcb 100644
+index 46cfa2ce92..602a4cdaf4 100644
 --- a/dom/media/webm/MatroskaDecoder.cpp
 +++ b/dom/media/webm/MatroskaDecoder.cpp
 @@ -8,6 +8,7 @@
@@ -119,7 +119,7 @@ index ca63eb884a..a2b99cfdcb 100644
  #include "VideoUtils.h"
  #include "mozilla/StaticPrefs_media.h"
  #include "nsMimeTypes.h"
-@@ -124,6 +125,12 @@ bool MatroskaDecoder::IsSupportedType(const MediaContainerType& aContainerType,
+@@ -143,6 +144,12 @@ bool MatroskaDecoder::IsSupportedType(const MediaContainerType& aContainerType,
  
    if (!tracks.IsEmpty()) {
      // Look for exact match as we know the codecs used.
@@ -133,13 +133,13 @@ index ca63eb884a..a2b99cfdcb 100644
        if (!track || PDMFactorySupport::IsSupported(SupportDecoderParams(*track),
                                                     aDiagnostics)
 diff --git a/dom/media/webm/moz.build b/dom/media/webm/moz.build
-index 46749416af..0f58406576 100644
+index ef13aa4876..52cd337854 100644
 --- a/dom/media/webm/moz.build
 +++ b/dom/media/webm/moz.build
-@@ -31,3 +31,6 @@ FINAL_LIBRARY = "xul"
- 
- # Add libFuzzer configuration directives
- include("/tools/fuzzing/libfuzzer-config.mozbuild")
+@@ -35,3 +35,6 @@ include("/tools/fuzzing/libfuzzer-config.mozbuild")
+ SOURCE_HEADERS += [
+     "EbmlComposer.h",
+ ]
 +
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]

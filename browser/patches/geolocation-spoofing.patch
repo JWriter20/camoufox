@@ -127,18 +127,18 @@ index 82c2951b4d..f51c60a03c 100644
  
  }  // namespace mozilla::dom::geolocation
 diff --git a/dom/geolocation/moz.build b/dom/geolocation/moz.build
-index 170552ab61..b5f1efa0a8 100644
+index ddb70f988e..61f518df3e 100644
 --- a/dom/geolocation/moz.build
 +++ b/dom/geolocation/moz.build
-@@ -73,3 +73,6 @@ BROWSER_CHROME_MANIFESTS += ["test/browser/browser.toml"]
- MOCHITEST_CHROME_MANIFESTS += ["test/chrome/chrome.toml"]
- MOCHITEST_MANIFESTS += ["test/mochitest/mochitest.toml"]
- XPCSHELL_TESTS_MANIFESTS += ["test/unit/xpcshell.toml"]
+@@ -77,3 +77,6 @@ XPCSHELL_TESTS_MANIFESTS += ["test/unit/xpcshell.toml"]
+ SOURCE_HEADERS += [
+     "MLSFallback.h",
+ ]
 +
 +# Camoufox: include path for MaskConfig.hpp
 +LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/dom/system/NetworkGeolocationProvider.sys.mjs b/dom/system/NetworkGeolocationProvider.sys.mjs
-index 2dc54dc968..5bf84686ce 100644
+index 619f58b151..fd83d5a202 100644
 --- a/dom/system/NetworkGeolocationProvider.sys.mjs
 +++ b/dom/system/NetworkGeolocationProvider.sys.mjs
 @@ -483,28 +483,63 @@ NetworkGeolocationProvider.prototype = {
