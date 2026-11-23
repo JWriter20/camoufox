@@ -1162,7 +1162,7 @@ rules:
 
   - id: http3-is-raced-on-the-exits-clock
     title: Behind a SOCKS5 relay, the timers that start TCP beside QUIC wait for what the proxy cost
-    check: manual   # browser/tests/playwright/patches/http3-https-record-socks5.py
+    check: manual   # browser/tests/playwright/patches/http3-https-record-socks5.py, ublock-connections-socks5.py
     evidence:
       - "Firefox 160 release, netwerk/protocol/http/nsHttpTransaction.cpp: OnHTTPSRRAvailable arms mFastFallbackTimer for network.dns.httpssvc.http3_fast_fallback_timeout (50 ms) and OnFastFallbackTimer opens a TCP connection; an Alt-Svc route has mHttp3BackupTimer, network.http.http3.backup_timer_delay (100 ms). OnBackupConnectionReady moves the request to TCP if QUIC has not connected. Happy Eyeballs v3 is off in release (network.http.happy_eyeballs_enabled)"
       - "behind a SOCKS5 proxy the first QUIC datagram leaves after the UDP ASSOCIATE (a TCP connect, greeting and request: two or three round trips to the proxy), so both timers ran out before QUIC had sent anything"
@@ -1170,6 +1170,13 @@ rules:
       - "once a TCP connection to the origin exists the backup is ready the moment the timer fires, so every later HTTP/3 attempt was closed before its relay was ready: one lone datagram each, on an association of its own"
       - "a navigation behind the proxy opened two QUIC connections to its origin and one with no proxy: nsHttpHandler::SpeculativeConnectInternal keys the connection with the page's partition key, and a proxied request's connection has none (StoragePrincipalHelper::GetOriginAttributesForHttpConnection, privacy.partition.network_state.connection_with_proxy false), so the speculative connection was never used"
       - "http3-https-record-socks5.py, 2026-11-22: 4 of 7 checks pass before the change and 7 of 7 after; an origin that answers nothing over QUIC is reached over TCP by the same connections either way"
+      - "Firefox 160: a page's render-blocking requests keep its other ones in the pending queue (nsHttpConnectionMgr, 'blocked by request context'), and the fast fallback timer of a queued request runs from its HTTPS record all the same; uBlock Origin's 'Disable pre-fetching' sets network.http.speculative-parallel-limit to 0, so no connection has been opened for it"
+      - "a page whose stylesheet, image, video, font, EventSource and fetch are at six names of one site, uBlock Origin loaded, no proxy, 2026-11-23: the site 4 ms away sees no TCP connection and every request over HTTP/3 (10 of 10 runs); 40 ms away a TCP connection for five names that carries nothing (5 of 5); 100 ms away a TCP connection for each name, which carry the EventSource, the fetch and the font (11 of 11); six QUIC connections at every distance"
+      - "the same page behind a SOCKS5 proxy 50 ms away each way with proxy_optimistic_data, before the change: one QUIC connection, and the image, video, font, EventSource and fetch over TCP at 4 ms and at 100 ms (ublock-connections-socks5.py, 4 of 6 checks in 2 of 2 runs)"
+      - "at 100 ms the stylesheet answered 209 ms after its record with no proxy and 612 ms after it behind the proxy, the 403 ms its relay's setup and two round trips come to; a TCP connection was ready 204 ms after it was started with no proxy and 407 ms behind the proxy, where its ClientHello travels behind the CONNECT request, while a QUIC connection's first datagram waits for the reply to UDP ASSOCIATE and its answer crosses the proxy: 305 ms, a round trip to the proxy more"
+      - "with a held request's timer waiting for the stylesheet's cost alone, the site saw what it sees with no proxy at 4 and 100 ms, and the EventSource, fetch and font over TCP at 40 ms (2 of 2 runs), where with no proxy QUIC wins by under 20 ms; with the TCP connection started a round trip later instead, the image and video, which join the stylesheet's QUIC connection, never opened the TCP connection they open with no proxy (2 of 2)"
+      - "with that round trip waited when the backup connection is ready: equal to no proxy at 4, 40 and 100 ms (3 of 3 runs at 40 ms); ublock-connections-socks5.py 6 of 6 checks in 5 of 5 runs"
+      - "the guard's DoH resolver speaks HTTP/1.1; with six connections reused, a page's answers came a round trip to the proxy apart (0, 122, 137 and 260 ms after the first) where with no proxy they came 20 ms apart, and a request whose record came late was not held like the others. A connection for each query, closed after its answer, brings them within 13 ms of each other both ways, as one HTTP/2 connection does"
     rationale: >-
       An origin sees which connections arrive, not only which one carries the
       request: a TCP connection beside every QUIC one, or a request over
@@ -1177,7 +1184,18 @@ rules:
       proxy's exit does only when QUIC is slow there. The timers measure the
       origin's QUIC against a head start, so behind a relay they wait for
       what the proxy added: the time the relay took to set up, and one round
-      trip to the proxy, measured on the UDP ASSOCIATE request. Do not turn
+      trip to the proxy, measured on the UDP ASSOCIATE request. A request
+      held behind a page's blocking ones has no connection when its timer
+      runs out, so it waits for what the proxy cost those: their relay's
+      setup and two round trips, a handshake and a response. Let go by
+      then, as it would be at the exit, it waits for its own relay. Still
+      held, it starts TCP as it does at the exit, and what is left to match
+      is the race that TCP connection runs against a QUIC connection not yet
+      asked for: with proxy_optimistic_data TCP crosses the proxy one round
+      trip sooner than QUIC, so the request is taken from QUIC that much
+      after the backup is ready. Do not start the TCP connection later
+      instead: a request that joins another's QUIC connection would never
+      open it, and the origin counts connections. Do not turn
       the timers off behind a proxy, and do not lengthen them by a constant:
       an origin with no working QUIC must still be reached over TCP, as late
       as the exit would reach it and no later than the proxy makes it. A
