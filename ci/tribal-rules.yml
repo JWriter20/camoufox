@@ -1218,6 +1218,8 @@ rules:
       - "Firefox 160, nsHttpChannel.cpp and AlternateServices.cpp: Happy Eyeballs is skipped for any channel with a proxy. third_party/rust/happy-eyeballs: the next endpoint is attempted when the newest attempt is 50 ms old (connection_attempt_delay, doubled per attempt in progress), and the rest are cancelled when one connects"
       - "behind a SOCKS5 proxy 50 ms away each way, the race on the browser's clock: a site 100 ms away saw no TCP connection where it sees six with no proxy (the TCP attempts were closed before they crossed the proxy), and an origin deaf to QUIC saw two TCP connections where it sees one (the second was started while the first was still in its SOCKS handshake)"
       - "with the proxy's cost of the attempts in progress taken off the race's clock and added to a loser's close: ublock-connections-socks5.py 5 of 8 checks before the change and 8 of 8 after; http3-https-record-socks5.py 7 of 7"
+      - "third_party/rust/happy-eyeballs: once an address is known the HTTPS record is waited for 25 ms (resolution_delay). uBlock Origin resolves each request's name (browser.dns.resolve) and holds the request until it has, so in the launch's own context the race's A and AAAA queries are answered from the cache at once and the HTTPS query alone goes to the resolver. With no proxy the record is back inside the 25 ms; behind a SOCKS5 proxy it is a round trip to the proxy later, the wait ran out, and TCP was tried at the URL's port with no record: the origin got nearly every subresource request over TCP, with a GREASE ECH extension, where stock sends every one over HTTP/3 (2026-11-23)"
+      - "the guard did not see it: its page was opened in a new context, whose lookups are cached apart from the extension's, so all three queries crossed the proxy together; and its resolver gave each query a connection of its own, four round trips to the proxy where a DoH resolver's one HTTP/2 connection costs one. With the page in the launch's context and the resolver on HTTP/2: 6 of 8 checks before the change (every request over TCP behind the proxy, at 4 and at 100 ms), 8 of 8 after"
     rationale: >-
       Which connections an origin sees, and which names a resolver is asked,
       are decided by the connection race, and release Firefox races with
@@ -1230,8 +1232,11 @@ rules:
       origin late by what the proxy costs: the association or the SOCKS
       handshake, and the round trips to the proxy. The race's clock is set
       back by that cost while an attempt is in progress, and an attempt that
-      lost is closed that much later. Do not lengthen the delays by a
-      constant, and do not turn the race off behind the proxy: both change
+      lost is closed that much later. A lookup crosses the proxy as well:
+      for each stretch with an answer outstanding the clock is set back by
+      the time waited, up to one round trip to the proxy (the last SOCKS5
+      greeting's), so an answer is taken when it reached the exit. Do not
+      lengthen the delays by a constant, and do not turn the race off behind the proxy: both change
       what the origin sees with the proxy's distance. A proxy given names
       still runs no race and asks no resolver. What is not matched: the cost
       is measured on the handshake with the proxy, so a proxy whose latency

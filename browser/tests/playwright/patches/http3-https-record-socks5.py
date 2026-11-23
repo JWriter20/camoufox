@@ -144,11 +144,13 @@ class Resolver:
     def __init__(self, cert: str, key: str) -> None:
         self.ports = {}  # name -> the port its HTTPS record names
         self.delay = 0  # how long an answer takes
-        self.once = False  # a connection is closed after one answer
+        self.http2 = False  # answers over HTTP/2 (serve_http2)
         self._tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self._tls.load_cert_chain(cert, key)
 
     async def start(self) -> str:
+        if self.http2:
+            self._tls.set_alpn_protocols(["h2"])
         self.server = await asyncio.start_server(self.serve, ADDRESS, 0, ssl=self._tls)
         return f"https://{ADDRESS}:{self.server.sockets[0].getsockname()[1]}/dns-query"
 
@@ -171,6 +173,8 @@ class Resolver:
 
     async def serve(self, reader, writer) -> None:
         try:
+            if writer.get_extra_info("ssl_object").selected_alpn_protocol() == "h2":
+                await self.serve_http2(reader, writer)
             while line := await reader.readline():
                 length = 0
                 while (header := await reader.readline()) not in (b"\r\n", b""):
@@ -182,16 +186,51 @@ class Resolver:
                     query = base64.urlsafe_b64decode(encoded + b"=" * (-len(encoded) % 4))
                 answer = self.answer(query)
                 await asyncio.sleep(self.delay)
-                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\n%s"
-                             b"Content-Length: %d\r\n\r\n%s"
-                             % (b"Connection: close\r\n" if self.once else b"", len(answer), answer))
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\n"
+                             b"Content-Length: %d\r\n\r\n%s" % (len(answer), answer))
                 await writer.drain()
-                if self.once:
-                    break
         except (ConnectionError, ssl.SSLError, asyncio.IncompleteReadError):
             pass
         finally:
             writer.close()
+
+    async def serve_http2(self, reader, writer) -> None:
+        """HTTP/2 as a DoH resolver speaks it: every query is a stream of one
+        connection, answered when it is ready. Queries are POSTed
+        (network.trr.useGET false), so no header has to be decoded."""
+
+        def frame(kind: int, flags: int, stream: int, payload: bytes = b"") -> None:
+            writer.write(len(payload).to_bytes(3, "big") + bytes((kind, flags)) + struct.pack("!I", stream) + payload)
+
+        async def reply(stream: int, query: bytes) -> None:
+            answer = self.answer(query)
+            await asyncio.sleep(self.delay)
+            if writer.is_closing():
+                return
+            kind = b"application/dns-message"
+            length = str(len(answer)).encode()
+            # :status 200, then content-type and content-length as literals
+            # with the static table's names.
+            frame(1, 4, stream, b"\x88\x0f\x10" + bytes((len(kind),)) + kind
+                  + b"\x0f\x0d" + bytes((len(length),)) + length)
+            frame(0, 1, stream, answer)
+
+        await reader.readexactly(24)
+        frame(4, 0, 0)
+        bodies, replies = {}, set()
+        while True:
+            header = await reader.readexactly(9)
+            kind, flags, stream = header[3], header[4], struct.unpack("!I", header[5:])[0]
+            payload = await reader.readexactly(int.from_bytes(header[:3], "big"))
+            if kind == 4 and not flags & 1:
+                frame(4, 1, 0)
+            elif kind == 6 and not flags & 1:
+                frame(6, 1, 0, payload)
+            elif kind == 0:
+                bodies[stream] = bodies.get(stream, b"") + payload
+                if flags & 1:
+                    replies.add(task := asyncio.ensure_future(reply(stream, bodies.pop(stream))))
+                    task.add_done_callback(replies.discard)
 
     def close(self) -> None:
         self.server.close()

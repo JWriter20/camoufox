@@ -191,7 +191,14 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
   proxy was sent, and the round trips to the proxy its answer needs (one,
   or two for a TCP connection without `proxy_optimistic_data`, whose
   ClientHello waits for the proxy's reply). An attempt that loses the race
-  is closed that much later, having reached the origin that much later
+  is closed that much later, having reached the origin that much later.
+  A lookup's answer crosses the proxy as well, and the race waits only 25 ms
+  for an HTTPS record once it has an address, which it has at once when
+  something else resolved the name first (uBlock Origin does, for every
+  request). So the clock is also set back by a round trip to the proxy for
+  each stretch spent waiting for the resolver; without that the record came
+  late and the request went over TCP to the URL's port, with a GREASE ECH
+  extension
   ([`connections-are-raced-as-release-races-them`](../ci/tribal-rules.yml)).
 - **uBlock Origin's "Disable pre-fetching" asks nothing of the resolver.** It
   sets `network.http.speculative-parallel-limit` to 0. With Happy Eyeballs a

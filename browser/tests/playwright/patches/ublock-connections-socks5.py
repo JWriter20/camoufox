@@ -14,7 +14,12 @@ proxied browser raced on the older timers, which open TCP connections stock no
 longer opens. Camoufox keeps it on behind a SOCKS5 proxy given addresses, and
 runs it on the exit's clock: an attempt sends nothing until the proxy has been
 asked for it, and its answer crosses the proxy, so the delay would run out on
-an attempt a Firefox at the proxy's exit is still waiting for.
+an attempt a Firefox at the proxy's exit is still waiting for. A lookup's
+answer crosses the proxy too. uBlock Origin resolves a request's name before
+letting it go, so the connection finds the addresses in the cache and waits
+25 ms for the HTTPS record alone (the resolution delay); on the browser's
+clock that ran out a round trip to the proxy early, and every request went
+over TCP to the URL's port with a GREASE ECH extension.
 
 uBlock Origin's default "Disable pre-fetching" sets
 network.http.speculative-parallel-limit to 0, so no connection is opened ahead
@@ -26,9 +31,11 @@ The guard runs a site of several names on one address (HTTP/1.1 over TLS and
 HTTP/3, announced by an HTTPS record), a page on another server whose
 stylesheet, image, video, font, EventSource and fetch are at those names and
 which preconnects to one more, a DoH resolver and a SOCKS5 proxy 50 ms away
-each way. The resolver is addressed by name, as the launcher's
-proxy_dns='doh' addresses its own: the proxy is given that one name and
-addresses for the rest. The site is a set distance from whoever connects to
+each way. The resolver answers over one HTTP/2 connection, 20 ms after it is
+asked, and is addressed by name, as the launcher's proxy_dns='doh' addresses
+its own: the proxy is given that one name and addresses for the rest. The
+page is opened in the launch's own context, whose lookups share a cache with
+uBlock Origin's. The site is a set distance from whoever connects to
 it, the browser or the proxy: once nearer than the delay and once further,
 where Firefox opens TCP beside QUIC with no proxy too.
 
@@ -297,7 +304,7 @@ class Resolver(record.Resolver):
         super().__init__(cert, key)
         self.asked, self.plain = set(), set()
         self.delay = RESOLVER
-        self.once = True
+        self.http2 = True
 
     def answer(self, query: bytes) -> bytes:
         at, labels = 12, []
@@ -414,8 +421,13 @@ async def visit(binary: Path, cert: str, key: str, trust: str, distance: float, 
     if proxy:
         proxy.names = {f"doh.{ZONE}": ADDRESS}
     log = tempfile.TemporaryDirectory()
+    profile = tempfile.TemporaryDirectory()
     port = free_port()
-    browser = await AsyncCamoufox(
+    # The page is opened in the launch's own context, where the lookup uBlock
+    # Origin makes for each request leaves the addresses in the cache the
+    # connection reads: the HTTPS record is then the one answer still to come.
+    context = await AsyncCamoufox(
+        persistent_context=True, user_data_dir=profile.name,
         headless=True, executable_path=str(binary), geoip=False, i_know_what_im_doing=True,
         args=marionette_args(),
         env={**marionette_env(), "MOZ_LOG": "append,nsHostResolver:5", "MOZ_LOG_FILE": f"{log.name}/resolver"},
@@ -426,29 +438,27 @@ async def visit(binary: Path, cert: str, key: str, trust: str, distance: float, 
             # that name, so the resolver is an address.
             **({"network.trr.uri": network.doh_by_name} if proxied
                else {"network.trr.mode": 3, "network.trr.uri": network.doh_by_address}),
-            # A DoH resolver answers a page's queries together, over one
-            # HTTP/2 connection. This one speaks HTTP/1.1, so each query gets
-            # a connection of its own (Resolver.once), all at the same time:
-            # an answer that waited for a connection, or found one open,
-            # would come a round trip to the proxy apart from the others.
-            "network.http.max-persistent-connections-per-server": 3 * (len(KINDS) + 1),
+            # The resolver answers over HTTP/2 and reads no header, so the
+            # query has to be the request's body.
+            "network.trr.useGET": False,
             "network.http.http3.disable_when_third_party_roots_found": False, "marionette.port": port},
     ).__aenter__()
     try:
         # Marionette's session needs a window to attach to.
-        window = await browser.new_page()
+        window = await context.new_page()
         limit = await asyncio.to_thread(prepare, port, trust)
         await window.close()
-        page = await (await browser.new_context()).new_page()
+        page = await context.new_page()
         await page.goto(network.url)
         await asyncio.sleep(4)
     finally:
-        await browser.close()
+        await context.close()
         network.close()
         if proxy:
             proxy.close()
     resolved = "".join(path.read_text(errors="replace") for path in Path(log.name).iterdir())
     log.cleanup()
+    profile.cleanup()
     seen = network.seen()
     seen["speculative limit"] = limit
     seen["resolved here"] = resolved.count("Calling getaddrinfo")
