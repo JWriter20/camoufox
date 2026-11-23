@@ -105,22 +105,10 @@ index 6e7a349494..b7d83085ea 100644
  
  transport_cppsrcs = [
 diff --git a/dom/media/webrtc/transport/nr_socket_prsock.cpp b/dom/media/webrtc/transport/nr_socket_prsock.cpp
-index a1f2c78aaf..016ceafaa5 100644
+index a1f2c78aaf..ee6fb75f85 100644
 --- a/dom/media/webrtc/transport/nr_socket_prsock.cpp
 +++ b/dom/media/webrtc/transport/nr_socket_prsock.cpp
-@@ -81,6 +81,11 @@ nrappkit copyright:
-    ekr@rtfm.com  Thu Dec 20 20:14:49 2001
- */
- 
-+// Camoufox: ahead of nrappkit (csi_platform.h), whose strlcpy macro the IPC
-+// headers these pull in do not survive.
-+#include "mozilla/net/ProxyConfigLookup.h"
-+#include "mozilla/net/WebrtcProxyConfig.h"
-+
- #include <assert.h>
- #include <csi_platform.h>
- #include <errno.h>
-@@ -96,6 +101,8 @@ nrappkit copyright:
+@@ -96,6 +96,8 @@ nrappkit copyright:
  #include "nsCOMPtr.h"
  #include "nsComponentManagerUtils.h"
  #include "nsDebug.h"
@@ -129,7 +117,16 @@ index a1f2c78aaf..016ceafaa5 100644
  #include "nsISocketFilter.h"
  #include "nsISocketTransportService.h"
  #include "nsISupportsImpl.h"
-@@ -1021,7 +1028,40 @@ NrUdpRelaySocket::~NrUdpRelaySocket() { EndRelay(); }
+@@ -132,6 +134,8 @@ nrappkit copyright:
+ #  undef strlcpy
+ 
+ #  include "mozilla/dom/network/UDPSocketChild.h"
++#  include "mozilla/net/ProxyConfigLookup.h"
++#  include "mozilla/net/WebrtcProxyConfig.h"
+ 
+ #  ifdef LOG_TEMP_INFO
+ #    define LOG_INFO LOG_TEMP_INFO
+@@ -1021,7 +1025,40 @@ NrUdpRelaySocket::~NrUdpRelaySocket() { EndRelay(); }
  int NrUdpRelaySocket::create(nr_transport_addr* addr) {
    int r = NrSocket::create(addr);
    if (!r) {
