@@ -113,7 +113,6 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "contentaccessible-parity",
         "context-menu-key-claimed-os",
         "css-device-size-fractional",
-        "dns-prefetch-through-doh",
         "driven-click-count",
         "driven-drag-gtk",
         "driven-evaluate-globals",
