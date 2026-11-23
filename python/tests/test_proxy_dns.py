@@ -24,6 +24,8 @@ def _apply(proxy_dns, proxy, exit_looked_up=False, config=None, prefs=None):
 @pytest.mark.parametrize("proxy_dns", [None, "doh"])
 def test_socks5_proxy_resolves_by_doh(proxy_dns):
     assert utils.PROXY_DOH_PREFS["network.trr.mode"] == 3
+    # Speculative lookups go by DoH too; in 'exit' this machine would make them.
+    assert utils.PROXY_DOH_PREFS["network.dns.prefetch_via_proxy"] is True
     assert _apply(proxy_dns, SOCKS) == ({}, DOH)
 
 
@@ -53,7 +55,7 @@ def test_unknown_mode_raises():
 def test_caller_prefs_are_kept():
     mine = {"network.trr.uri": "https://dns.example/dns-query", "network.trr.excluded-domains": "a.example"}
     _, prefs = _apply(None, SOCKS, prefs=dict(mine))
-    assert prefs == {**mine, "network.trr.mode": 3}
+    assert prefs == {**utils.PROXY_DOH_PREFS, **mine}
 
 
 @pytest.mark.parametrize("ipv6, expected", [(None, {"network:ipv4Only": True}), ("2001:db8::7", {})])

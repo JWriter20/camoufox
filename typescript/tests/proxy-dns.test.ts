@@ -40,6 +40,8 @@ it.each([
 	"doh",
 ])("a SOCKS5 proxy resolves by DoH (%s)", async (mode) => {
 	expect(PROXY_DOH_PREFS["network.trr.mode"]).toBe(3);
+	// Speculative lookups go by DoH too; in "exit" this machine would make them.
+	expect(PROXY_DOH_PREFS["network.dns.prefetch_via_proxy"]).toBe(true);
 	expect(await apply(mode, SOCKS)).toEqual([{}, DOH]);
 });
 
@@ -77,7 +79,7 @@ it("the caller's prefs are kept", async () => {
 		"network.trr.excluded-domains": "a.example",
 	};
 	const [, prefs] = await apply(undefined, SOCKS, false, {}, { ...mine });
-	expect(prefs).toEqual({ ...mine, "network.trr.mode": 3 });
+	expect(prefs).toEqual({ ...PROXY_DOH_PREFS, ...mine });
 });
 
 it.each([

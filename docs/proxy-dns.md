@@ -43,6 +43,21 @@ rollout uses. Juggler then gives the launch proxy addresses instead of names
 resolves. The proxy's own host name is the one name this host's resolver is
 asked (`network.trr.excluded-domains`).
 
+Speculative lookups are made too. Firefox resolves the name of a
+`<link rel=dns-prefetch>`, and of a link in the page, before anything is asked
+of it, and the name's nameserver sees the question. Firefox stops for the life
+of the browser at its first proxied request, and Juggler stops when a proxy is
+set, because this host would make the lookup. In `doh` mode it is one more DoH
+question through the proxy, so the launcher sets
+`network.dns.prefetch_via_proxy` and both leave it on
+([`doh-mode-keeps-dns-prefetch`](../ci/tribal-rules.yml)). In `exit` mode, and
+behind an HTTP proxy, it stays off: nothing but this host could answer.
+
+uBlock Origin, a default addon, turns every speculative lookup and connection
+off through its "Disable pre-fetching" setting, with or without a proxy. Pass
+`exclude_addons=[DefaultAddons.UBO]` for a browser that makes them as stock
+does.
+
 The resolver an authoritative DNS server sees is therefore Cloudflare's, asked
 from the exit. That is what it sees of a stock Firefox in the countries where
 Mozilla has rolled DoH out (the `doh-config` collection of Remote Settings on
