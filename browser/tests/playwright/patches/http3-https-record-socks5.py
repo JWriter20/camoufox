@@ -143,6 +143,7 @@ class Resolver:
 
     def __init__(self, cert: str, key: str) -> None:
         self.ports = {}  # name -> the port its HTTPS record names
+        self.delay = 0  # how long an answer takes
         self._tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self._tls.load_cert_chain(cert, key)
 
@@ -179,6 +180,7 @@ class Resolver:
                     encoded = line.split()[1].split(b"dns=")[1].split(b"&")[0]
                     query = base64.urlsafe_b64decode(encoded + b"=" * (-len(encoded) % 4))
                 answer = self.answer(query)
+                await asyncio.sleep(self.delay)
                 writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\n"
                              b"Content-Length: %d\r\n\r\n%s" % (len(answer), answer))
                 await writer.drain()
@@ -208,6 +210,7 @@ class DistantProxy(relayed.Socks5Proxy):
     def __init__(self, associate: float = 0) -> None:
         super().__init__(ADDRESS)
         self.associate = associate
+        self.names = {}  # the names this proxy resolves, and their addresses
 
     async def handle(self, reader, writer) -> None:
         loop = asyncio.get_running_loop()
@@ -249,7 +252,7 @@ class DistantProxy(relayed.Socks5Proxy):
         if cmd == 1:
             self.connects.append((atyp, host, port))
             await asyncio.sleep(DELAY)
-            up_reader, up_writer = await asyncio.open_connection(host, port)
+            up_reader, up_writer = await asyncio.open_connection(self.names.get(host, host), port)
             # What the browser sent behind the request is not kept waiting
             # for the reply.
             up = asyncio.ensure_future(delayed(reader, up_writer))
