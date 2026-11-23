@@ -107,7 +107,8 @@
   },
   "proxyDohPrefs": {
     "network.trr.mode": 3,
-    "network.trr.uri": "https://mozilla.cloudflare-dns.com/dns-query"
+    "network.trr.uri": "https://mozilla.cloudflare-dns.com/dns-query",
+    "network.dns.prefetch_via_proxy": true
   },
   "windowsBehaviourPrefs": {
     "layout.word_select.eat_space_to_next_word": true,
