@@ -1164,14 +1164,14 @@ rules:
     title: Behind a SOCKS5 relay, the timers that start TCP beside QUIC wait for what the proxy cost
     check: manual   # browser/tests/playwright/patches/http3-https-record-socks5.py, ublock-connections-socks5.py
     evidence:
-      - "Firefox 160 release, netwerk/protocol/http/nsHttpTransaction.cpp: OnHTTPSRRAvailable arms mFastFallbackTimer for network.dns.httpssvc.http3_fast_fallback_timeout (50 ms) and OnFastFallbackTimer opens a TCP connection; an Alt-Svc route has mHttp3BackupTimer, network.http.http3.backup_timer_delay (100 ms). OnBackupConnectionReady moves the request to TCP if QUIC has not connected. Happy Eyeballs v3 is off in release (network.http.happy_eyeballs_enabled)"
+      - "Firefox 160 release, netwerk/protocol/http/nsHttpTransaction.cpp: OnHTTPSRRAvailable arms mFastFallbackTimer for network.dns.httpssvc.http3_fast_fallback_timeout (50 ms) and OnFastFallbackTimer opens a TCP connection; an Alt-Svc route has mHttp3BackupTimer, network.http.http3.backup_timer_delay (100 ms). OnBackupConnectionReady moves the request to TCP if QUIC has not connected. These timers serve the requests Happy Eyeballs v3 does not take (connections-are-raced-as-release-races-them)"
       - "behind a SOCKS5 proxy the first QUIC datagram leaves after the UDP ASSOCIATE (a TCP connect, greeting and request: two or three round trips to the proxy), so both timers ran out before QUIC had sent anything"
       - "an origin with an HTTPS record (alpn h3,h2) and a SOCKS5 proxy 50 ms away each way, same build: with no proxy each of 3 names saw one QUIC connection and no TCP connection; behind the proxy each also saw a TCP connection; with proxy_optimistic_data the requests of new names went over TCP in 5 of 5 runs, and a QUIC connection closed before its relay was ready sent one datagram carrying only CONNECTION_CLOSE; with the association granted after a second, no QUIC at all"
       - "once a TCP connection to the origin exists the backup is ready the moment the timer fires, so every later HTTP/3 attempt was closed before its relay was ready: one lone datagram each, on an association of its own"
       - "a navigation behind the proxy opened two QUIC connections to its origin and one with no proxy: nsHttpHandler::SpeculativeConnectInternal keys the connection with the page's partition key, and a proxied request's connection has none (StoragePrincipalHelper::GetOriginAttributesForHttpConnection, privacy.partition.network_state.connection_with_proxy false), so the speculative connection was never used"
       - "http3-https-record-socks5.py, 2026-11-22: 4 of 7 checks pass before the change and 7 of 7 after; an origin that answers nothing over QUIC is reached over TCP by the same connections either way"
       - "Firefox 160: a page's render-blocking requests keep its other ones in the pending queue (nsHttpConnectionMgr, 'blocked by request context'), and the fast fallback timer of a queued request runs from its HTTPS record all the same; uBlock Origin's 'Disable pre-fetching' sets network.http.speculative-parallel-limit to 0, so no connection has been opened for it"
-      - "a page whose stylesheet, image, video, font, EventSource and fetch are at six names of one site, uBlock Origin loaded, no proxy, 2026-11-23: the site 4 ms away sees no TCP connection and every request over HTTP/3 (10 of 10 runs); 40 ms away a TCP connection for five names that carries nothing (5 of 5); 100 ms away a TCP connection for each name, which carry the EventSource, the fetch and the font (11 of 11); six QUIC connections at every distance"
+      - "a page whose stylesheet, image, video, font, EventSource and fetch are at six names of one site, uBlock Origin loaded, no proxy, network.http.happy_eyeballs_enabled false, 2026-11-23: the site 4 ms away sees no TCP connection and every request over HTTP/3 (10 of 10 runs); 40 ms away a TCP connection for five names that carries nothing (5 of 5); 100 ms away a TCP connection for each name, which carry the EventSource, the fetch and the font (11 of 11); six QUIC connections at every distance"
       - "the same page behind a SOCKS5 proxy 50 ms away each way with proxy_optimistic_data, before the change: one QUIC connection, and the image, video, font, EventSource and fetch over TCP at 4 ms and at 100 ms (ublock-connections-socks5.py, 4 of 6 checks in 2 of 2 runs)"
       - "at 100 ms the stylesheet answered 209 ms after its record with no proxy and 612 ms after it behind the proxy, the 403 ms its relay's setup and two round trips come to; a TCP connection was ready 204 ms after it was started with no proxy and 407 ms behind the proxy, where its ClientHello travels behind the CONNECT request, while a QUIC connection's first datagram waits for the reply to UDP ASSOCIATE and its answer crosses the proxy: 305 ms, a round trip to the proxy more"
       - "with a held request's timer waiting for the stylesheet's cost alone, the site saw what it sees with no proxy at 4 and 100 ms, and the EventSource, fetch and font over TCP at 40 ms (2 of 2 runs), where with no proxy QUIC wins by under 20 ms; with the TCP connection started a round trip later instead, the image and video, which join the stylesheet's QUIC connection, never opened the TCP connection they open with no proxy (2 of 2)"
@@ -1207,6 +1207,35 @@ rules:
       that rejects ECH, whose QUIC connection takes three probe timeouts to
       close, is still raced over TCP sooner than at the exit
       (docs/proxy-dns.md).
+
+  - id: connections-are-raced-as-release-races-them
+    title: Happy Eyeballs v3 is on as in release Firefox, and behind a SOCKS5 proxy given addresses it runs on the exit's clock
+    check: manual   # browser/tests/playwright/patches/ublock-connections-socks5.py, http3-https-record-socks5.py
+    evidence:
+      - "Nimbus rollout happy-eyeballs-release-rollout: 100% of release profiles from Firefox 157, since 2026-09-28, sets network.http.happy_eyeballs_enabled and nothing else (checked 2026-11-23). Camoufox's update channel is 'default', which no rollout targets, and a stock Firefox launched with Nimbus off runs without it too"
+      - "a page whose stylesheet, image, video, font, EventSource and fetch are at six names of one site and which has a <link rel=preconnect> to a seventh, uBlock Origin 1.75.4 loaded, no proxy, 2026-11-23. Stock Firefox 160.0.1 with the pref on and Camoufox with it on, 2 or 3 runs each at 4, 40 and 100 ms: the same connections at each distance (no TCP connection at 4 and 40 ms; at 100 ms a TCP ClientHello for each of the six names and no request over TCP; every request over HTTP/3). With the pref off both made a TCP connection for five names at 40 ms and carried the EventSource, fetch and font over TCP at 100 ms"
+      - "the preconnected name with uBlock Origin's network.http.speculative-parallel-limit 0: asked for A, AAAA and HTTPS with the pref off, asked nothing with it on (nsHttpHandler::SpeculativeConnectInternal: the Happy Eyeballs path returns before any lookup when the limit allows no connection). Seen from a name's authoritative server, Camoufox resolved the name and stock with uBlock Origin never did"
+      - "Firefox 160, nsHttpChannel.cpp and AlternateServices.cpp: Happy Eyeballs is skipped for any channel with a proxy. third_party/rust/happy-eyeballs: the next endpoint is attempted when the newest attempt is 50 ms old (connection_attempt_delay, doubled per attempt in progress), and the rest are cancelled when one connects"
+      - "behind a SOCKS5 proxy 50 ms away each way, the race on the browser's clock: a site 100 ms away saw no TCP connection where it sees six with no proxy (the TCP attempts were closed before they crossed the proxy), and an origin deaf to QUIC saw two TCP connections where it sees one (the second was started while the first was still in its SOCKS handshake)"
+      - "with the proxy's cost of the attempts in progress taken off the race's clock and added to a loser's close: ublock-connections-socks5.py 5 of 8 checks before the change and 8 of 8 after; http3-https-record-socks5.py 7 of 7"
+    rationale: >-
+      Which connections an origin sees, and which names a resolver is asked,
+      are decided by the connection race, and release Firefox races with
+      Happy Eyeballs v3. Without the rollout's pref Camoufox raced as no
+      release profile does, with or without a proxy. Firefox turns the race
+      off behind every proxy, where the proxy resolves the name and there is
+      nothing to race; a SOCKS5 proxy given addresses (proxy_dns 'doh')
+      connects as no proxy does, so the race stays on, as the HTTPS record
+      and HTTP/3 do. Its delays are measured against attempts that reach the
+      origin late by what the proxy costs: the association or the SOCKS
+      handshake, and the round trips to the proxy. The race's clock is set
+      back by that cost while an attempt is in progress, and an attempt that
+      lost is closed that much later. Do not lengthen the delays by a
+      constant, and do not turn the race off behind the proxy: both change
+      what the origin sees with the proxy's distance. A proxy given names
+      still runs no race and asks no resolver. What is not matched: the cost
+      is measured on the handshake with the proxy, so a proxy whose latency
+      changes after it is charged the old figure.
 
   - id: optimistic-data-is-opt-in-and-tls-only
     title: A TLS ClientHello may travel behind the SOCKS5 CONNECT request, only when the launch asks for it

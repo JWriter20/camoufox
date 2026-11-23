@@ -1,37 +1,45 @@
 """
 Verify a site sees the same connections from a browser with uBlock Origin
-behind a SOCKS5 proxy as from the same browser with none.
+behind a SOCKS5 proxy as from the same browser with none, and that both see
+what stock Firefox with uBlock Origin shows.
+
+Stock Firefox on the release channel connects with Happy Eyeballs v3
+(network.http.happy_eyeballs_enabled, a 100% Nimbus rollout that camoufox.cfg
+restores): a request's addresses and HTTPS record are asked for together, the
+connection the record names is tried first, and another is started beside it
+every time one has gone 50 ms without connecting
+(network.http.happy_eyeballs_connection_attempt_delay). A site near enough
+sees QUIC alone. Firefox does not use Happy Eyeballs behind a proxy, so a
+proxied browser raced on the older timers, which open TCP connections stock no
+longer opens. Camoufox keeps it on behind a SOCKS5 proxy given addresses, and
+runs it on the exit's clock: an attempt sends nothing until the proxy has been
+asked for it, and its answer crosses the proxy, so the delay would run out on
+an attempt a Firefox at the proxy's exit is still waiting for.
 
 uBlock Origin's default "Disable pre-fetching" sets
 network.http.speculative-parallel-limit to 0, so no connection is opened ahead
-of a request. A page's stylesheet holds its other requests back until it has
-loaded (they are "blocked by the request context"), and the 50 ms Firefox
-gives QUIC before it also starts TCP (network.dns.httpssvc.
-http3_fast_fallback_timeout) starts when a request's HTTPS record arrives,
-held back or not. With no proxy the stylesheet answers inside that time
-whenever the site is near enough. Behind a SOCKS5 proxy it waits for its UDP
-ASSOCIATE and two round trips to the proxy, so the timer of every request held
-behind it ran out before QUIC had been tried for them: the site got a TCP
-connection per name, and those requests over it, where a Firefox at the
-proxy's exit sends them over HTTP/3.
+of a request. With Happy Eyeballs a <link rel=preconnect> then asks nothing
+of the resolver either; without it the name's addresses and HTTPS record were
+asked for a connection that was never going to be opened.
 
 The guard runs a site of several names on one address (HTTP/1.1 over TLS and
 HTTP/3, announced by an HTTPS record), a page on another server whose
-stylesheet, image, video, font, EventSource and fetch are at those names, a
-DoH resolver and a SOCKS5 proxy 50 ms away each way. The resolver is
-addressed by name, as the launcher's proxy_dns='doh' addresses its own: the
-proxy is given that one name and addresses for the rest. The site is a set
-distance from whoever connects to it, the browser or the proxy: once nearer
-than the timer and once further, where Firefox opens TCP beside QUIC with no
-proxy too.
+stylesheet, image, video, font, EventSource and fetch are at those names and
+which preconnects to one more, a DoH resolver and a SOCKS5 proxy 50 ms away
+each way. The resolver is addressed by name, as the launcher's
+proxy_dns='doh' addresses its own: the proxy is given that one name and
+addresses for the rest. The site is a set distance from whoever connects to
+it, the browser or the proxy: once nearer than the delay and once further,
+where Firefox opens TCP beside QUIC with no proxy too.
 
 What PASS means, at each distance, with uBlock Origin loaded and its
 preferences in place before the page is opened:
     * with no proxy the site sees the connections measured for that distance
-      (REFERENCE, the guard's own check that it still measures the race);
+      from stock Firefox 160.0.1 with uBlock Origin 1.75.4 (REFERENCE), and
+      the resolver is asked nothing about the preconnected name;
     * behind the proxy with proxy_optimistic_data the site sees what it sees
       with no proxy: the TCP connections (server name, ALPN offered, ECH
-      extension), the QUIC connections, the connection that carried each
+      extension), the QUIC connections, the protocol that carried each
       request, the names asked of the resolver and their types, and no QUIC
       connection of one datagram;
     * no name is resolved by this machine, the resolver's included.
@@ -68,22 +76,20 @@ _spec.loader.exec_module(record)
 ADDRESS = record.ADDRESS
 ZONE = "ublock-guard.test"
 KINDS = ("css", "img", "font", "video", "es", "fetch")
-# Round trips between the site and whoever connects to it. NEAR: the stylesheet
-# has answered, and the requests held behind it have connected over QUIC,
-# well inside the 50 ms Firefox gives QUIC. FAR: the timer starts a TCP
-# connection for every name while the stylesheet is on its way, and they are
-# ready before the requests held behind it have connected over QUIC.
+# Round trips between the site and whoever connects to it. NEAR: every QUIC
+# connection is up well inside the 50 ms Firefox gives an attempt. FAR: a TCP
+# connection is started beside each, and QUIC still connects first.
 NEAR, FAR = 0.004, 0.1
-# What the site sees with no proxy (Firefox 160.0.1 with uBlock Origin, the
-# same in every run measured): the names it has a TCP connection for, and the
-# requests each protocol carried. The stylesheet is asked for twice, and the
-# image and video share its QUIC connection. The EventSource, the fetch and
-# the font have connections of their own, so FAR's TCP connections win them.
+# What the site sees of stock Firefox 160.0.1 with uBlock Origin 1.75.4 and no
+# proxy (the same in every run measured): the names it has a TCP connection
+# for, and the requests each protocol carried. The stylesheet is asked for
+# twice. Which QUIC connection carries the EventSource, the fetch and the font
+# differs from run to run, in stock too, so it is not compared.
 REFERENCE = {
     NEAR: {"tcp names": [], "over tcp": [],
            "over h3": ["css", "css", "es", "fetch", "font", "img", "video"]},
-    FAR: {"tcp names": sorted(KINDS), "over tcp": ["es", "fetch", "font"],
-          "over h3": ["css", "css", "img", "video"]},
+    FAR: {"tcp names": sorted(KINDS), "over tcp": [],
+          "over h3": ["css", "css", "es", "fetch", "font", "img", "video"]},
 }
 # How long the resolver takes to answer. A page's requests are asked about
 # together, so with a resolver that answers at once the first of them are on
@@ -95,6 +101,7 @@ new EventSource('https://es.{zone}:{port}/es');
 fetch('https://fetch.{zone}:{port}/fetch', {{mode: 'no-cors', cache: 'no-store'}}).catch(() => 0);
 new FontFace('guard', 'url(https://font.{zone}:{port}/font)').load().catch(() => 0);
 </script>
+<link rel="preconnect" href="https://preconnect.{zone}:{port}">
 <link rel="stylesheet" href="https://css.{zone}:{port}/css">
 </head><body>
 <img src="https://img.{zone}:{port}/img">
@@ -278,7 +285,6 @@ class Site:
             "over tcp": sorted(name for c in self.tcp for name in c["requests"]),
             "over h3": sorted(name for names in self.h3_requests.values() for name in names),
             "quic": len(self.datagrams),
-            "quic by requests": sorted(tuple(sorted(self.h3_requests.get(peer, ()))) for peer in self.datagrams),
             "quic of one datagram": sum(count == 1 for count in self.datagrams.values()),
         }
 
@@ -453,7 +459,7 @@ async def visit(binary: Path, cert: str, key: str, trust: str, distance: float, 
 
 def same(seen: dict, direct: dict) -> bool:
     return all(seen[what] == direct[what] for what in (
-        "tcp", "over tcp", "over h3", "quic", "quic by requests", "quic of one datagram", "asked"))
+        "tcp", "over tcp", "over h3", "quic", "quic of one datagram", "asked"))
 
 
 async def main() -> int:
@@ -474,10 +480,12 @@ async def main() -> int:
             where = f"a site {distance * 1000:.0f} ms away"
             direct = await visit(binary, cert, key, trust, distance, False)
             checks.append((f"{where}, no proxy: uBlock Origin's preferences are set, the site sees the connections "
-                           "measured for this distance and no name is resolved here (the guard's reference)",
+                           "stock Firefox makes at this distance and no name is resolved here",
                            direct["speculative limit"] == 0
                            and all(direct[what] == expected for what, expected in REFERENCE[distance].items())
                            and not direct["resolved here"], direct))
+            checks.append((f"{where}, no proxy: the resolver is asked nothing about the preconnected name",
+                           not any(name.startswith("preconnect") for name, _ in direct["asked"]), direct["asked"]))
             seen = await visit(binary, cert, key, trust, distance, True)
             checks.append((f"{where}, behind the proxy: the site sees what it sees with no proxy",
                            seen["speculative limit"] == 0 and same(seen, direct), seen))

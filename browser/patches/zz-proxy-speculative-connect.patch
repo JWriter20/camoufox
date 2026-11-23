@@ -50,10 +50,10 @@ index 58b4f9d56e..43d655a388 100644
      speculativeHandler->SpeculativeConnectWithOriginAttributesNative(
          uri, std::move(mOriginAttributes.ref()), mCallbacks, anonymous);
 diff --git a/netwerk/base/nsSocketTransport2.cpp b/netwerk/base/nsSocketTransport2.cpp
-index 1fb9a3a7cf..25f4c49ba5 100644
+index cf9efd18fa..01113c7f61 100644
 --- a/netwerk/base/nsSocketTransport2.cpp
 +++ b/netwerk/base/nsSocketTransport2.cpp
-@@ -1402,8 +1402,15 @@ nsresult nsSocketTransport::InitiateSocket() {
+@@ -1403,8 +1403,15 @@ nsresult nsSocketTransport::InitiateSocket() {
  
    // Hosts/Proxy Hosts that are Local IP Literals should not be speculatively
    // connected - Bug 853423.
@@ -71,8 +71,23 @@ index 1fb9a3a7cf..25f4c49ba5 100644
      SOCKET_LOG(
          ("nsSocketTransport::InitiateSocket skipping "
           "speculative connection for host [%s:%d] proxy "
+diff --git a/netwerk/protocol/http/nsHttpConnectionInfo.cpp b/netwerk/protocol/http/nsHttpConnectionInfo.cpp
+index 4ecf6a989a..4163248aa5 100644
+--- a/netwerk/protocol/http/nsHttpConnectionInfo.cpp
++++ b/netwerk/protocol/http/nsHttpConnectionInfo.cpp
+@@ -704,7 +704,9 @@ bool nsHttpConnectionInfo::ConnectsAsDirect() const {
+ bool nsHttpConnectionInfo::HostIsLocalIPLiteral() const {
+   NetAddr netAddr;
+   // If the host/proxy host is not an IP address literal, return false.
+-  nsAutoCString host(ProxyHost() ? ProxyHost() : Origin());
++  // Camoufox: a proxy that connects as direct is given the origin's address.
++  nsAutoCString host(ProxyHost() && !ConnectsAsDirect() ? ProxyHost()
++                                                         : Origin());
+   if (NS_FAILED(netAddr.InitFromString(host))) {
+     return false;
+   }
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
-index 3ec2937f08..31571e8150 100644
+index 3ec2937f08..552b22fd91 100644
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp
 @@ -2515,7 +2515,8 @@ nsHttpHandler::Observe(nsISupports* subject, const char* topic,
@@ -133,17 +148,20 @@ index 3ec2937f08..31571e8150 100644
                                    originAttributes, aURI->SchemeIs("https"));
    }
    ci = ci->Mutate()
-@@ -2634,7 +2646,9 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
+@@ -2634,8 +2646,11 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
      }
    }
  
 -  bool fetchHTTPSRR = EchConfigEnabled();
-+  // Camoufox: no HTTPS record is asked for a name the proxy resolves.
-+  bool fetchHTTPSRR =
-+      EchConfigEnabled() && (!proxyInfo || proxyInfo->ConnectsAsDirect());
-   if (StaticPrefs::network_http_happy_eyeballs_enabled()) {
+-  if (StaticPrefs::network_http_happy_eyeballs_enabled()) {
++  // Camoufox: a name the proxy resolves is asked nothing about, neither its
++  // HTTPS record nor the addresses Happy Eyeballs races.
++  bool resolvesHere = !proxyInfo || proxyInfo->ConnectsAsDirect();
++  bool fetchHTTPSRR = EchConfigEnabled() && resolvesHere;
++  if (StaticPrefs::network_http_happy_eyeballs_enabled() && resolvesHere) {
      ci = ci->Mutate().SetHappyEyeballsEnabled(true).Finalize();
      // When HE is enabled, HTTPS RR lookups are handled by
+     // HappyEyeballsConnectionAttempt.
 diff --git a/netwerk/protocol/http/nsHttpHandler.h b/netwerk/protocol/http/nsHttpHandler.h
 index bb745251d8..965366bdc1 100644
 --- a/netwerk/protocol/http/nsHttpHandler.h

@@ -169,34 +169,42 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
 - **Nothing leaves around the relay.** There is no direct path to fall back to
   and none to migrate to. The handshake starts when the relay is granted, so a
   slow proxy delays it rather than losing its first packets.
-- **TCP is raced when a Firefox at the exit would race it.** Firefox gives a
-  QUIC connection a head start before it also opens a TCP one: 50 ms when
-  HTTP/3 is known from an HTTPS record
-  (`network.dns.httpssvc.http3_fast_fallback_timeout`), 100 ms from Alt-Svc
-  (`network.http.http3.backup_timer_delay`). Whichever is ready first carries
-  the request, and an origin that answers QUIC in time sees no TCP connection
-  at all. Behind the proxy QUIC's first datagram waits for the association,
-  and its answer crosses the proxy, so a timer that runs out starts again for
-  what that cost: the time the relay took to set up, and one round trip to
-  the proxy, measured on the UDP ASSOCIATE request. Without that the origin
-  got a TCP connection stock never opens, and the request went over it
-  whenever TCP won, which `proxy_optimistic_data` made the rule for a proxy
-  more than 50 ms away
-  ([`http3-is-raced-on-the-exits-clock`](../ci/tribal-rules.yml)).
-- **A request held behind a stylesheet is raced on the exit's clock too.** A
-  page's render-blocking requests hold its other ones back, and the 50 ms
-  timer of a held request runs meanwhile. With speculative connections off,
-  which is uBlock Origin's default, nothing has connected for it when the
-  timer runs out. Behind the proxy the timer then waits for what the proxy
-  cost the requests it is held behind: their relay's setup and two round
-  trips to the proxy, a handshake and a response. A request let go by then
-  waits for its own relay, as above. One still held starts TCP, as it does
-  at the exit. With `proxy_optimistic_data` that connection's ClientHello
-  reaches the origin a round trip to the proxy sooner than the first
-  datagram of the QUIC connection it races, which waits for its relay, so
-  once ready it waits that round trip before it takes the request. Without
-  this such a page's fonts, fetches and EventSources went over HTTP/2 on new
-  TCP connections where a browser with no proxy sends them over HTTP/3.
+- **Connections are raced as a Firefox at the exit races them.** Stock Firefox
+  on the release channel connects with Happy Eyeballs v3
+  (`network.http.happy_eyeballs_enabled`, a 100% Nimbus rollout that
+  `camoufox.cfg` restores). A name's addresses and HTTPS record are asked for
+  together, the connection the record names is tried first, and another is
+  started beside it each time the newest has gone 50 ms without connecting
+  (`network.http.happy_eyeballs_connection_attempt_delay`, doubling with
+  every attempt in progress). The first to connect carries the request and
+  the rest are closed, so an origin that answers QUIC in time sees no TCP
+  connection at all. Firefox turns this off behind any proxy. Camoufox keeps
+  it on behind a SOCKS5 proxy that is given addresses, because it is what
+  decides the connections an origin sees and the names a resolver is asked.
+- **The race runs on the exit's clock.** Behind the proxy an attempt sends
+  nothing until the proxy has been asked for it, and its answer crosses the
+  proxy: a QUIC attempt waits for its association, a TCP one for the SOCKS
+  handshake. The 50 ms would run out on an attempt a Firefox at the exit is
+  still waiting for, and the origin would get a connection stock never
+  opens. So the clock the race reads is set back by what the proxy has cost
+  the attempts in progress: the time each spent before its request to the
+  proxy was sent, and the round trips to the proxy its answer needs (one,
+  or two for a TCP connection without `proxy_optimistic_data`, whose
+  ClientHello waits for the proxy's reply). An attempt that loses the race
+  is closed that much later, having reached the origin that much later
+  ([`connections-are-raced-as-release-races-them`](../ci/tribal-rules.yml)).
+- **uBlock Origin's "Disable pre-fetching" asks nothing of the resolver.** It
+  sets `network.http.speculative-parallel-limit` to 0. With Happy Eyeballs a
+  `<link rel=preconnect>` then does nothing at all; on the older path the
+  name's addresses and HTTPS record were asked for a connection that was
+  never going to be opened, which the name's authoritative server sees.
+- **Requests Happy Eyeballs does not take keep Firefox's older timers**, as
+  they do in stock: conservative ones (the browser's own services) and
+  WebSocket and WebTransport upgrades. QUIC gets 50 ms from an HTTPS record
+  (`network.dns.httpssvc.http3_fast_fallback_timeout`) or 100 ms from
+  Alt-Svc (`network.http.http3.backup_timer_delay`) before TCP is started
+  too, and behind the proxy a timer that runs out starts again for the
+  relay's setup and a round trip to the proxy.
 - **A connection closed before its relay is ready sends nothing.** All it
   has to say by then is that it closed, in the first datagram of a
   connection its peer never saw.
