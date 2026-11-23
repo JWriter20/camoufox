@@ -156,19 +156,16 @@ class Resolver:
             labels.append(query[at + 1:at + 1 + query[at]].decode().lower())
             at += query[at] + 1
         (qtype,) = struct.unpack("!H", query[at + 1:at + 3])
-        record = self.record(".".join(labels), qtype)
+        # An HTTPS record for another port than 443 is asked at _port._https.
+        port = self.ports.get(".".join(label for label in labels if not label.startswith("_")))
+        record = b""
+        if port and qtype == 1:
+            record = socket.inet_aton(ADDRESS)
+        elif port and qtype == 65:
+            record = struct.pack("!H", 1) + b"\0" + struct.pack("!HH", 1, 3) + b"\x02h3" + struct.pack("!HHH", 3, 2, port)
         if record:
             record = b"\xc0\x0c" + struct.pack("!HHIH", qtype, 1, 60, len(record)) + record
         return query[:2] + struct.pack("!HHHHH", 0x8180, 1, 1 if record else 0, 0, 0) + query[12:at + 5] + record
-
-    def record(self, name: str, qtype: int) -> bytes:
-        # An HTTPS record for another port than 443 is asked at _port._https.
-        port = self.ports.get(".".join(label for label in name.split(".") if not label.startswith("_")))
-        if port and qtype == 1:
-            return socket.inet_aton(ADDRESS)
-        if port and qtype == 65:
-            return struct.pack("!H", 1) + b"\0" + struct.pack("!HH", 1, 3) + b"\x02h3" + struct.pack("!HHH", 3, 2, port)
-        return b""
 
     async def serve(self, reader, writer) -> None:
         try:
@@ -270,10 +267,14 @@ class DistantProxy(relayed.Socks5Proxy):
         relay.close()
 
 
-def certificate(directory: str) -> tuple:
-    """A certificate for ADDRESS and the names of ZONE, its key, and what
-    makes a browser launched with marionette_args() trust its authority."""
-    ca, ca_key, cert, key = (f"{directory}/{name}.pem" for name in ("ca", "ca-key", "cert", "key"))
+async def main() -> int:
+    from camoufox.async_api import AsyncCamoufox
+
+    if shutil.which("docker") is None:
+        print("  FAIL docker is needed to give this host a public address")
+        return 1
+    tmp = tempfile.TemporaryDirectory()
+    ca, ca_key, cert, key = (f"{tmp.name}/{name}.pem" for name in ("ca", "ca-key", "cert", "key"))
     for command in (
         ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", ca_key, "-out", ca, "-days", "2",
          "-subj", "/CN=http3-https-record-socks5 guard", "-addext", "basicConstraints=critical,CA:TRUE"],
@@ -283,35 +284,8 @@ def certificate(directory: str) -> tuple:
     ):
         subprocess.run(["openssl", *command], check=True, capture_output=True)
     ca_der = "".join(Path(ca).read_text().splitlines()[1:-1])
-    script = ("Cc['@mozilla.org/security/x509certdb;1'].getService(Ci.nsIX509CertDB)"
-              f".addCertFromBase64('{ca_der}', 'C,,'); return true;")
-
-    sessions = []
-
-    def run(port: int) -> None:
-        # Never closed: when a session ends Marionette sets the prefs it
-        # recommends for tests, which turn off DNS prefetch and speculative
-        # connections.
-        sessions.append(Marionette(port))
-        sessions[-1].js(script)
-
-    async def trust(browser, port: int) -> None:
-        # Marionette's session needs a window to attach to.
-        window = await browser.new_page()
-        await asyncio.to_thread(run, port)
-        await window.close()
-
-    return cert, key, trust
-
-
-async def main() -> int:
-    from camoufox.async_api import AsyncCamoufox
-
-    if shutil.which("docker") is None:
-        print("  FAIL docker is needed to give this host a public address")
-        return 1
-    tmp = tempfile.TemporaryDirectory()
-    cert, key, trust = certificate(tmp.name)
+    trust = ("Cc['@mozilla.org/security/x509certdb;1'].getService(Ci.nsIX509CertDB)"
+             f".addCertFromBase64('{ca_der}', 'C,,'); return true;")
     serial = iter(range(1000))
 
     async def origin(resolver: Resolver, deaf: bool) -> Origin:
@@ -335,7 +309,17 @@ async def main() -> int:
                 "network.trr.confirmationNS": "skip",
                 "network.http.http3.disable_when_third_party_roots_found": False, "marionette.port": port},
         ).__aenter__()
-        await trust(browser, port)
+        def trust_authority() -> None:
+            marionette = Marionette(port)
+            try:
+                marionette.js(trust)
+            finally:
+                marionette.close()
+
+        # Marionette's session needs a window to attach to.
+        window = await browser.new_page()
+        await asyncio.to_thread(trust_authority)
+        await window.close()
         return browser
 
     async def visit(deaf: bool, proxy: DistantProxy = None, optimistic: bool = False) -> list:

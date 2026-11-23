@@ -107,10 +107,8 @@ function recordProxied(owner) {
   Services.prefs.getDefaultBranch('roverfox.s.').setCharPref(`webrtc_proxied_${owner}`, '1');
   // Firefox turns prefetch off at its first proxied load. A document with no
   // load yet (about:blank, a fulfilled route) would resolve its dns-prefetch
-  // links on this machine's resolver until then. Not when the launch resolves
-  // by DoH through the proxy: Firefox leaves it on then, and so does this.
-  if (!Services.prefs.getBoolPref('network.dns.prefetch_via_proxy', false))
-    Services.prefs.getDefaultBranch('network.dns.').setBoolPref('disablePrefetch', true);
+  // links on this machine's resolver until then.
+  Services.prefs.getDefaultBranch('network.dns.').setBoolPref('disablePrefetch', true);
 }
 
 // A system proxy is not in network.proxy.* either, and a content process

@@ -1160,28 +1160,6 @@ rules:
       HTTP proxy is left as Firefox has it, because nothing would reach the
       origin (docs/proxy-dns.md).
 
-  - id: doh-mode-keeps-dns-prefetch
-    title: With proxy_dns='doh' speculative DNS lookups are made, by DoH through the proxy; in 'exit' mode never
-    check: manual   # browser/tests/playwright/patches/dns-prefetch-through-doh.py, python/tests/test_proxy_dns.py
-    evidence:
-      - "Firefox 160, netwerk/base/nsProtocolProxyService.cpp: MaybeDisableDNSPrefetch calls SetPrefetchEnabled(false) on the DNS service at the first request through any proxy, unless network.dns.prefetch_via_proxy; nsDNSService::AsyncResolve then refuses every RESOLVE_SPECULATE lookup, which is what HTMLDNSPrefetch sends for a dns-prefetch link and for the links of a page"
-      - "Juggler's recordProxied set network.dns.disablePrefetch on the default branch for any proxy, and a user pref equal to the old default does not override it, so the pref alone changed nothing (measured)"
-      - "dns-prefetch-through-doh.py, Firefox 160.0.1, 2026-11-22, uBlock Origin excluded: with no proxy the resolver is asked A, AAAA and HTTPS for the page, for a dns-prefetch link and for a hovered link; behind a SOCKS5 proxy in doh mode it was asked nothing for the dns-prefetch link and no HTTPS record for the hovered one (4 of 5 checks); after, the same questions, every connection to the resolver made by the proxy, no getaddrinfo for either name (5 of 5)"
-      - "exit mode with network.dns.prefetch_via_proxy forced on: nsHostResolver logs getaddrinfo for the dns-prefetch link's name on this machine"
-      - "toolkit/components/extensions/parent/ext-privacy.js: an extension's privacy.network.networkPredictionEnabled=false sets network.dns.disablePrefetch, network.prefetch-next off and network.http.speculative-parallel-limit 0; uBlock Origin's default 'Disable pre-fetching' does that (measured at launch: prefetch off, limit 0; with the addon excluded: on, 20)"
-    rationale: >-
-      A site's nameserver sees whether the names its page links to are looked
-      up, so a browser that never prefetches is told apart from stock by a
-      link. Firefox and Juggler turn prefetch off behind a proxy because the
-      lookup would be made by this machine. In doh mode the resolver is DoH
-      alone and its requests go through the proxy, so the reason is gone and
-      the launcher sets network.dns.prefetch_via_proxy, which Juggler reads
-      too. Do not set it in exit mode or behind an HTTP proxy: there is no
-      resolver but this machine's, and the lookup would leave around the
-      proxy. The bundled uBlock Origin still turns all of it off by its own
-      setting; changing that default is a separate decision
-      (docs/proxy-dns.md).
-
   - id: http3-is-raced-on-the-exits-clock
     title: Behind a SOCKS5 relay, the timers that start TCP beside QUIC wait for what the proxy cost
     check: manual   # browser/tests/playwright/patches/http3-https-record-socks5.py
