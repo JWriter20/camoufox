@@ -183,6 +183,20 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
   whenever TCP won, which `proxy_optimistic_data` made the rule for a proxy
   more than 50 ms away
   ([`http3-is-raced-on-the-exits-clock`](../ci/tribal-rules.yml)).
+- **A request held behind a stylesheet is raced on the exit's clock too.** A
+  page's render-blocking requests hold its other ones back, and the 50 ms
+  timer of a held request runs meanwhile. With speculative connections off,
+  which is uBlock Origin's default, nothing has connected for it when the
+  timer runs out. Behind the proxy the timer then waits for what the proxy
+  cost the requests it is held behind: their relay's setup and two round
+  trips to the proxy, a handshake and a response. A request let go by then
+  waits for its own relay, as above. One still held starts TCP, as it does
+  at the exit. With `proxy_optimistic_data` that connection's ClientHello
+  reaches the origin a round trip to the proxy sooner than the first
+  datagram of the QUIC connection it races, which waits for its relay, so
+  once ready it waits that round trip before it takes the request. Without
+  this such a page's fonts, fetches and EventSources went over HTTP/2 on new
+  TCP connections where a browser with no proxy sends them over HTTP/3.
 - **A connection closed before its relay is ready sends nothing.** All it
   has to say by then is that it closed, in the first datagram of a
   connection its peer never saw.

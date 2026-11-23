@@ -1067,10 +1067,10 @@ index 2c272acae9..b5cd8b67ed 100644
    bool UsingHttpProxy() const { return mUsingHttpProxy || mUsingHttpsProxy; }
  
 diff --git a/netwerk/protocol/http/nsHttpConnectionMgr.cpp b/netwerk/protocol/http/nsHttpConnectionMgr.cpp
-index 9f7500a340..1b7fe16ad1 100644
+index 9f7500a340..b0217fe81a 100644
 --- a/netwerk/protocol/http/nsHttpConnectionMgr.cpp
 +++ b/netwerk/protocol/http/nsHttpConnectionMgr.cpp
-@@ -4223,6 +4223,41 @@ void nsHttpConnectionMgr::CheckTransInPendingQueue(nsHttpTransaction* aTrans) {
+@@ -4223,6 +4223,42 @@ void nsHttpConnectionMgr::CheckTransInPendingQueue(nsHttpTransaction* aTrans) {
    MOZ_ASSERT(!foundInPendingQ);
  }
  
@@ -1082,7 +1082,7 @@ index 9f7500a340..1b7fe16ad1 100644
 +}
 +
 +Maybe<TimeDuration> nsHttpConnectionMgr::Http3BlockerRelayLag(
-+    nsHttpTransaction* aTrans) {
++    nsHttpTransaction* aTrans, uint32_t aRoundTrips) {
 +  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 +  Maybe<TimeDuration> longest;
 +  nsIRequestContext* context = aTrans->RequestContext();
@@ -1100,7 +1100,8 @@ index 9f7500a340..1b7fe16ad1 100644
 +          !trans->IsDispatchedAsBlocking()) {
 +        continue;
 +      }
-+      Maybe<TimeDuration> lag = Http3RelayLag(trans->ConnectionInfo(), 2);
++      Maybe<TimeDuration> lag =
++          Http3RelayLag(trans->ConnectionInfo(), aRoundTrips);
 +      if (lag && (!longest || *lag > *longest)) {
 +        longest = lag;
 +      }
@@ -1113,7 +1114,7 @@ index 9f7500a340..1b7fe16ad1 100644
      nsHttpConnectionInfo* ci, nsresult aError) {
    ConnectionEntry* ent = mCT.GetWeak(ci->HashKey());
 diff --git a/netwerk/protocol/http/nsHttpConnectionMgr.h b/netwerk/protocol/http/nsHttpConnectionMgr.h
-index a89e066c25..cceb7d1907 100644
+index a89e066c25..47d91713cf 100644
 --- a/netwerk/protocol/http/nsHttpConnectionMgr.h
 +++ b/netwerk/protocol/http/nsHttpConnectionMgr.h
 @@ -213,6 +213,13 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
@@ -1124,17 +1125,48 @@ index a89e066c25..cceb7d1907 100644
 +  Maybe<TimeDuration> Http3RelayLag(nsHttpConnectionInfo* ci,
 +                                    uint32_t aRoundTrips);
 +  // Camoufox: the longest Http3RelayLag() of the transactions aTrans is held
-+  // back by, the ones its request context is blocked on, when they have
-+  // answered: a handshake and a response, two round trips.
-+  Maybe<TimeDuration> Http3BlockerRelayLag(nsHttpTransaction* aTrans);
++  // back by, the ones its request context is blocked on.
++  Maybe<TimeDuration> Http3BlockerRelayLag(nsHttpTransaction* aTrans,
++                                           uint32_t aRoundTrips);
    bool AllowToRetryDifferentIPFamilyForHttp3(nsHttpConnectionInfo* ci,
                                               nsresult aError);
    void SetRetryDifferentIPFamilyForHttp3(nsHttpConnectionInfo* ci,
 diff --git a/netwerk/protocol/http/nsHttpTransaction.cpp b/netwerk/protocol/http/nsHttpTransaction.cpp
-index 69c3e9c2cd..b790783f02 100644
+index 69c3e9c2cd..6e192f71d7 100644
 --- a/netwerk/protocol/http/nsHttpTransaction.cpp
 +++ b/netwerk/protocol/http/nsHttpTransaction.cpp
-@@ -4002,12 +4002,60 @@ static void CreateBackupConnection(
+@@ -3930,6 +3930,11 @@ void nsHttpTransaction::MaybeCancelFallbackTimer() {
+     mHttp3TunnelFallbackTimer->Cancel();
+     mHttp3TunnelFallbackTimer = nullptr;
+   }
++
++  if (mBackupHeadStartTimer) {
++    mBackupHeadStartTimer->Cancel();
++    mBackupHeadStartTimer = nullptr;
++  }
+ }
+ 
+ void nsHttpTransaction::OnBackupConnectionReady(bool aTriggeredByHTTPSRR) {
+@@ -3946,6 +3951,18 @@ void nsHttpTransaction::OnBackupConnectionReady(bool aTriggeredByHTTPSRR) {
+     return;
+   }
+ 
++  // Camoufox: see FallbackWaitsForRelay.
++  if (mBackupHeadStart) {
++    const uint32_t headStart =
++        static_cast<uint32_t>(mBackupHeadStart.ToMilliseconds());
++    mBackupHeadStart = TimeDuration();
++    mBackupHeadStartByHTTPSRR = aTriggeredByHTTPSRR;
++    CreateAndStartTimer(mBackupHeadStartTimer, this, headStart);
++    if (mBackupHeadStartTimer) {
++      return;
++    }
++  }
++
+   if (mConnection) {
+     if (mConnection->Version() != HttpVersion::v3_0) {
+       LOG(("Already have non-HTTP/3 conn:%p", mConnection.get()));
+@@ -4002,12 +4019,71 @@ static void CreateBackupConnection(
    gHttpHandler->ConnMgr()->DoFallbackConnection(trans, false);
  }
  
@@ -1147,7 +1179,13 @@ index 69c3e9c2cd..b790783f02 100644
 +// lag is longer than that, so the look after the relay is ready comes before
 +// the timer is due. The timers run for a request held back by its page's
 +// blocking ones too (a stylesheet), which has no connection yet: it waits for
-+// what the proxy cost those, then for its own relay once it has one.
++// what the proxy cost those, a handshake and a response. Let go by then, as
++// it would be at the exit, it waits for its own relay. Still held back, it
++// starts TCP, which is going to race a QUIC connection that has not been
++// asked for. A ClientHello sent behind the CONNECT request reaches the origin
++// a round trip to the proxy sooner than a first datagram, which waits for the
++// reply to UDP ASSOCIATE, so OnBackupConnectionReady gives that head start
++// back before it takes the request from QUIC.
 +bool nsHttpTransaction::FallbackWaitsForRelay(nsCOMPtr<nsITimer>& aTimer,
 +                                              uint32_t aDelay) {
 +  if (!mConnInfo->ProxyCarriesUdp()) {
@@ -1158,7 +1196,12 @@ index 69c3e9c2cd..b790783f02 100644
 +  Maybe<TimeDuration> lag = mgr->Http3RelayLag(mConnInfo, 1);
 +  if (!lag && !mConnection) {
 +    waited = &mFallbackWaitedForBlocker;
-+    lag = mgr->Http3BlockerRelayLag(this);
++    lag = mgr->Http3BlockerRelayLag(this, 2);
++    Maybe<TimeDuration> more = mgr->Http3BlockerRelayLag(this, 3);
++    if (*waited && lag && more && *more != TimeDuration::Forever() &&
++        StaticPrefs::network_proxy_socks5_optimistic_data()) {
++      mBackupHeadStart = *more - *lag;
++    }
 +  }
 +  if (!lag || *waited) {
 +    return false;
@@ -1195,7 +1238,7 @@ index 69c3e9c2cd..b790783f02 100644
  
    if (mConnInfo->IsHttp3ProxyConnection()) {
      mBackupConnInfo = mConnInfo->CreateConnectUDPFallbackConnInfo();
-@@ -4068,6 +4116,11 @@ void nsHttpTransaction::OnFastFallbackTimer() {
+@@ -4068,6 +4144,11 @@ void nsHttpTransaction::OnFastFallbackTimer() {
         mConnected));
  
    mFastFallbackTimer = nullptr;
@@ -1207,8 +1250,18 @@ index 69c3e9c2cd..b790783f02 100644
  
    MOZ_ASSERT(mHTTPSSVCRecord && mOrigConnInfo);
    if (!mHTTPSSVCRecord || !mOrigConnInfo) {
+@@ -4154,6 +4235,9 @@ nsHttpTransaction::Notify(nsITimer* aTimer) {
+     OnHttp3BackupTimer();
+   } else if (aTimer == mHttp3TunnelFallbackTimer) {
+     OnHttp3TunnelFallbackTimer();
++  } else if (aTimer == mBackupHeadStartTimer) {
++    mBackupHeadStartTimer = nullptr;
++    OnBackupConnectionReady(mBackupHeadStartByHTTPSRR);
+   }
+ 
+   return NS_OK;
 diff --git a/netwerk/protocol/http/nsHttpTransaction.h b/netwerk/protocol/http/nsHttpTransaction.h
-index 675ebefd97..a0b00510a8 100644
+index 675ebefd97..a2377ec3a5 100644
 --- a/netwerk/protocol/http/nsHttpTransaction.h
 +++ b/netwerk/protocol/http/nsHttpTransaction.h
 @@ -127,6 +127,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
@@ -1228,13 +1281,18 @@ index 675ebefd97..a0b00510a8 100644
  
   private:
    TransactionObserverFunc mTransactionObserver;
-@@ -692,6 +695,9 @@ class nsHttpTransaction final : public nsAHttpTransaction,
+@@ -692,6 +695,14 @@ class nsHttpTransaction final : public nsAHttpTransaction,
    nsCOMPtr<nsITimer> mFastFallbackTimer;
    nsCOMPtr<nsITimer> mHttp3BackupTimer;
    nsCOMPtr<nsITimer> mHttp3TunnelFallbackTimer;
 +  TimeStamp mFallbackDue;
 +  bool mFallbackWaitedForRelay = false;
 +  bool mFallbackWaitedForBlocker = false;
++  // Camoufox: how long a backup connection that is ready waits before it
++  // takes this transaction (FallbackWaitsForRelay), and the timer for it.
++  TimeDuration mBackupHeadStart;
++  nsCOMPtr<nsITimer> mBackupHeadStartTimer;
++  bool mBackupHeadStartByHTTPSRR = false;
    RefPtr<nsHttpConnectionInfo> mBackupConnInfo;
    // The value of mConnInfo when this transaction was activated.
    // Describes the server that the associated connection is connected to.

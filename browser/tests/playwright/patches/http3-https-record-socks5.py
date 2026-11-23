@@ -144,6 +144,7 @@ class Resolver:
     def __init__(self, cert: str, key: str) -> None:
         self.ports = {}  # name -> the port its HTTPS record names
         self.delay = 0  # how long an answer takes
+        self.once = False  # a connection is closed after one answer
         self._tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self._tls.load_cert_chain(cert, key)
 
@@ -181,9 +182,12 @@ class Resolver:
                     query = base64.urlsafe_b64decode(encoded + b"=" * (-len(encoded) % 4))
                 answer = self.answer(query)
                 await asyncio.sleep(self.delay)
-                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\n"
-                             b"Content-Length: %d\r\n\r\n%s" % (len(answer), answer))
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\n%s"
+                             b"Content-Length: %d\r\n\r\n%s"
+                             % (b"Connection: close\r\n" if self.once else b"", len(answer), answer))
                 await writer.drain()
+                if self.once:
+                    break
         except (ConnectionError, ssl.SSLError, asyncio.IncompleteReadError):
             pass
         finally:

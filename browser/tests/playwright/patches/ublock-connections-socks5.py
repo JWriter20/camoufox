@@ -27,12 +27,13 @@ proxy too.
 
 What PASS means, at each distance, with uBlock Origin loaded and its
 preferences in place before the page is opened:
-    * with no proxy the site's requests are carried over HTTP/3 (the
-      guard's reference);
+    * with no proxy the site sees the connections measured for that distance
+      (REFERENCE, the guard's own check that it still measures the race);
     * behind the proxy with proxy_optimistic_data the site sees what it sees
       with no proxy: the TCP connections (server name, ALPN offered, ECH
-      extension), the protocol that carried each request, the names asked of
-      the resolver and their types, and no QUIC connection of one datagram;
+      extension), the QUIC connections, the connection that carried each
+      request, the names asked of the resolver and their types, and no QUIC
+      connection of one datagram;
     * no name is resolved by this machine, the resolver's included.
 
     python browser/tests/playwright/patches/ublock-connections-socks5.py
@@ -69,9 +70,21 @@ ZONE = "ublock-guard.test"
 KINDS = ("css", "img", "font", "video", "es", "fetch")
 # Round trips between the site and whoever connects to it. NEAR: the stylesheet
 # has answered, and the requests held behind it have connected over QUIC,
-# well inside the 50 ms Firefox gives QUIC. FAR: the TCP connections that
-# timer starts are ready before the stylesheet has answered.
+# well inside the 50 ms Firefox gives QUIC. FAR: the timer starts a TCP
+# connection for every name while the stylesheet is on its way, and they are
+# ready before the requests held behind it have connected over QUIC.
 NEAR, FAR = 0.004, 0.1
+# What the site sees with no proxy (Firefox 160.0.1 with uBlock Origin, the
+# same in every run measured): the names it has a TCP connection for, and the
+# requests each protocol carried. The stylesheet is asked for twice, and the
+# image and video share its QUIC connection. The EventSource, the fetch and
+# the font have connections of their own, so FAR's TCP connections win them.
+REFERENCE = {
+    NEAR: {"tcp names": [], "over tcp": [],
+           "over h3": ["css", "css", "es", "fetch", "font", "img", "video"]},
+    FAR: {"tcp names": sorted(KINDS), "over tcp": ["es", "fetch", "font"],
+          "over h3": ["css", "css", "img", "video"]},
+}
 # How long the resolver takes to answer. A page's requests are asked about
 # together, so with a resolver that answers at once the first of them are on
 # their way before the stylesheet is asked for, and nothing is held back.
@@ -261,6 +274,7 @@ class Site:
         return {
             "tcp": sorted((str(c.get("name", "")).split(".")[0], c.get("alpn"), c.get("ech"), tuple(c["requests"]))
                           for c in self.tcp),
+            "tcp names": sorted(str(c.get("name", "")).split(".")[0] for c in self.tcp),
             "over tcp": sorted(name for c in self.tcp for name in c["requests"]),
             "over h3": sorted(name for names in self.h3_requests.values() for name in names),
             "quic": len(self.datagrams),
@@ -277,6 +291,7 @@ class Resolver(record.Resolver):
         super().__init__(cert, key)
         self.asked, self.plain = set(), set()
         self.delay = RESOLVER
+        self.once = True
 
     def answer(self, query: bytes) -> bytes:
         at, labels = 12, []
@@ -405,6 +420,12 @@ async def visit(binary: Path, cert: str, key: str, trust: str, distance: float, 
             # that name, so the resolver is an address.
             **({"network.trr.uri": network.doh_by_name} if proxied
                else {"network.trr.mode": 3, "network.trr.uri": network.doh_by_address}),
+            # A DoH resolver answers a page's queries together, over one
+            # HTTP/2 connection. This one speaks HTTP/1.1, so each query gets
+            # a connection of its own (Resolver.once), all at the same time:
+            # an answer that waited for a connection, or found one open,
+            # would come a round trip to the proxy apart from the others.
+            "network.http.max-persistent-connections-per-server": 3 * (len(KINDS) + 1),
             "network.http.http3.disable_when_third_party_roots_found": False, "marionette.port": port},
     ).__aenter__()
     try:
@@ -431,7 +452,8 @@ async def visit(binary: Path, cert: str, key: str, trust: str, distance: float, 
 
 
 def same(seen: dict, direct: dict) -> bool:
-    return all(seen[what] == direct[what] for what in ("tcp", "over tcp", "over h3", "quic of one datagram", "asked"))
+    return all(seen[what] == direct[what] for what in (
+        "tcp", "over tcp", "over h3", "quic", "quic by requests", "quic of one datagram", "asked"))
 
 
 async def main() -> int:
@@ -451,9 +473,10 @@ async def main() -> int:
         for distance in (NEAR, FAR):
             where = f"a site {distance * 1000:.0f} ms away"
             direct = await visit(binary, cert, key, trust, distance, False)
-            checks.append((f"{where}, no proxy: uBlock Origin's preferences are set, the requests go over HTTP/3 "
-                           "and no name is resolved here (the guard's reference)",
-                           direct["speculative limit"] == 0 and direct["over h3"] == sorted(KINDS)
+            checks.append((f"{where}, no proxy: uBlock Origin's preferences are set, the site sees the connections "
+                           "measured for this distance and no name is resolved here (the guard's reference)",
+                           direct["speculative limit"] == 0
+                           and all(direct[what] == expected for what, expected in REFERENCE[distance].items())
                            and not direct["resolved here"], direct))
             seen = await visit(binary, cert, key, trust, distance, True)
             checks.append((f"{where}, behind the proxy: the site sees what it sees with no proxy",

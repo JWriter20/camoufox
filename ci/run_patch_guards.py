@@ -161,6 +161,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "system-font-size-windows",
         "timer-lateness-claimed-os",
         "tracking-protection-lists",
+        "ublock-connections-socks5",
         "viewport-fits-screen",
         "viewport-no-rdm",
         "virtual-display-window-visible",
