@@ -145,6 +145,7 @@ class Resolver:
         self.ports = {}  # name -> the port its HTTPS record names
         self.delay = 0  # how long an answer takes
         self.http2 = False  # answers over HTTP/2 (serve_http2)
+        self.alpn = (b"h3",)  # what the HTTPS record offers
         self._tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self._tls.load_cert_chain(cert, key)
 
@@ -166,7 +167,9 @@ class Resolver:
         if port and qtype == 1:
             record = socket.inet_aton(ADDRESS)
         elif port and qtype == 65:
-            record = struct.pack("!H", 1) + b"\0" + struct.pack("!HH", 1, 3) + b"\x02h3" + struct.pack("!HHH", 3, 2, port)
+            alpn = b"".join(bytes((len(protocol),)) + protocol for protocol in self.alpn)
+            record = (struct.pack("!H", 1) + b"\0" + struct.pack("!HH", 1, len(alpn)) + alpn
+                      + struct.pack("!HHH", 3, 2, port))
         if record:
             record = b"\xc0\x0c" + struct.pack("!HHIH", qtype, 1, 60, len(record)) + record
         return query[:2] + struct.pack("!HHHHH", 0x8180, 1, 1 if record else 0, 0, 0) + query[12:at + 5] + record
@@ -248,11 +251,14 @@ class DistantRelay(relayed.Relay):
 class DistantProxy(relayed.Socks5Proxy):
     """The Alt-Svc guard's proxy, DELAY away: every reply, every byte it
     pipes and every datagram takes that long each way. `associate` is how
-    long it takes to grant a UDP ASSOCIATE."""
+    long it takes to grant a UDP ASSOCIATE. A `local` one has its endpoint
+    on the browser's machine, which forwards to the exit: the greeting is
+    answered at once, and everything after it is DELAY away."""
 
-    def __init__(self, associate: float = 0) -> None:
+    def __init__(self, associate: float = 0, local: bool = False) -> None:
         super().__init__(ADDRESS)
         self.associate = associate
+        self.local = local
         self.names = {}  # the names this proxy resolves, and their addresses
 
     async def handle(self, reader, writer) -> None:
@@ -289,7 +295,10 @@ class DistantProxy(relayed.Socks5Proxy):
 
         _, count = await reader.readexactly(2)
         await reader.readexactly(count)
-        await reply(b"\x05\x00")
+        if self.local:
+            writer.write(b"\x05\x00")
+        else:
+            await reply(b"\x05\x00")
         _, cmd, _, atyp = await reader.readexactly(4)
         host, port = await relayed.read_addr(reader, atyp)
         if cmd == 1:
