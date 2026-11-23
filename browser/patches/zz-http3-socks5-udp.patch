@@ -548,11 +548,61 @@ index 70621a068d..135b88b0b8 100644
    bool IsHttp3Proxy();
  
    static void SerializeProxyInfo(nsProxyInfo* aProxyInfo,
+diff --git a/netwerk/base/nsSocketTransport2.cpp b/netwerk/base/nsSocketTransport2.cpp
+index 25f4c49ba5..01113c7f61 100644
+--- a/netwerk/base/nsSocketTransport2.cpp
++++ b/netwerk/base/nsSocketTransport2.cpp
+@@ -35,6 +35,7 @@
+ #include "nsNetUtil.h"
+ #include "nsPrintfCString.h"
+ #include "nsProxyInfo.h"
++#include "nsSOCKSIOLayer.h"
+ #include "nsSocketProviderService.h"
+ #include "nsStreamUtils.h"
+ #include "nsThreadUtils.h"
+@@ -2880,6 +2881,14 @@ nsSocketTransport::GetQoSBits(uint8_t* aQoSBits) {
+   return NS_OK;
+ }
+ 
++TimeDuration nsSocketTransport::ProxyLost() {
++  // The handshake with the proxy is part of connecting, when the streams
++  // have no descriptor yet.
++  MutexAutoLock lock(mLock);
++  return mProxyTransparent && mFD.IsInitialized() ? nsSOCKSIOLayerLost(mFD)
++                                                  : TimeDuration();
++}
++
+ NS_IMETHODIMP
+ nsSocketTransport::GetRecvBufferSize(uint32_t* aSize) {
+   PRFileDescAutoLock fd(this);
+diff --git a/netwerk/base/nsSocketTransport2.h b/netwerk/base/nsSocketTransport2.h
+index ed81b052e2..fb7f005e4e 100644
+--- a/netwerk/base/nsSocketTransport2.h
++++ b/netwerk/base/nsSocketTransport2.h
+@@ -108,6 +108,8 @@ class nsSocketTransport final : public nsASocketHandler,
+   uint64_t ByteCountReceived() override;
+   uint64_t ByteCountSent() override;
+   bool IsTRRConnection() override;
++  // Camoufox: nsSOCKSIOLayerLost() of a socket behind a SOCKS proxy.
++  TimeDuration ProxyLost();
+   static void CloseSocket(PRFileDesc* aFd);
+ 
+  protected:
 diff --git a/netwerk/protocol/http/AlternateServices.cpp b/netwerk/protocol/http/AlternateServices.cpp
-index 289b877ccb..1afd7f639b 100644
+index 289b877ccb..a38c75496c 100644
 --- a/netwerk/protocol/http/AlternateServices.cpp
 +++ b/netwerk/protocol/http/AlternateServices.cpp
-@@ -905,7 +905,8 @@ void AltSvcCache::UpdateAltServiceMapping(
+@@ -458,7 +458,8 @@ void AltSvcMapping::GetConnectionInfo(
+   ci = ci->Mutate()
+            .SetInsecureScheme(!mHttps && !mMixedScheme)
+            .SetHappyEyeballsEnabled(
+-               StaticPrefs::network_http_happy_eyeballs_enabled() && !pi)
++               StaticPrefs::network_http_happy_eyeballs_enabled() &&
++               (!pi || pi->ConnectsAsDirect()))
+            .SetPrivate(mPrivate)
+            .Finalize();
+   ci.forget(outCI);
+@@ -905,7 +906,8 @@ void AltSvcCache::UpdateAltServiceMapping(
    }
  
    if (map->IsHttp3()) {
@@ -562,6 +612,26 @@ index 289b877ccb..1afd7f639b 100644
      if (!isProxyAllowed) {
        LOG(
            ("AltSvcCache::UpdateAltServiceMapping %p map %p ignored h3 because "
+@@ -934,7 +936,8 @@ void AltSvcCache::UpdateAltServiceMapping(
+   // validation would resolve the host client-side and leak it outside a SOCKS
+   // remote-DNS proxy. TODO: handle this in the Happy Eyeballs code once it
+   // supports establishing proxy connections.
+-  if (StaticPrefs::network_http_happy_eyeballs_enabled() && !pi) {
++  if (StaticPrefs::network_http_happy_eyeballs_enabled() &&
++      (!pi || pi->ConnectsAsDirect())) {
+     // Validating an h3 alternate must establish an h3 connection; don't let
+     // Happy Eyeballs race h1/h2 and settle on a non-h3 connection.
+     ci = ci->Mutate()
+@@ -1211,7 +1214,8 @@ void Http3FirstAltSvcMapping::GetConnectionInfo(
+       mAlternateHost, mAlternatePort, mIsHttp3, false);
+   ci = ci->Mutate()
+            .SetHappyEyeballsEnabled(
+-               StaticPrefs::network_http_happy_eyeballs_enabled() && !pi)
++               StaticPrefs::network_http_happy_eyeballs_enabled() &&
++               (!pi || pi->ConnectsAsDirect()))
+            .SetPrivate(mPrivate)
+            .Finalize();
+   ci.forget(outCI);
 diff --git a/netwerk/protocol/http/ConnectionEntry.cpp b/netwerk/protocol/http/ConnectionEntry.cpp
 index 82a56487ab..e8cc433536 100644
 --- a/netwerk/protocol/http/ConnectionEntry.cpp
@@ -607,6 +677,79 @@ index 86760ca45f..ef3fff03e1 100644
    bool RemoveTransFromPendingQ(nsHttpTransaction* aTrans);
  
    // Notify that a transaction was removed directly from a per-window pending
+diff --git a/netwerk/protocol/http/ConnectionEstablisher.cpp b/netwerk/protocol/http/ConnectionEstablisher.cpp
+index 05047d8358..1ed103abda 100644
+--- a/netwerk/protocol/http/ConnectionEstablisher.cpp
++++ b/netwerk/protocol/http/ConnectionEstablisher.cpp
+@@ -13,6 +13,8 @@
+ #include "nsHttpHandler.h"
+ #include "nsHttpTransaction.h"
+ #include "nsIDNSRecord.h"
++#include "nsQueryObject.h"
++#include "nsSocketTransport2.h"
+ #include "nsSocketTransportService2.h"
+ 
+ // Log on level :5, instead of default :4.
+@@ -497,6 +499,16 @@ void TCPConnectionEstablisher::Close(nsresult aReason) {
+   Finish(aReason);
+ }
+ 
++TimeDuration TCPConnectionEstablisher::ProxyLost() const {
++  nsCOMPtr<nsISocketTransport> transport = mSocketTransport;
++  if (!transport && mResultConn) {
++    transport = mResultConn->Transport();
++  }
++  return transport ? static_cast<nsSocketTransport*>(transport.get())
++                         ->ProxyLost()
++                   : TimeDuration();
++}
++
+ nsresult TCPConnectionEstablisher::CreateAndConfigureSocketTransport() {
+   nsresult rv = NS_OK;
+   nsTArray<nsCString> socketTypes;
+@@ -768,6 +780,11 @@ void UDPConnectionEstablisher::Close(nsresult aReason) {
+   Finish(aReason);
+ }
+ 
++TimeDuration UDPConnectionEstablisher::ProxyLost() const {
++  RefPtr<HttpConnectionUDP> conn = do_QueryObject(mResultConn);
++  return conn ? conn->RelayLost() : TimeDuration();
++}
++
+ nsresult UDPConnectionEstablisher::CreateAndConfigureUDPConn() {
+   LOG(
+       ("UDPConnectionEstablisher::CreateAndConfigureUDPConn [this=%p "
+diff --git a/netwerk/protocol/http/ConnectionEstablisher.h b/netwerk/protocol/http/ConnectionEstablisher.h
+index 36c6c41a02..78e3bed07d 100644
+--- a/netwerk/protocol/http/ConnectionEstablisher.h
++++ b/netwerk/protocol/http/ConnectionEstablisher.h
+@@ -76,6 +76,10 @@ class ConnectionEstablisher : public nsITransportEventSink,
+   void ClearResultConnection();
+   HttpConnectionBase* ResultConn() const { return mResultConn; }
+   virtual bool IsUDP() const { return false; }
++  // Camoufox: the time this attempt has lost to a SOCKS5 proxy so far: a TCP
++  // socket's handshake with the proxy (nsSocketTransport::ProxyLost), a QUIC
++  // connection's relay (HttpConnectionUDP::RelayLost).
++  virtual TimeDuration ProxyLost() const = 0;
+   bool HasConnected() const { return mHasConnected; }
+   bool RefusedForLocalAddress() const { return mRefusedForLocalAddress; }
+ 
+@@ -139,6 +143,7 @@ class TCPConnectionEstablisher : public ConnectionEstablisher,
+   bool Start(DoneCallback&& aCallback) override;
+   void ResetSpeculativeFlags() override;
+   void Close(nsresult aReason) override;
++  TimeDuration ProxyLost() const override;
+ 
+  private:
+   ~TCPConnectionEstablisher();
+@@ -166,6 +171,7 @@ class UDPConnectionEstablisher : public ConnectionEstablisher {
+   void ResetSpeculativeFlags() override {}
+   void Close(nsresult aReason) override;
+   bool IsUDP() const override { return true; }
++  TimeDuration ProxyLost() const override;
+ 
+  private:
+   ~UDPConnectionEstablisher();
 diff --git a/netwerk/protocol/http/DnsAndConnectSocket.cpp b/netwerk/protocol/http/DnsAndConnectSocket.cpp
 index 869dc9799f..22b6602150 100644
 --- a/netwerk/protocol/http/DnsAndConnectSocket.cpp
@@ -629,6 +772,108 @@ index 869dc9799f..22b6602150 100644
          StaticPrefs::network_lna_blocking()) {
        NetAddr peerAddr;
        if (NS_SUCCEEDED(transport->mSocketTransport->GetPeerAddr(&peerAddr))) {
+diff --git a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
+index e499817a90..c553c7b45f 100644
+--- a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
++++ b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
+@@ -40,6 +40,7 @@ using happy_eyeballs::happy_eyeballs_process_dns_response_aaaa;
+ using happy_eyeballs::happy_eyeballs_process_dns_response_https;
+ using happy_eyeballs::happy_eyeballs_process_ech_retry;
+ using happy_eyeballs::happy_eyeballs_process_output;
++using happy_eyeballs::happy_eyeballs_set_relay_lag;
+ 
+ static void NotifyConnectionActivity(nsHttpConnectionInfo* aConnInfo,
+                                      uint32_t aSubtype) {
+@@ -553,6 +554,9 @@ nsresult HappyEyeballsConnectionAttempt::ProcessHappyEyeballsOutput() {
+ 
+   nsresult rv = NS_OK;
+ 
++  happy_eyeballs_set_relay_lag(
++      mHappyEyeballs, static_cast<uint64_t>(RelayLag().ToMilliseconds()));
++
+   while (!IsTerminal()) {
+     happy_eyeballs::Output event{};
+     nsTArray<uint8_t> echConfig;
+@@ -1200,13 +1204,29 @@ void HappyEyeballsConnectionAttempt::CancelConnection(uint64_t aId) {
+ 
+   RefPtr<ConnectionEstablisher> conn = mConnectionEstablisherTable.Get(aId);
+   if (conn) {
+-    conn->Close(NS_ERROR_ABORT);
++    CloseLoser(conn);
+     mConnectionEstablisherTable.Remove(aId);
+   } else {
+     LOG(("No matching connection found for id=%" PRIu64, aId));
+   }
+ }
+ 
++void HappyEyeballsConnectionAttempt::CloseLoser(
++    ConnectionEstablisher* aEstablisher) {
++  const TimeDuration lost = aEstablisher->ProxyLost();
++  if (!lost) {
++    aEstablisher->Close(NS_ERROR_ABORT);
++    return;
++  }
++  NS_DelayedDispatchToCurrentThread(
++      NS_NewRunnableFunction(
++          "HappyEyeballsConnectionAttempt::CloseLoser",
++          [establisher = RefPtr{aEstablisher}] {
++            establisher->Close(NS_ERROR_ABORT);
++          }),
++      static_cast<uint32_t>(lost.ToMilliseconds()));
++}
++
+ void HappyEyeballsConnectionAttempt::CloseHttpTransaction(
+     happy_eyeballs::FailureReason aReason, ConnectionEntry* aEntry) {
+   LOG(("HappyEyeballsConnectionAttempt::CloseHttpTransaction %p reason=%d",
+@@ -1738,7 +1758,7 @@ void HappyEyeballsConnectionAttempt::EnterDone() {
+   mConnectionEstablisherTable.Clear();
+ 
+   for (auto& conn : establishers) {
+-    conn->Close(NS_ERROR_ABORT);
++    CloseLoser(conn);
+   }
+ 
+   if (mTimer) {
+@@ -1875,6 +1895,14 @@ void HappyEyeballsConnectionAttempt::Transition(State aNext,
+ 
+ void HappyEyeballsConnectionAttempt::PrintDiagnostics(nsCString& log) {}
+ 
++TimeDuration HappyEyeballsConnectionAttempt::RelayLag() const {
++  TimeDuration lag;
++  for (const auto& establisher : mConnectionEstablisherTable.Values()) {
++    lag += establisher->ProxyLost();
++  }
++  return lag;
++}
++
+ uint32_t HappyEyeballsConnectionAttempt::UnconnectedUDPConnsLength() const {
+   uint32_t len = 0;
+   for (auto iter = mConnectionEstablisherTable.ConstIter(); !iter.Done();
+diff --git a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
+index 1bf8bf81e7..886c197de5 100644
+--- a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
++++ b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
+@@ -198,6 +198,20 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
+ 
+   nsresult ProcessHappyEyeballsOutput();
+ 
++  // Camoufox: behind a SOCKS5 proxy an attempt sends nothing until the proxy
++  // has been asked for it, and its answer crosses the proxy, so the delay
++  // before the next attempt would run out on an attempt a Firefox at the
++  // proxy's exit would still be waiting for. This is the time the attempts
++  // in progress have lost that way (ConnectionEstablisher::ProxyLost), which
++  // the state machine's clock is set back by.
++  TimeDuration RelayLag() const;
++  // Camoufox: closes an attempt that lost the race. Behind a SOCKS5 proxy it
++  // reached the origin later than it was started by what the proxy cost it
++  // (ConnectionEstablisher::ProxyLost), so it is closed that much later: the
++  // origin sees it for as long as it sees the one a Firefox at the proxy's
++  // exit gives up.
++  void CloseLoser(ConnectionEstablisher* aEstablisher);
++
+   // Report the domain lookup span: domainLookupStart is the first DNS query
+   // (any type), domainLookupEnd is the start of the first connection attempt.
+   void DnsLookupTimings(TimeStamp& aStart, TimeStamp& aEnd) const;
 diff --git a/netwerk/protocol/http/Http2Session.cpp b/netwerk/protocol/http/Http2Session.cpp
 index 92fe5508d5..b9d38b1703 100644
 --- a/netwerk/protocol/http/Http2Session.cpp
@@ -689,7 +934,7 @@ index 9e54d6d8bf..7f5af63091 100644
                   : true;
    // TODO: When mUpgradeProtocolCallback is not null, we should allow HTTP/3 for
 diff --git a/netwerk/protocol/http/HttpConnectionUDP.cpp b/netwerk/protocol/http/HttpConnectionUDP.cpp
-index c662beac36..eb707f995c 100644
+index c662beac36..1d08d80c87 100644
 --- a/netwerk/protocol/http/HttpConnectionUDP.cpp
 +++ b/netwerk/protocol/http/HttpConnectionUDP.cpp
 @@ -20,6 +20,7 @@
@@ -711,7 +956,7 @@ index c662beac36..eb707f995c 100644
    MOZ_ASSERT(mQueuedHttpConnectTransaction.IsEmpty(),
               "Should not have any queued transactions");
    MOZ_ASSERT(mQueuedConnectUdpTransaction.IsEmpty(),
-@@ -299,6 +304,106 @@ nsresult HttpConnectionUDP::InitWithSocket(nsHttpConnectionInfo* info,
+@@ -299,6 +304,113 @@ nsresult HttpConnectionUDP::InitWithSocket(nsHttpConnectionInfo* info,
    return InitCommon(aSocket, aPeerAddr, callbacks, caps, true);
  }
  
@@ -797,6 +1042,13 @@ index c662beac36..eb707f995c 100644
 +                     : Nothing();
 +}
 +
++TimeDuration HttpConnectionUDP::RelayLost() const {
++  if (mRelayPending) {
++    return TimeStamp::Now() - mRelayAsked;
++  }
++  return mSocks5 ? RelayLag(1).valueOr(TimeDuration()) : TimeDuration();
++}
++
 +void HttpConnectionUDP::OnRelayFailed() {
 +  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 +  mRelayPending = false;
@@ -818,29 +1070,29 @@ index c662beac36..eb707f995c 100644
  nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
                                         const NetAddr& aPeerAddr,
                                         nsIInterfaceRequestor* callbacks,
-@@ -314,32 +419,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -314,32 +426,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
      mSocket->MarkAsTRRServiceChannel();
    }
  
 -  NetAddr local;
 -  local.raw.family = aPeerAddr.raw.family;
 -  nsresult rv = mSocket->InitWithAddress(&local, nullptr, false, 1);
--  if (NS_FAILED(rv)) {
--    mSocket = nullptr;
--    return rv;
--  }
--
--  rv = mSocket->SetRecvBufferSize(
--      StaticPrefs::network_http_http3_recvBufferSize());
 +  nsresult rv = BindSocket(mSocket, aPeerAddr.raw.family);
    if (NS_FAILED(rv)) {
--    LOG(("HttpConnectionUDP::InitCommon SetRecvBufferSize failed %d [this=%p]",
--         static_cast<uint32_t>(rv), this));
--    mSocket->Close();
      mSocket = nullptr;
      return rv;
    }
  
+-  rv = mSocket->SetRecvBufferSize(
+-      StaticPrefs::network_http_http3_recvBufferSize());
+-  if (NS_FAILED(rv)) {
+-    LOG(("HttpConnectionUDP::InitCommon SetRecvBufferSize failed %d [this=%p]",
+-         static_cast<uint32_t>(rv), this));
+-    mSocket->Close();
+-    mSocket = nullptr;
+-    return rv;
+-  }
+-
 -  if (aPeerAddr.raw.family == AF_INET) {
 -    rv = mSocket->SetDontFragment(true);
 -    if (NS_FAILED(rv)) {
@@ -852,7 +1104,7 @@ index c662beac36..eb707f995c 100644
    // get the resulting socket address.
    rv = mSocket->GetLocalAddr(getter_AddRefs(mSelfAddr));
    if (NS_FAILED(rv)) {
-@@ -389,6 +474,15 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -389,6 +481,15 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
    mIsInTunnel = isInTunnel;
    if (mIsInTunnel) {
      mHttp3Session->SetIsInTunnel();
@@ -868,7 +1120,7 @@ index c662beac36..eb707f995c 100644
    }
  
    ChangeConnectionState(ConnectionState::INITED);
-@@ -403,6 +497,14 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -403,6 +504,14 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
      return rv;
    }
  
@@ -883,7 +1135,7 @@ index c662beac36..eb707f995c 100644
    return NS_OK;
  }
  
-@@ -416,7 +518,7 @@ nsresult HttpConnectionUDP::Activate(nsAHttpTransaction* trans, uint32_t caps,
+@@ -416,7 +525,7 @@ nsresult HttpConnectionUDP::Activate(nsAHttpTransaction* trans, uint32_t caps,
    nsHttpTransaction* hTrans = trans->QueryHttpTransaction();
    nsHttpConnectionInfo* transCI = trans->ConnectionInfo();
    NetAddr peerAddr;
@@ -892,7 +1144,7 @@ index c662beac36..eb707f995c 100644
        NS_SUCCEEDED(GetPeerAddr(&peerAddr))) {
      // set the targetIpAddressSpace in the transaction object, this might be
      // needed by the channel for determining the kind of LNA permissions and/or
-@@ -697,6 +799,9 @@ void HttpConnectionUDP::Close(nsresult reason, bool aIsShutdown) {
+@@ -697,6 +806,9 @@ void HttpConnectionUDP::Close(nsresult reason, bool aIsShutdown) {
    if (socket) {
      socket->Close();
    }
@@ -902,7 +1154,7 @@ index c662beac36..eb707f995c 100644
    if (mHttp3Session) {
      mHttp3Session->SetCleanShutdown(true);
      mHttp3Session->Close(reason);
-@@ -1265,6 +1370,10 @@ NS_IMETHODIMP HttpConnectionUDP::OnPacketReceived(nsIUDPSocket* aSocket) {
+@@ -1265,6 +1377,10 @@ NS_IMETHODIMP HttpConnectionUDP::OnPacketReceived(nsIUDPSocket* aSocket) {
  
  NS_IMETHODIMP HttpConnectionUDP::OnStopListening(nsIUDPSocket* aSocket,
                                                   nsresult aStatus) {
@@ -914,7 +1166,7 @@ index c662beac36..eb707f995c 100644
    // true to ensure that mHttp3Session is also closed.
    CloseTransaction(mHttp3Session, aStatus, true);
 diff --git a/netwerk/protocol/http/HttpConnectionUDP.h b/netwerk/protocol/http/HttpConnectionUDP.h
-index b401912ab9..394338490d 100644
+index b401912ab9..03aad83cfa 100644
 --- a/netwerk/protocol/http/HttpConnectionUDP.h
 +++ b/netwerk/protocol/http/HttpConnectionUDP.h
 @@ -11,6 +11,7 @@
@@ -935,7 +1187,7 @@ index b401912ab9..394338490d 100644
   private:
    virtual ~HttpConnectionUDP();
  
-@@ -59,6 +61,16 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+@@ -59,6 +61,20 @@ class HttpConnectionUDP final : public HttpConnectionBase,
  
    HttpConnectionUDP();
  
@@ -948,11 +1200,15 @@ index b401912ab9..394338490d 100644
 +  // give up on HTTP/3 wait this much longer
 +  // (nsHttpTransaction::FallbackWaitsForRelay).
 +  Maybe<TimeDuration> RelayLag(uint32_t aRoundTrips) const;
++  // Camoufox: RelayLag(1), or while the relay is being set up the time that
++  // has taken so far: what the clock of a Firefox at the proxy's exit is
++  // behind by (HappyEyeballsConnectionAttempt::RelayLag).
++  TimeDuration RelayLost() const;
 +
    [[nodiscard]] nsresult Init(nsHttpConnectionInfo* info,
                                nsIDNSRecord* dnsRecord, nsresult status,
                                nsIInterfaceRequestor* callbacks, uint32_t caps);
-@@ -118,6 +130,7 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+@@ -118,6 +134,7 @@ class HttpConnectionUDP final : public HttpConnectionBase,
    nsresult InitCommon(nsIUDPSocket* aSocket, const NetAddr& aPeerAddr,
                        nsIInterfaceRequestor* callbacks, uint32_t caps,
                        bool isInTunnel);
@@ -960,7 +1216,7 @@ index b401912ab9..394338490d 100644
    [[nodiscard]] nsresult OnTransactionDone(nsresult reason);
    nsresult RecvData();
    nsresult SendData();
-@@ -146,6 +159,13 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+@@ -146,6 +163,13 @@ class HttpConnectionUDP final : public HttpConnectionBase,
  
    PRIntervalTime mLastRequestBytesSentTime = 0;
    nsCOMPtr<nsIUDPSocket> mSocket;
@@ -996,6 +1252,120 @@ index 14fe3c54ec..d16bbb191a 100644
 +  if (!mConnInfo->ConnectsAsDirect()) {
      return;
    }
+ 
+diff --git a/netwerk/protocol/http/happy_eyeballs_glue/src/lib.rs b/netwerk/protocol/http/happy_eyeballs_glue/src/lib.rs
+index c02ca3f640..fda7ce41aa 100644
+--- a/netwerk/protocol/http/happy_eyeballs_glue/src/lib.rs
++++ b/netwerk/protocol/http/happy_eyeballs_glue/src/lib.rs
+@@ -132,6 +132,7 @@ pub unsafe extern "C" fn happy_eyeballs_create(
+                 inner: he,
+                 profiler,
+                 metrics,
++                relay_lag: Duration::ZERO,
+             });
+             boxed
+                 .profiler
+@@ -146,6 +147,15 @@ pub unsafe extern "C" fn happy_eyeballs_create(
+     NS_OK
+ }
+ 
++/// Camoufox: the time the attempts have lost to a SOCKS5 UDP relay so far
++/// (HappyEyeballsConnectionAttempt::RelayLag).
++#[no_mangle]
++pub unsafe extern "C" fn happy_eyeballs_set_relay_lag(he: *mut HappyEyeballs, lag_ms: u64) {
++    if let Some(he) = unsafe { he.as_mut() } {
++        he.relay_lag = Duration::from_millis(lag_ms);
++    }
++}
++
+ #[no_mangle]
+ pub unsafe extern "C" fn happy_eyeballs_process_dns_response_a(
+     he: *mut HappyEyeballs,
+@@ -278,9 +288,17 @@ pub struct HappyEyeballs {
+     inner: happy_eyeballs::HappyEyeballs,
+     profiler: profiler::Profiler,
+     metrics: metrics::Metrics,
++    relay_lag: Duration,
+ }
+ 
+ impl HappyEyeballs {
++    /// Camoufox: the clock of a Firefox at the proxy's exit, where no attempt
++    /// waits for a relay: the delays between attempts run on it.
++    fn now(&self) -> Instant {
++        let now = Instant::now();
++        now.checked_sub(self.relay_lag).unwrap_or(now)
++    }
++
+     fn process_dns_response_a(
+         &mut self,
+         id: u64,
+@@ -303,7 +321,7 @@ impl HappyEyeballs {
+ 
+         let result = happy_eyeballs::DnsResult::A(Ok(addrs));
+         let input = happy_eyeballs::Input::DnsResult { id, result, stale };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -330,7 +348,7 @@ impl HappyEyeballs {
+ 
+         let result = happy_eyeballs::DnsResult::Aaaa(Ok(addrs));
+         let input = happy_eyeballs::Input::DnsResult { id, result, stale };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -404,7 +422,7 @@ impl HappyEyeballs {
+ 
+         let result = happy_eyeballs::DnsResult::Https(Ok(infos));
+         let input = happy_eyeballs::Input::DnsResult { id, result, stale };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -426,7 +444,7 @@ impl HappyEyeballs {
+         };
+ 
+         let input = happy_eyeballs::Input::ConnectionResult { id, result };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -440,7 +458,7 @@ impl HappyEyeballs {
+         ));
+ 
+         let input = happy_eyeballs::Input::ConnectionResult { id, result };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -451,7 +469,7 @@ impl HappyEyeballs {
+         ech_config: &mut ThinVec<u8>,
+         dns_hostname: &mut nsACString,
+     ) -> nsresult {
+-        let out = self.inner.process_output(std::time::Instant::now());
++        let out = self.inner.process_output(self.now());
+         ech_config.clear();
+         dns_hostname.truncate();
+         match out {
+diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
+index 050d925fe3..174573426c 100644
+--- a/netwerk/protocol/http/nsHttpChannel.cpp
++++ b/netwerk/protocol/http/nsHttpChannel.cpp
+@@ -8359,7 +8359,8 @@ nsresult nsHttpChannel::BeginConnect() {
+       return false;
+     }
+ 
+-    if (mProxyInfo) {
++    // Camoufox: a proxy that connects as direct races as no proxy does.
++    if (!mConnectionInfo->ConnectsAsDirect()) {
+       return false;
+     }
  
 diff --git a/netwerk/protocol/http/nsHttpConnection.cpp b/netwerk/protocol/http/nsHttpConnection.cpp
 index 33d5659b50..add5762755 100644
@@ -1781,3 +2151,122 @@ index 0000000000..682969c355
 +fn canonical(addr: SocketAddr) -> SocketAddr {
 +    SocketAddr::new(addr.ip().to_canonical(), addr.port())
 +}
+diff --git a/netwerk/socket/nsSOCKSIOLayer.cpp b/netwerk/socket/nsSOCKSIOLayer.cpp
+index a466a4b03c..76b5bcc795 100644
+--- a/netwerk/socket/nsSOCKSIOLayer.cpp
++++ b/netwerk/socket/nsSOCKSIOLayer.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "mozilla/Components.h"
+ #include "mozilla/Logging.h"
++#include "mozilla/Maybe.h"
+ #include "mozilla/net/DNS.h"
+ #include "nsCRT.h"
+ #include "nsICancelable.h"
+@@ -87,6 +88,7 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
+   void GetExternalProxyAddr(NetAddr& aExternalProxyAddr);
+   void GetDestinationAddr(NetAddr& aDestinationAddr);
+   void SetDestinationAddr(const NetAddr& aDestinationAddr);
++  mozilla::TimeDuration Lost() const;
+ 
+  private:
+   virtual ~nsSOCKSSocketInfo() {
+@@ -223,6 +225,13 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
+   NetAddr mDestinationAddr;
+   PRIntervalTime mTimeout{PR_INTERVAL_NO_TIMEOUT};
+   nsCString mProxyUsername;  // Cache, from mProxy
++  // Camoufox: when the handshake began and when the greeting was sent, the
++  // round trip to the proxy its reply took, and how long the handshake had
++  // taken when the CONNECT request was sent (see Lost()).
++  mozilla::TimeStamp mBegan;
++  mozilla::TimeStamp mGreeted;
++  mozilla::TimeDuration mRoundTrip;
++  mozilla::Maybe<mozilla::TimeDuration> mSetup;
+ };
+ 
+ nsSOCKSSocketInfo::nsSOCKSSocketInfo() {
+@@ -1052,6 +1061,7 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+ 
+   switch (mState) {
+     case SOCKS_INITIAL:
++      mBegan = mozilla::TimeStamp::Now();
+       if (IsLocalProxy()) {
+         mState = SOCKS_DNS_COMPLETE;
+         mLookupStatus = NS_OK;
+@@ -1077,11 +1087,13 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+ 
+     case SOCKS5_WRITE_AUTH_REQUEST:
+       if (WriteToSocket(fd) != PR_SUCCESS) return PR_FAILURE;
++      mGreeted = mozilla::TimeStamp::Now();
+       WantRead(2);
+       mState = SOCKS5_READ_AUTH_RESPONSE;
+       return PR_SUCCESS;
+     case SOCKS5_READ_AUTH_RESPONSE:
+       if (ReadFromSocket(fd) != PR_SUCCESS) return PR_FAILURE;
++      mRoundTrip = mozilla::TimeStamp::Now() - mGreeted;
+       return ReadV5AuthResponse();
+     case SOCKS5_WRITE_USERNAME_REQUEST:
+       if (WriteToSocket(fd) != PR_SUCCESS) return PR_FAILURE;
+@@ -1093,6 +1105,7 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+       return ReadV5UsernameResponse();
+     case SOCKS5_WRITE_CONNECT_REQUEST:
+       if (WriteToSocket(fd) != PR_SUCCESS) return PR_FAILURE;
++      mSetup = mozilla::Some(mozilla::TimeStamp::Now() - mBegan);
+ 
+       // The SOCKS 5 response to the connection request is variable
+       // length. First, we'll read enough to tell how long the response
+@@ -1122,6 +1135,21 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+   return PR_FAILURE;
+ }
+ 
++// Camoufox: how much later than a connection with no proxy this one hears
++// from its peer: the handshake up to the CONNECT request, and a round trip to
++// the proxy for that request and its reply, and one more for a ClientHello
++// that waits for the reply. Until the request is sent, the time the handshake
++// has taken so far (HappyEyeballsConnectionAttempt::RelayLag).
++mozilla::TimeDuration nsSOCKSSocketInfo::Lost() const {
++  if (mBegan.IsNull()) {
++    return mozilla::TimeDuration();
++  }
++  if (!mSetup) {
++    return mozilla::TimeStamp::Now() - mBegan;
++  }
++  return *mSetup + mRoundTrip.MultDouble(mOptimisticData ? 1 : 2);
++}
++
+ int16_t nsSOCKSSocketInfo::GetPollFlags() const {
+   switch (mState) {
+     case SOCKS_DNS_IN_PROGRESS:
+@@ -1525,6 +1553,12 @@ nsresult nsSOCKSIOLayerAddToSocket(int32_t family, const char* host,
+   return NS_OK;
+ }
+ 
++mozilla::TimeDuration nsSOCKSIOLayerLost(PRFileDesc* fd) {
++  PRFileDesc* layer = PR_GetIdentitiesLayer(fd, nsSOCKSIOLayerIdentity);
++  return layer ? ((nsSOCKSSocketInfo*)layer->secret)->Lost()
++               : mozilla::TimeDuration();
++}
++
+ bool IsHostLocalTarget(const nsACString& aHost) {
+ #if defined(XP_UNIX)
+   return StringBeginsWith(aHost, "file:"_ns);
+diff --git a/netwerk/socket/nsSOCKSIOLayer.h b/netwerk/socket/nsSOCKSIOLayer.h
+index d5282ae2fa..1cfc383edb 100644
+--- a/netwerk/socket/nsSOCKSIOLayer.h
++++ b/netwerk/socket/nsSOCKSIOLayer.h
+@@ -6,6 +6,7 @@
+ #ifndef nsSOCKSIOLayer_h_
+ #define nsSOCKSIOLayer_h_
+ 
++#include "mozilla/TimeStamp.h"
+ #include "nsIProxyInfo.h"
+ #include "nscore.h"
+ #include "prio.h"
+@@ -17,4 +18,7 @@ nsresult nsSOCKSIOLayerAddToSocket(int32_t family, const char* host,
+ 
+ bool IsHostLocalTarget(const nsACString& aHost);
+ 
++// Camoufox: nsSOCKSSocketInfo::Lost() of a socket with a SOCKS layer.
++mozilla::TimeDuration nsSOCKSIOLayerLost(PRFileDesc* fd);
++
+ #endif /* nsSOCKSIOLayer_h_ */
