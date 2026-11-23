@@ -192,13 +192,21 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
   or two for a TCP connection without `proxy_optimistic_data`, whose
   ClientHello waits for the proxy's reply). An attempt that loses the race
   is closed that much later, having reached the origin that much later.
-  A lookup's answer crosses the proxy as well, and the race waits only 25 ms
-  for an HTTPS record once it has an address, which it has at once when
+- **A lookup in flight does not let TCP start ahead.** The race waits only
+  25 ms for an HTTPS record once it has an address, which it has at once when
   something else resolved the name first (uBlock Origin does, for every
-  request). So the clock is also set back by a round trip to the proxy for
-  each stretch spent waiting for the resolver; without that the record came
-  late and the request went over TCP to the URL's port, with a GREASE ECH
-  extension
+  request). A Firefox at the exit has its resolver beside it; behind the
+  proxy the answer has the proxy to cross, the wait ran out, and the request
+  went over TCP to the URL's port, with a GREASE ECH extension and no HTTP/3.
+  So the race's clock stands still while an answer is outstanding. The limit
+  is measured on the DoH requests themselves, which are the only thing that
+  crosses the whole path to the resolver: the time after which an answer is
+  late by RFC 6298's rule, the smoothed answer time plus four times its
+  variation, over the answers so far. Nothing is read from the SOCKS
+  handshake for this: a proxy whose endpoint runs on the browser's machine
+  and forwards to the exit answers the greeting at once, however far the exit
+  is. An answer that is lost, or slower than that limit, is given up as stock
+  gives it up, 25 ms later: the request goes over TCP without the record
   ([`connections-are-raced-as-release-races-them`](../ci/tribal-rules.yml)).
 - **uBlock Origin's "Disable pre-fetching" asks nothing of the resolver.** It
   sets `network.http.speculative-parallel-limit` to 0. With Happy Eyeballs a
@@ -280,6 +288,13 @@ For the claim "a Firefox at the exit" to hold, a SOCKS5 proxy has to:
 - A TCP connection raced against QUIC starts later than it does at the exit,
   by the delay of the proxy. An origin whose QUIC is slow or blocked sees the
   TCP connection that much later.
+- An HTTPS record whose answer is lost is given up later than at the exit, by
+  the time the resolver's answers have been taking through the proxy. The
+  request then goes over TCP, as it does at the exit.
+- What a TCP attempt costs behind the proxy is measured on the SOCKS greeting.
+  A proxy whose endpoint runs on the browser's machine answers it at once, so
+  a TCP attempt is charged nothing: an origin that announces HTTP/3 and
+  answers none sees two TCP connections where it sees one from its exit.
 - Timers inside QUIC and TLS run on the round trip of the whole path, the
   proxy's included. An origin whose record offers an ECH configuration it
   rejects sees more TCP connections than it does from its exit: the QUIC

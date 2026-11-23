@@ -18,8 +18,12 @@ an attempt a Firefox at the proxy's exit is still waiting for. A lookup's
 answer crosses the proxy too. uBlock Origin resolves a request's name before
 letting it go, so the connection finds the addresses in the cache and waits
 25 ms for the HTTPS record alone (the resolution delay); on the browser's
-clock that ran out a round trip to the proxy early, and every request went
-over TCP to the URL's port with a GREASE ECH extension.
+clock that ran out before the answer had crossed the proxy, and every request
+went over TCP to the URL's port with a GREASE ECH extension. A Firefox at the
+exit has its resolver beside it, so the wait is for as long as the resolver's
+answers have been taking, and no round trip to the proxy is assumed: a proxy
+whose endpoint is on the browser's machine answers the SOCKS greeting at once
+however far its exit is.
 
 uBlock Origin's default "Disable pre-fetching" sets
 network.http.speculative-parallel-limit to 0, so no connection is opened ahead
@@ -27,17 +31,21 @@ of a request. With Happy Eyeballs a <link rel=preconnect> then asks nothing
 of the resolver either; without it the name's addresses and HTTPS record were
 asked for a connection that was never going to be opened.
 
-The guard runs a site of several names on one address (HTTP/1.1 over TLS and
-HTTP/3, announced by an HTTPS record), a page on another server whose
-stylesheet, image, video, font, EventSource and fetch are at those names and
-which preconnects to one more, a DoH resolver and a SOCKS5 proxy 50 ms away
-each way. The resolver answers over one HTTP/2 connection, 20 ms after it is
-asked, and is addressed by name, as the launcher's proxy_dns='doh' addresses
-its own: the proxy is given that one name and addresses for the rest. The
-page is opened in the launch's own context, whose lookups share a cache with
-uBlock Origin's. The site is a set distance from whoever connects to
-it, the browser or the proxy: once nearer than the delay and once further,
-where Firefox opens TCP beside QUIC with no proxy too.
+The guard runs a site of several names on one address, a DoH resolver and a
+SOCKS5 proxy. The site's URLs name a port that answers HTTP/1.1 over TLS, and
+its HTTPS records (alpn h3,h2) name another, which answers HTTP/3 too: a
+request that did not wait for its record is one over TCP to the URL's port.
+The page is one of the site's names; its stylesheet, image, video, font,
+EventSource and fetch are at six more, and it preconnects to another. The
+proxy's endpoint is on the browser's machine and answers the greeting at
+once; its exit is 50 ms away each way, for every byte after that. The
+resolver answers over one HTTP/2 connection, 20 ms after it is asked (120 ms
+through the proxy), and is addressed by name, as the launcher's
+proxy_dns='doh' addresses its own: the proxy is given that one name and
+addresses for the rest. The page is opened in the launch's own context, whose
+lookups share a cache with uBlock Origin's. The site is a set distance from
+whoever connects to it, the browser or the proxy: once nearer than the delay
+and once further, where Firefox opens TCP beside QUIC with no proxy too.
 
 What PASS means, at each distance, with uBlock Origin loaded and its
 preferences in place before the page is opened:
@@ -45,10 +53,10 @@ preferences in place before the page is opened:
       from stock Firefox 160.0.1 with uBlock Origin 1.75.4 (REFERENCE), and
       the resolver is asked nothing about the preconnected name;
     * behind the proxy with proxy_optimistic_data the site sees what it sees
-      with no proxy: the TCP connections (server name, ALPN offered, ECH
-      extension), the QUIC connections, the protocol that carried each
-      request, the names asked of the resolver and their types, and no QUIC
-      connection of one datagram;
+      with no proxy: the TCP connections (port, server name, ALPN offered,
+      ECH extension), the QUIC connections, the protocol that carried each
+      request, the page's first among them, the names asked of the resolver
+      and their types, and no QUIC connection of one datagram;
     * no name is resolved by this machine, the resolver's included.
 
     python browser/tests/playwright/patches/ublock-connections-socks5.py
@@ -90,13 +98,14 @@ NEAR, FAR = 0.004, 0.1
 # What the site sees of stock Firefox 160.0.1 with uBlock Origin 1.75.4 and no
 # proxy (the same in every run measured): the names it has a TCP connection
 # for, and the requests each protocol carried. The stylesheet is asked for
-# twice. Which QUIC connection carries the EventSource, the fetch and the font
-# differs from run to run, in stock too, so it is not compared.
+# twice, and the page's name for the page and its icon. Which QUIC connection
+# carries the EventSource, the fetch and the font differs from run to run, in
+# stock too, so it is not compared.
 REFERENCE = {
     NEAR: {"tcp names": [], "over tcp": [],
-           "over h3": ["css", "css", "es", "fetch", "font", "img", "video"]},
-    FAR: {"tcp names": sorted(KINDS), "over tcp": [],
-          "over h3": ["css", "css", "es", "fetch", "font", "img", "video"]},
+           "over h3": ["css", "css", "es", "fetch", "font", "img", "page", "page", "video"]},
+    FAR: {"tcp names": sorted(("page", *KINDS)), "over tcp": [],
+          "over h3": ["css", "css", "es", "fetch", "font", "img", "page", "page", "video"]},
 }
 # How long the resolver takes to answer. A page's requests are asked about
 # together, so with a resolver that answers at once the first of them are on
@@ -120,10 +129,6 @@ BODIES = {
     "/es": (b"text/event-stream", b"retry: 600000\ndata: 1\n\n"),
 }
 SPECULATIVE_LIMIT = "return Services.prefs.getIntPref('network.http.speculative-parallel-limit');"
-
-
-def body_of(path: str) -> tuple:
-    return BODIES.get(path.split("?")[0], (b"application/octet-stream", b"ok"))
 
 
 def client_hello(data: bytes) -> dict:
@@ -154,15 +159,17 @@ def client_hello(data: bytes) -> dict:
 
 
 class Site:
-    """Several names on one address and port: HTTP/1.1 over TLS and HTTP/3.
-    `distance` is the round trip between it and whoever connects. Records
-    every TCP connection's ClientHello, every QUIC connection's datagrams, and
-    which connection carried each request."""
+    """Several names on one address, the page's among them. Their URLs name
+    one port, which answers HTTP/1.1 over TLS; their HTTPS records name
+    another, which answers HTTP/3 as well. `distance` is the round trip
+    between the site and whoever connects. Records every TCP connection's
+    port and ClientHello, every QUIC connection's datagrams, and which
+    connection carried each request."""
 
     def __init__(self, cert: str, key: str, distance: float) -> None:
-        self.port = free_port()
+        self.port = free_port()  # the one the HTTPS records name
         self.way = distance / 2
-        self.tcp = []  # {"name", "alpn", "ech", "requests"}
+        self.tcp = []  # {"port", "name", "alpn", "ech", "requests"}
         self.datagrams = {}  # UDP source -> how many datagrams came from it
         self.h3_requests = {}  # UDP source -> the names requested
         self._cert, self._key = cert, key
@@ -186,7 +193,7 @@ class Site:
                         headers = dict(ev.headers)
                         peer = self._quic._network_paths[0].addr[:2]
                         site.h3_requests.setdefault(peer, []).append(headers[b":authority"].decode().split(".")[0])
-                        kind, body = body_of(headers[b":path"].decode())
+                        kind, body = site.body(headers[b":path"].decode())
                         self.h3.send_headers(ev.stream_id, [
                             (b":status", b"200"), (b"content-type", kind),
                             (b"content-length", str(len(body)).encode())])
@@ -217,13 +224,22 @@ class Site:
         tls.load_cert_chain(self._cert, self._key)
         self._tls = await asyncio.start_server(self._serve, "127.0.0.1", 0, ssl=tls)
         self._tcp = await asyncio.start_server(self._accept, ADDRESS, self.port)
+        self._url = await asyncio.start_server(self._accept, ADDRESS, 0)
+        self.url_port = self._url.sockets[0].getsockname()[1]
+        self._page = PAGE.format(zone=ZONE, port=self.url_port).encode()
+
+    def body(self, path: str) -> tuple:
+        if path == "/":
+            return b"text/html", self._page
+        return BODIES.get(path.split("?")[0], (b"application/octet-stream", b"ok"))
 
     async def _accept(self, reader, writer) -> None:
         """A TCP connection: its ClientHello is recorded, and its bytes reach
         the TLS server `way` late, the first ones a round trip later still,
         as behind a handshake over that distance."""
         loop = asyncio.get_running_loop()
-        connection = {"requests": []}
+        to_url = writer.get_extra_info("sockname")[1] == self.url_port
+        connection = {"port": "the URL's" if to_url else "the record's", "requests": []}
         self.tcp.append(connection)
         up_reader, up_writer = await asyncio.open_connection("127.0.0.1", self._tls.sockets[0].getsockname()[1])
         self._inner[up_writer.get_extra_info("sockname")[1]] = connection
@@ -270,7 +286,7 @@ class Site:
                     if header.lower().startswith(b"host:"):
                         host = header.split(b":")[1].strip().decode()
                 connection["requests"].append(host.split(".")[0])
-                kind, body = body_of(line.split()[1].decode())
+                kind, body = self.body(line.split()[1].decode())
                 writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n%s"
                              % (kind, len(body), body))
                 await writer.drain()
@@ -280,14 +296,14 @@ class Site:
             writer.close()
 
     def close(self) -> None:
-        for server in (self._quic, self._tcp, self._tls):
+        for server in (self._quic, self._tcp, self._url, self._tls):
             server.close()
 
     def seen(self) -> dict:
         """What the site can tell of the browser's connections to it."""
         return {
-            "tcp": sorted((str(c.get("name", "")).split(".")[0], c.get("alpn"), c.get("ech"), tuple(c["requests"]))
-                          for c in self.tcp),
+            "tcp": sorted((c["port"], str(c.get("name", "")).split(".")[0], c.get("alpn"), c.get("ech"),
+                           tuple(c["requests"])) for c in self.tcp),
             "tcp names": sorted(str(c.get("name", "")).split(".")[0] for c in self.tcp),
             "over tcp": sorted(name for c in self.tcp for name in c["requests"]),
             "over h3": sorted(name for names in self.h3_requests.values() for name in names),
@@ -298,13 +314,14 @@ class Site:
 
 class Resolver(record.Resolver):
     """The HTTPS record guard's resolver for ZONE, recording what it is
-    asked. A name in `plain` has an address and no HTTPS record."""
+    asked."""
 
     def __init__(self, cert: str, key: str) -> None:
         super().__init__(cert, key)
-        self.asked, self.plain = set(), set()
+        self.asked = set()
         self.delay = RESOLVER
         self.http2 = True
+        self.alpn = (b"h3", b"h2")
 
     def answer(self, query: bytes) -> bytes:
         at, labels = 12, []
@@ -314,13 +331,11 @@ class Resolver(record.Resolver):
         (qtype,) = struct.unpack("!H", query[at + 1:at + 3])
         name = ".".join(labels)
         self.asked.add((name.replace("." + ZONE, ""), qtype))
-        if name in self.plain and qtype == 65:
-            return query[:2] + struct.pack("!HHHHH", 0x8180, 1, 0, 0, 0) + query[12:at + 5]
         return super().answer(query)
 
 
 class Network:
-    """A site at `distance`, the page that loads from it, and their resolver."""
+    """A site at `distance` and its resolver."""
 
     def __init__(self, cert: str, key: str, distance: float) -> None:
         self._cert, self._key = cert, key
@@ -334,43 +349,18 @@ class Network:
                 break
             except OSError:  # the port is free for TCP and taken for UDP
                 self.site = Site(self._cert, self._key, self.site.way * 2)
-        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        tls.load_cert_chain(self._cert, self._key)
-        self.page = await asyncio.start_server(self._serve_page, ADDRESS, 0, ssl=tls)
-        self.page_port = self.page.sockets[0].getsockname()[1]
-        self.url = f"https://page.{ZONE}:{self.page_port}/"
-        self.resolver.ports = {f"{kind}.{ZONE}": self.site.port for kind in KINDS}
-        self.resolver.ports[f"page.{ZONE}"] = self.page_port
-        self.resolver.plain.add(f"_{self.page_port}._https.page.{ZONE}")
+        self.url = f"https://page.{ZONE}:{self.site.url_port}/"
+        self.resolver.ports = {f"{name}.{ZONE}": self.site.port for name in ("page", *KINDS)}
         self.doh_by_address = await self.resolver.start()
         doh_port = self.doh_by_address.split(":")[2].split("/")[0]
         self.doh_by_name = f"https://doh.{ZONE}:{doh_port}/dns-query"
 
-    async def _serve_page(self, reader, writer) -> None:
-        body = PAGE.format(zone=ZONE, port=self.site.port).encode()
-        try:
-            while await reader.readline():
-                while (await reader.readline()) not in (b"\r\n", b""):
-                    pass
-                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\n\r\n%s"
-                             % (len(body), body))
-                await writer.drain()
-        except (ConnectionError, ssl.SSLError):
-            pass
-        finally:
-            writer.close()
-
     def close(self) -> None:
-        for closing in (self.site, self.resolver, self.page):
+        for closing in (self.site, self.resolver):
             closing.close()
 
     def seen(self) -> dict:
-        ports = {f"_{self.site.port}.": "_site.", f"_{self.page_port}.": "_page."}
-        asked = set()
-        for name, qtype in self.resolver.asked:
-            for port, label in ports.items():
-                name = name.replace(port, label)
-            asked.add((name, qtype))
+        asked = {(name.replace(f"_{self.site.url_port}.", "_url."), qtype) for name, qtype in self.resolver.asked}
         return {**self.site.seen(), "asked": sorted(asked)}
 
 
@@ -417,7 +407,7 @@ async def visit(binary: Path, cert: str, key: str, trust: str, distance: float, 
 
     network = Network(cert, key, distance)
     await network.start()
-    proxy = record.DistantProxy() if proxied else None
+    proxy = record.DistantProxy(local=True) if proxied else None
     if proxy:
         proxy.names = {f"doh.{ZONE}": ADDRESS}
     log = tempfile.TemporaryDirectory()

@@ -1220,6 +1220,11 @@ rules:
       - "with the proxy's cost of the attempts in progress taken off the race's clock and added to a loser's close: ublock-connections-socks5.py 5 of 8 checks before the change and 8 of 8 after; http3-https-record-socks5.py 7 of 7"
       - "third_party/rust/happy-eyeballs: once an address is known the HTTPS record is waited for 25 ms (resolution_delay). uBlock Origin resolves each request's name (browser.dns.resolve) and holds the request until it has, so in the launch's own context the race's A and AAAA queries are answered from the cache at once and the HTTPS query alone goes to the resolver. With no proxy the record is back inside the 25 ms; behind a SOCKS5 proxy it is a round trip to the proxy later, the wait ran out, and TCP was tried at the URL's port with no record: the origin got nearly every subresource request over TCP, with a GREASE ECH extension, where stock sends every one over HTTP/3 (2026-11-23)"
       - "the guard did not see it: its page was opened in a new context, whose lookups are cached apart from the extension's, so all three queries crossed the proxy together; and its resolver gave each query a connection of its own, four round trips to the proxy where a DoH resolver's one HTTP/2 connection costs one. With the page in the launch's context and the resolver on HTTP/2: 6 of 8 checks before the change (every request over TCP behind the proxy, at 4 and at 100 ms), 8 of 8 after"
+      - "that wait was first lengthened by a round trip to the proxy, measured on the SOCKS5 greeting. A proxy whose endpoint runs on the browser's machine and forwards to its exit answers the greeting at once, so the round trip measured was nothing; and a DoH answer takes more than a round trip to the proxy, the resolver's own time being on top. Behind such a proxy every request still went over TCP to the URL's port, the page's own included, where stock sends every one over HTTP/3"
+      - "stock Firefox 160.0.1 with uBlock Origin, no proxy, a public DoH resolver, one page load: no connection race started a connection before its HTTPS answer had come, and every answer came within the 25 ms"
+      - "Firefox 160, netwerk/dns/TRR.cpp, ReturnData: every DoH answer has the time between its request and the end of its response (trrFetchDurationNetworkOnly), on a connection that is already open. RFC 6298 section 2: an answer is late after the smoothed time plus four times its variation"
+      - "the guard did not see it: its proxy answered the greeting from 50 ms away, and its HTTPS records named the URL's port, where a request without its record still found HTTP/1.1. With the greeting answered at once, the records (alpn h3,h2) naming another port and the page among the site's names, 2026-11-23: 6 of 8 checks before the change (behind the proxy every request, the page's first, over TCP to the URL's port, and at 100 ms seven QUIC connections that carried nothing), 8 of 8 after in 5 of 5 runs; stock Firefox 160.0.1 and Camoufox with no proxy see the same connections on it, 2 of 2 runs each at 4 and 100 ms"
+      - "the HTTPS record guard with the greeting answered at once, before and after the change: an origin deaf to QUIC sees two TCP connections behind the proxy and one with none (5 of 7 checks), because a TCP attempt's cost is measured on the greeting"
     rationale: >-
       Which connections an origin sees, and which names a resolver is asked,
       are decided by the connection race, and release Firefox races with
@@ -1232,15 +1237,30 @@ rules:
       origin late by what the proxy costs: the association or the SOCKS
       handshake, and the round trips to the proxy. The race's clock is set
       back by that cost while an attempt is in progress, and an attempt that
-      lost is closed that much later. A lookup crosses the proxy as well:
-      for each stretch with an answer outstanding the clock is set back by
-      the time waited, up to one round trip to the proxy (the last SOCKS5
-      greeting's), so an answer is taken when it reached the exit. Do not
+      lost is closed that much later. A lookup crosses the proxy as well,
+      and a Firefox at the exit has its resolver beside it: an answer in
+      flight through the proxy must not be what lets TCP start ahead. So
+      the clock stands still while an answer is outstanding, for at most
+      the time after which the resolver's answers are late: RFC 6298's
+      timeout over the answer times measured on the DoH requests
+      themselves, the smoothed time plus four times its variation
+      (TRRService::AnswerTimeout). An answer that is lost, or slower than
+      that, is given up as stock gives it up, 25 ms later, and the request
+      goes over TCP without its record. Do not bound that wait by a round
+      trip to the proxy, and do not measure anything on the SOCKS greeting
+      for it: the endpoint that answers the greeting may be on the
+      browser's machine, and an answer costs the resolver's time as well.
+      Do not wait for the answer without a bound either: an origin whose
+      record never comes must still be reached. Do not
       lengthen the delays by a constant, and do not turn the race off behind the proxy: both change
       what the origin sees with the proxy's distance. A proxy given names
-      still runs no race and asks no resolver. What is not matched: the cost
-      is measured on the handshake with the proxy, so a proxy whose latency
-      changes after it is charged the old figure.
+      still runs no race and asks no resolver. What is not matched: an
+      attempt's cost is measured on the handshake with the proxy, so a
+      proxy whose latency changes after it is charged the old figure, and
+      a TCP attempt behind an endpoint on the browser's machine is charged
+      nothing (an origin deaf to QUIC sees a second TCP connection); a
+      lost HTTPS answer is given up later than at the exit, by that
+      timeout.
 
   - id: optimistic-data-is-opt-in-and-tls-only
     title: A TLS ClientHello may travel behind the SOCKS5 CONNECT request, only when the launch asks for it
