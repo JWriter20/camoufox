@@ -14,7 +14,7 @@ what the proxy has to do for it to hold.
 | Who resolves a name | the browser, by DoH through the proxy | the proxy | the proxy |
 | The proxy is given | addresses | names | names |
 | HTTPS records, so real ECH | yes | no (GREASE ECH) | no (GREASE ECH) |
-| HTTP/3 and WebTransport | yes, over UDP ASSOCIATE | no | no |
+| HTTP/3 and WebTransport | yes, over UDP ASSOCIATE | over UDP ASSOCIATE, from the second connection (`Alt-Svc`) | no |
 | WebRTC UDP | over UDP ASSOCIATE | over UDP ASSOCIATE | none |
 | TLS early data, connection coalescing | as with no proxy | off, as Firefox has them behind any proxy | off |
 | `domainLookupStart`/`End` in Resource Timing | a lookup's, as with no proxy | equal: no lookup happened | equal |
@@ -70,9 +70,13 @@ IPv6-only host through the proxy, and sets `network:ipv4Only` when that fails.
 The proxy is sent names, over CONNECT and in UDP ASSOCIATE datagrams (WebRTC's
 STUN and TURN servers). Nothing is resolved by the browser, and the resolver an
 authoritative server sees is the exit's. The cost is the right-hand side of
-the table: no HTTPS records, so no real ECH and no HTTP/3, and Resource Timing
-shows no lookup. Use it for a proxy that cannot carry the DoH request, or when
-the exit's own resolver matters more than the rest.
+the table: no HTTPS records, so no real ECH, and Resource Timing shows no
+lookup. HTTP/3 is learnt from `Alt-Svc` alone: the first connection to an
+origin is TCP, and once its `Alt-Svc` is cached the next ones go over QUIC
+through the relay, addressed by name. Without a record there is nothing to
+start QUIC on before the first response, and no QUIC is tried blind. Use it
+for a proxy that cannot carry the DoH request, or when the exit's own resolver
+matters more than the rest.
 
 ## Speculative connections
 
@@ -246,6 +250,14 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
   segmented send cannot fragment. The relay reassembles and sends the peer the
   datagram a direct browser sends
   ([`relay-hop-may-fragment`](../ci/tribal-rules.yml)).
+- **A proxy given names is sent names.** In `exit` mode, and through a
+  context's own proxy, each datagram is addressed by the origin's name (the
+  `Alt-Svc` host when it names one), and nothing is resolved on this machine.
+  neqo needs a peer address, so the connection is given a placeholder from
+  TEST-NET-1 (`192.0.2.1`) that never leaves the browser: replies addressed
+  by the name, or from the address the relay resolved it to, are handed to
+  neqo as coming from the placeholder. That address is IPv4, so neqo sizes
+  its datagrams for an IPv4 peer, and no other address family is tried.
 - **SOCKS5 only.** SOCKS4 and HTTP proxies carry no UDP, and are sent none.
 
 ## What the proxy must do
@@ -269,7 +281,10 @@ For the claim "a Firefox at the exit" to hold, a SOCKS5 proxy has to:
    and validates the path; a relay that clears the bits makes every connection
    look like one on an ECN-bleaching path.
 6. Accept IPv4 and IPv6 destinations, and relay to IPv6 where the exit has it.
-7. Resolve names for `exit` mode and for the DoH request, from the exit.
+7. Resolve names for `exit` mode and for the DoH request, from the exit: in
+   CONNECT requests and as the destination of UDP ASSOCIATE datagrams. A
+   relay may answer a datagram sent to a name from the name or from the
+   address it resolved.
 8. For `proxy_optimistic_data` only: keep every byte that arrives on a CONNECT's
    connection after the request, send it to the destination as soon as the
    destination is connected, in the order received and as one write, and only
@@ -280,6 +295,9 @@ For the claim "a Firefox at the exit" to hold, a SOCKS5 proxy has to:
 - The DoH requests travel over TCP. Stock tries HTTP/3 first with Cloudflare;
   only the DoH provider can tell.
 - In `exit` mode and behind an HTTP proxy, the table's right-hand columns.
+  In `exit` mode the first connection to an origin is TCP where stock, which
+  has the HTTPS record, may open QUIC at once, and an origin reachable only
+  over IPv6 is sent datagrams of IPv4 size.
 - Without `proxy_optimistic_data`, a TLS connection's ClientHello reaches the
   origin a round trip between the exit and the browser after the TCP
   handshake. With it, `connectEnd` no longer marks the end of that handshake.

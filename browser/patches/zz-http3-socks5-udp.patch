@@ -508,10 +508,10 @@ index 9f9b338136..0cae900504 100644
      "SuspendableChannelWrapper.cpp",
      "ThrottleQueue.cpp",
 diff --git a/netwerk/base/nsProxyInfo.cpp b/netwerk/base/nsProxyInfo.cpp
-index 8d79d80395..c0cb5795be 100644
+index 8d79d80395..08f69a8ba5 100644
 --- a/netwerk/base/nsProxyInfo.cpp
 +++ b/netwerk/base/nsProxyInfo.cpp
-@@ -181,6 +181,15 @@ bool nsProxyInfo::IsSOCKS() {
+@@ -181,8 +181,21 @@ bool nsProxyInfo::IsSOCKS() {
           mType == kProxyType_SOCKS5;
  }
  
@@ -526,12 +526,18 @@ index 8d79d80395..c0cb5795be 100644
 +
  bool nsProxyInfo::IsHttp3Proxy() { return mType == kProxyType_MASQUE; }
  
++bool nsProxyInfo::CarriesHttp3() {
++  return IsDirect() || IsSOCKS5() || IsHttp3Proxy();
++}
++
  /* static */
+ void nsProxyInfo::SerializeProxyInfo(nsProxyInfo* aProxyInfo,
+                                      nsTArray<ProxyInfoCloneArgs>& aResult) {
 diff --git a/netwerk/base/nsProxyInfo.h b/netwerk/base/nsProxyInfo.h
-index 70621a068d..135b88b0b8 100644
+index 70621a068d..988aac5b9c 100644
 --- a/netwerk/base/nsProxyInfo.h
 +++ b/netwerk/base/nsProxyInfo.h
-@@ -52,6 +52,13 @@ class nsProxyInfo final : public nsIProxyInfo {
+@@ -52,7 +52,17 @@ class nsProxyInfo final : public nsIProxyInfo {
    bool IsHTTP();
    bool IsHTTPS();
    bool IsSOCKS();
@@ -539,14 +545,18 @@ index 70621a068d..135b88b0b8 100644
 +  bool IsSOCKS5();
 +  // Camoufox: no proxy, or a SOCKS5 proxy that is given the addresses this
 +  // browser resolved. Such a proxy is to a connection what the network is, so
-+  // what a server can see of the connection (HTTP/3, early data, coalescing)
-+  // is decided as it is with no proxy.
++  // what a server can see of the connection (early data, coalescing) is
++  // decided as it is with no proxy.
 +  bool ConnectsAsDirect();
    bool IsHttp3Proxy();
++  // Camoufox: HTTP/3 can reach the origin: with no proxy, through a SOCKS5
++  // relay (given addresses or names), or through a MASQUE proxy.
++  bool CarriesHttp3();
  
    static void SerializeProxyInfo(nsProxyInfo* aProxyInfo,
+                                  nsTArray<ProxyInfoCloneArgs>& aResult);
 diff --git a/netwerk/base/nsSocketTransport2.cpp b/netwerk/base/nsSocketTransport2.cpp
-index 25f4c49ba5..01113c7f61 100644
+index 12c77533a5..b5b446068f 100644
 --- a/netwerk/base/nsSocketTransport2.cpp
 +++ b/netwerk/base/nsSocketTransport2.cpp
 @@ -35,6 +35,7 @@
@@ -557,7 +567,7 @@ index 25f4c49ba5..01113c7f61 100644
  #include "nsSocketProviderService.h"
  #include "nsStreamUtils.h"
  #include "nsThreadUtils.h"
-@@ -2880,6 +2881,14 @@ nsSocketTransport::GetQoSBits(uint8_t* aQoSBits) {
+@@ -2865,6 +2866,14 @@ nsSocketTransport::GetQoSBits(uint8_t* aQoSBits) {
    return NS_OK;
  }
  
@@ -661,7 +671,7 @@ index f17c4fcd4d..0d4be4e9ad 100644
  
    void DontUseTRRThread() { mDontUseTRRThread = true; }
 diff --git a/netwerk/protocol/http/AlternateServices.cpp b/netwerk/protocol/http/AlternateServices.cpp
-index 289b877ccb..a38c75496c 100644
+index 289b877ccb..2f35918593 100644
 --- a/netwerk/protocol/http/AlternateServices.cpp
 +++ b/netwerk/protocol/http/AlternateServices.cpp
 @@ -458,7 +458,8 @@ void AltSvcMapping::GetConnectionInfo(
@@ -674,17 +684,16 @@ index 289b877ccb..a38c75496c 100644
             .SetPrivate(mPrivate)
             .Finalize();
    ci.forget(outCI);
-@@ -905,7 +906,8 @@ void AltSvcCache::UpdateAltServiceMapping(
+@@ -905,7 +906,7 @@ void AltSvcCache::UpdateAltServiceMapping(
    }
  
    if (map->IsHttp3()) {
 -    bool isProxyAllowed = pi ? (pi->IsDirect() || pi->IsHttp3Proxy()) : true;
-+    bool isProxyAllowed =
-+        pi ? (pi->ConnectsAsDirect() || pi->IsHttp3Proxy()) : true;
++    bool isProxyAllowed = pi ? pi->CarriesHttp3() : true;
      if (!isProxyAllowed) {
        LOG(
            ("AltSvcCache::UpdateAltServiceMapping %p map %p ignored h3 because "
-@@ -934,7 +936,8 @@ void AltSvcCache::UpdateAltServiceMapping(
+@@ -934,7 +935,8 @@ void AltSvcCache::UpdateAltServiceMapping(
    // validation would resolve the host client-side and leak it outside a SOCKS
    // remote-DNS proxy. TODO: handle this in the Happy Eyeballs code once it
    // supports establishing proxy connections.
@@ -694,7 +703,7 @@ index 289b877ccb..a38c75496c 100644
      // Validating an h3 alternate must establish an h3 connection; don't let
      // Happy Eyeballs race h1/h2 and settle on a non-h3 connection.
      ci = ci->Mutate()
-@@ -1211,7 +1214,8 @@ void Http3FirstAltSvcMapping::GetConnectionInfo(
+@@ -1211,7 +1213,8 @@ void Http3FirstAltSvcMapping::GetConnectionInfo(
        mAlternateHost, mAlternatePort, mIsHttp3, false);
    ci = ci->Mutate()
             .SetHappyEyeballsEnabled(
@@ -705,7 +714,7 @@ index 289b877ccb..a38c75496c 100644
             .Finalize();
    ci.forget(outCI);
 diff --git a/netwerk/protocol/http/ConnectionEntry.cpp b/netwerk/protocol/http/ConnectionEntry.cpp
-index 82a56487ab..e8cc433536 100644
+index 82a56487ab..6af28a4997 100644
 --- a/netwerk/protocol/http/ConnectionEntry.cpp
 +++ b/netwerk/protocol/http/ConnectionEntry.cpp
 @@ -69,6 +69,17 @@ bool ConnectionEntry::HasActiveH3Connection() const {
@@ -735,6 +744,16 @@ index 82a56487ab..e8cc433536 100644
      return false;
    }
  
+@@ -1112,7 +1123,8 @@ bool ConnectionEntry::AllowToRetryDifferentIPFamilyForHttp3(nsresult aError) {
+       ("ConnectionEntry::AllowToRetryDifferentIPFamilyForHttp3 %p "
+        "error=%" PRIx32,
+        this, static_cast<uint32_t>(aError)));
+-  if (mConnInfo->GetHappyEyeballsEnabled()) {
++  // Camoufox: a proxy given the name picks the address, and its family.
++  if (mConnInfo->GetHappyEyeballsEnabled() || !mConnInfo->ConnectsAsDirect()) {
+     return false;
+   }
+   if (!mConnInfo->IsHttp3() && !mConnInfo->IsHttp3ProxyConnection()) {
 diff --git a/netwerk/protocol/http/ConnectionEntry.h b/netwerk/protocol/http/ConnectionEntry.h
 index 86760ca45f..ef3fff03e1 100644
 --- a/netwerk/protocol/http/ConnectionEntry.h
@@ -823,19 +842,43 @@ index 36c6c41a02..78e3bed07d 100644
   private:
    ~UDPConnectionEstablisher();
 diff --git a/netwerk/protocol/http/DnsAndConnectSocket.cpp b/netwerk/protocol/http/DnsAndConnectSocket.cpp
-index 869dc9799f..22b6602150 100644
+index 869dc9799f..69705328bc 100644
 --- a/netwerk/protocol/http/DnsAndConnectSocket.cpp
 +++ b/netwerk/protocol/http/DnsAndConnectSocket.cpp
-@@ -70,7 +70,7 @@ DnsAndConnectSocket::DnsAndConnectSocket(nsHttpConnectionInfo* ci,
+@@ -70,7 +70,9 @@ DnsAndConnectSocket::DnsAndConnectSocket(nsHttpConnectionInfo* ci,
    LOG(("Creating DnsAndConnectSocket [this=%p trans=%p ent=%s key=%s]\n", this,
         trans, mConnInfo->Origin(), mConnInfo->HashKey().get()));
  
 -  if (mConnInfo->UsingProxy()) {
-+  if (mConnInfo->UsingProxy() && !mConnInfo->ConnectsAsDirect()) {
++  // Camoufox: a SOCKS5 proxy carries QUIC whether it is given addresses or
++  // names.
++  if (mConnInfo->UsingProxy() && !mConnInfo->ProxyCarriesUdp()) {
      mIsHttp3 = mConnInfo->IsHttp3ProxyConnection();
    } else {
      mIsHttp3 = mConnInfo->IsHttp3();
-@@ -773,7 +773,7 @@ DnsAndConnectSocket::OnTransportStatus(nsITransport* trans, nsresult status,
+@@ -246,6 +248,21 @@ nsresult DnsAndConnectSocket::SetupEvent(SetupEvents event) {
+         mState = DnsAndSocketState::DONE;
+       } else if (mPrimaryTransport.FirstResolving()) {
+         mState = DnsAndSocketState::RESOLVING;
++      } else if (mIsHttp3 && mPrimaryTransport.Resolved()) {
++        // Camoufox: the proxy resolves the name, so there is nothing to wait
++        // for. The connection is made once the entry holds this attempt.
++        mState = DnsAndSocketState::RESOLVING;
++        rv = NS_DispatchToCurrentThread(NS_NewRunnableFunction(
++            "DnsAndConnectSocket::SetupConn",
++            [self = RefPtr{this}]() {
++              if (self->mState == DnsAndSocketState::DONE) {
++                return;
++              }
++              self->SetupConn(true, NS_OK);
++              if (self->mState != DnsAndSocketState::DONE) {
++                self->SetupEvent(SetupEvents::PRIMARY_DONE_EVENT);
++              }
++            }));
+       } else if (!mIsHttp3 && mPrimaryTransport.ConnectingOrRetry()) {
+         mState = DnsAndSocketState::CONNECTING;
+         SetupBackupTimer();
+@@ -773,7 +790,7 @@ DnsAndConnectSocket::OnTransportStatus(nsITransport* trans, nsresult status,
      // (see nsHttpConnection::HandshakeDoneInternal) when
      // network.lna.defer_https_check is set; this avoids spurious prompts
      // when DNS misdirects a public hostname to a private address.
@@ -844,6 +887,18 @@ index 869dc9799f..22b6602150 100644
          StaticPrefs::network_lna_blocking()) {
        NetAddr peerAddr;
        if (NS_SUCCEEDED(transport->mSocketTransport->GetPeerAddr(&peerAddr))) {
+@@ -957,6 +974,11 @@ nsresult DnsAndConnectSocket::TransportSetup::Init(
+     DnsAndConnectSocket* dnsAndSock) {
+   nsresult rv;
+   mSynStarted = TimeStamp::Now();
++  if (mSkipDnsResolution && dnsAndSock->mIsHttp3) {
++    // Camoufox: QUIC to a proxy that resolves names needs no address.
++    mState = TransportSetup::TransportSetupState::RESOLVED;
++    return NS_OK;
++  }
+   if (mSkipDnsResolution) {
+     mState = TransportSetup::TransportSetupState::CONNECTING;
+     rv = SetupStreams(dnsAndSock);
 diff --git a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
 index e499817a90..bea10d9292 100644
 --- a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
@@ -1034,15 +1089,17 @@ index c9194c225a..665a71218c 100644
                 "RealJoinConnection should not be called when using proxy");
      return false;
 diff --git a/netwerk/protocol/http/Http3Session.h b/netwerk/protocol/http/Http3Session.h
-index cd8b2a8e29..79f8a1f8a1 100644
+index cd8b2a8e29..b1d015c066 100644
 --- a/netwerk/protocol/http/Http3Session.h
 +++ b/netwerk/protocol/http/Http3Session.h
-@@ -348,6 +348,14 @@ class Http3Session final : public Http3SessionBase,
+@@ -348,6 +348,16 @@ class Http3Session final : public Http3SessionBase,
        PRIntervalTime aRtt, bool aIsExtendedCONNECT);
    void SetIsInTunnel() { mIsInTunnel = true; }
  
 +  // Camoufox: see HttpConnectionUDP::mSocks5.
-+  nsresult Socks5() { return mHttp3Connection->Socks5(); }
++  nsresult Socks5(const nsACString& aName, const NetAddr& aPlaceholder) {
++    return mHttp3Connection->Socks5(aName, aPlaceholder);
++  }
 +  nsresult Socks5Relay(const NetAddr& aRelay, int64_t aSocket,
 +                       bool aReplaced) {
 +    return mHttp3Connection->Socks5Relay(aRelay, aSocket, aReplaced);
@@ -1053,21 +1110,24 @@ index cd8b2a8e29..79f8a1f8a1 100644
  
   private:
 diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/HttpBaseChannel.cpp
-index 9e54d6d8bf..7f5af63091 100644
+index 9e54d6d8bf..5f9be9249e 100644
 --- a/netwerk/protocol/http/HttpBaseChannel.cpp
 +++ b/netwerk/protocol/http/HttpBaseChannel.cpp
-@@ -6777,7 +6777,8 @@ void HttpBaseChannel::DoDiagnosticAssertWhenOnStopNotCalledOnDestroy() {}
+@@ -6777,9 +6777,9 @@ void HttpBaseChannel::DoDiagnosticAssertWhenOnStopNotCalledOnDestroy() {}
  
  bool HttpBaseChannel::Http3Allowed() const {
    bool allowedProxyInfo =
 -      mProxyInfo ? (static_cast<nsProxyInfo*>(mProxyInfo.get())->IsDirect() ||
-+      mProxyInfo ? (static_cast<nsProxyInfo*>(mProxyInfo.get())
-+                        ->ConnectsAsDirect() ||
-                     static_cast<nsProxyInfo*>(mProxyInfo.get())->IsHttp3Proxy())
-                  : true;
+-                    static_cast<nsProxyInfo*>(mProxyInfo.get())->IsHttp3Proxy())
+-                 : true;
++      mProxyInfo
++          ? static_cast<nsProxyInfo*>(mProxyInfo.get())->CarriesHttp3()
++          : true;
    // TODO: When mUpgradeProtocolCallback is not null, we should allow HTTP/3 for
+   // connect-udp.
+   return !mUpgradeProtocolCallback && allowedProxyInfo &&
 diff --git a/netwerk/protocol/http/HttpConnectionUDP.cpp b/netwerk/protocol/http/HttpConnectionUDP.cpp
-index c662beac36..1d08d80c87 100644
+index c662beac36..8715a8b37f 100644
 --- a/netwerk/protocol/http/HttpConnectionUDP.cpp
 +++ b/netwerk/protocol/http/HttpConnectionUDP.cpp
 @@ -20,6 +20,7 @@
@@ -1089,7 +1149,43 @@ index c662beac36..1d08d80c87 100644
    MOZ_ASSERT(mQueuedHttpConnectTransaction.IsEmpty(),
               "Should not have any queued transactions");
    MOZ_ASSERT(mQueuedConnectUdpTransaction.IsEmpty(),
-@@ -299,6 +304,113 @@ nsresult HttpConnectionUDP::InitWithSocket(nsHttpConnectionInfo* info,
+@@ -245,6 +250,26 @@ nsresult HttpConnectionUDP::Init(nsHttpConnectionInfo* info,
+     return mErrorBeforeConnect;
+   }
+ 
++  nsresult rv;
++  // Camoufox: a SOCKS5 proxy that resolves names is sent the origin's name,
++  // and nothing is looked up here. The connection is made to a placeholder
++  // (TEST-NET-1, RFC 5737) that stands for the name.
++  if (!mConnInfo->ConnectsAsDirect() && mConnInfo->ProxyCarriesUdp()) {
++    mSocks5Name = mConnInfo->GetRoutedHost().IsEmpty()
++                      ? mConnInfo->GetOrigin()
++                      : mConnInfo->GetRoutedHost();
++    NetAddr placeholder;
++    MOZ_ALWAYS_SUCCEEDS(placeholder.InitFromString(
++        "192.0.2.1"_ns, !mConnInfo->GetRoutedHost().IsEmpty()
++                            ? mConnInfo->RoutedPort()
++                            : mConnInfo->OriginPort()));
++    mSocket = do_CreateInstance("@mozilla.org/network/udp-socket;1", &rv);
++    if (NS_FAILED(rv)) {
++      return rv;
++    }
++    return InitCommon(mSocket, placeholder, callbacks, caps, false);
++  }
++
+   nsCOMPtr<nsIDNSAddrRecord> dnsAddrRecord = do_QueryInterface(dnsRecord);
+   if (!dnsAddrRecord) {
+     return NS_ERROR_FAILURE;
+@@ -259,7 +284,7 @@ nsresult HttpConnectionUDP::Init(nsHttpConnectionInfo* info,
+           : (!mConnInfo->GetRoutedHost().IsEmpty() ? mConnInfo->RoutedPort()
+                                                    : mConnInfo->OriginPort());
+ 
+-  nsresult rv = dnsAddrRecord->GetNextAddr(port, &peerAddr);
++  rv = dnsAddrRecord->GetNextAddr(port, &peerAddr);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
+@@ -299,6 +324,113 @@ nsresult HttpConnectionUDP::InitWithSocket(nsHttpConnectionInfo* info,
    return InitCommon(aSocket, aPeerAddr, callbacks, caps, true);
  }
  
@@ -1203,29 +1299,29 @@ index c662beac36..1d08d80c87 100644
  nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
                                         const NetAddr& aPeerAddr,
                                         nsIInterfaceRequestor* callbacks,
-@@ -314,32 +426,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -314,32 +446,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
      mSocket->MarkAsTRRServiceChannel();
    }
  
 -  NetAddr local;
 -  local.raw.family = aPeerAddr.raw.family;
 -  nsresult rv = mSocket->InitWithAddress(&local, nullptr, false, 1);
-+  nsresult rv = BindSocket(mSocket, aPeerAddr.raw.family);
-   if (NS_FAILED(rv)) {
-     mSocket = nullptr;
-     return rv;
-   }
- 
--  rv = mSocket->SetRecvBufferSize(
--      StaticPrefs::network_http_http3_recvBufferSize());
 -  if (NS_FAILED(rv)) {
--    LOG(("HttpConnectionUDP::InitCommon SetRecvBufferSize failed %d [this=%p]",
--         static_cast<uint32_t>(rv), this));
--    mSocket->Close();
 -    mSocket = nullptr;
 -    return rv;
 -  }
 -
+-  rv = mSocket->SetRecvBufferSize(
+-      StaticPrefs::network_http_http3_recvBufferSize());
++  nsresult rv = BindSocket(mSocket, aPeerAddr.raw.family);
+   if (NS_FAILED(rv)) {
+-    LOG(("HttpConnectionUDP::InitCommon SetRecvBufferSize failed %d [this=%p]",
+-         static_cast<uint32_t>(rv), this));
+-    mSocket->Close();
+     mSocket = nullptr;
+     return rv;
+   }
+ 
 -  if (aPeerAddr.raw.family == AF_INET) {
 -    rv = mSocket->SetDontFragment(true);
 -    if (NS_FAILED(rv)) {
@@ -1237,12 +1333,12 @@ index c662beac36..1d08d80c87 100644
    // get the resulting socket address.
    rv = mSocket->GetLocalAddr(getter_AddRefs(mSelfAddr));
    if (NS_FAILED(rv)) {
-@@ -389,6 +481,15 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -389,6 +501,15 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
    mIsInTunnel = isInTunnel;
    if (mIsInTunnel) {
      mHttp3Session->SetIsInTunnel();
 +  } else if (mConnInfo->ProxyCarriesUdp()) {
-+    rv = mHttp3Session->Socks5();
++    rv = mHttp3Session->Socks5(mSocks5Name, aPeerAddr);
 +    if (NS_FAILED(rv)) {
 +      mSocket->Close();
 +      mSocket = nullptr;
@@ -1253,7 +1349,7 @@ index c662beac36..1d08d80c87 100644
    }
  
    ChangeConnectionState(ConnectionState::INITED);
-@@ -403,6 +504,14 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -403,6 +524,14 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
      return rv;
    }
  
@@ -1268,7 +1364,7 @@ index c662beac36..1d08d80c87 100644
    return NS_OK;
  }
  
-@@ -416,7 +525,7 @@ nsresult HttpConnectionUDP::Activate(nsAHttpTransaction* trans, uint32_t caps,
+@@ -416,7 +545,7 @@ nsresult HttpConnectionUDP::Activate(nsAHttpTransaction* trans, uint32_t caps,
    nsHttpTransaction* hTrans = trans->QueryHttpTransaction();
    nsHttpConnectionInfo* transCI = trans->ConnectionInfo();
    NetAddr peerAddr;
@@ -1277,7 +1373,7 @@ index c662beac36..1d08d80c87 100644
        NS_SUCCEEDED(GetPeerAddr(&peerAddr))) {
      // set the targetIpAddressSpace in the transaction object, this might be
      // needed by the channel for determining the kind of LNA permissions and/or
-@@ -697,6 +806,9 @@ void HttpConnectionUDP::Close(nsresult reason, bool aIsShutdown) {
+@@ -697,6 +826,9 @@ void HttpConnectionUDP::Close(nsresult reason, bool aIsShutdown) {
    if (socket) {
      socket->Close();
    }
@@ -1287,7 +1383,7 @@ index c662beac36..1d08d80c87 100644
    if (mHttp3Session) {
      mHttp3Session->SetCleanShutdown(true);
      mHttp3Session->Close(reason);
-@@ -1265,6 +1377,10 @@ NS_IMETHODIMP HttpConnectionUDP::OnPacketReceived(nsIUDPSocket* aSocket) {
+@@ -1265,6 +1397,10 @@ NS_IMETHODIMP HttpConnectionUDP::OnPacketReceived(nsIUDPSocket* aSocket) {
  
  NS_IMETHODIMP HttpConnectionUDP::OnStopListening(nsIUDPSocket* aSocket,
                                                   nsresult aStatus) {
@@ -1298,8 +1394,20 @@ index c662beac36..1d08d80c87 100644
    // At this point, the UDP socket has already been closed. Set aIsShutdown to
    // true to ensure that mHttp3Session is also closed.
    CloseTransaction(mHttp3Session, aStatus, true);
+@@ -1279,6 +1415,11 @@ nsresult HttpConnectionUDP::GetSelfAddr(NetAddr* addr) {
+ }
+ 
+ nsresult HttpConnectionUDP::GetPeerAddr(NetAddr* addr) {
++  // Camoufox: the placeholder is not the peer, whose address only the proxy
++  // knows.
++  if (!mSocks5Name.IsEmpty()) {
++    return NS_ERROR_NOT_AVAILABLE;
++  }
+   if (mPeerAddr) {
+     return mPeerAddr->GetNetAddr(addr);
+   }
 diff --git a/netwerk/protocol/http/HttpConnectionUDP.h b/netwerk/protocol/http/HttpConnectionUDP.h
-index b401912ab9..03aad83cfa 100644
+index b401912ab9..dff101123a 100644
 --- a/netwerk/protocol/http/HttpConnectionUDP.h
 +++ b/netwerk/protocol/http/HttpConnectionUDP.h
 @@ -11,6 +11,7 @@
@@ -1349,13 +1457,15 @@ index b401912ab9..03aad83cfa 100644
    [[nodiscard]] nsresult OnTransactionDone(nsresult reason);
    nsresult RecvData();
    nsresult SendData();
-@@ -146,6 +163,13 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+@@ -146,6 +163,15 @@ class HttpConnectionUDP final : public HttpConnectionBase,
  
    PRIntervalTime mLastRequestBytesSentTime = 0;
    nsCOMPtr<nsIUDPSocket> mSocket;
 +  // Camoufox: behind a SOCKS5 proxy, the UDP ASSOCIATE whose relay carries
 +  // every datagram of this connection. Nothing is sent around it.
 +  RefPtr<Socks5UdpAssociation> mSocks5;
++  // The origin's name the relay is sent, when the proxy resolves names.
++  nsCString mSocks5Name;
 +  bool mRelayReady = false;
 +  bool mRelayPending = false;
 +  TimeStamp mRelayAsked;
@@ -1545,7 +1655,7 @@ index 33d5659b50..add5762755 100644
        StaticPrefs::network_lna_defer_https_check()) {
      NetAddr peerAddr;
 diff --git a/netwerk/protocol/http/nsHttpConnectionInfo.cpp b/netwerk/protocol/http/nsHttpConnectionInfo.cpp
-index 0279c314b4..4163248aa5 100644
+index cf3ccd7190..4ecf6a989a 100644
 --- a/netwerk/protocol/http/nsHttpConnectionInfo.cpp
 +++ b/netwerk/protocol/http/nsHttpConnectionInfo.cpp
 @@ -693,6 +693,14 @@ bool nsHttpConnectionInfo::UsingProxy() const {
@@ -1812,15 +1922,17 @@ index 675ebefd97..a2377ec3a5 100644
    // The value of mConnInfo when this transaction was activated.
    // Describes the server that the associated connection is connected to.
 diff --git a/netwerk/socket/neqo_glue/NeqoHttp3Conn.h b/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
-index 9ab8ba7234..a296794a47 100644
+index 9ab8ba7234..a4dd37afac 100644
 --- a/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
 +++ b/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
-@@ -51,6 +51,14 @@ class NeqoHttp3Conn final {
+@@ -51,6 +51,16 @@ class NeqoHttp3Conn final {
  
    void Close(uint64_t aError) { neqo_http3conn_close(this, aError); }
  
 +  // Camoufox: the connection's datagrams go through a SOCKS5 UDP relay.
-+  nsresult Socks5() { return neqo_http3conn_socks5(this); }
++  nsresult Socks5(const nsACString& aName, const NetAddr& aPlaceholder) {
++    return neqo_http3conn_socks5(this, &aName, &aPlaceholder);
++  }
 +  nsresult Socks5Relay(const NetAddr& aRelay, int64_t aSocket,
 +                       bool aReplaced) {
 +    return neqo_http3conn_socks5_relay(this, &aRelay, aSocket, aReplaced);
@@ -1831,7 +1943,7 @@ index 9ab8ba7234..a296794a47 100644
      return neqo_http3conn_tls_info(this, aSecInfo);
    }
 diff --git a/netwerk/socket/neqo_glue/src/lib.rs b/netwerk/socket/neqo_glue/src/lib.rs
-index 60be32d98a..11dd6880c3 100644
+index 60be32d98a..b2b91903b9 100644
 --- a/netwerk/socket/neqo_glue/src/lib.rs
 +++ b/netwerk/socket/neqo_glue/src/lib.rs
 @@ -63,6 +63,8 @@ use winapi::{
@@ -1971,7 +2083,7 @@ index 60be32d98a..11dd6880c3 100644
              });
  
 -            conn.conn.process_multiple_input(dgrams, Instant::now());
-+            if let Some(relay) = conn.socks5.as_ref() {
++            if let Some(relay) = conn.socks5.as_mut() {
 +                // Camoufox: the peer's datagrams, out of the relay's.
 +                let local = conn.local_addr;
 +                let dgrams: Vec<Datagram> = dgrams
@@ -2039,18 +2151,39 @@ index 60be32d98a..11dd6880c3 100644
                              let single = datagram::Batch::from(single.to_owned());
                              if let Err(e) = socket.send(&single) {
                                  qwarn!("failed to resend datagram without GSO: {e}");
-@@ -1518,6 +1554,60 @@ pub extern "C" fn neqo_http3conn_process_output_and_send(
+@@ -1518,6 +1554,81 @@ pub extern "C" fn neqo_http3conn_process_output_and_send(
      }
  }
  
 +/// Camoufox: the connection is behind a SOCKS5 proxy. Nothing is sent until
-+/// `neqo_http3conn_socks5_relay` or `neqo_http3conn_socks5_failed`.
++/// `neqo_http3conn_socks5_relay` or `neqo_http3conn_socks5_failed`. A proxy
++/// that resolves names is sent `name` in place of `placeholder`, the address
++/// the connection was made to; an empty `name` sends addresses.
++///
++/// # Safety
++///
++/// Use of raw (i.e. unsafe) pointers as arguments.
 +#[no_mangle]
-+pub extern "C" fn neqo_http3conn_socks5(conn: &mut NeqoHttp3Conn) -> nsresult {
++pub unsafe extern "C" fn neqo_http3conn_socks5(
++    conn: &mut NeqoHttp3Conn,
++    name: &nsACString,
++    placeholder: *const NetAddr,
++) -> nsresult {
 +    if conn.socket.is_none() {
 +        return NS_ERROR_NOT_AVAILABLE;
 +    }
-+    conn.socks5 = Some(socks5::Relay::new());
++    conn.socks5 = if name.is_empty() {
++        Some(socks5::Relay::new())
++    } else {
++        let placeholder = match netaddr_to_socket_addr(placeholder) {
++            Ok(a) => a,
++            Err(e) => return e,
++        };
++        match socks5::Relay::named(name, placeholder) {
++            Some(r) => Some(r),
++            None => return NS_ERROR_INVALID_ARG,
++        }
++    };
 +    NS_OK
 +}
 +
@@ -2102,10 +2235,10 @@ index 60be32d98a..11dd6880c3 100644
      conn.conn.close(Instant::now(), error, "");
 diff --git a/netwerk/socket/neqo_glue/src/socks5.rs b/netwerk/socket/neqo_glue/src/socks5.rs
 new file mode 100644
-index 0000000000..682969c355
+index 0000000000..9d215013bc
 --- /dev/null
 +++ b/netwerk/socket/neqo_glue/src/socks5.rs
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,259 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -2116,6 +2249,11 @@ index 0000000000..682969c355
 +//! association is made by `mozilla::net::Socks5UdpAssociation`; this is only
 +//! the framing, so the socket, its ECN marks and its batching stay the ones a
 +//! direct connection uses.
++//!
++//! A proxy that resolves names is sent the origin's name (ATYP 3), never an
++//! address looked up here. The connection is made to a placeholder address,
++//! which stands for the name on the way out and for the peer on the way back,
++//! however the relay addresses its replies.
 +
 +use std::{
 +    io,
@@ -2132,6 +2270,7 @@ index 0000000000..682969c355
 +pub const MAX_SEGMENTS: usize = 1;
 +
 +const ATYP_IPV4: u8 = 1;
++const ATYP_NAME: u8 = 3;
 +const ATYP_IPV6: u8 = 4;
 +
 +enum State {
@@ -2144,15 +2283,41 @@ index 0000000000..682969c355
 +    Failed,
 +}
 +
++/// The origin's name, sent in place of the placeholder the connection is
++/// made to.
++struct Named {
++    name: Vec<u8>,
++    placeholder: SocketAddr,
++    /// The address the relay reports the peer's replies from, once it has.
++    resolved: Option<SocketAddr>,
++}
++
 +pub struct Relay {
 +    state: State,
++    named: Option<Named>,
 +}
 +
 +impl Relay {
 +    pub const fn new() -> Self {
 +        Self {
 +            state: State::Pending,
++            named: None,
 +        }
++    }
++
++    /// The relay is sent `name` for every datagram to `placeholder`.
++    pub fn named(name: &[u8], placeholder: SocketAddr) -> Option<Self> {
++        if name.is_empty() || name.len() > usize::from(u8::MAX) {
++            return None;
++        }
++        Some(Self {
++            state: State::Pending,
++            named: Some(Named {
++                name: name.to_vec(),
++                placeholder,
++                resolved: None,
++            }),
++        })
 +    }
 +
 +    pub fn set_relay(&mut self, relay: SocketAddr) {
@@ -2167,8 +2332,18 @@ index 0000000000..682969c355
 +        matches!(self.state, State::Pending)
 +    }
 +
-+    fn header(to: SocketAddr) -> Vec<u8> {
++    fn header(&self, to: SocketAddr) -> Vec<u8> {
 +        let mut h = vec![0, 0, 0];
++        match &self.named {
++            Some(n) if n.placeholder == to => {
++                h.push(ATYP_NAME);
++                h.push(u8::try_from(n.name.len()).expect("checked in named"));
++                h.extend_from_slice(&n.name);
++                h.extend_from_slice(&to.port().to_be_bytes());
++                return h;
++            }
++            _ => {}
++        }
 +        match to.ip() {
 +            IpAddr::V4(ip) => {
 +                h.push(ATYP_IPV4);
@@ -2190,7 +2365,7 @@ index 0000000000..682969c355
 +        let State::Relay(relay) = self.state else {
 +            return None;
 +        };
-+        let header = Self::header(batch.destination());
++        let header = self.header(batch.destination());
 +        let size = batch.datagram_size().get();
 +        let mut data =
 +            Vec::with_capacity(batch.data().len() + batch.num_datagrams() * header.len());
@@ -2208,8 +2383,10 @@ index 0000000000..682969c355
 +    }
 +
 +    /// The sender and payload of a datagram received from `from`. `None` for
-+    /// one that is not the relay's, a fragment, or malformed.
-+    pub fn unwrap<'a>(&self, from: SocketAddr, d: &'a [u8]) -> Option<(SocketAddr, &'a [u8])> {
++    /// one that is not the relay's, a fragment, or malformed. Behind a proxy
++    /// given the name, the peer's replies come from the placeholder, whether
++    /// the relay addresses them by the name or by the address it resolved.
++    pub fn unwrap<'a>(&mut self, from: SocketAddr, d: &'a [u8]) -> Option<(SocketAddr, &'a [u8])> {
 +        let State::Relay(relay) = self.state else {
 +            return None;
 +        };
@@ -2219,20 +2396,45 @@ index 0000000000..682969c355
 +        let (ip, rest) = match d[3] {
 +            ATYP_IPV4 => {
 +                let ip: [u8; 4] = d.get(4..8)?.try_into().ok()?;
-+                (IpAddr::V4(Ipv4Addr::from(ip)), &d[8..])
++                (Some(IpAddr::V4(Ipv4Addr::from(ip))), &d[8..])
 +            }
 +            ATYP_IPV6 => {
 +                let ip: [u8; 16] = d.get(4..20)?.try_into().ok()?;
-+                (IpAddr::V6(Ipv6Addr::from(ip)), &d[20..])
++                (Some(IpAddr::V6(Ipv6Addr::from(ip))), &d[20..])
++            }
++            ATYP_NAME => {
++                let len = usize::from(*d.get(4)?);
++                let name = d.get(5..5 + len)?;
++                let named = self.named.as_ref()?;
++                if !name.eq_ignore_ascii_case(&named.name) {
++                    return None;
++                }
++                (None, &d[5 + len..])
 +            }
 +            _ => return None,
 +        };
 +        let port: [u8; 2] = rest.get(..2)?.try_into().ok()?;
++        let port = u16::from_be_bytes(port);
 +        let payload = &rest[2..];
 +        if payload.is_empty() {
 +            return None;
 +        }
-+        Some((SocketAddr::new(ip, u16::from_be_bytes(port)), payload))
++        let Some(ip) = ip else {
++            let placeholder = self.named.as_ref()?.placeholder;
++            return (port == placeholder.port()).then_some((placeholder, payload));
++        };
++        let sender = SocketAddr::new(ip, port);
++        if let Some(named) = self.named.as_mut() {
++            // The first reply from the origin's port is the address the relay
++            // resolved the name to.
++            if named.resolved.is_none() && port == named.placeholder.port() {
++                named.resolved = Some(canonical(sender));
++            }
++            if named.resolved == Some(canonical(sender)) {
++                return Some((named.placeholder, payload));
++            }
++        }
++        Some((sender, payload))
 +    }
 +}
 +
@@ -2297,7 +2499,7 @@ index 0000000000..682969c355
 +    SocketAddr::new(addr.ip().to_canonical(), addr.port())
 +}
 diff --git a/netwerk/socket/nsSOCKSIOLayer.cpp b/netwerk/socket/nsSOCKSIOLayer.cpp
-index a466a4b03c..76b5bcc795 100644
+index e169d1e4ff..23501240f9 100644
 --- a/netwerk/socket/nsSOCKSIOLayer.cpp
 +++ b/netwerk/socket/nsSOCKSIOLayer.cpp
 @@ -6,6 +6,7 @@
@@ -2308,7 +2510,7 @@ index a466a4b03c..76b5bcc795 100644
  #include "mozilla/net/DNS.h"
  #include "nsCRT.h"
  #include "nsICancelable.h"
-@@ -87,6 +88,7 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
+@@ -80,6 +81,7 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
    void GetExternalProxyAddr(NetAddr& aExternalProxyAddr);
    void GetDestinationAddr(NetAddr& aDestinationAddr);
    void SetDestinationAddr(const NetAddr& aDestinationAddr);
@@ -2316,7 +2518,7 @@ index a466a4b03c..76b5bcc795 100644
  
   private:
    virtual ~nsSOCKSSocketInfo() {
-@@ -223,6 +225,13 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
+@@ -215,6 +217,13 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
    NetAddr mDestinationAddr;
    PRIntervalTime mTimeout{PR_INTERVAL_NO_TIMEOUT};
    nsCString mProxyUsername;  // Cache, from mProxy
@@ -2330,7 +2532,7 @@ index a466a4b03c..76b5bcc795 100644
  };
  
  nsSOCKSSocketInfo::nsSOCKSSocketInfo() {
-@@ -1052,6 +1061,7 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+@@ -1040,6 +1049,7 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
  
    switch (mState) {
      case SOCKS_INITIAL:
@@ -2338,7 +2540,7 @@ index a466a4b03c..76b5bcc795 100644
        if (IsLocalProxy()) {
          mState = SOCKS_DNS_COMPLETE;
          mLookupStatus = NS_OK;
-@@ -1077,11 +1087,13 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+@@ -1065,11 +1075,13 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
  
      case SOCKS5_WRITE_AUTH_REQUEST:
        if (WriteToSocket(fd) != PR_SUCCESS) return PR_FAILURE;
@@ -2352,7 +2554,7 @@ index a466a4b03c..76b5bcc795 100644
        return ReadV5AuthResponse();
      case SOCKS5_WRITE_USERNAME_REQUEST:
        if (WriteToSocket(fd) != PR_SUCCESS) return PR_FAILURE;
-@@ -1093,6 +1105,7 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+@@ -1081,6 +1093,7 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
        return ReadV5UsernameResponse();
      case SOCKS5_WRITE_CONNECT_REQUEST:
        if (WriteToSocket(fd) != PR_SUCCESS) return PR_FAILURE;
@@ -2360,7 +2562,7 @@ index a466a4b03c..76b5bcc795 100644
  
        // The SOCKS 5 response to the connection request is variable
        // length. First, we'll read enough to tell how long the response
-@@ -1122,6 +1135,21 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+@@ -1110,6 +1123,21 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
    return PR_FAILURE;
  }
  
@@ -2382,7 +2584,7 @@ index a466a4b03c..76b5bcc795 100644
  int16_t nsSOCKSSocketInfo::GetPollFlags() const {
    switch (mState) {
      case SOCKS_DNS_IN_PROGRESS:
-@@ -1525,6 +1553,12 @@ nsresult nsSOCKSIOLayerAddToSocket(int32_t family, const char* host,
+@@ -1484,6 +1512,12 @@ nsresult nsSOCKSIOLayerAddToSocket(int32_t family, const char* host,
    return NS_OK;
  }
  

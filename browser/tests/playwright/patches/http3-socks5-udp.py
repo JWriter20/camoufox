@@ -5,12 +5,14 @@ A Firefox at the proxy's exit speaks QUIC to an origin that offers it. Behind a
 proxy, Camoufox used to speak TCP only: no HTTP/3 where stock negotiates it, and
 no WebTransport at all. zz-http3-socks5-udp.patch sends each QUIC connection
 through a UDP ASSOCIATE relay (RFC 1928 §7) of its own on the SOCKS5 proxy the
-request uses, when that proxy is given addresses (docs/proxy-dns.md).
+request uses. A proxy given names (docs/proxy-dns.md) is sent each datagram
+addressed by the origin's name, so no name is resolved on this host.
 
 The guard runs its own origin, HTTP/1.1 over TLS with an Alt-Svc header and
 HTTP/3 on the same port, and its own SOCKS5 proxies. The origin is reached at
 this host's address on its default route, which a direct page reaches too, so
-the same pages are loaded direct for comparison.
+the same pages are loaded direct for comparison. Behind a proxy given names it
+is reached by a name only the proxy resolves.
 
 What PASS means:
     * behind a SOCKS5 proxy given addresses, the page's requests reach the
@@ -34,13 +36,19 @@ What PASS means:
       context, is carried the same way;
     * with proxy_optimistic_data, which sends a TCP connection's ClientHello
       ahead of the proxy's reply, HTTP/3 is reached through the relay as before;
-    * a SOCKS5 proxy given names (a context's own proxy), and an HTTP proxy,
-      are sent no QUIC: their requests stay on TCP.
+    * behind a SOCKS5 proxy given names (a context's own proxy), the first
+      request goes over TCP and the next ones over HTTP/3 once Alt-Svc is
+      known, every datagram and every CONNECT addressed by name, and the
+      relay's replies, from the address it resolved, are taken; a proxy given
+      names that refuses or drops the association leaves the page on TCP the
+      same way; a WebTransport session opens through it as well;
+    * an HTTP proxy is sent no QUIC: its requests stay on TCP.
 
     python browser/tests/playwright/patches/http3-socks5-udp.py
 """
 
 import asyncio
+import itertools
 import json
 import os
 import shutil
@@ -66,6 +74,8 @@ from helpers import Marionette, free_port, marionette_args, marionette_env, own_
 # launch proxy addresses (the launcher's proxy_dns='doh'). No name is resolved
 # here: the origin is an address.
 DOH_ONLY = {"network.trr.mode": 3, "network.trr.uri": "https://doh.invalid/dns-query"}
+# The origin's name behind a proxy given names: only the proxy resolves it.
+NAME = "h3-guard.test"
 # Firefox speaks no HTTP/3 to a certificate from an authority a user added.
 PREFS = {**DOH_ONLY, "network.http.http3.disable_when_third_party_roots_found": False}
 
@@ -110,9 +120,9 @@ WEBTRANSPORT = """async (url) => {
 class Origin:
     """An HTTPS origin: HTTP/1.1 with Alt-Svc over TCP, HTTP/3 over UDP."""
 
-    def __init__(self, host: str, cert: str, key: str) -> None:
+    def __init__(self, host: str, cert: str, key: str, name: str = None) -> None:
         self.host, self.port = host, free_port()
-        self.url = f"https://{host}:{self.port}/"
+        self.url = f"https://{name or host}:{self.port}/"
         self.h3_peers = []  # the UDP source of every HTTP/3 request
         self.tcp_requests = 0
         self.datagrams = {}  # UDP source -> sizes of the datagrams from it
@@ -211,17 +221,23 @@ class Relay(asyncio.DatagramProtocol):
         if len(data) < 10 or data[:3] != b"\0\0\0":
             return
         self.proxy.atyps.add(data[3])
-        if data[3] != 1:
+        if data[3] == 1:
+            dst, payload = (socket.inet_ntoa(data[4:8]), struct.unpack("!H", data[8:10])[0]), data[10:]
+        elif data[3] == 3:
+            end = 5 + data[4]
+            name = data[5:end].decode()
+            dst, payload = (self.proxy.names.get(name, name), struct.unpack("!H", data[end:end + 2])[0]), data[end + 2:]
+        else:
             return
-        dst = (socket.inet_ntoa(data[4:8]), struct.unpack("!H", data[8:10])[0])
         self.sent += 1
         if self.proxy.hang_up_after and self.sent > self.proxy.hang_up_after:
             self.control.close()
             self.close()
             return
-        self.exit.sendto(data[10:], dst)
+        self.exit.sendto(payload, dst)
 
     def from_exit(self, data: bytes, addr: tuple) -> None:
+        # From the address the exit sent to, as a relay given a name answers.
         if self.client and not self.transport.is_closing():
             header = b"\0\0\0\x01" + socket.inet_aton(addr[0]) + struct.pack("!H", addr[1])
             self.transport.sendto(header + data, self.client)
@@ -302,10 +318,13 @@ class Socks5Proxy:
     """A SOCKS5 proxy on loopback. CONNECT is piped to where it names;
     `udp=False` refuses UDP ASSOCIATE, `hang_up_after` drops an association
     (control connection and relay) after that many datagrams, and `relay_at`
-    names a relay on another host for every association."""
+    names a relay on another host for every association. `names` are what it
+    resolves: name -> address."""
 
-    def __init__(self, host: str, udp: bool = True, hang_up_after: int = 0, relay_at: tuple = None) -> None:
+    def __init__(self, host: str, udp: bool = True, hang_up_after: int = 0, relay_at: tuple = None,
+                 names: dict = None) -> None:
         self.host, self.udp, self.hang_up_after, self.relay_at = host, udp, hang_up_after, relay_at
+        self.names = names or {}
         self.connects = []  # (atyp, host, port) of every CONNECT
         self.refused = 0
         self.atyps = set()  # address type of every relayed datagram
@@ -331,7 +350,7 @@ class Socks5Proxy:
         host, port = await read_addr(reader, atyp)
         if cmd == 1:
             self.connects.append((atyp, host, port))
-            up_reader, up_writer = await asyncio.open_connection(host, port)
+            up_reader, up_writer = await asyncio.open_connection(self.names.get(host, host), port)
             writer.write(b"\x05\x00\x00\x01" + bytes(6))
 
             async def pipe(src, dst) -> None:
@@ -425,7 +444,7 @@ async def main() -> int:
         ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", ca_key, "-out", ca, "-days", "2",
          "-subj", "/CN=http3-socks5-udp guard", "-addext", "basicConstraints=critical,CA:TRUE"],
         ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "2",
-         "-subj", "/CN=origin", "-CA", ca, "-CAkey", ca_key, "-addext", f"subjectAltName=IP:{host}",
+         "-subj", "/CN=origin", "-CA", ca, "-CAkey", ca_key, "-addext", f"subjectAltName=IP:{host},DNS:{NAME}",
          "-addext", "basicConstraints=critical,CA:FALSE"],
     ):
         subprocess.run(["openssl", *command], check=True, capture_output=True)
@@ -433,8 +452,8 @@ async def main() -> int:
     trust = ("Cc['@mozilla.org/security/x509certdb;1'].getService(Ci.nsIX509CertDB)"
              f".addCertFromBase64('{ca_der}', 'C,,'); return true;")
 
-    async def origin() -> Origin:
-        o = Origin(host, cert, key)
+    async def origin(name: str = None) -> Origin:
+        o = Origin(host, cert, key, name)
         await o.start()
         return o
 
@@ -488,10 +507,12 @@ async def main() -> int:
     await load(browser, second_origin)
     echoed = await load(browser, wt_origin, WEBTRANSPORT, wt_origin.url + "wt")
 
-    # A context's own SOCKS5 proxy is given names, so it carries no QUIC.
-    named_origin = await origin()
-    naming = Socks5Proxy(host)
-    named_seen = await load(browser, named_origin, proxy={"server": await naming.start()})
+    # A context's own SOCKS5 proxy is given names.
+    named_origin, named_wt_origin = await origin(NAME), await origin(NAME)
+    naming = Socks5Proxy(host, names={NAME: host})
+    named_proxy = {"server": await naming.start()}
+    named_seen = await load(browser, named_origin, proxy=named_proxy)
+    named_echoed = await load(browser, named_wt_origin, WEBTRANSPORT, named_wt_origin.url + "wt", proxy=named_proxy)
     await browser.close()
 
     exits = relaying.exits()
@@ -514,9 +535,21 @@ async def main() -> int:
          (sorted(second_origin.datagrams), sorted(relayed_origin.datagrams))),
         ("a WebTransport session opens through the relay and echoes a datagram",
          echoed == 3 and set(wt_origin.datagrams) <= exits, echoed),
-        ("a SOCKS5 proxy given names is sent no QUIC",
-         named_seen and set(named_seen) == {"tcp"} and not naming.relays and not named_origin.datagrams
-         and {c[0] for c in naming.connects} == {3}, (named_seen, naming.connects[:2])),
+        ("behind a SOCKS5 proxy given names the navigation goes over TCP, the requests after it over HTTP/3",
+         named_origin.tcp_requests >= 1 and named_seen.count("h3") >= 2, (named_origin.tcp_requests, named_seen)),
+        ("every QUIC datagram of a proxy given names came from its relays",
+         bool(named_origin.datagrams) and set(named_origin.datagrams) <= naming.exits(),
+         (sorted(named_origin.datagrams), sorted(naming.exits()))),
+        ("datagrams and CONNECTs to a proxy given names are addressed by name",
+         naming.atyps == {3} and {c[:2] for c in naming.connects} == {(3, NAME)},
+         (naming.atyps, naming.connects[:2])),
+        ("through a proxy given names the client's first flight is the size it is with no proxy",
+         initial_sizes(next(iter(named_origin.datagrams.values()), []))
+         == initial_sizes(direct_origin.datagrams[direct_sources[0]]),
+         list(named_origin.datagrams.values())[:1]),
+        ("a WebTransport session opens through a proxy given names and echoes a datagram",
+         named_echoed == 3 and bool(named_wt_origin.datagrams) and set(named_wt_origin.datagrams) <= naming.exits(),
+         named_echoed),
     ]
 
     # A persistent context: Playwright gives it the launch proxy as its own, too.
@@ -546,16 +579,21 @@ async def main() -> int:
     optimistic_origin.close()
     proxy.close()
 
-    for label, kwargs in (("refuses UDP ASSOCIATE", {"udp": False}),
-                          ("drops the association in use", {"hang_up_after": 3})):
-        blocked_origin = await origin()
-        proxy = Socks5Proxy(host, **kwargs)
-        browser = await launch(await proxy.start())
+    for (label, kwargs), named in itertools.product(
+            (("refuses UDP ASSOCIATE", {"udp": False}), ("drops the association in use", {"hang_up_after": 3})),
+            (False, True)):
+        blocked_origin = await origin(NAME if named else None)
+        proxy = Socks5Proxy(host, names={NAME: host}, **kwargs)
+        if named:
+            browser, context = await launch(), {"proxy": {"server": await proxy.start()}}
+        else:
+            browser, context = await launch(await proxy.start()), {}
         started = time.monotonic()
-        seen = await load(browser, blocked_origin)
+        seen = await load(browser, blocked_origin, **context)
         took = round(time.monotonic() - started)
         await browser.close()
-        checks.append((f"a proxy that {label} leaves the page on TCP, with no request waiting on QUIC",
+        given = "names" if named else "addresses"
+        checks.append((f"a proxy given {given} that {label} leaves the page on TCP, with no request waiting on QUIC",
                        seen and set(seen) == {"tcp"} and not blocked_origin.h3_peers
                        and (proxy.refused > 0 if not proxy.udp else len(proxy.relays) > 0)
                        and took < 2 * QUIC_IDLE_SECONDS,
