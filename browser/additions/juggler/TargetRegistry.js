@@ -103,12 +103,13 @@ function withProxyAuth(proxy, auth) {
 
 // Camoufox: WebRTC must not gather around a Juggler proxy, which is not in
 // network.proxy.*. WebRTCIPManager::IsProxied reads this in the content process.
-function recordProxied(owner) {
+function recordProxied(owner, carriesDoH = false) {
   Services.prefs.getDefaultBranch('roverfox.s.').setCharPref(`webrtc_proxied_${owner}`, '1');
   // Firefox turns prefetch off at its first proxied load. A document with no
   // load yet (about:blank, a fulfilled route) would resolve its dns-prefetch
-  // links on this machine's resolver until then.
-  Services.prefs.getDefaultBranch('network.dns.').setBoolPref('disablePrefetch', true);
+  // links on this machine's resolver until then. A proxy that carries DoH is
+  // the network, as with no proxy: prefetches are resolved by DoH through it.
+  Services.prefs.getDefaultBranch('network.dns.').setBoolPref(carriesDoH ? 'prefetch_via_proxy' : 'disablePrefetch', true);
 }
 
 // A system proxy is not in network.proxy.* either, and a content process
@@ -463,8 +464,16 @@ export class TargetRegistry {
 
   setBrowserProxy(proxy) {
     this._browserProxy = withProxyAuth(proxy, this._launchProxyAuth);
-    recordProxied('browser');
+    recordProxied('browser', this.carriesDoH(this._browserProxy));
     this._updateProxiesWithSameAuthCacheAndDifferentCredentials();
+  }
+
+  // Camoufox: when the browser resolves names by DoH alone, the launch proxy
+  // carries the DoH requests and is given addresses, as the network is with
+  // no proxy (docs/proxy-dns.md).
+  carriesDoH(proxy) {
+    return !!proxy && proxy.type === 'socks' && proxy === this._browserProxy &&
+        Services.prefs.getIntPref('network.trr.mode', 0) === 3;
   }
 
   getProxyInfo(channel) {

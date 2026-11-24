@@ -318,20 +318,9 @@ class Resolver(record.Resolver):
 
     def __init__(self, cert: str, key: str) -> None:
         super().__init__(cert, key)
-        self.asked = set()
         self.delay = RESOLVER
         self.http2 = True
         self.alpn = (b"h3", b"h2")
-
-    def answer(self, query: bytes) -> bytes:
-        at, labels = 12, []
-        while query[at]:
-            labels.append(query[at + 1:at + 1 + query[at]].decode().lower())
-            at += query[at] + 1
-        (qtype,) = struct.unpack("!H", query[at + 1:at + 3])
-        name = ".".join(labels)
-        self.asked.add((name.replace("." + ZONE, ""), qtype))
-        return super().answer(query)
 
 
 class Network:
@@ -360,7 +349,8 @@ class Network:
             closing.close()
 
     def seen(self) -> dict:
-        asked = {(name.replace(f"_{self.site.url_port}.", "_url."), qtype) for name, qtype in self.resolver.asked}
+        asked = {(name.replace("." + ZONE, "").replace(f"_{self.site.url_port}.", "_url."), qtype)
+                 for name, qtype in self.resolver.asked}
         return {**self.site.seen(), "asked": sorted(asked)}
 
 
