@@ -61,6 +61,16 @@ again once the proxy accepts it. That error on every page means the proxy is
 refusing or cannot reach the DoH host, not that the name is wrong
 ([`doh-mode-keeps-firefox-resolver-timeouts`](../ci/tribal-rules.yml)).
 
+DNS prefetch stays on, as it is with no proxy. Firefox turns it off behind
+any proxy, and Juggler turns it off for every other proxy before the first
+load. In `doh` mode the prefetch is a DoH lookup through the proxy, so it is
+what a resolver sees of a stock Firefox: a page's `<link rel=dns-prefetch>`
+is asked for, and so is the HTTPS record of a WebSocket's host, which
+Firefox asks for only by prefetch. uBlock Origin, which Camoufox loads by
+default, turns prefetch off with its "Disable pre-fetching" setting, on by
+default: with it, those names go unasked, as in a stock Firefox with uBlock
+Origin.
+
 The browser now picks the address family, so it has to know whether the exit
 has IPv6. When the launch looks the exit up (`geoip`), it also asks an
 IPv6-only host through the proxy, and sets `network:ipv4Only` when that fails.

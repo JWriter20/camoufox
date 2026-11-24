@@ -29,7 +29,11 @@ What PASS means:
     * a proxy that takes a second to grant the association changes none of
       that;
     * an origin that answers nothing over QUIC is still reached over TCP, by
-      the connections it sees with no proxy.
+      the connections it sees with no proxy;
+    * behind the proxy, a WebSocket's HTTPS record is asked of the resolver
+      as it is with no proxy: the proxy carries the DoH requests and is the
+      network, so DNS prefetch stays on. With no addon, since uBlock Origin
+      turns prefetch off.
 
     python browser/tests/playwright/patches/http3-https-record-socks5.py
 """
@@ -146,6 +150,7 @@ class Resolver:
         self.delay = 0  # how long an answer takes
         self.http2 = False  # answers over HTTP/2 (serve_http2)
         self.alpn = (b"h3",)  # what the HTTPS record offers
+        self.asked = set()  # (name, qtype) of every question
         self._tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self._tls.load_cert_chain(cert, key)
 
@@ -161,6 +166,7 @@ class Resolver:
             labels.append(query[at + 1:at + 1 + query[at]].decode().lower())
             at += query[at] + 1
         (qtype,) = struct.unpack("!H", query[at + 1:at + 3])
+        self.asked.add((".".join(labels), qtype))
         # An HTTPS record for another port than 443 is asked at _port._https.
         port = self.ports.get(".".join(label for label in labels if not label.startswith("_")))
         record = b""
@@ -323,6 +329,7 @@ class DistantProxy(relayed.Socks5Proxy):
 
 
 async def main() -> int:
+    from camoufox import DefaultAddons
     from camoufox.async_api import AsyncCamoufox
 
     if shutil.which("docker") is None:
@@ -353,12 +360,12 @@ async def main() -> int:
             resolver.ports[o.name] = o.port
             return o
 
-    async def launch(resolver: Resolver, proxy: DistantProxy = None, optimistic: bool = False):
+    async def launch(resolver: Resolver, proxy: DistantProxy = None, optimistic: bool = False, addons: bool = True):
         port = free_port()
         browser = await AsyncCamoufox(
             headless=True, executable_path=str(resolve_binary()), geoip=False, i_know_what_im_doing=True,
             args=marionette_args(), env=marionette_env(), proxy={"server": await proxy.start()} if proxy else None,
-            proxy_optimistic_data=optimistic or None,
+            proxy_optimistic_data=optimistic or None, exclude_addons=None if addons else [DefaultAddons.UBO],
             firefox_user_prefs={
                 "network.trr.mode": 3, "network.trr.uri": await resolver.start(),
                 "network.trr.confirmationNS": "skip",
@@ -394,6 +401,23 @@ async def main() -> int:
                 closing.close()
         return [o.seen() for o in origins]
 
+    async def socket_record(proxy: DistantProxy = None) -> bool:
+        """Whether a WebSocket's HTTPS record is asked of the resolver."""
+        resolver = Resolver(cert, key)
+        page_origin, socket_origin = [await origin(resolver, False) for _ in range(2)]
+        browser = await launch(resolver, proxy, addons=False)
+        page = await (await browser.new_context()).new_page()
+        try:
+            await page.goto(page_origin.url)
+            # The origin answers the upgrade with a plain 200, so the socket fails.
+            await page.evaluate("url => new Promise(done => { new WebSocket(url).onerror = done; })",
+                                f"wss://{socket_origin.name}:{socket_origin.port}/")
+        finally:
+            await browser.close()
+            for closing in (page_origin, socket_origin, resolver, *([proxy] if proxy else [])):
+                closing.close()
+        return (f"_{socket_origin.port}._https.{socket_origin.name}", 65) in resolver.asked
+
     checks = []
     address = PublicAddress()
     try:
@@ -411,6 +435,10 @@ async def main() -> int:
             if not deaf:
                 checks.append((f"{what}, a proxy slow to grant the association: the same connections",
                                (seen := await visit(deaf, DistantProxy(associate=SLOW_ASSOCIATE), True)) == direct, seen))
+        direct = await socket_record()
+        checks.append(("a WebSocket, no proxy: its HTTPS record is asked (the guard's reference)", direct, direct))
+        checks.append(("a WebSocket, behind the proxy: its HTTPS record is asked, as with no proxy",
+                       (asked := await socket_record(DistantProxy())) == direct, asked))
     finally:
         address.close()
 
