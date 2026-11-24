@@ -51,7 +51,13 @@ What PASS means:
     * a datagram too large for the ICE stack's 9216-byte read buffer is dropped,
       and gathering goes on (one once overran that buffer by up to 252 bytes);
     * two pages in two contexts, each behind its own SOCKS5 proxy and given
-      only each other's srflx, open a data channel through both relays.
+      only each other's srflx, open a data channel through both relays;
+    * behind an exit that keeps the port it is sent from, as most home routers
+      do, the srflx port is the host candidate's port, as it is for a machine
+      behind that router: a relayed datagram leaves from the host candidate's
+      own socket or, for a proxy reached from another address, from the same
+      port on that address. It once left from a second socket on a port of its
+      own, so the page saw two different ports where a home user has one.
 
     python browser/tests/playwright/patches/webrtc-socks5-udp.py
 """
@@ -85,14 +91,14 @@ TIMER_TOLERANCE_MS = 1000
 # RTCStatsReport getStats() returns.
 GATHER = """mw:async (stun) => {
   const pc = new RTCPeerConnection({iceServers: [{urls: stun, username: 'guard', credential: 'guard'}]});
-  const srflx = [];
+  const srflx = [], host = [];
   const start = performance.now();
   const ended = new Promise(resolve => {
     setTimeout(() => resolve(null), 30000);
     pc.onicecandidate = e => {
       if (!e.candidate) return resolve(performance.now() - start);
-      const m = e.candidate.candidate.match(/ (\\S+) (\\d+) typ srflx/);
-      if (m) srflx.push(m[1] + ':' + m[2]);
+      const m = e.candidate.candidate.match(/ (\\S+) (\\d+) typ (srflx|host)/);
+      if (m) (m[3] === 'srflx' ? srflx : host).push(m[1] + ':' + m[2]);
     };
   });
   pc.createDataChannel('probe');
@@ -106,7 +112,7 @@ GATHER = """mw:async (stun) => {
       stats.push(s.address + ':' + s.port);
   });
   pc.close();
-  return {srflx, sdp, stats, elapsed};
+  return {srflx, host, sdp, stats, elapsed};
 }"""
 
 # Everything a page can read about its own candidates while it is capturing.
@@ -265,6 +271,11 @@ class Relay(asyncio.DatagramProtocol):
         if addr[0] != self.control_ip or (self.client and addr != self.client):
             self.proxy.strangers += 1
             return
+        if not self.client and self.proxy.keep_port:
+            # A port-keeping router maps the port it was sent from to the same port.
+            self.proxy.net.hosts.pop(self.public, None)
+            self.public = (self.public[0], addr[1])
+            self.proxy.net.hosts[self.public] = self.to_client
         self.client = addr
         parsed = parse_datagram(data)
         if not parsed:
@@ -299,13 +310,15 @@ class Socks5Proxy:
     those RFC 1929 credentials. `bound` is how the grant names the relay:
     "address", "ipv6", "name" or "unspecified". `hang_up` drops the control
     connection at the first datagram the relay hears. `grant_delay` is how long
-    the proxy takes to grant a relay, in seconds."""
+    the proxy takes to grant a relay, in seconds. `keep_port` makes the exit
+    send from the port each association's datagrams came from. `host` is the
+    address the proxy and its relays listen on."""
 
     def __init__(self, net: Internet, public_ip: str, udp: bool = True,
                  auth: tuple = None, bound: str = "address", hang_up: bool = False,
-                 grant_delay: float = 0) -> None:
+                 grant_delay: float = 0, keep_port: bool = False, host: str = "127.0.0.1") -> None:
         self.net, self.public_ip, self.udp, self.auth, self.bound = net, public_ip, udp, auth, bound
-        self.hang_up, self.grant_delay = hang_up, grant_delay
+        self.hang_up, self.grant_delay, self.keep_port, self.host = hang_up, grant_delay, keep_port, host
         self.hung_up = 0
         self.authenticated = 0
         self.connects = []  # (host, port) of every CONNECT
@@ -317,7 +330,7 @@ class Socks5Proxy:
         self.server = None
 
     async def start(self) -> int:
-        self.server = await asyncio.start_server(self.serve, "127.0.0.1", 0)
+        self.server = await asyncio.start_server(self.serve, self.host, 0)
         return self.server.sockets[0].getsockname()[1]
 
     async def serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -368,7 +381,7 @@ class Socks5Proxy:
         self.associations += 1
         public = (self.public_ip, 40000 + self.associations)
         # The browser reaches an IPv6 relay from ::1, not from the control connection's address.
-        local = "::1" if self.bound == "ipv6" else "127.0.0.1"
+        local = "::1" if self.bound == "ipv6" else self.host
         client_ip = local if self.bound == "ipv6" else writer.get_extra_info("peername")[0]
         loop = asyncio.get_running_loop()
         _, relay = await loop.create_datagram_endpoint(
@@ -426,9 +439,14 @@ async def main() -> int:
     capturing = Socks5Proxy(net, "198.51.100.100")
     hanging_up = Socks5Proxy(net, "198.51.100.110", hang_up=True)
     slow = Socks5Proxy(net, "198.51.100.120", grant_delay=SLOW_GRANT_S)
+    # The host candidates' socket is on this host's own address; a proxy there hears from it
+    # directly, and one on loopback from another socket.
+    machine = own_address()
+    keeping = {where: Socks5Proxy(net, ip, keep_port=True, host=host) for where, ip, host in (
+        ("loopback", "198.51.100.130", "127.0.0.1"), ("this host's address", "198.51.100.140", machine))}
     proxies = {p: await p.start() for p in (relaying, refusing, peer_a, peer_b, authed, launched, capturing, hanging_up,
                                             slow,
-                                            *grants.values())}
+                                            *grants.values(), *keeping.values())}
     http_requests = []
     http = await asyncio.start_server(lambda r, w: serve_http_proxy(http_requests, r, w), "127.0.0.1", 0)
     http_port = http.sockets[0].getsockname()[1]
@@ -449,7 +467,7 @@ async def main() -> int:
         return blob
 
     def socks(proxy: Socks5Proxy) -> str:
-        return f"socks5://127.0.0.1:{proxies[proxy]}"
+        return f"socks5://{proxy.host}:{proxies[proxy]}"
 
     async def gather_through(page) -> tuple:
         """The gathering, with the Binding requests it sent and the addresses they mapped."""
@@ -498,6 +516,8 @@ async def main() -> int:
             browser, socks(authed), username=CREDENTIALS[0], password=CREDENTIALS[1]))
         via_grant = {bound: await gather_through(await page_behind(browser, socks(proxy)))
                      for bound, proxy in grants.items()}
+        via_keeping = {where: await gather_through(await page_behind(browser, socks(proxy)))
+                       for where, proxy in keeping.items()}
         via_hang_up = await gather_through(await page_behind(browser, socks(hanging_up)))
         before = len(stun.transactions)
         via_slow = await gather_through(await page_behind(browser, socks(slow)))
@@ -520,7 +540,6 @@ async def main() -> int:
         via_launch_page = await gather_through(launch_blank)
 
     # No webrtc:ipv4 here, which would hide the address behind its own replacement.
-    machine = own_address()
     capture_prefs = {"media.navigator.streams.fake": True, "media.navigator.permission.disabled": True,
                      "media.devices.insecure.enabled": True, "media.getusermedia.insecure.enabled": True}
     async with AsyncCamoufox(firefox_user_prefs=capture_prefs, **launch) as browser:
@@ -600,6 +619,13 @@ async def main() -> int:
          and abs(via_hang_up[0]["elapsed"] - unanswered["elapsed"]) < TIMER_TOLERANCE_MS,
          f"{via_hang_up[0]['elapsed']} against {unanswered['elapsed']}"),
         *relayed("SOCKS5 slow to grant its relay", slow, via_slow),
+        *[check for where, result in via_keeping.items()
+          for check in relayed(f"SOCKS5 on {where}, exit keeping the port", keeping[where], result)],
+        *[(f"SOCKS5 on {where}, exit keeping the port: the srflx port is the host candidate's",
+           bool(gather["srflx"]) and {c.rsplit(":", 1)[1] for c in gather["srflx"]}
+           <= {c.rsplit(":", 1)[1] for c in gather["host"]},
+           f"host {gather['host']} srflx {gather['srflx']}")
+          for where, (gather, _, _) in via_keeping.items()],
         ("SOCKS5 slow to grant its relay: the server heard each Binding request once",
          len(slow_transactions) == len(set(slow_transactions)),
          f"{len(slow_transactions)} requests in {len(set(slow_transactions))} transactions"),

@@ -162,6 +162,13 @@ sends each QUIC connection through an association of its own
 ([docs/proxy-dns.md](../../docs/proxy-dns.md)). It also edits
 `network-patches.patch`'s neighbourhood in `netwerk/protocol/http/`.
 
+`zz-webrtc-relay-host-port.patch` applies after `zz-http3-socks5-udp.patch`,
+whose `Socks5UdpAssociation` it extends with `GetSelfAddr`. It sends relayed
+datagrams from the host candidate's port, through the host socket itself when
+the control connection leaves from the host candidate's address, so an exit
+that keeps ports reports the host candidate's port to a STUN server, as a home
+router that keeps ports does.
+
 ## Backports
 
 These patches carry upstream Firefox changes that `browser/upstream.sh`'s

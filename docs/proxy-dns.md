@@ -256,7 +256,10 @@ For the claim "a Firefox at the exit" to hold, a SOCKS5 proxy has to:
    association for as long as its control connection is open.
 2. Send an association's datagrams from the address its CONNECTs exit from.
 3. Give each association an exit port of its own and keep it for the
-   association's life.
+   association's life. Where it is free, make it the port the association's
+   datagrams arrive from, as most home routers keep a machine's port: WebRTC
+   sends them from its host candidate's port, so a STUN server then sees that
+   port, as it would with no proxy.
 4. Relay datagrams of at least 1500 bytes whole, in both directions, and send
    each to its destination as one unfragmented packet with don't-fragment set,
    as the browser's own socket would. On the hop to the client, accept
