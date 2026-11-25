@@ -1741,6 +1741,28 @@ describe.skipIf(!MODEL.ok)(
 			expect(warned).toBe(true);
 		});
 
+		for (const [server, warns] of [
+			["http://proxy.example:3128", true],
+			["proxy.example:3128", true],
+			["https://proxy.example:443", true],
+			["socks5://proxy.example:1080", false],
+		] as const) {
+			it(`a ${server} proxy ${warns ? "warns" : "does not warn"} that it carries no UDP`, async () => {
+				const { warned } = await launchWarning(
+					{
+						os: "windows",
+						executable_path: BUNDLE_EXE,
+						geoip: false,
+						proxy: { server },
+						i_know_what_im_doing: false,
+					},
+					"LeakWarning",
+					"carries no UDP",
+				);
+				expect(warned).toBe(warns);
+			});
+		}
+
 		it("is_mobile warns that Camoufox is desktop-only", async () => {
 			const { warned } = await launchWarning(
 				{

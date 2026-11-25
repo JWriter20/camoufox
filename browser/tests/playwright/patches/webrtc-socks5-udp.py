@@ -22,7 +22,10 @@ What PASS means:
     * behind a SOCKS5 proxy, the STUN server gets Binding requests, every one
       from that context's relay, and the page's one srflx is the address the
       server mapped, in the candidate, the SDP and getStats(), not the
-      identity's `webrtc:ipv4`;
+      identity's `webrtc:ipv4`; it is the default candidate (the m= port and
+      c= address) and comes before a=end-of-candidates, as stock lists a
+      gathered srflx (a srflx once spliced into the SDP text left
+      "m=application 9" / "c=IN IP4 0.0.0.0" and followed end-of-candidates);
     * a STUN server named by host name is asked through the relay by that name;
     * a top-level blob: page the proxied page opened with noopener, which no
       document loaded over HTTP leads back to, gathers through the relay too;
@@ -92,6 +95,15 @@ TIMER_TOLERANCE_MS = 1000
 GATHER = """mw:async (stun) => {
   const pc = new RTCPeerConnection({iceServers: [{urls: stun, username: 'guard', credential: 'guard'}]});
   const srflx = [], host = [];
+  // The default candidate (m= port, c= address) and where the srflx and
+  // a=end-of-candidates sit in the description.
+  const shape = sdp => {
+    const lines = sdp.split('\\r\\n');
+    return {m: lines.find(l => l.startsWith('m=')), c: lines.find(l => l.startsWith('c=')),
+            order: lines.filter(l => / typ srflx/.test(l) || l === 'a=end-of-candidates')
+                        .map(l => l.startsWith('a=candidate') ? 'srflx' : 'end')};
+  };
+  let atSrflx = null;
   const start = performance.now();
   const ended = new Promise(resolve => {
     setTimeout(() => resolve(null), 30000);
@@ -99,6 +111,7 @@ GATHER = """mw:async (stun) => {
       if (!e.candidate) return resolve(performance.now() - start);
       const m = e.candidate.candidate.match(/ (\\S+) (\\d+) typ (srflx|host)/);
       if (m) (m[3] === 'srflx' ? srflx : host).push(m[1] + ':' + m[2]);
+      if (m && m[3] === 'srflx') atSrflx = shape(pc.localDescription.sdp);
     };
   });
   pc.createDataChannel('probe');
@@ -111,8 +124,9 @@ GATHER = """mw:async (stun) => {
     if (s.type === 'local-candidate' && s.candidateType === 'srflx')
       stats.push(s.address + ':' + s.port);
   });
+  const final = shape(pc.localDescription.sdp);
   pc.close();
-  return {srflx, host, sdp, stats, elapsed};
+  return {srflx, host, sdp, stats, elapsed, atSrflx, final};
 }"""
 
 # Everything a page can read about its own candidates while it is capturing.
@@ -567,6 +581,15 @@ async def main() -> int:
         ("SOCKS5: the SDP and getStats() carry the same srflx",
          by_ip["sdp"] == by_ip["srflx"] and by_ip["stats"] == by_ip["srflx"],
          f"sdp {by_ip['sdp']} stats {by_ip['stats']}"),
+        *[(f"SOCKS5, {when}: the srflx is the default candidate (m= port, c= address), as a gathered one is",
+           len(by_ip["srflx"]) == 1 and bool(shape)
+           and shape["m"].split(" ")[1] == by_ip["srflx"][0].rsplit(":", 1)[1]
+           and shape["c"] == f"c=IN IP4 {by_ip['srflx'][0].rsplit(':', 1)[0]}",
+           shape and f"{shape['m']} / {shape['c']}")
+          for when, shape in (("in its icecandidate handler", by_ip["atSrflx"]),
+                              ("in the final description", by_ip["final"]))],
+        ("SOCKS5: the srflx comes before a=end-of-candidates",
+         by_ip["final"]["order"] == ["srflx", "end"], by_ip["final"]["order"]),
         ("SOCKS5: a STUN server named by host name is asked by that name, through the relay",
          bool(name_requests) and (3, STUN_NAME, STUN_ADDR[1]) in relaying.destinations
          and len(by_name["srflx"]) == 1 and by_name["srflx"][0] in name_mapped,

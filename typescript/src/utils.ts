@@ -1205,6 +1205,14 @@ export function isDomainSet(
 }
 
 /** The host of a SOCKS5 proxy, or null when `proxy` is not one. */
+/** Whether a Playwright proxy server is an HTTP(S) proxy (a bare host:port is one), which carries no UDP. */
+export function proxyCarriesNoUdp(server: string): boolean {
+	const scheme = server.includes("://")
+		? server.split("://", 1)[0].toLowerCase()
+		: "http";
+	return scheme === "http" || scheme === "https";
+}
+
 export function socks5Host(
 	proxy: ProxyConfig | undefined | null,
 ): string | null {
@@ -3226,6 +3234,13 @@ async function buildLaunchOptions(
 		!isDomainSet(config, "geolocation")
 	) {
 		LeakWarning.warn("proxy_without_geoip");
+	}
+
+	// An HTTP proxy carries no UDP: WebRTC and HTTP/3 then act as on a machine
+	// whose firewall drops every datagram, which few people's does. A SOCKS5
+	// proxy with UDP ASSOCIATE sends them from the exit.
+	if (proxy && proxyCarriesNoUdp(String(proxy.server ?? ""))) {
+		LeakWarning.warn("proxy_http_no_udp", i_know_what_im_doing);
 	}
 
 	await applyProxyDns(
