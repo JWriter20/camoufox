@@ -276,7 +276,7 @@ def test_launch_server_surfaces_child_exit_instead_of_pipe_error(monkeypatch, tm
 class _FakeVirtualDisplay:
     instances = []
 
-    def __init__(self, debug=None):
+    def __init__(self, debug=None, screen=None):
         self.debug = debug
         self.killed = False
         _FakeVirtualDisplay.instances.append(self)
@@ -393,3 +393,13 @@ def test_a_served_gpu_display_is_proved_on_the_printed_endpoint(monkeypatch, cap
     assert connected == ["ws://localhost:4242/abc", "closed"]
     assert proved == [display]
     assert "ws://localhost:4242/abc" in capsys.readouterr().out
+
+
+def test_launch_server_passes_only_launch_options_their_defaults(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(server, "launch_options", lambda **kwargs: seen.update(kwargs) or {})
+    monkeypatch.setattr(server, "_serve", lambda config, display: None)
+    monkeypatch.setattr(server.pro, "claim", lambda config, display: None)
+    server.launch_server(headless=True)
+    assert "persistent_context" not in seen and "telemetry" not in seen
+    assert seen["passthrough"] is False

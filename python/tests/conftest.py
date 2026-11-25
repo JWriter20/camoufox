@@ -27,3 +27,12 @@ def properties_of_this_checkout(monkeypatch):
     monkeypatch.setattr(
         utils, '_load_properties', lambda path=None: load(path or SETTINGS / 'camoufox-bin')
     )
+
+
+@pytest.fixture(autouse=True)
+def no_telemetry_or_user_defaults(monkeypatch, tmp_path):
+    """Launches in this suite report nothing, and read the packaged defaults
+    alone, not the defaults file of whoever runs it. The tests of either set
+    their own."""
+    monkeypatch.setenv('CAMOUFOX_TELEMETRY', '0')
+    monkeypatch.setenv('CAMOUFOX_DEFAULTS', str(tmp_path / 'no-user-defaults.json'))

@@ -53,6 +53,9 @@ inquirer = "*"
 # humanize's default engine. Pinned: a seed must plan the same input in Python and
 # TypeScript, and in every install of one camoufox release.
 myuri = "5.1.0"
+# The defaults file, passthrough launches and anti-bot telemetry, shared with the
+# other Camou launchers so their files, checks and payloads cannot drift apart.
+camoucore = "^0.3.0"
 maxminddb = {version = "*", optional = true}
 # Camoufox Pro profile state sync: XChaCha20-Poly1305, zstd, FastCDC.
 pynacl = {version = ">=1.5", optional = true}

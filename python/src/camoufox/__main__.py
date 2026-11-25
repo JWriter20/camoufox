@@ -11,6 +11,7 @@ from typing import Any, List, NoReturn, Optional, Tuple
 import requests
 import rich_click as click
 
+from .defaults import write_user_file
 from .fpgen_model import ensure_fpgen_model
 from .geolocation import (
     ALLOW_GEOIP,
@@ -1329,6 +1330,14 @@ def path_cmd():
     Print the install directory path
     """
     click.echo(INSTALL_DIR)
+
+
+@cli.command(name="defaults")
+def defaults_cmd():
+    """
+    Write your own copy of the launch defaults, unless you have one, and print its path
+    """
+    click.echo(write_user_file())
 
 
 if __name__ == "__main__":

@@ -583,6 +583,9 @@ claims the host's OS. Details are in
 | Core count that a page can measure | `pin_cpu_cores=True` |
 | Block images, WebRTC or WebGL | `block_images`, `block_webrtc`, `block_webgl` |
 | The host's GPU on the host's OS; random canvas readback, as in LibreWolf, on another OS | default; `canvas_noise=True` or `False` to choose |
+| This machine's own identity, with Camoufox's behaviour options | `passthrough=True` |
+| Your own defaults for every launch, in one documented file | `camoufox defaults`, [`camoufox.defaults.json`](camoufox.defaults.json) |
+| Anti-bot success counts per proxy provider, no URLs or IPs ([what is sent](python/README.md#telemetry)) | on; `telemetry=False`, `CAMOUFOX_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off |
 
 The full option list is in the [Python README](python/README.md#launch-options).
 
