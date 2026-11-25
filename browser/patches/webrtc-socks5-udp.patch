@@ -1,8 +1,8 @@
 diff --git a/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp b/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
-index bade2f403c..39ace626b3 100644
+index dfcb15ee5e..68bc93bf61 100644
 --- a/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
 +++ b/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
-@@ -105,6 +105,8 @@
+@@ -107,6 +107,8 @@
  #include "mozilla/RustRegex.h"
  #include "WebRTCIPManager.h"
  #include "mozilla/dom/NavigatorManager.h"
@@ -11,7 +11,7 @@ index bade2f403c..39ace626b3 100644
  #include "nsDocShell.h"
  #include "nsContentUtils.h"
  #include "nsDOMJSUtils.h"
-@@ -1811,11 +1813,13 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+@@ -1819,11 +1821,13 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
    auto ipv4Opt = SpoofIP(false);
    auto ipv6Opt = SpoofIP(true);
    bool shouldSanitizeStats = ipv4Opt || ipv6Opt;
@@ -26,7 +26,7 @@ index bade2f403c..39ace626b3 100644
                UniquePtr<dom::RTCStatsReportInternal>&& aReport) {
              // Camoufox: Sanitize IP addresses in stats before exposing to JS
              if (shouldSanitizeStats && aReport) {
-@@ -1833,9 +1837,11 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+@@ -1841,9 +1845,11 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
                    addr.Assign(NS_ConvertUTF16toUTF8(candStat.mAddress.Value()));
                    // Check for colons AND no periods to avoid IPv4:port false positives
                    bool isIPv6 = addr.FindChar(':') != kNotFound && addr.FindChar('.') == kNotFound;
@@ -40,7 +40,7 @@ index bade2f403c..39ace626b3 100644
                      candStat.mAddress.Value() = NS_ConvertUTF8toUTF16(ipv4Opt.value().c_str());
                    }
                  }
-@@ -2489,6 +2495,10 @@ PeerConnectionImpl::Close() {
+@@ -2497,6 +2503,10 @@ PeerConnectionImpl::Close() {
  
    if (mStunAddrsRequest) {
      for (const auto& hostname : mRegisteredMDNSHostnames) {
@@ -51,15 +51,7 @@ index bade2f403c..39ace626b3 100644
        mStunAddrsRequest->SendUnregisterMDNSHostname(
            nsCString(hostname.c_str()));
      }
-@@ -3386,6 +3396,7 @@ void PeerConnectionImpl::CandidateReady(const std::string& candidate_,
-   STAMP_TIMECARD(mTimeCard, "Ice Candidate gathered");
-   PC_AUTO_ENTER_API_CALL_VOID_RETURN(false);
- 
-+  NoteProxiedAddress(candidate_);
-   const std::string& candidate = [&]() -> const std::string& {
-     if (ShouldSpoofCandidateIP()) {
-       static std::string spoofedCandidate;
-@@ -3520,10 +3531,11 @@ bool isSpecialIP(const std::string& ip) {
+@@ -3534,10 +3544,11 @@ bool isSpecialIP(const std::string& ip) {
  
  std::string getMaskForIP(const std::string& ip,
                           const std::optional<std::string>& ipv4Value,
@@ -74,7 +66,7 @@ index bade2f403c..39ace626b3 100644
    }
    // Use colons AND no periods to avoid IPv4:port false positives
    bool isIPv6 = (ip.find(':') != std::string::npos) && (ip.find('.') == std::string::npos);
-@@ -3543,7 +3555,8 @@ std::string getMaskForIP(const std::string& ip,
+@@ -3557,7 +3568,8 @@ std::string getMaskForIP(const std::string& ip,
  
  std::string replaceIPAddresses(const std::string& input, const char* pattern,
                                 const std::optional<std::string>& ipv4,
@@ -84,7 +76,7 @@ index bade2f403c..39ace626b3 100644
    // Replace IP addresses in a output line
    mozilla::RustRegex regex(pattern);
    if (!regex.IsValid()) {
-@@ -3556,7 +3569,7 @@ std::string replaceIPAddresses(const std::string& input, const char* pattern,
+@@ -3570,7 +3582,7 @@ std::string replaceIPAddresses(const std::string& input, const char* pattern,
  
    while (auto match = iter.Next()) {
      std::string ip = input.substr(match->start, match->end - match->start);
@@ -93,7 +85,7 @@ index bade2f403c..39ace626b3 100644
  
      if (mask != ip) {
        result.append(input, lastEnd, match->start - lastEnd);
-@@ -3572,6 +3585,38 @@ std::string replaceIPAddresses(const std::string& input, const char* pattern,
+@@ -3586,6 +3598,38 @@ std::string replaceIPAddresses(const std::string& input, const char* pattern,
    return result;
  }
  
@@ -132,7 +124,7 @@ index bade2f403c..39ace626b3 100644
  std::string PeerConnectionImpl::SpoofCandidateIP(const std::string& candidate) {
    if (!ShouldSpoofCandidateIP() || candidate.empty()) {
      return candidate;
-@@ -3582,10 +3627,11 @@ std::string PeerConnectionImpl::SpoofCandidateIP(const std::string& candidate) {
+@@ -3596,10 +3640,11 @@ std::string PeerConnectionImpl::SpoofCandidateIP(const std::string& candidate) {
  
    // ipv4
    const char* ipv4Pattern = "(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)";
@@ -146,7 +138,7 @@ index bade2f403c..39ace626b3 100644
  
    return result;
  }
-@@ -3624,10 +3670,12 @@ nsresult PeerConnectionImpl::SanitizeSDPForIPLeak(std::string& sdp) {
+@@ -3638,10 +3683,12 @@ nsresult PeerConnectionImpl::SanitizeSDPForIPLeak(std::string& sdp) {
  
    // ipv4
    const char* ipv4Pattern = "(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)";
@@ -161,7 +153,7 @@ index bade2f403c..39ace626b3 100644
  
    if (processedSdp != originalSdp) {
      sdp = processedSdp;
-@@ -4049,7 +4097,13 @@ void PeerConnectionImpl::OnCandidateFound(const std::string& aTransportId,
+@@ -4063,7 +4110,13 @@ void PeerConnectionImpl::OnCandidateFound(const std::string& aTransportId,
    if (mStunAddrsRequest && !aCandidateInfo.mMDNSAddress.empty()) {
      MOZ_ASSERT(!aCandidateInfo.mActualAddress.empty());
  
@@ -176,7 +168,17 @@ index bade2f403c..39ace626b3 100644
        auto itor = mRegisteredMDNSHostnames.find(aCandidateInfo.mMDNSAddress);
  
        // We'll see the address twice if we're generating both UDP and TCP
-@@ -5066,7 +5120,10 @@ bool PeerConnectionImpl::GetPrefDefaultAddressOnly() const {
+@@ -4080,6 +4133,9 @@ void PeerConnectionImpl::OnCandidateFound(const std::string& aTransportId,
+     }
+   }
+ 
++  // Camoufox: before the default candidate, which may be this srflx, so the
++  // m= and c= lines carry the proxy's address as its a=candidate line does.
++  NoteProxiedAddress(aCandidateInfo.mCandidate);
+   if (!aCandidateInfo.mDefaultHostRtp.empty()) {
+     UpdateDefaultCandidate(aCandidateInfo.mDefaultHostRtp,
+                            aCandidateInfo.mDefaultPortRtp,
+@@ -5080,7 +5136,10 @@ bool PeerConnectionImpl::GetPrefDefaultAddressOnly() const {
        Preferences::GetBool("media.peerconnection.ice.default_address_only",
                             false) ||
        ShouldSpoofCandidateIP();
@@ -187,7 +189,7 @@ index bade2f403c..39ace626b3 100644
        !MediaManager::Get()->IsActivelyCapturingOrHasAPermission(winId);
    return default_address_only;
  }
-@@ -5074,6 +5131,12 @@ bool PeerConnectionImpl::GetPrefDefaultAddressOnly() const {
+@@ -5088,6 +5147,12 @@ bool PeerConnectionImpl::GetPrefDefaultAddressOnly() const {
  bool PeerConnectionImpl::GetPrefObfuscateHostAddresses() const {
    MOZ_ASSERT(NS_IsMainThread());
  
@@ -200,7 +202,7 @@ index bade2f403c..39ace626b3 100644
    uint64_t winId = mWindow->WindowID();
  
    bool obfuscate_host_addresses = Preferences::GetBool(
-@@ -5109,6 +5172,19 @@ void PeerConnectionImpl::AddIceCandidate(const std::string& aCandidate,
+@@ -5130,6 +5195,19 @@ void PeerConnectionImpl::AddIceCandidate(const std::string& aCandidate,
  
        if (nPeriods == 1 &&
            addr.rfind(".local") + dotLocalLength == addr.length()) {
@@ -221,7 +223,7 @@ index bade2f403c..39ace626b3 100644
            PendingIceCandidate cand;
            cand.mCandidate = aCandidate;
 diff --git a/dom/media/webrtc/jsapi/PeerConnectionImpl.h b/dom/media/webrtc/jsapi/PeerConnectionImpl.h
-index fdeb8675c3..dc95864053 100644
+index 19bc4e60cc..4b25169dbc 100644
 --- a/dom/media/webrtc/jsapi/PeerConnectionImpl.h
 +++ b/dom/media/webrtc/jsapi/PeerConnectionImpl.h
 @@ -6,6 +6,7 @@
@@ -706,7 +708,7 @@ index b7d83085ea..6e7a349494 100644
  
  transport_cppsrcs = [
 diff --git a/dom/media/webrtc/transport/ipc/WebrtcTCPSocket.cpp b/dom/media/webrtc/transport/ipc/WebrtcTCPSocket.cpp
-index 28458be..06b2e75 100644
+index 28458bedcd..06b2e75f6c 100644
 --- a/dom/media/webrtc/transport/ipc/WebrtcTCPSocket.cpp
 +++ b/dom/media/webrtc/transport/ipc/WebrtcTCPSocket.cpp
 @@ -216,11 +216,18 @@ nsresult WebrtcTCPSocket::DoProxyConfigLookup() {
@@ -759,7 +761,7 @@ index 28458be..06b2e75 100644
  
  NS_IMETHODIMP
 diff --git a/dom/media/webrtc/transport/nr_socket_prsock.cpp b/dom/media/webrtc/transport/nr_socket_prsock.cpp
-index c8bcce464c..84893a8e5b 100644
+index c8bcce464c..a1f2c78aaf 100644
 --- a/dom/media/webrtc/transport/nr_socket_prsock.cpp
 +++ b/dom/media/webrtc/transport/nr_socket_prsock.cpp
 @@ -1003,6 +1003,227 @@ abort:
@@ -1042,7 +1044,7 @@ index c8bcce464c..84893a8e5b 100644
    uint16_t port;
    int r;
 diff --git a/dom/media/webrtc/transport/nr_socket_prsock.h b/dom/media/webrtc/transport/nr_socket_prsock.h
-index bfd5a26286..c1a6abda03 100644
+index bfd5a26286..f2e3948afb 100644
 --- a/dom/media/webrtc/transport/nr_socket_prsock.h
 +++ b/dom/media/webrtc/transport/nr_socket_prsock.h
 @@ -43,6 +43,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
@@ -1166,7 +1168,7 @@ index 5f250a5158..d2b347e93d 100644
                LOG_ICE, LOG_DEBUG,
                "ICE-CANDIDATE(%s): Starting DNS resolution (%u/%s - %u/%s).",
 diff --git a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_component.cpp b/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_component.cpp
-index dc21b541d5..7c29cbbfcd 100644
+index 4c190853f3..203c382612 100644
 --- a/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_component.cpp
 +++ b/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_component.cpp
 @@ -211,11 +211,11 @@ static int nr_ice_component_initialize_udp(struct nr_ice_ctx_ *ctx,nr_ice_compon
@@ -1212,7 +1214,7 @@ index dc21b541d5..7c29cbbfcd 100644
          if (nr_transport_addr_check_compatibility(
                  &addrs[i].addr, &component->stream->turn_servers[j].turn_server.addr)) {
            r_log(LOG_ICE,LOG_INFO,"ICE-STREAM(%s): Skipping TURN server because of address type mis-match",component->stream->label);
-@@ -1139,13 +1127,12 @@ int nr_ice_component_pair_candidate(nr_ice_peer_ctx *pctx, nr_ice_component *pco
+@@ -1138,13 +1126,12 @@ int nr_ice_component_pair_candidate(nr_ice_peer_ctx *pctx, nr_ice_component *pco
        if(!nr_ice_component_can_candidate_tcptype_pair(lcand->tcp_type, pcand->tcp_type))
          continue;
  
@@ -1567,10 +1569,10 @@ index ef0e206b40..c2cf4709c9 100644
  
  }  // namespace net
 diff --git a/netwerk/ipc/SocketProcessParent.cpp b/netwerk/ipc/SocketProcessParent.cpp
-index bf7e2b896b..8d06be3775 100644
+index a57b129587..eb0a7763ea 100644
 --- a/netwerk/ipc/SocketProcessParent.cpp
 +++ b/netwerk/ipc/SocketProcessParent.cpp
-@@ -265,15 +265,16 @@ SocketProcessParent::AllocPAltServiceParent() {
+@@ -266,15 +266,16 @@ SocketProcessParent::AllocPAltServiceParent() {
  already_AddRefed<PProxyConfigLookupParent>
  SocketProcessParent::AllocPProxyConfigLookupParent(
      nsIURI* aURI, const uint32_t& aProxyResolveFlags,
@@ -1591,7 +1593,7 @@ index bf7e2b896b..8d06be3775 100644
    return IPC_OK();
  }
 diff --git a/netwerk/ipc/SocketProcessParent.h b/netwerk/ipc/SocketProcessParent.h
-index 78f3ec67f6..715a7b3b8c 100644
+index c99e388930..74dee6fcf0 100644
 --- a/netwerk/ipc/SocketProcessParent.h
 +++ b/netwerk/ipc/SocketProcessParent.h
 @@ -82,11 +82,11 @@ class SocketProcessParent final

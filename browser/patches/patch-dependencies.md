@@ -143,7 +143,9 @@ context:
   document with no HTTP channel, so a direct launch stays direct and a proxied
   one never gathers around its proxy. The new patch keeps a srflx or
   relay address gathered through the proxy as it is, because a page's own STUN
-  server already saw that address. Behind an HTTP proxy, or a SOCKS5 proxy that
+  server already saw that address. It notes that address before the default
+  candidate (the m= port and c= address) takes it, so the SDP names the srflx
+  there too, as stock does once one is gathered. Behind an HTTP proxy, or a SOCKS5 proxy that
   refuses UDP, no srflx surfaces: the page reads a machine whose UDP is
   blocked, not one that made a STUN answer up.
 
