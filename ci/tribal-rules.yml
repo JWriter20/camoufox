@@ -1160,6 +1160,24 @@ rules:
       HTTP proxy is left as Firefox has it, because nothing would reach the
       origin (docs/proxy-dns.md).
 
+  - id: doh-request-is-not-prefetched
+    title: Behind a SOCKS proxy the DoH request's own host is never prefetched on this host
+    check: manual   # browser/tests/playwright/patches/doh-proxy-resolves-nothing-here.py
+    evidence:
+      - "Firefox 160, netwerk/protocol/http/TRRServiceChannel.cpp: BeginConnect calls MaybeStartDNSPrefetch, which skips only an HTTP proxy; nsHttpChannel skips any proxy that resolves the name (GetProxyDNSStrategyHelper). TRR is off for its own server's name, so the prefetch is a getaddrinfo on this host"
+      - "network.dns.disablePrefetch was the only other gate; uBlock Origin's 'Disable pre-fetching' sets it once the add-on has started, after the first DoH request of a launch, and Juggler leaves prefetch on behind a proxy that carries DoH (docs/proxy-dns.md)"
+      - "doh-proxy-resolves-nothing-here.py, 2026-11-25: 2 of 3 checks in 3 of 3 runs before the change, the DoH server's name resolved by this host's resolver; 3 of 3 checks in 3 of 3 runs after, the resolver log showing every page name answered by DoH and no getaddrinfo"
+      - "behind a remote SOCKS5 exit with uBlock Origin loaded, three launch variants three times each, same day: the DoH server's name was looked up on this host in 9 of 9 launches before the change and in 0 of 9 after, every other connection leaving by the exit both times"
+    rationale: >-
+      With proxy_dns='doh' the exit resolves the DoH server's name and the
+      browser resolves every other name through it, so this host's resolver
+      should be asked nothing. A prefetch of the DoH request's host told a
+      resolver beside the user which DoH server the browser uses, at every
+      launch, and a proxied stock Firefox never asks it. The DoH channel
+      follows nsHttpChannel's rule: no prefetch when the proxy resolves the
+      name. Do not rely on network.dns.disablePrefetch for this; it is on by
+      design in doh mode, and uBlock Origin sets it too late.
+
   - id: http3-is-raced-on-the-exits-clock
     title: Behind a SOCKS5 relay, the timers that start TCP beside QUIC wait for what the proxy cost
     check: manual   # browser/tests/playwright/patches/http3-https-record-socks5.py, ublock-connections-socks5.py

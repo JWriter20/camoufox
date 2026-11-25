@@ -1,0 +1,19 @@
+diff --git a/netwerk/protocol/http/TRRServiceChannel.cpp b/netwerk/protocol/http/TRRServiceChannel.cpp
+index 848290ff75..11cd97fa16 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.cpp
++++ b/netwerk/protocol/http/TRRServiceChannel.cpp
+@@ -723,7 +723,13 @@ nsresult TRRServiceChannel::SetupTransaction() {
+ }
+ 
+ void TRRServiceChannel::MaybeStartDNSPrefetch() {
+-  if (mConnectionInfo->UsingHttpProxy() ||
++  // Camoufox: as nsHttpChannel does, none when the proxy resolves the name. A
++  // DoH request through a SOCKS proxy would otherwise have its server's name
++  // looked up on this machine's resolver, which TRR never answers for itself.
++  nsProxyInfo* proxyInfo = mConnectionInfo->ProxyInfo();
++  if ((proxyInfo && !proxyInfo->IsDirect() &&
++       GetProxyDNSStrategyHelper(proxyInfo->Type(), proxyInfo->Flags()) ==
++           nsIHttpChannelInternal::PROXY_DNS_STRATEGY_PROXY) ||
+       (mLoadFlags & (nsICachingChannel::LOAD_NO_NETWORK_IO |
+                      nsICachingChannel::LOAD_ONLY_FROM_CACHE))) {
+     return;

@@ -69,7 +69,10 @@ is asked for, and so is the HTTPS record of a WebSocket's host, which
 Firefox asks for only by prefetch. uBlock Origin, which Camoufox loads by
 default, turns prefetch off with its "Disable pre-fetching" setting, on by
 default: with it, those names go unasked, as in a stock Firefox with uBlock
-Origin.
+Origin. The DoH request itself is never prefetched
+(`trr-prefetch-proxy-dns.patch`): its host is the exit's to resolve, and TRR
+does not answer for its own server's name, so a prefetch would ask this host's
+resolver for it.
 
 The browser now picks the address family, so it has to know whether the exit
 has IPv6. When the launch looks the exit up (`geoip`), it also asks an

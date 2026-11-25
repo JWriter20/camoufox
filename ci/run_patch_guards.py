@@ -125,6 +125,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "driven-page-real-focus",
         "driven-right-click-order",
         "driven-wheel-notches",
+        "doh-proxy-resolves-nothing-here",
         "eme-playready-claimed-os",
         "enterprise-policies",
         "firefox-version-pin",
