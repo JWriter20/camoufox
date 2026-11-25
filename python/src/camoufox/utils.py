@@ -787,6 +787,12 @@ def socks5_host(proxy: Optional[Dict[str, Any]]) -> Optional[str]:
     return url.hostname if url.scheme.lower() == 'socks5' else None
 
 
+def proxy_carries_no_udp(server: str) -> bool:
+    """Whether a Playwright proxy server is an HTTP(S) proxy (a bare host:port is one), which carries no UDP."""
+    scheme = server.split('://', 1)[0].lower() if '://' in server else 'http'
+    return scheme in ('http', 'https')
+
+
 def apply_proxy_dns(
     proxy_dns: Optional[str],
     proxy: Optional[Dict[str, Any]],
@@ -2619,6 +2625,11 @@ def launch_options(
         and not is_domain_set(config, 'geolocation')
     ):
         LeakWarning.warn('proxy_without_geoip')
+
+    # An HTTP proxy carries no UDP: WebRTC and HTTP/3 then act as on a machine whose firewall drops every
+    # datagram, which few people's does. A SOCKS5 proxy with UDP ASSOCIATE sends them from the exit.
+    if proxy and proxy_carries_no_udp(str(proxy.get('server', ''))):
+        LeakWarning.warn('proxy_http_no_udp', i_know_what_im_doing)
 
     apply_proxy_dns(proxy_dns, proxy, config, firefox_user_prefs, exit_looked_up=bool(geoip))
     apply_proxy_optimistic_data(proxy_optimistic_data, proxy, firefox_user_prefs)

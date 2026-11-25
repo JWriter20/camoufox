@@ -330,6 +330,21 @@ class TestGeoipIPv6:
             sent = self._launch(monkeypatch, None, geoip=False, proxy={"server": "http://proxy.example.com:3128"})
         assert "timezone" not in sent
 
+    @pytest.mark.parametrize(
+        "server, warns",
+        [("http://proxy.example:3128", True), ("proxy.example:3128", True), ("https://proxy.example:443", True),
+         ("socks5://proxy.example:1080", False)],
+    )
+    def test_an_http_proxy_warns_that_it_carries_no_udp(self, monkeypatch, isolated_launch_dependencies, server, warns):
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._launch(monkeypatch, None, geoip=False, proxy={"server": server})
+        no_udp = [w for w in caught if "carries no UDP" in str(w.message)]
+        assert bool(no_udp) is warns
+        assert all("socks5://" in str(w.message) for w in no_udp)
+
     def test_proxy_leaves_ipv6_alone(self, monkeypatch, isolated_launch_dependencies):
         def no_lookup():
             raise AssertionError("the host's IPv6 address is not what a proxied site sees")
