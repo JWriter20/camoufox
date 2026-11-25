@@ -1,0 +1,238 @@
+{
+  "$about": "The defaults every Camoufox launch starts from: Camoufox(), AsyncCamoufox(), NewBrowser(), AsyncNewBrowser(), launch_server() and launch_options(). Each option has its default, what it does, and example values. An option passed to the launch call always wins over this file. Do not edit the copy inside the installed package: run `camoufox defaults`, which writes your own copy to your user config directory (~/.config/camoufox/defaults.json on Linux) and prints its path, then change values there. Your file may keep this shape or use the short form {\"telemetry\": false}. CAMOUFOX_DEFAULTS=<path> reads your defaults from another file. An option your file does not know, or a value of another type than a non-null default, raises ValueError. Not listed, because they are not defaults: pro_key (use `camoufox login` or CAMOUFOX_PRO_KEY), virtual_display (set by headless=\"virtual\") and pool_profile (Camoufox Pro's pool warmer only).",
+  "telemetry": {
+    "default": true,
+    "about": "Proxy telemetry: counts how often anti-bot providers let this browser through. Collected, and nothing else: per anti-bot provider (Cloudflare, Cloudflare Turnstile, DataDome, Akamai, PerimeterX/HUMAN, Kasada, Imperva, AWS WAF, hCaptcha, reCAPTCHA, Arkose Labs, Queue-it, F5 Shape, ThreatMetrix, Google BotGuard), the number of encounters that ended in success, a challenge, a block, or an outcome the browser cannot see (unknown); plus the launcher (camoufox), its version, the browser version, whether it is a Pro build, whether the identity claims another OS than this machine's (cross-OS), whether it is a passthrough launch, and the proxy provider's domain only (e.g. example.com; \"none\" without a proxy). Never collected: URLs, sites, page content, cookies, IP addresses, the proxy's username, password, host or port, or any identifier of you or this machine. Used for: publishing the success rates of proxy providers against no proxy, by release, Pro vs not and cross-OS vs not, on the Camoufox website. To turn it off: set this to false, set CAMOUFOX_TELEMETRY=0, or set DO_NOT_TRACK=1.",
+    "examples": [false]
+  },
+  "passthrough": {
+    "default": false,
+    "about": "Launch the browser as this machine's own: no fingerprint is drawn and none is injected, so pages read this machine's user agent, screen, GPU, fonts, timezone and languages. Behaviour options (proxy, headless, addons, humanize, block_*) still apply. Options that set an identity (config, os, fingerprint, locale, geoip, screen, window, fonts, webgl_config, ...) raise ValueError with it. With a proxy it warns: the timezone and languages are this machine's, not the exit's.",
+    "examples": [true]
+  },
+  "headless": {
+    "default": null,
+    "about": "null or false shows a window. true is Firefox's headless mode. On Linux, \"virtual\" runs a headed browser on a private Xvfb display, and \"virtual-gpu\" on a headless Xorg server bound to one GPU.",
+    "examples": [true, "virtual", "virtual-gpu"]
+  },
+  "persistent_context": {
+    "default": false,
+    "about": "Launch a persistent context, which keeps its profile in user_data_dir (a Playwright option passed to the launch call), instead of a browser.",
+    "examples": [true]
+  },
+  "gpu": {
+    "default": null,
+    "about": "The GPU headless=\"virtual-gpu\" renders on: a PCI address (the stable choice), a /dev/dri card or an index. null uses CAMOUFOX_GPU, or the only GPU.",
+    "examples": ["0000:01:00.0", 0]
+  },
+  "require_gpu": {
+    "default": null,
+    "about": "With headless=\"virtual-gpu\": null or true fails the launch when the browser does not render on the GPU; false warns instead.",
+    "examples": [false]
+  },
+  "os": {
+    "default": null,
+    "about": "The operating system the identity claims: \"windows\", \"macos\", \"linux\", or a list to pick from. null draws from fpgen's real-world mix.",
+    "examples": ["windows", ["windows", "macos"]]
+  },
+  "humanize": {
+    "default": null,
+    "about": "Human-like input, run by the driver: true moves, types and scrolls with myuri on every channel, and an object picks the engine per channel (mouse, keyboard, scroll) plus a seed and myuri's settings. The browser adds none of its own: null or false sends each Playwright input call as one event.",
+    "examples": [true, {"seed": 1234}]
+  },
+  "geoip": {
+    "default": null,
+    "about": "Take timezone, locale, geolocation and the WebRTC IP from an IP address: true looks up the public IP (through the proxy when there is one), a string uses that IP. null turns it on behind a proxy when the geoip extra is installed. Needs pip install \"camoufox[geoip]\".",
+    "examples": [true, "203.0.113.7", false]
+  },
+  "geoip_db": {
+    "default": null,
+    "about": "The GeoIP database to use. null uses the one chosen with `camoufox set --geoip`, or the default.",
+    "examples": ["GeoIP AIO by daijro"]
+  },
+  "locale": {
+    "default": null,
+    "about": "The locale or locales the identity claims; the first is used for Intl. null takes it from geoip, else from the drawn identity.",
+    "examples": ["en-US", ["fr-FR", "en-US"]]
+  },
+  "proxy": {
+    "default": null,
+    "about": "The browser's proxy, in Playwright's form: server, and optionally username, password and bypass. A socks5:// proxy may carry a username and password too.",
+    "examples": [{"server": "socks5://proxy.example.com:1080", "username": "user", "password": "pass"}, {"server": "http://proxy.example.com:8080"}]
+  },
+  "proxy_dns": {
+    "default": null,
+    "about": "Who resolves names behind a socks5:// proxy: \"doh\", the browser by DNS over HTTPS through the proxy (what null does behind one), or \"exit\", the proxy. An HTTP proxy is always given names.",
+    "examples": ["doh", "exit"]
+  },
+  "proxy_optimistic_data": {
+    "default": false,
+    "about": "Send each TLS ClientHello behind the SOCKS5 CONNECT request, before the proxy replies. Only for a proxy known to forward those bytes: behind one that discards them every HTTPS navigation hangs.",
+    "examples": [true]
+  },
+  "managed": {
+    "default": null,
+    "about": "A managed proxy paid from your Camoufox account: true for the defaults, false for none. null gives a Pro profile the default and any other launch no managed proxy. Cannot be combined with proxy.",
+    "examples": [true, false]
+  },
+  "block_images": {
+    "default": false,
+    "about": "Block image loading. Warns: some WAFs detect it.",
+    "examples": [true]
+  },
+  "block_webrtc": {
+    "default": false,
+    "about": "Turn WebRTC off entirely.",
+    "examples": [true]
+  },
+  "block_webgl": {
+    "default": false,
+    "about": "Turn WebGL off. Warns: many WAFs check for it.",
+    "examples": [true]
+  },
+  "disable_coop": {
+    "default": false,
+    "about": "Turn off Cross-Origin-Opener-Policy, so elements in cross-origin iframes (such as the Turnstile checkbox) can be clicked. Warns.",
+    "examples": [true]
+  },
+  "enable_cache": {
+    "default": false,
+    "about": "Keep Firefox's page and request caches. Uses more memory.",
+    "examples": [true]
+  },
+  "main_world_eval": {
+    "default": false,
+    "about": "Allow page.evaluate(\"mw:...\") and mw: init scripts to run in the page's own world.",
+    "examples": [true]
+  },
+  "allow_addon_new_tab": {
+    "default": false,
+    "about": "Let addons open new tabs.",
+    "examples": [true]
+  },
+  "addons": {
+    "default": null,
+    "about": "Paths to extracted Firefox addons (folders holding a manifest.json), loaded on top of the default ones.",
+    "examples": [["/path/to/addon"]]
+  },
+  "exclude_addons": {
+    "default": null,
+    "about": "Default addons to leave out, by name.",
+    "examples": [["UBO"]]
+  },
+  "fonts": {
+    "default": null,
+    "about": "Extra font families, installed on this machine, on top of the claimed OS's own.",
+    "examples": [["Fira Code", "Inter"]]
+  },
+  "custom_fonts_only": {
+    "default": false,
+    "about": "Use only the families in fonts, not the OS's. Warns: the font set no longer matches the OS.",
+    "examples": [true]
+  },
+  "screen": {
+    "default": null,
+    "about": "Bounds for the drawn screen, as camoufox.fingerprints.Screen takes them. null bounds it by the real display when headed.",
+    "examples": [{"max_width": 1920, "max_height": 1080}]
+  },
+  "window": {
+    "default": null,
+    "about": "A fixed outer window size, [width, height]. null draws one.",
+    "examples": [[1280, 800]]
+  },
+  "webgl_config": {
+    "default": null,
+    "about": "The GPU the identity claims, [vendor, renderer]: a pair fpgen has recorded from Firefox on os (camoufox.webgl.firefox_gpus). Needs os. null draws one.",
+    "examples": [["Intel", "Intel(R) HD Graphics, or similar"]]
+  },
+  "cpu": {
+    "default": null,
+    "about": "The CPU the identity computes as: {\"arch\": \"x86\" or \"arm\", \"manufacturer\": ...}, either key optional. null follows the GPU and core count.",
+    "examples": [{"arch": "arm"}, {"manufacturer": "amd"}]
+  },
+  "canvas_noise": {
+    "default": null,
+    "about": "Random canvas and WebGL readback, as in LibreWolf. null turns it on only for an identity of another OS or GPU than this machine's. Warns.",
+    "examples": [true, false]
+  },
+  "pin_cpu_cores": {
+    "default": false,
+    "about": "Linux and Windows: pin the browser to as many cores as navigator.hardwareConcurrency claims. Costs CPU and serializes concurrent launches.",
+    "examples": [true]
+  },
+  "display_profile": {
+    "default": null,
+    "about": "The display's ICC colour profile, as a path. false keeps the browser's own. null draws one for an identity of another OS, and uses this display's for the host's OS.",
+    "examples": ["/path/to/display.icc", false]
+  },
+  "fingerprint": {
+    "default": null,
+    "about": "An fpgen fingerprint to use instead of drawing one. Warns.",
+    "examples": [{"navigator": {"platform": "Win32"}}]
+  },
+  "fingerprint_preset": {
+    "default": null,
+    "about": "Use a recorded real-device preset instead of fpgen: true picks a random bundled one, an object is the preset itself.",
+    "examples": [true]
+  },
+  "ff_version": {
+    "default": null,
+    "about": "The Firefox major version to claim. null claims the browser's own. Warns: a mismatch with the engine is detectable.",
+    "examples": [152]
+  },
+  "config": {
+    "default": null,
+    "about": "Raw Camoufox properties (browser/settings/properties.json), over the drawn identity. Manual identity keys warn.",
+    "examples": [{"allowMainWorld": true}]
+  },
+  "firefox_user_prefs": {
+    "default": null,
+    "about": "Extra Firefox preferences.",
+    "examples": [{"browser.sessionstore.max_tabs_undo": 0}]
+  },
+  "args": {
+    "default": null,
+    "about": "Extra browser command-line arguments.",
+    "examples": [["-purgecaches"]]
+  },
+  "env": {
+    "default": null,
+    "about": "Environment variables for the browser. null passes a copy of this process's environment.",
+    "examples": [{"MOZ_LOG": "nsHttp:3"}]
+  },
+  "executable_path": {
+    "default": null,
+    "about": "The browser binary to launch. null uses CAMOUFOX_EXECUTABLE_PATH, else the installed build. Cannot be combined with browser.",
+    "examples": ["/opt/camoufox/camoufox-bin"]
+  },
+  "browser": {
+    "default": null,
+    "about": "Launch another installed build instead of the paired one: \"official/beta.20\", \"beta.20\" or \"134.0.2-beta.20\". Never downloads.",
+    "examples": ["official/beta.20"]
+  },
+  "profile": {
+    "default": null,
+    "about": "Camoufox Pro: a stored profile's key. The browser presents its identity and restores its state. Needs os.",
+    "examples": ["shop-account-1"]
+  },
+  "warm_plan": {
+    "default": null,
+    "about": "Camoufox Pro: the warm plan a new profile is created with, \"none\", \"standard\" or \"continuous\". null leaves it to the API.",
+    "examples": ["none", "standard"]
+  },
+  "farm_gpu": {
+    "default": null,
+    "about": "Camoufox Pro: false renders a Windows identity's WebGL, WebGPU and canvas on this machine's GPU instead of a remote one.",
+    "examples": [false]
+  },
+  "i_know_what_im_doing": {
+    "default": false,
+    "about": "Silence the leak warnings that options such as block_images, block_webgl and ff_version print.",
+    "examples": [true]
+  },
+  "debug": {
+    "default": false,
+    "about": "Print the config sent to the browser.",
+    "examples": [true]
+  }
+}

@@ -287,14 +287,77 @@ with sync_playwright() as playwright:
 Prefer `NewBrowser()`: it also defaults new pages to `no_viewport` when the
 window size is spoofed, and to the host's own color scheme and motion settings.
 
+### Defaults file
+
+Every launch starts from
+[`camoufox.defaults.json`](../camoufox.defaults.json), which lists each launch
+option with its default, what it does and example values. An option passed to
+the launch call always wins. To change a default for every launch on this
+machine, write your own copy and edit it:
+
+```sh
+camoufox defaults   # writes ~/.config/camoufox/defaults.json on Linux, prints its path
+```
+
+Your copy may keep only the options you change, e.g. `{"headless": "virtual"}`.
+`CAMOUFOX_DEFAULTS=<path>` reads another file. An unknown option, or a value of
+another type than the default's, raises `ValueError`.
+
+### Passthrough
+
+`passthrough=True` launches the browser as this machine's own: no fingerprint
+is drawn and nothing is injected, so pages read this machine's user agent,
+screen, GPU, fonts, timezone and languages.
+
+```python
+from camoufox import Camoufox
+
+with Camoufox(passthrough=True, headless=True) as browser:
+    page = browser.new_page()
+```
+
+Behaviour options still apply: `proxy`, `headless`, `addons`, `humanize`,
+`block_*`, `main_world_eval`. Options that set an identity (`os`, `config`,
+`fingerprint`, `locale`, `geoip`, `screen`, `window`, `fonts`, `webgl_config`,
+...) raise `ValueError` with it, and so do `preset`, `os`, `ff_version` and
+`webrtc_ip` in `NewContext()` on its browser. With a proxy it warns: the
+timezone and languages stay this machine's, not the exit's. A Camoufox Pro build
+refuses it, since its lease grants an identity. On `headless="virtual"` the
+display is 1920x1080 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` says otherwise.
+
+### Telemetry
+
+Camoufox counts how often anti-bot providers let the browser through, so that
+the success rates of proxy providers can be published, against no proxy, on the
+Camoufox website. Every 10 minutes and when the browser closes, it sends:
+
+- per provider (Cloudflare, Turnstile, DataDome, Akamai, PerimeterX, Kasada,
+  Imperva, AWS WAF, hCaptcha, reCAPTCHA, Arkose Labs, Queue-it, F5 Shape,
+  ThreatMetrix, Google BotGuard), the number of encounters that ended in
+  success, a challenge, a block, or an outcome the browser cannot see;
+- the launcher (`camoufox`), its version, the browser version, whether the build
+  is Pro, whether the identity claims another OS than this machine's, whether
+  the launch is a passthrough one, and the proxy provider's domain only
+  (`example.com`, or `none`).
+
+It never sends URLs, sites, page content, cookies, IP addresses, the proxy's
+username, password, host or port, or anything that identifies you or this
+machine. To turn it off, pass `telemetry=False`, set it to `false` in your
+defaults file, or set `CAMOUFOX_TELEMETRY=0` or `DO_NOT_TRACK=1`. A failure
+to report never affects the browser. `launch_server()` reports nothing: the
+client drives the pages.
+
 ## Launch options
 
 `Camoufox`, `AsyncCamoufox`, `NewBrowser`, `AsyncNewBrowser`, `launch_server`
-and `launch_options` all take these keyword arguments. Any other keyword is
+and `launch_options` all take these keyword arguments, with defaults from the
+[defaults file](#defaults-file). Any other keyword is
 passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
+| `passthrough` | `bool` | `False` | Present this machine: no identity is drawn or injected. See [Passthrough](#passthrough). |
+| `telemetry` | `bool` | `True` | Report anti-bot outcomes. See [Telemetry](#telemetry). Not taken by `launch_options` or `launch_server`. |
 | `os` | `str` or `list[str]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, or a list to pick from. |
 | `headless` | `bool`, `"virtual"` or `"virtual-gpu"` | `False` | See [Headless modes](#headless-modes). |
 | `gpu` | `str` or `int` | `CAMOUFOX_GPU`, or the only GPU | The card for `headless="virtual-gpu"`. See [The GPU display](#the-gpu-display). Not taken by `launch_options`. |
@@ -357,6 +420,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `remove [VERSION]` | `--select`, `-y/--yes` | Remove one build, pick one interactively, or (with no argument) the whole data directory. |
 | `version` | | Package versions (Camoufox, fpgen, Playwright), the active build and whether it is the latest in its channel, the GeoIP database, and storage paths and sizes. |
 | `path` | | Print the data directory (`~/.cache/camoufox` on Linux). |
+| `defaults` | | Write your own copy of the [defaults file](#defaults-file), unless you have one, and print its path. |
 | `test [URL]` | `--executable-path PATH` | Open a headed browser with the Playwright inspector. |
 | `server` | | Start a Playwright server with default options and print its websocket endpoint. |
 | `gpu-setup [GPU]` | | Print the root script that sets this machine up for `headless="virtual-gpu"` on the card `GPU` names (or `CAMOUFOX_GPU`). Run it with `\| sudo sh`. |

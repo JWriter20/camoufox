@@ -7,6 +7,7 @@ import platform
 import shutil
 import threading
 from functools import wraps
+from inspect import Parameter, signature
 from os import environ
 from os.path import abspath
 from pathlib import Path
@@ -18,7 +19,10 @@ import orjson
 from typing_extensions import TypeAlias
 from ua_parser import user_agent_parser
 
+from camoucore.passthrough import check_passthrough, warn_passthrough
+
 from . import driver_defaults
+from .defaults import PRODUCT, with_defaults
 from .addons import DefaultAddons, add_default_addons, confirm_paths
 from .display import has_display, largest_display
 from .display_profile import DisplayProfileOption, apply_display_profile
@@ -53,13 +57,16 @@ from .pkgman import (
     warn_if_package_outdated,
 )
 from .gpudisplay import GPU_PREFS, GpuDisplay, async_prove_gpu, prove_gpu, select_gpu
-from .virtdisplay import VirtualDisplay
+from .virtdisplay import SCREEN_ENV_VAR, VirtualDisplay
 from platformdirs import user_cache_dir
 from ._warnings import WARNINGS_DATA, FallbackWarning, LeakWarning, _warn_from_caller
 from .host_rendering import Gpu, add_canvas_placeholder, has_canvas_placeholder, host_gpu, set_webgpu
 from .webgl import firefox_gpus, sample_webgl_for_screen, webgl_for_gpu
 
 ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
+
+# Xvfb geometry for a passthrough launch on headless='virtual' (start_virtual_display).
+PASSTHROUGH_SCREEN = '1920x1080x24'
 
 # Camoufox preferences to cache previous pages and requests
 CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
@@ -338,6 +345,7 @@ def get_env_vars(
     config_map: Dict[str, str],
     user_agent_os: str,
     path: Optional[Path] = None,
+    fontconfig: bool = True,
 ) -> Dict[str, Union[str, float, bool]]:
     """
     Gets a dictionary of environment variables for Camoufox.
@@ -346,7 +354,8 @@ def get_env_vars(
     fontconfig is read from beside that binary rather than from the managed
     install, the same way _load_properties() already treats properties.json:
     a caller running their own build should not be resolved against, or made
-    to download, a different one.
+    to download, a different one. `fontconfig=False` leaves the host's own
+    fontconfig, for a passthrough launch.
     """
     env_vars: Dict[str, Union[str, float, bool]] = {}
     try:
@@ -359,7 +368,7 @@ def get_env_vars(
     for i in range(0, len(config_str), chunk_size):
         env_vars[f"CAMOU_CONFIG_{(i // chunk_size) + 1}"] = config_str[i : i + chunk_size]
 
-    if OS_NAME == 'lin':
+    if OS_NAME == 'lin' and fontconfig:
         # https://github.com/coryking/camoufox/commit/f21eeb2850a74cc104fb57e17e0a2fa27b7a2a28
         # Thanks @coryking
         # The fontconfig directories are named for the OS ('linux'), not its key ('lin').
@@ -1097,6 +1106,24 @@ def persistent_context_options(from_options: Dict[str, Any], no_viewport_default
     }
 
 
+def passthrough_context_options(
+    preset: Any, os: Any, ff_version: Any, webrtc_ip: Any,
+    proxy: Optional[Dict[str, str]], geolocation: Optional[Dict[str, float]], context_kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    """NewContext()'s new_context() options on a passthrough browser, whose
+    contexts present this machine: no identity, and no exit lookup for a proxy."""
+    identity = [name for name, value in (
+        ('preset', preset), ('os', os), ('ff_version', ff_version), ('webrtc_ip', webrtc_ip)
+    ) if value is not None]
+    if identity:
+        raise ValueError(
+            f'This browser was launched with passthrough=True, so its contexts present this machine: '
+            f'pass no {", ".join(identity)}.'
+        )
+    extra = {name: value for name, value in (('proxy', proxy), ('geolocation', geolocation)) if value is not None}
+    return {**context_kwargs, **extra}
+
+
 def attach_socks5_auth(target: Any) -> Any:
     """
     Let new_context()/new_page() of `target` take a SOCKS5 proxy with a username
@@ -1557,7 +1584,10 @@ def start_virtual_display(
     elif gpu is not None or require_gpu is not None:
         raise ValueError("gpu and require_gpu apply to headless='virtual-gpu' only")
     elif headless == 'virtual':
-        display = VirtualDisplay(debug=debug)
+        # A passthrough browser reports the display's own size, so its display is a
+        # common monitor rather than the 1x1 root an injected screen hides.
+        screen = PASSTHROUGH_SCREEN if kwargs.get('passthrough') and not environ.get(SCREEN_ENV_VAR) else None
+        display = VirtualDisplay(debug=debug, screen=screen)
     else:
         return None, headless
     kwargs['virtual_display'] = display.get()
@@ -1662,7 +1692,113 @@ def _release_lease_on_failure(build: Any) -> Any:
     return wrapper
 
 
+def _apply_defaults(build: Any) -> Any:
+    """Fill the options the caller left unset from the defaults file."""
+    names = [p.name for p in signature(build).parameters.values() if p.kind is Parameter.KEYWORD_ONLY]
+
+    @wraps(build)
+    def wrapper(**kwargs: Any) -> Any:
+        return build(**with_defaults(kwargs, names))
+
+    return wrapper
+
+
 _OS_CODE = {"windows": "win", "macos": "mac", "linux": "lin"}
+
+
+def _passthrough_options(
+    *,
+    browser_binary: str,
+    executable_path: Optional[Path],
+    proxy_wire: Any,
+    pro_key: Optional[str],
+    proxy: Optional[Dict[str, str]],
+    proxy_dns: Optional[str],
+    proxy_optimistic_data: Optional[bool],
+    addons: List[str],
+    exclude_addons: Optional[List[DefaultAddons]],
+    config: Dict[str, Any],
+    firefox_user_prefs: Dict[str, Any],
+    user_pref_keys: set,
+    env: Dict[str, Union[str, float, bool]],
+    args: List[str],
+    headless: Any,
+    humanize: HumanizeSetting,
+    main_world_eval: Optional[bool],
+    allow_addon_new_tab: Optional[bool],
+    block_images: Optional[bool],
+    block_webrtc: Optional[bool],
+    block_webgl: Optional[bool],
+    disable_coop: Optional[bool],
+    enable_cache: Optional[bool],
+    i_know_what_im_doing: bool,
+    debug: Optional[bool],
+    launch_options: Dict[str, Any],
+) -> Dict[str, Any]:
+    """launch_options() for passthrough=True: the behaviour options, and no
+    identity. The browser gets a config of switches only (addons, main world,
+    addon tabs) and the host's own fontconfig, so every value a page reads is
+    this machine's."""
+    if proxy_wire is not None:
+        if _HELD.proxy is None:
+            _HELD.proxy = ProxySession(proxy_wire, pro_key)
+        proxy = _HELD.proxy.proxy()
+    warn_passthrough(PRODUCT, proxy, i_know_what_im_doing)
+    if proxy and proxy_carries_no_udp(str(proxy.get('server', ''))):
+        LeakWarning.warn('proxy_http_no_udp', i_know_what_im_doing)
+    apply_proxy_dns(proxy_dns, proxy, config, firefox_user_prefs, exit_looked_up=False)
+    apply_proxy_optimistic_data(proxy_optimistic_data, proxy, firefox_user_prefs)
+
+    add_default_addons(addons, exclude_addons, browser_binary)
+    if addons:
+        confirm_paths(addons)
+        config['addons'] = addons
+    normalize_humanize(humanize)
+    if main_world_eval:
+        config['allowMainWorld'] = True
+    if allow_addon_new_tab:
+        config['allowAddonNewtab'] = True
+
+    if block_images:
+        LeakWarning.warn('block_images', i_know_what_im_doing)
+    if disable_coop:
+        LeakWarning.warn('disable_coop', i_know_what_im_doing)
+    for on, pref, stock, toggled in (
+        (block_images, 'permissions.default.image', 1, 2),
+        (block_webrtc, 'media.peerconnection.enabled', True, False),
+        (disable_coop, 'browser.tabs.remote.useCrossOriginOpenerPolicy', True, False),
+    ):
+        set_toggle_pref(firefox_user_prefs, pref, bool(on), stock, toggled, launch_options.get('user_data_dir'))
+    if block_webgl:
+        firefox_user_prefs['webgl.disabled'] = True
+        LeakWarning.warn('block_webgl', i_know_what_im_doing)
+    if enable_cache:
+        merge_into(firefox_user_prefs, CACHE_PREFS)
+    if debug:
+        print('[DEBUG] Config:')
+        pprint(config)
+
+    apply_launch_rules(OS_NAME, config, firefox_user_prefs, user_pref_keys, env, path=executable_path)
+    warn_if_executable_predates_playwright(executable_path)
+    validate_config(config, path=executable_path)
+
+    proxy, proxy_auth = socks5_auth(proxy)
+    result = {
+        "executable_path": browser_binary,
+        "args": args,
+        "env": {
+            **get_env_vars(config, OS_NAME, path=executable_path, fontconfig=False),
+            **get_pref_env_vars(firefox_user_prefs),
+            **(proxy_auth_env(proxy_auth) if proxy_auth else {}),
+            **env,
+        },
+        "firefox_user_prefs": firefox_user_prefs,
+        "headless": headless,
+        **launch_options,
+    }
+    if proxy is not None:
+        result["proxy"] = proxy
+    return result
 
 
 def _firefox_version(executable_path: Path) -> str:
@@ -1670,6 +1806,7 @@ def _firefox_version(executable_path: Path) -> str:
     return resolve_verstr(executable_path).split("-", 1)[0]
 
 
+@_apply_defaults
 @_release_lease_on_failure
 def launch_options(
     *,
@@ -1718,6 +1855,7 @@ def launch_options(
     farm_gpu: Optional[Literal[False]] = None,
     pool_profile: Optional[str] = None,
     display_profile: DisplayProfileOption = None,
+    passthrough: Optional[bool] = None,
     **launch_options: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
@@ -1867,6 +2005,12 @@ def launch_options(
             keeps the browser's own (built-in sRGB on a host without one). Default: an
             identity of another OS draws one from display-profiles.json for its OS and
             screen; an identity of the host's OS uses the host display's, as stock does.
+        passthrough (Optional[bool]):
+            Launch the browser as this machine's own: no identity is drawn or sent,
+            so pages read this machine's user agent, screen, GPU, fonts, timezone and
+            languages. Behaviour options (proxy, headless, addons, humanize, block_*)
+            still apply; an option that sets an identity raises ValueError, and so
+            does a Camoufox Pro build, which launches with its lease's identity.
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
             The pair must be one fpgen has recorded from Firefox on `os`
@@ -1899,6 +2043,16 @@ def launch_options(
         **launch_options (Dict[str, Any]):
             Additional Firefox launch options.
     """
+    if passthrough:
+        # Before anything is downloaded or leased: the caller asked for two launches at once.
+        check_passthrough(PRODUCT, {
+            'config': config, 'os': os, 'fingerprint': fingerprint, 'fingerprint_preset': fingerprint_preset,
+            'webgl_config': webgl_config, 'cpu': cpu, 'screen': screen, 'window': window, 'fonts': fonts,
+            'custom_fonts_only': custom_fonts_only, 'locale': locale, 'geoip': geoip,
+            'canvas_noise': canvas_noise, 'pin_cpu_cores': pin_cpu_cores, 'ff_version': ff_version,
+        })
+        if display_profile not in (None, False):
+            raise ValueError('passthrough=True keeps the display\'s own colour profile: pass no display_profile.')
     ensure_browser_profile_dir(env)
 
     # The launch fills these in, so it works on copies: a caller's mapping
@@ -2033,6 +2187,23 @@ def launch_options(
         env['GDK_BACKEND'] = 'x11'
         env.pop('WAYLAND_DISPLAY', None)
         env["MOZ_ENABLE_WAYLAND"] = "0"
+
+    if passthrough:
+        if leased:
+            raise ValueError(
+                'passthrough=True needs a standard build: a Camoufox Pro build launches with the identity '
+                'its lease grants.'
+            )
+        return _passthrough_options(
+            browser_binary=browser_binary, executable_path=executable_path, proxy_wire=proxy_wire,
+            pro_key=pro_key, proxy=proxy, proxy_dns=proxy_dns, proxy_optimistic_data=proxy_optimistic_data,
+            addons=addons, exclude_addons=exclude_addons, config=config, firefox_user_prefs=firefox_user_prefs,
+            user_pref_keys=_user_pref_keys, env=env, args=args, headless=headless, humanize=humanize,
+            main_world_eval=main_world_eval, allow_addon_new_tab=allow_addon_new_tab,
+            block_images=block_images, block_webrtc=block_webrtc, block_webgl=block_webgl,
+            disable_coop=disable_coop, enable_cache=enable_cache, i_know_what_im_doing=i_know_what_im_doing,
+            debug=debug, launch_options=launch_options,
+        )
 
     # Warn the user for manual config settings
     if not i_know_what_im_doing:

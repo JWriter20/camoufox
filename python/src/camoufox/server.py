@@ -12,6 +12,7 @@ import orjson
 from playwright._impl._driver import compute_driver_executable
 
 from camoufox import pro
+from camoufox.defaults import with_defaults
 from camoufox.pkgman import LOCAL_DATA
 from camoufox.gpudisplay import GpuDisplay, prove_gpu
 from camoufox.humanize import driven_channels
@@ -60,6 +61,9 @@ def launch_server(**kwargs) -> NoReturn:
     `BrowserContext` over a websocket endpoint. Reject those options up front
     rather than accepting them and silently launching a throwaway profile.
     """
+    kwargs = with_defaults(kwargs)
+    # The client drives the pages, so this process has nothing to report on.
+    kwargs.pop('telemetry', None)
     # A Camoufox Pro profile launches as a persistent context too.
     for unsupported in ('persistent_context', 'user_data_dir', 'profile'):
         if kwargs.get(unsupported):

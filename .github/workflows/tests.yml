@@ -119,6 +119,8 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
+  # CI's launches would otherwise report anti-bot outcomes as if they were users'.
+  CAMOUFOX_TELEMETRY: "0"
   CI_WORK_DIR: ${{ github.workspace }}/.ci-work
   CI_RESULTS_DIR: ${{ github.workspace }}/.ci-work/results
 
