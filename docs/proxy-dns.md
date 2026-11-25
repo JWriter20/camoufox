@@ -222,8 +222,12 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
   variation, over the answers so far. Nothing is read from the SOCKS
   handshake for this: a proxy whose endpoint runs on the browser's machine
   and forwards to the exit answers the greeting at once, however far the exit
-  is. An answer that is lost, or slower than that limit, is given up as stock
-  gives it up, 25 ms later: the request goes over TCP without the record
+  is. The time the clock has stood still is not given back when the limit
+  falls, as it does when answers speed up while one is still outstanding:
+  the clock would jump ahead by it, and the race would start TCP beside a
+  QUIC attempt that a Firefox at the exit is still waiting for. An answer
+  that is lost, or slower than that limit, is given up as stock gives it up,
+  25 ms later: the request goes over TCP without the record
   ([`connections-are-raced-as-release-races-them`](../ci/tribal-rules.yml)).
 - **uBlock Origin's "Disable pre-fetching" asks nothing of the resolver.** It
   sets `network.http.speculative-parallel-limit` to 0. With Happy Eyeballs a

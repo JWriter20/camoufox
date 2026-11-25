@@ -1243,6 +1243,9 @@ rules:
       - "Firefox 160, netwerk/dns/TRR.cpp, ReturnData: every DoH answer has the time between its request and the end of its response (trrFetchDurationNetworkOnly), on a connection that is already open. RFC 6298 section 2: an answer is late after the smoothed time plus four times its variation"
       - "the guard did not see it: its proxy answered the greeting from 50 ms away, and its HTTPS records named the URL's port, where a request without its record still found HTTP/1.1. With the greeting answered at once, the records (alpn h3,h2) naming another port and the page among the site's names, 2026-11-23: 6 of 8 checks before the change (behind the proxy every request, the page's first, over TCP to the URL's port, and at 100 ms seven QUIC connections that carried nothing), 8 of 8 after in 5 of 5 runs; stock Firefox 160.0.1 and Camoufox with no proxy see the same connections on it, 2 of 2 runs each at 4 and 100 ms"
       - "the HTTPS record guard with the greeting answered at once, before and after the change: an origin deaf to QUIC sees two TCP connections behind the proxy and one with none (5 of 7 checks), because a TCP attempt's cost is measured on the greeting"
+      - "the clock first gave back time it had counted as lost when fast DoH answers lowered the timeout mid-lookup. Behind a remote SOCKS5 exit, 2026-11-25: 115 of 305 races saw it jump ahead (median 41 ms, at most 169 ms), 18 of them followed by a TCP connection beside a QUIC attempt still waiting; none once the lost time is kept"
+      - "the HTTPS record guard holding a QUIC association while a burst of fast answers lowers the timeout, run alternately on an idle machine, same day: 9 of 10 checks before the change in 5 of 5 runs (a TCP connection started before the association), 10 of 10 after in 5 of 5"
+      - "the same exit against stock Firefox, uBlock Origin loaded, three launch variants three times each: 44 differing keys in the races' requests, QUIC and TCP connections before the change, 34, 34 and 18 in three runs after; an exit that resolves names, both builds side by side: 664 differing keys before, 624 after (TCP 52 to 32)"
     rationale: >-
       Which connections an origin sees, and which names a resolver is asked,
       are decided by the connection race, and release Firefox races with
@@ -1262,7 +1265,10 @@ rules:
       the time after which the resolver's answers are late: RFC 6298's
       timeout over the answer times measured on the DoH requests
       themselves, the smoothed time plus four times its variation
-      (TRRService::AnswerTimeout). An answer that is lost, or slower than
+      (TRRService::AnswerTimeout). Time the clock has stood still is kept
+      when that timeout falls while an answer is outstanding: given back,
+      it moves the clock ahead at once and starts TCP beside an attempt
+      still in progress. An answer that is lost, or slower than
       that, is given up as stock gives it up, 25 ms later, and the request
       goes over TCP without its record. Do not bound that wait by a round
       trip to the proxy, and do not measure anything on the SOCKS greeting

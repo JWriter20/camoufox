@@ -67,6 +67,10 @@ ZONE = "https-record.test"
 # time Firefox gives QUIC before it starts TCP.
 DELAY = 0.05
 SLOW_ASSOCIATE = 1.0
+# How long the resolver takes to answer before its answers speed up, and how
+# many names are then looked up at once.
+SLOW_ANSWER = 0.6
+BURST = 8
 
 FETCH = """async (urls) => {
   for (let round = 0; round < 2; round++) {
@@ -147,7 +151,7 @@ class Resolver:
 
     def __init__(self, cert: str, key: str) -> None:
         self.ports = {}  # name -> the port its HTTPS record names
-        self.delay = 0  # how long an answer takes
+        self.delay = 0  # how long an answer takes, unless `wait` is replaced
         self.http2 = False  # answers over HTTP/2 (serve_http2)
         self.alpn = (b"h3",)  # what the HTTPS record offers
         self.asked = set()  # (name, qtype) of every question
@@ -160,7 +164,11 @@ class Resolver:
         self.server = await asyncio.start_server(self.serve, ADDRESS, 0, ssl=self._tls)
         return f"https://{ADDRESS}:{self.server.sockets[0].getsockname()[1]}/dns-query"
 
-    def answer(self, query: bytes) -> bytes:
+    async def wait(self, name: str, qtype: int) -> None:
+        """What the answer to a question waits for."""
+        await asyncio.sleep(self.delay)
+
+    async def answer(self, query: bytes) -> bytes:
         at, labels = 12, []
         while query[at]:
             labels.append(query[at + 1:at + 1 + query[at]].decode().lower())
@@ -176,6 +184,7 @@ class Resolver:
             alpn = b"".join(bytes((len(protocol),)) + protocol for protocol in self.alpn)
             record = (struct.pack("!H", 1) + b"\0" + struct.pack("!HH", 1, len(alpn)) + alpn
                       + struct.pack("!HHH", 3, 2, port))
+        await self.wait(".".join(labels), qtype)
         if record:
             record = b"\xc0\x0c" + struct.pack("!HHIH", qtype, 1, 60, len(record)) + record
         return query[:2] + struct.pack("!HHHHH", 0x8180, 1, 1 if record else 0, 0, 0) + query[12:at + 5] + record
@@ -193,8 +202,7 @@ class Resolver:
                 if not query:
                     encoded = line.split()[1].split(b"dns=")[1].split(b"&")[0]
                     query = base64.urlsafe_b64decode(encoded + b"=" * (-len(encoded) % 4))
-                answer = self.answer(query)
-                await asyncio.sleep(self.delay)
+                answer = await self.answer(query)
                 writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\n"
                              b"Content-Length: %d\r\n\r\n%s" % (len(answer), answer))
                 await writer.drain()
@@ -212,8 +220,7 @@ class Resolver:
             writer.write(len(payload).to_bytes(3, "big") + bytes((kind, flags)) + struct.pack("!I", stream) + payload)
 
         async def reply(stream: int, query: bytes) -> None:
-            answer = self.answer(query)
-            await asyncio.sleep(self.delay)
+            answer = await self.answer(query)
             if writer.is_closing():
                 return
             kind = b"application/dns-message"
@@ -257,9 +264,10 @@ class DistantRelay(relayed.Relay):
 class DistantProxy(relayed.Socks5Proxy):
     """The Alt-Svc guard's proxy, DELAY away: every reply, every byte it
     pipes and every datagram takes that long each way. `associate` is how
-    long it takes to grant a UDP ASSOCIATE. A `local` one has its endpoint
-    on the browser's machine, which forwards to the exit: the greeting is
-    answered at once, and everything after it is DELAY away."""
+    long it takes to grant a UDP ASSOCIATE, or a coroutine function the grant
+    waits for. A `local` one has its endpoint on the browser's machine, which
+    forwards to the exit: the greeting is answered at once, and everything
+    after it is DELAY away."""
 
     def __init__(self, associate: float = 0, local: bool = False) -> None:
         super().__init__(ADDRESS)
@@ -318,7 +326,7 @@ class DistantProxy(relayed.Socks5Proxy):
             writer.write(b"\x05\x00\x00\x01" + bytes(6))
             await asyncio.gather(up, delayed(up_reader, writer))
             return
-        await asyncio.sleep(self.associate)
+        await (self.associate() if callable(self.associate) else asyncio.sleep(self.associate))
         _, relay = await loop.create_datagram_endpoint(lambda: DistantRelay(self, writer), local_addr=("127.0.0.1", 0))
         relay.exit, _ = await loop.create_datagram_endpoint(lambda: relayed.Exit(relay), local_addr=(ADDRESS, 0))
         self.relays.append(relay)
@@ -368,7 +376,7 @@ async def main() -> int:
             proxy_optimistic_data=optimistic or None, exclude_addons=None if addons else [DefaultAddons.UBO],
             firefox_user_prefs={
                 "network.trr.mode": 3, "network.trr.uri": await resolver.start(),
-                "network.trr.confirmationNS": "skip",
+                "network.trr.confirmationNS": "skip", "network.trr.useGET": False,
                 "network.http.http3.disable_when_third_party_roots_found": False, "marionette.port": port},
         ).__aenter__()
         def trust_authority() -> None:
@@ -418,6 +426,68 @@ async def main() -> int:
                 closing.close()
         return (f"_{socket_origin.port}._https.{socket_origin.name}", 65) in resolver.asked
 
+    async def answers_speed_up() -> dict:
+        """A fetch from an origin whose IPv6 address is still being asked for
+        while its QUIC connection waits for the association. The resolver's
+        answers, slow until then, become fast meanwhile, which shortens how
+        long a lookup is taken to have stood still at the exit; the time the
+        target's lookup was already counted as lost must not be given back.
+        The proxy grants the association SLOW_ASSOCIATE after the fast answers
+        are in: what it saw before."""
+        resolver = Resolver(cert, key)
+        resolver.http2 = True
+        target, other = await origin(resolver, False), await origin(resolver, False)
+        slow = [f"w{i}.{ZONE}" for i in range(4)]
+        burst = [f"b{i}.{ZONE}" for i in range(BURST)]
+        for name in slow + burst:
+            resolver.ports[name] = other.port
+        associating, burst_done, granted = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        answered, held, associations = set(), [], []
+
+        async def wait(name: str, qtype: int) -> None:
+            if name == target.name and qtype == 28:
+                held.append(name)
+                await granted.wait()
+            elif name in slow:
+                await asyncio.sleep(SLOW_ANSWER)
+            elif name in burst and qtype in (1, 65):
+                answered.add((name, qtype))
+                if len(answered) == 2 * BURST:
+                    burst_done.set()
+
+        async def associate() -> None:
+            if not associating.is_set() and not held:  # the slow names' connections
+                return
+            associations.append(None)
+            if len(associations) > 1:
+                return await granted.wait()
+            associating.set()
+            await burst_done.wait()
+            await asyncio.sleep(SLOW_ASSOCIATE)
+            seen["tcp before the association"] = sum(port == target.port for _, _, port in proxy.connects)
+            seen["its IPv6 address was still asked for"] = bool(held)
+            granted.set()
+
+        resolver.wait = wait
+        proxy = DistantProxy(associate=associate)
+        seen = {}
+        browser = await launch(resolver, proxy, addons=False)
+        page = await (await browser.new_context()).new_page()
+        fetch = "names => names.map(name => fetch(`https://${name}/`, {mode: 'no-cors'}).catch(() => 0))"
+        try:
+            await page.evaluate(f"names => Promise.all(({fetch})(names))", slow)
+            await page.evaluate("url => { window.fetched = fetch(url, {mode: 'no-cors'}).catch(e => String(e)); }",
+                                target.url)
+            await asyncio.wait_for(associating.wait(), 15)
+            await page.evaluate(f"names => {{ ({fetch})(names); }}", burst)
+            await asyncio.wait_for(granted.wait(), 15)
+            await page.evaluate("() => window.fetched")
+        finally:
+            await browser.close()
+            for closing in (target, other, resolver, proxy):
+                closing.close()
+        return seen
+
     checks = []
     address = PublicAddress()
     try:
@@ -435,6 +505,10 @@ async def main() -> int:
             if not deaf:
                 checks.append((f"{what}, a proxy slow to grant the association: the same connections",
                                (seen := await visit(deaf, DistantProxy(associate=SLOW_ASSOCIATE), True)) == direct, seen))
+        checks.append(("answers that speed up while a QUIC connection waits for its association: no TCP "
+                       "connection is started meanwhile",
+                       (seen := await answers_speed_up()) == {"tcp before the association": 0,
+                                                              "its IPv6 address was still asked for": True}, seen))
         direct = await socket_record()
         checks.append(("a WebSocket, no proxy: its HTTPS record is asked (the guard's reference)", direct, direct))
         checks.append(("a WebSocket, behind the proxy: its HTTPS record is asked, as with no proxy",

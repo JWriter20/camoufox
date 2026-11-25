@@ -900,7 +900,7 @@ index 869dc9799f..69705328bc 100644
      mState = TransportSetup::TransportSetupState::CONNECTING;
      rv = SetupStreams(dnsAndSock);
 diff --git a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
-index e499817a90..bea10d9292 100644
+index e499817a90..62ef1e7487 100644
 --- a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
 +++ b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
 @@ -15,6 +15,7 @@
@@ -979,20 +979,23 @@ index e499817a90..bea10d9292 100644
    }
  
    if (mTimer) {
-@@ -1875,6 +1899,23 @@ void HappyEyeballsConnectionAttempt::Transition(State aNext,
+@@ -1875,6 +1899,26 @@ void HappyEyeballsConnectionAttempt::Transition(State aNext,
  
  void HappyEyeballsConnectionAttempt::PrintDiagnostics(nsCString& log) {}
  
-+TimeDuration HappyEyeballsConnectionAttempt::DnsLost() const {
++TimeDuration HappyEyeballsConnectionAttempt::DnsLost() {
 +  nsProxyInfo* proxy = mConnInfo->ProxyInfo();
 +  if (mDnsAsked.IsNull() || !proxy || !proxy->ConnectsAsDirect()) {
 +    return mDnsLost;
 +  }
-+  return mDnsLost +
-+         std::min(TimeStamp::Now() - mDnsAsked, TRRService::AnswerTimeout());
++  // What has been counted as lost is not given back when the answer timeout
++  // falls, or the clock would jump forward by it.
++  mDnsWaited = std::max(mDnsWaited, std::min(TimeStamp::Now() - mDnsAsked,
++                                             TRRService::AnswerTimeout()));
++  return mDnsLost + mDnsWaited;
 +}
 +
-+TimeDuration HappyEyeballsConnectionAttempt::RelayLag() const {
++TimeDuration HappyEyeballsConnectionAttempt::RelayLag() {
 +  TimeDuration lag = DnsLost();
 +  for (const auto& establisher : mConnectionEstablisherTable.Values()) {
 +    lag += establisher->ProxyLost();
@@ -1003,7 +1006,7 @@ index e499817a90..bea10d9292 100644
  uint32_t HappyEyeballsConnectionAttempt::UnconnectedUDPConnsLength() const {
    uint32_t len = 0;
    for (auto iter = mConnectionEstablisherTable.ConstIter(); !iter.Done();
-@@ -1958,6 +1999,14 @@ HappyEyeballsConnectionAttempt::OnLookupComplete(nsICancelable* request,
+@@ -1958,6 +2002,15 @@ HappyEyeballsConnectionAttempt::OnLookupComplete(nsICancelable* request,
    happy_eyeballs::DnsRecordType type = info->Type();
    mDnsRequestTable.Remove(request);
  
@@ -1013,13 +1016,14 @@ index e499817a90..bea10d9292 100644
 +  if (mDnsRequestTable.IsEmpty()) {
 +    mDnsLost = DnsLost();
 +    mDnsAsked = TimeStamp();
++    mDnsWaited = TimeDuration();
 +  }
 +
    switch (type) {
      case happy_eyeballs::DnsRecordType::A:
        return OnARecord(rec, status, id);
 diff --git a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
-index 1bf8bf81e7..36ed9252de 100644
+index 1bf8bf81e7..0153741de0 100644
 --- a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
 +++ b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
 @@ -198,6 +198,28 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
@@ -1034,13 +1038,13 @@ index 1bf8bf81e7..36ed9252de 100644
 +  // the state machine's clock is set back by. A lookup crosses the proxy as
 +  // well (DnsLost), or the wait for the HTTPS record would run out on an
 +  // answer a Firefox there would have.
-+  TimeDuration RelayLag() const;
++  TimeDuration RelayLag();
 +  // Camoufox: the time lookups have lost to a proxy that connects as direct.
 +  // A Firefox at the exit has its resolver beside it, so the clock stands
 +  // still while an answer is outstanding, for as long as the resolver's
 +  // answers have been taking through the proxy (TRRService::AnswerTimeout).
 +  // An answer later than that is waited for as stock waits for any.
-+  TimeDuration DnsLost() const;
++  TimeDuration DnsLost();
 +  // Camoufox: closes an attempt that lost the race. Behind a SOCKS5 proxy it
 +  // reached the origin later than it was started by what the proxy cost it
 +  // (ConnectionEstablisher::ProxyLost), so it is closed that much later: the
@@ -1051,13 +1055,14 @@ index 1bf8bf81e7..36ed9252de 100644
    // Report the domain lookup span: domainLookupStart is the first DNS query
    // (any type), domainLookupEnd is the start of the first connection attempt.
    void DnsLookupTimings(TimeStamp& aStart, TimeStamp& aEnd) const;
-@@ -305,6 +327,10 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
+@@ -305,6 +327,11 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
  
    nsRefPtrHashtable<nsPtrHashKey<nsICancelable>, DnsRequestInfo>
        mDnsRequestTable;
-+  // Camoufox: when the stretch of lookups under way began, and what the
-+  // finished ones lost (DnsLost).
++  // Camoufox: when the stretch of lookups under way began, what it has lost
++  // so far, and what the finished ones lost (DnsLost).
 +  TimeStamp mDnsAsked;
++  TimeDuration mDnsWaited;
 +  TimeDuration mDnsLost;
  
    nsRefPtrHashtable<nsUint64HashKey, ConnectionEstablisher>
