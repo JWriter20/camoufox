@@ -1,21 +1,24 @@
 diff --git a/dom/base/nsContentUtils.cpp b/dom/base/nsContentUtils.cpp
-index 0593a34979..7521e855a9 100644
+index 0593a34979..1764df18b2 100644
 --- a/dom/base/nsContentUtils.cpp
 +++ b/dom/base/nsContentUtils.cpp
-@@ -10584,6 +10584,13 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
-       aOptions.mIsDOMEventSynthesized;
-   mouseOrPointerEvent.mExitFrom = std::move(exitFrom);
+@@ -10586,7 +10586,15 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
    mouseOrPointerEvent.mJugglerEventId = aMouseEventData.mJugglerEventId;
-+  // Camoufox: a move Juggler delivers late (a Windows drag's deferred motion,
-+  // PageHandler) is stamped when it was made, as Windows stamps a queued
-+  // WM_MOUSEMOVE with its message time.
-+  if (aMouseEventData.mJugglerAgeMs > 0) {
-+    mouseOrPointerEvent.mTimeStamp -=
-+        TimeDuration::FromMilliseconds(aMouseEventData.mJugglerAgeMs);
-+  }
    mouseOrPointerEvent.convertToPointer = aOptions.mConvertToPointer;
    mouseOrPointerEvent.mCallbackId = notifier.SaveCallback();
-   mouseOrPointerEvent.mTimeStamp = MaskConfig::InputTimeStamp();
+-  mouseOrPointerEvent.mTimeStamp = MaskConfig::InputTimeStamp();
++  // Camoufox: a move Juggler delivers late (a Windows drag's deferred motion,
++  // PageHandler) is stamped when it was made, as Windows stamps a queued
++  // WM_MOUSEMOVE with its message time. The age goes into the input stamp
++  // itself: subtracting it before InputTimeStamp() replaced the stamp lost it.
++  mouseOrPointerEvent.mTimeStamp = MaskConfig::InputTimeStamp(
++      TimeStamp::Now() -
++      TimeDuration::FromMilliseconds(aMouseEventData.mJugglerAgeMs > 0
++                                         ? aMouseEventData.mJugglerAgeMs
++                                         : 0));
+ 
+   nsPresContext* presContext = aPresShell->GetPresContext();
+   if (!presContext) {
 diff --git a/dom/base/nsDOMWindowUtils.cpp b/dom/base/nsDOMWindowUtils.cpp
 index 8ff27b597d..95d663afb6 100644
 --- a/dom/base/nsDOMWindowUtils.cpp

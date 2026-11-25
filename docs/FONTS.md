@@ -270,7 +270,10 @@ Linux: generics resolve as a stock Ubuntu does (`sans-serif` → Noto Sans,
 `serif` → Noto Serif, `monospace` → DejaVu Sans Mono, `cursive` → Z003),
 `hintstyle` is `hintslight`, and the stock metric aliases (30-metric-aliases),
 49-sansserif, urw-base35 and the non-Latin rule files are merged in stock
-`conf.d` order. Windows: `sans-serif` → Arial, `serif` → Times New Roman,
+`conf.d` order. Every name those rewrite to a bundled face (`Century` → C059,
+`ITC Bookman` → URW Bookman, the `TeX Gyre` names, ...) renders, so it is in
+`gen-fonts-json.py` ALIASES and claimed with its target
+(`python/tests/test_fontconfig_alias_claims.py`). Windows: `sans-serif` → Arial, `serif` → Times New Roman,
 `monospace` → Consolas, `cursive` → Comic Sans MS, plus `MS Shell Dlg 2 ->
 Tahoma`, the `Sitka` / `Segoe UI Variable` scan-time instance families and the
 alias block above. macOS: Helvetica / Times / Menlo / Apple Chancery / Zapfino.
