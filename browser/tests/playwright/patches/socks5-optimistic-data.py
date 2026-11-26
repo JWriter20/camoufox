@@ -27,7 +27,10 @@ What PASS means, for a launch proxy given addresses and one given names:
     * the ClientHello is the same size and lists the same extensions either way;
     * a plain HTTP connection sends nothing before the reply, with or without;
     * a CONNECT the proxy refuses fails the navigation with the same error,
-      with or without, and is asked no more often with;
+      with or without, and is asked no more often with (less often when the
+      proxy is given names: a connection still waiting for the reply opens a
+      backup after network.http.connection-retry-timeout, and with the option
+      none is waiting);
     * a proxy that discards what it received before its reply leaves the TLS
       handshake unanswered: the navigation does not load, waits at least the
       handshake's own timeout, and no connection is tried without the bytes.
@@ -159,8 +162,9 @@ class Socks5Proxy:
     """A SOCKS5 proxy on loopback that asks for a username and password, takes
     `host` for every destination, and holds its reply to CONNECT until the
     browser's ClientHello is whole or HOLD_SECONDS pass. `refuse` and `discard`
-    are destination ports: a CONNECT to the first is refused, and what came
-    ahead of the reply to the second is thrown away."""
+    are destination ports: a CONNECT to the first is refused once HOLD_SECONDS
+    have passed, and what came ahead of the reply to the second is thrown
+    away."""
 
     def __init__(self, host: str, origins: list, refuse: int = 0, discard: int = 0) -> None:
         self.host, self.refuse, self.discard = host, refuse, discard
@@ -214,6 +218,7 @@ class Socks5Proxy:
             return data
 
         # Everything the browser sends before this proxy has replied.
+        held = asyncio.get_running_loop().time() + HOLD_SECONDS
         reading = asyncio.ensure_future(first_flight())
         done, _ = await asyncio.wait([reading], timeout=HOLD_SECONDS)
         early = reading.result() if done else b""
@@ -222,6 +227,11 @@ class Socks5Proxy:
 
         origin = self.origins.get(port)
         if port == self.refuse:
+            # Refused when the hold is over, with the option or without: a
+            # navigation's request takes a speculative connection still
+            # waiting for its reply, and opens one of its own if they have
+            # all been refused, so an earlier refusal would ask once more.
+            await asyncio.sleep(held - asyncio.get_running_loop().time())
             reading.cancel()
             writer.write(b"\x05\x05\x00\x01" + bytes(6))
             return
