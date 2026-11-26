@@ -215,11 +215,16 @@ association is the one WebRTC uses (`mozilla::net::Socks5UdpAssociation`).
   request). A Firefox at the exit has its resolver beside it; behind the
   proxy the answer has the proxy to cross, the wait ran out, and the request
   went over TCP to the URL's port, with a GREASE ECH extension and no HTTP/3.
-  So the race's clock stands still while an answer is outstanding. The limit
-  is measured on the DoH requests themselves, which are the only thing that
-  crosses the whole path to the resolver: the time after which an answer is
-  late by RFC 6298's rule, the smoothed answer time plus four times its
-  variation, over the answers so far. Nothing is read from the SOCKS
+  So the race's clock stands still while an answer is outstanding. While a
+  query waits to be sent, for a connection to the resolver through the
+  proxy, it stands still for as long as that takes, up to the DoH request's
+  timeout: a page that has had quick answers over an open connection would
+  otherwise count the next query, which has a new connection to make, as
+  late. Once the query is sent, the limit is measured on the DoH requests
+  themselves, which are the only thing that crosses the whole path to the
+  resolver: the time after which an answer is late by RFC 6298's rule, the
+  smoothed answer time plus four times its variation, over the answers so
+  far. Nothing is read from the SOCKS
   handshake for this: a proxy whose endpoint runs on the browser's machine
   and forwards to the exit answers the greeting at once, however far the exit
   is. The time the clock has stood still is not given back when the limit

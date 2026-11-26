@@ -28,6 +28,10 @@ What PASS means:
       and without;
     * a proxy that takes a second to grant the association changes none of
       that;
+    * nor does a lookup that waits for a new connection to the resolver,
+      after the page has learned that its answers come quickly: the clock
+      that decides when TCP starts stands still while a query waits to be
+      sent, as it does while it waits for its answer;
     * an origin that answers nothing over QUIC is still reached over TCP, by
       the connections it sees with no proxy;
     * behind the proxy, a WebSocket's HTTPS record is asked of the resolver
@@ -71,6 +75,8 @@ SLOW_ASSOCIATE = 1.0
 # many names are then looked up at once.
 SLOW_ANSWER = 0.6
 BURST = 8
+# How many rounds of three names a page looks up before the resolver hangs up.
+WARM_ROUNDS = 30
 
 FETCH = """async (urls) => {
   for (let round = 0; round < 2; round++) {
@@ -155,6 +161,7 @@ class Resolver:
         self.http2 = False  # answers over HTTP/2 (serve_http2)
         self.alpn = (b"h3",)  # what the HTTPS record offers
         self.asked = set()  # (name, qtype) of every question
+        self.connections = set()  # the browser's open connections
         self._tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self._tls.load_cert_chain(cert, key)
 
@@ -176,7 +183,8 @@ class Resolver:
         (qtype,) = struct.unpack("!H", query[at + 1:at + 3])
         self.asked.add((".".join(labels), qtype))
         # An HTTPS record for another port than 443 is asked at _port._https.
-        port = self.ports.get(".".join(label for label in labels if not label.startswith("_")))
+        port = self.ports.get(".".join(labels)) or self.ports.get(
+            ".".join(label for label in labels if not label.startswith("_")))
         record = b""
         if port and qtype == 1:
             record = socket.inet_aton(ADDRESS)
@@ -189,7 +197,13 @@ class Resolver:
             record = b"\xc0\x0c" + struct.pack("!HHIH", qtype, 1, 60, len(record)) + record
         return query[:2] + struct.pack("!HHHHH", 0x8180, 1, 1 if record else 0, 0, 0) + query[12:at + 5] + record
 
+    def hang_up(self) -> None:
+        """Closes the browser's connections, as a resolver closes idle ones."""
+        for writer in self.connections:
+            writer.close()
+
     async def serve(self, reader, writer) -> None:
+        self.connections.add(writer)
         try:
             if writer.get_extra_info("ssl_object").selected_alpn_protocol() == "h2":
                 await self.serve_http2(reader, writer)
@@ -209,6 +223,7 @@ class Resolver:
         except (ConnectionError, ssl.SSLError, asyncio.IncompleteReadError):
             pass
         finally:
+            self.connections.discard(writer)
             writer.close()
 
     async def serve_http2(self, reader, writer) -> None:
@@ -243,6 +258,9 @@ class Resolver:
             elif kind == 6 and not flags & 1:
                 frame(6, 1, 0, payload)
             elif kind == 0:
+                if payload:
+                    # Returns the connection's window, or the browser stops sending.
+                    frame(8, 0, 0, struct.pack("!I", len(payload)))
                 bodies[stream] = bodies.get(stream, b"") + payload
                 if flags & 1:
                     replies.add(task := asyncio.ensure_future(reply(stream, bodies.pop(stream))))
@@ -358,14 +376,15 @@ async def main() -> int:
              f".addCertFromBase64('{ca_der}', 'C,,'); return true;")
     serial = iter(range(1000))
 
-    async def origin(resolver: Resolver, deaf: bool) -> Origin:
+    async def origin(resolver: Resolver, deaf: bool, name: str = None) -> Origin:
+        """An origin at a new name, or at another port of `name`."""
         while True:
-            o = Origin(f"n{next(serial)}.{ZONE}", cert, key, deaf)
+            o = Origin(name or f"n{next(serial)}.{ZONE}", cert, key, deaf)
             try:
                 await o.start()
             except OSError:  # the port is free for TCP and taken for UDP
                 continue
-            resolver.ports[o.name] = o.port
+            resolver.ports[f"_{o.port}._https.{name}" if name else o.name] = o.port
             return o
 
     async def launch(resolver: Resolver, proxy: DistantProxy = None, optimistic: bool = False, addons: bool = True):
@@ -392,15 +411,30 @@ async def main() -> int:
         await window.close()
         return browser
 
-    async def visit(deaf: bool, proxy: DistantProxy = None, optimistic: bool = False) -> list:
+    async def visit(deaf: bool, proxy: DistantProxy = None, optimistic: bool = False, hung_up: bool = False) -> list:
         """A navigation to one name and two rounds of fetches from two more:
-        what each of the three origins saw."""
+        what each of the three origins saw. With `hung_up`, the page first
+        fetches from WARM_ROUNDS * 3 other names, the resolver then hangs up,
+        and the second origin is the first's name at another port: its
+        address is known, and its HTTPS record waits for a new connection."""
         resolver = Resolver(cert, key)
-        origins = [await origin(resolver, deaf) for _ in range(3)]
+        resolver.http2 = True
+        first = await origin(resolver, deaf)
+        origins = [first, await origin(resolver, deaf, first.name if hung_up else None), await origin(resolver, deaf)]
         browser = await launch(resolver, proxy, optimistic)
         page = await (await browser.new_context()).new_page()
         try:
             await page.goto(origins[0].url)
+            if hung_up:
+                warm = await origin(resolver, False)
+                names = [f"w{i}.{ZONE}" for i in range(WARM_ROUNDS * 3)]
+                resolver.ports.update(dict.fromkeys(names, warm.port))
+                await page.evaluate("""async urls => { for (let i = 0; i < urls.length; i += 3)
+                    await Promise.all(urls.slice(i, i + 3).map(u => fetch(u, {mode: 'no-cors'}).catch(() => 0))); }""",
+                                    [f"https://{name}:{warm.port}/" for name in names])
+                warm.close()
+                resolver.hang_up()
+                await asyncio.sleep(0.5)
             await page.evaluate(FETCH, [o.url for o in origins[1:]])
             await asyncio.sleep(2)
         finally:
@@ -505,6 +539,13 @@ async def main() -> int:
             if not deaf:
                 checks.append((f"{what}, a proxy slow to grant the association: the same connections",
                                (seen := await visit(deaf, DistantProxy(associate=SLOW_ASSOCIATE), True)) == direct, seen))
+        direct = await visit(True, hung_up=True)
+        checks.append(("an origin deaf to QUIC, after the resolver hangs up, no proxy: the requests are carried "
+                       "over TCP (the guard's reference)",
+                       all(o["tcp carried requests"] and o["quic tried"] for o in direct), direct))
+        checks.append(("an origin deaf to QUIC, after the resolver hangs up on a page that learned its answers "
+                       "are fast, behind the proxy: the same connections",
+                       (seen := await visit(True, DistantProxy(), hung_up=True)) == direct, seen))
         checks.append(("answers that speed up while a QUIC connection waits for its association: no TCP "
                        "connection is started meanwhile",
                        (seen := await answers_speed_up()) == {"tcp before the association": 0,
