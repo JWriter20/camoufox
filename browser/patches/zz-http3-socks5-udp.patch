@@ -596,10 +596,65 @@ index ed81b052e2..fb7f005e4e 100644
  
   protected:
 diff --git a/netwerk/dns/TRR.cpp b/netwerk/dns/TRR.cpp
-index a960b375a0..e973478397 100644
+index a960b375a0..fea243bd92 100644
 --- a/netwerk/dns/TRR.cpp
 +++ b/netwerk/dns/TRR.cpp
-@@ -609,6 +609,7 @@ nsresult TRR::ReturnData(nsIChannel* aChannel) {
+@@ -48,8 +48,39 @@ namespace mozilla {
+ namespace net {
+ 
+ NS_IMPL_ISUPPORTS_INHERITED(TRR, Runnable, nsIStreamListener, nsITimerCallback,
++                            nsIInterfaceRequestor, nsIProgressEventSink,
+                             nsIRunnablePriority)
+ 
++NS_IMETHODIMP
++TRR::GetInterface(const nsIID& aIID, void** aResult) {
++  if (aIID.Equals(NS_GET_IID(nsIProgressEventSink))) {
++    return QueryInterface(aIID, aResult);
++  }
++  return NS_ERROR_NO_INTERFACE;
++}
++
++NS_IMETHODIMP
++TRR::OnStatus(nsIRequest* aRequest, nsresult aStatus,
++              const char16_t* aStatusArg) {
++  if (aStatus == NS_NET_STATUS_SENDING_TO) {
++    Sent();
++  }
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++TRR::OnProgress(nsIRequest* aRequest, int64_t aProgress,
++                int64_t aProgressMax) {
++  return NS_OK;
++}
++
++void TRR::Sent() {
++  if (mWaiting) {
++    mWaiting = false;
++    TRRService::QuerySent();
++  }
++}
++
+ NS_IMETHODIMP
+ TRR::GetPriority(uint32_t* aPriority) {
+   if (StaticPrefs::network_trr_high_priority_events()) {
+@@ -398,10 +429,14 @@ nsresult TRR::SendHTTPRequest() {
+     return rv;
+   }
+ 
++  rv = httpChannel->SetNotificationCallbacks(this);
++  NS_ENSURE_SUCCESS(rv, rv);
+   rv = httpChannel->AsyncOpen(this);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
++  mWaiting = true;
++  TRRService::QueryWaiting();
+ 
+   // If the asyncOpen succeeded we can say that we actually attempted to
+   // use the TRR connection.
+@@ -609,6 +644,7 @@ nsresult TRR::ReturnData(nsIChannel* aChannel) {
          NS_SUCCEEDED(timedChan->GetResponseEnd(&end)) && !start.IsNull() &&
          !end.IsNull()) {
        trrFetchDurationNetworkOnly = Some(end - start);
@@ -607,8 +662,54 @@ index a960b375a0..e973478397 100644
      }
    }
  
+@@ -899,6 +935,7 @@ TRR::OnStopRequest(nsIRequest* aRequest, nsresult aStatusCode) {
+   // The dtor will be run after the function returns
+   LOG(("TRR:OnStopRequest %p %s %d failed=%d code=%X\n", this, mHost.get(),
+        mType, mFailed, (unsigned int)aStatusCode));
++  Sent();
+   nsCOMPtr<nsIChannel> channel;
+   channel.swap(mChannel);
+ 
+diff --git a/netwerk/dns/TRR.h b/netwerk/dns/TRR.h
+index a476afd9ca..90a7a2c639 100644
+--- a/netwerk/dns/TRR.h
++++ b/netwerk/dns/TRR.h
+@@ -10,6 +10,7 @@
+ #include "nsClassHashtable.h"
+ #include "nsIChannel.h"
+ #include "nsIInterfaceRequestor.h"
++#include "nsIProgressEventSink.h"
+ #include "nsIStreamListener.h"
+ #include "nsITRRSkipReason.h"
+ #include "nsThreadUtils.h"
+@@ -27,11 +28,15 @@ class TRRServiceChannel;
+ class TRR : public Runnable,
+             public nsITimerCallback,
+             public nsIStreamListener,
++            public nsIInterfaceRequestor,
++            public nsIProgressEventSink,
+             public nsIRunnablePriority {
+  public:
+   NS_DECL_ISUPPORTS_INHERITED
+   NS_DECL_NSIREQUESTOBSERVER
+   NS_DECL_NSISTREAMLISTENER
++  NS_DECL_NSIINTERFACEREQUESTOR
++  NS_DECL_NSIPROGRESSEVENTSINK
+   NS_DECL_NSITIMERCALLBACK
+   NS_DECL_NSIRUNNABLEPRIORITY
+ 
+@@ -125,6 +130,9 @@ class TRR : public Runnable,
+   // we get from the prefs.
+   uint32_t mTimeoutMs = 0;
+   nsCOMPtr<nsITimer> mTimeout;
++  // Camoufox: the query is open and not yet sent (TRRService::QueryWaiting).
++  bool mWaiting = false;
++  void Sent();
+   nsCString mCname;
+   uint32_t mCnameLoop = kCnameChaseMax;  // loop detection counter
+ 
 diff --git a/netwerk/dns/TRRService.cpp b/netwerk/dns/TRRService.cpp
-index 8ec6a5667a..61d1cf955c 100644
+index 8ec6a5667a..85081c1f09 100644
 --- a/netwerk/dns/TRRService.cpp
 +++ b/netwerk/dns/TRRService.cpp
 @@ -8,6 +8,7 @@
@@ -619,7 +720,7 @@ index 8ec6a5667a..61d1cf955c 100644
  #include "mozilla/StaticPrefs_network.h"
  #include "mozilla/Telemetry.h"
  #include "mozilla/Tokenizer.h"
-@@ -110,6 +111,31 @@ const nsCString& TRRService::ProviderKey() {
+@@ -110,6 +111,61 @@ const nsCString& TRRService::ProviderKey() {
    return kTRRDomains[sCurrentTRRModeIndex][sDomainIndex];
  }
  
@@ -648,14 +749,44 @@ index 8ec6a5667a..61d1cf955c 100644
 +  return sAnswerTime + sAnswerTimeVariation * 4;
 +}
 +
++static uint32_t sQueriesWaiting MOZ_GUARDED_BY(sAnswerTimeLock);
++static TimeStamp sQueriesWaitingSince MOZ_GUARDED_BY(sAnswerTimeLock);
++static TimeDuration sQueriesWaited MOZ_GUARDED_BY(sAnswerTimeLock);
++
++// static
++void TRRService::QueryWaiting() {
++  StaticMutexAutoLock lock(sAnswerTimeLock);
++  if (!sQueriesWaiting++) {
++    sQueriesWaitingSince = TimeStamp::Now();
++  }
++}
++
++// static
++void TRRService::QuerySent() {
++  StaticMutexAutoLock lock(sAnswerTimeLock);
++  MOZ_RELEASE_ASSERT(sQueriesWaiting);
++  if (!--sQueriesWaiting) {
++    sQueriesWaited += TimeStamp::Now() - sQueriesWaitingSince;
++  }
++}
++
++// static
++TimeDuration TRRService::QueriesWaited() {
++  StaticMutexAutoLock lock(sAnswerTimeLock);
++  if (!sQueriesWaiting) {
++    return sQueriesWaited;
++  }
++  return sQueriesWaited + (TimeStamp::Now() - sQueriesWaitingSince);
++}
++
  NS_IMPL_ISUPPORTS_INHERITED(TRRService, TRRServiceBase, nsIObserver,
                              nsISupportsWeakReference)
  
 diff --git a/netwerk/dns/TRRService.h b/netwerk/dns/TRRService.h
-index f17c4fcd4d..0d4be4e9ad 100644
+index f17c4fcd4d..fd4cf619f3 100644
 --- a/netwerk/dns/TRRService.h
 +++ b/netwerk/dns/TRRService.h
-@@ -100,6 +100,14 @@ class TRRService : public TRRServiceBase,
+@@ -100,6 +100,21 @@ class TRRService : public TRRServiceBase,
    // Only called when TRR mode changed.
    static void SetCurrentTRRMode(nsIDNSService::ResolverMode aMode);
  
@@ -666,6 +797,13 @@ index f17c4fcd4d..0d4be4e9ad 100644
 +  // its variation. Zero before the first answer.
 +  static void AnswerTook(TimeDuration aTime);
 +  static TimeDuration AnswerTimeout();
++  // Camoufox: how long queries have waited to be sent, for a connection to
++  // the resolver or behind other queries: the time, since the process
++  // started, during which at least one query was opened (QueryWaiting) and
++  // not yet sent (QuerySent).
++  static void QueryWaiting();
++  static void QuerySent();
++  static TimeDuration QueriesWaited();
 +
    void InitTRRConnectionInfo(bool aForceReinit = false) override;
  
@@ -900,7 +1038,7 @@ index 869dc9799f..69705328bc 100644
      mState = TransportSetup::TransportSetupState::CONNECTING;
      rv = SetupStreams(dnsAndSock);
 diff --git a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
-index e499817a90..62ef1e7487 100644
+index e499817a90..b06e927d7f 100644
 --- a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
 +++ b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
 @@ -15,6 +15,7 @@
@@ -929,17 +1067,18 @@ index e499817a90..62ef1e7487 100644
    while (!IsTerminal()) {
      happy_eyeballs::Output event{};
      nsTArray<uint8_t> echConfig;
-@@ -877,6 +882,9 @@ void HappyEyeballsConnectionAttempt::DNSLookup(
+@@ -877,6 +882,10 @@ void HappyEyeballsConnectionAttempt::DNSLookup(
    if (NS_SUCCEEDED(rv) && request) {
      requestInfo->SetRequest(request);
      mDnsRequestTable.InsertOrUpdate(request, requestInfo);
 +    if (mDnsAsked.IsNull()) {
 +      mDnsAsked = TimeStamp::Now();
++      mDnsQueriesWaited = TRRService::QueriesWaited();
 +    }
      return;
    }
  
-@@ -1200,13 +1208,29 @@ void HappyEyeballsConnectionAttempt::CancelConnection(uint64_t aId) {
+@@ -1200,13 +1209,29 @@ void HappyEyeballsConnectionAttempt::CancelConnection(uint64_t aId) {
  
    RefPtr<ConnectionEstablisher> conn = mConnectionEstablisherTable.Get(aId);
    if (conn) {
@@ -970,7 +1109,7 @@ index e499817a90..62ef1e7487 100644
  void HappyEyeballsConnectionAttempt::CloseHttpTransaction(
      happy_eyeballs::FailureReason aReason, ConnectionEntry* aEntry) {
    LOG(("HappyEyeballsConnectionAttempt::CloseHttpTransaction %p reason=%d",
-@@ -1738,7 +1762,7 @@ void HappyEyeballsConnectionAttempt::EnterDone() {
+@@ -1738,7 +1763,7 @@ void HappyEyeballsConnectionAttempt::EnterDone() {
    mConnectionEstablisherTable.Clear();
  
    for (auto& conn : establishers) {
@@ -979,7 +1118,7 @@ index e499817a90..62ef1e7487 100644
    }
  
    if (mTimer) {
-@@ -1875,6 +1899,26 @@ void HappyEyeballsConnectionAttempt::Transition(State aNext,
+@@ -1875,6 +1900,28 @@ void HappyEyeballsConnectionAttempt::Transition(State aNext,
  
  void HappyEyeballsConnectionAttempt::PrintDiagnostics(nsCString& log) {}
  
@@ -990,8 +1129,10 @@ index e499817a90..62ef1e7487 100644
 +  }
 +  // What has been counted as lost is not given back when the answer timeout
 +  // falls, or the clock would jump forward by it.
-+  mDnsWaited = std::max(mDnsWaited, std::min(TimeStamp::Now() - mDnsAsked,
-+                                             TRRService::AnswerTimeout()));
++  const TimeDuration unsent = TRRService::QueriesWaited() - mDnsQueriesWaited;
++  const TimeDuration sent = TimeStamp::Now() - mDnsAsked - unsent;
++  mDnsWaited = std::max(
++      mDnsWaited, unsent + std::min(sent, TRRService::AnswerTimeout()));
 +  return mDnsLost + mDnsWaited;
 +}
 +
@@ -1006,7 +1147,7 @@ index e499817a90..62ef1e7487 100644
  uint32_t HappyEyeballsConnectionAttempt::UnconnectedUDPConnsLength() const {
    uint32_t len = 0;
    for (auto iter = mConnectionEstablisherTable.ConstIter(); !iter.Done();
-@@ -1958,6 +2002,15 @@ HappyEyeballsConnectionAttempt::OnLookupComplete(nsICancelable* request,
+@@ -1958,6 +2005,15 @@ HappyEyeballsConnectionAttempt::OnLookupComplete(nsICancelable* request,
    happy_eyeballs::DnsRecordType type = info->Type();
    mDnsRequestTable.Remove(request);
  
@@ -1023,10 +1164,10 @@ index e499817a90..62ef1e7487 100644
      case happy_eyeballs::DnsRecordType::A:
        return OnARecord(rec, status, id);
 diff --git a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
-index 1bf8bf81e7..0153741de0 100644
+index 1bf8bf81e7..7f4b6fbd9c 100644
 --- a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
 +++ b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
-@@ -198,6 +198,28 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
+@@ -198,6 +198,30 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
  
    nsresult ProcessHappyEyeballsOutput();
  
@@ -1041,9 +1182,11 @@ index 1bf8bf81e7..0153741de0 100644
 +  TimeDuration RelayLag();
 +  // Camoufox: the time lookups have lost to a proxy that connects as direct.
 +  // A Firefox at the exit has its resolver beside it, so the clock stands
-+  // still while an answer is outstanding, for as long as the resolver's
-+  // answers have been taking through the proxy (TRRService::AnswerTimeout).
-+  // An answer later than that is waited for as stock waits for any.
++  // still while an answer is outstanding: while queries wait to be sent, for
++  // a connection to the resolver through the proxy (TRRService::QueriesWaited),
++  // then for as long as the resolver's answers take once sent
++  // (TRRService::AnswerTimeout). An answer later than that is waited for as
++  // stock waits for any.
 +  TimeDuration DnsLost();
 +  // Camoufox: closes an attempt that lost the race. Behind a SOCKS5 proxy it
 +  // reached the origin later than it was started by what the proxy cost it
@@ -1055,13 +1198,15 @@ index 1bf8bf81e7..0153741de0 100644
    // Report the domain lookup span: domainLookupStart is the first DNS query
    // (any type), domainLookupEnd is the start of the first connection attempt.
    void DnsLookupTimings(TimeStamp& aStart, TimeStamp& aEnd) const;
-@@ -305,6 +327,11 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
+@@ -305,6 +329,13 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
  
    nsRefPtrHashtable<nsPtrHashKey<nsICancelable>, DnsRequestInfo>
        mDnsRequestTable;
-+  // Camoufox: when the stretch of lookups under way began, what it has lost
-+  // so far, and what the finished ones lost (DnsLost).
++  // Camoufox: when the stretch of lookups under way began, how long queries
++  // had waited to be sent by then, what it has lost so far, and what the
++  // finished ones lost (DnsLost).
 +  TimeStamp mDnsAsked;
++  TimeDuration mDnsQueriesWaited;
 +  TimeDuration mDnsWaited;
 +  TimeDuration mDnsLost;
  
@@ -1478,6 +1623,25 @@ index b401912ab9..dff101123a 100644
  
    nsCOMPtr<nsINetAddr> mSelfAddr;
    nsCOMPtr<nsINetAddr> mPeerAddr;
+diff --git a/netwerk/protocol/http/TRRServiceChannel.cpp b/netwerk/protocol/http/TRRServiceChannel.cpp
+index 11cd97fa16..8a39698903 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.cpp
++++ b/netwerk/protocol/http/TRRServiceChannel.cpp
+@@ -760,6 +760,14 @@ void TRRServiceChannel::MaybeStartDNSPrefetch() {
+ NS_IMETHODIMP
+ TRRServiceChannel::OnTransportStatus(nsITransport* trans, nsresult status,
+                                      int64_t progress, int64_t progressMax) {
++  // Camoufox: TRR is told when its query is sent, as nsHttpChannel tells it.
++  if (!mProgressSink) {
++    GetCallback(mProgressSink);
++  }
++  if (mProgressSink && NS_SUCCEEDED(mStatus) && LoadIsPending()) {
++    nsCOMPtr<nsIProgressEventSink> progressSink(mProgressSink);
++    progressSink->OnStatus(this, status, u"");
++  }
+   return NS_OK;
+ }
+ 
 diff --git a/netwerk/protocol/http/TlsHandshaker.cpp b/netwerk/protocol/http/TlsHandshaker.cpp
 index 14fe3c54ec..d16bbb191a 100644
 --- a/netwerk/protocol/http/TlsHandshaker.cpp
