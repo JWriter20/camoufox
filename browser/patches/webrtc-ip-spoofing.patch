@@ -171,10 +171,10 @@ index 0000000000..a134ba615a
 +
 +#endif // mozilla_dom_WebRTCIPManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index ea530fb4a0..1d64f2922d 100644
+index 879e1c7498..9c4785dd7b 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -302,10 +302,15 @@ EXPORTS.mozilla.dom += [
+@@ -303,10 +303,15 @@ EXPORTS.mozilla.dom += [
      "VideoFrameProvider.h",
      "ViewportMetaData.h",
      "VisualViewport.h",
@@ -191,10 +191,10 @@ index ea530fb4a0..1d64f2922d 100644
      EXPORTS.mozilla.dom += [
          "FuzzingFunctions.h",
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 556666e7fe..7baea2bb5a 100644
+index 2d9af5c12c..920399da3c 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -330,6 +330,8 @@
+@@ -333,6 +333,8 @@
  #include "xpcprivate.h"
  #include "xpcpublic.h"
  
@@ -203,7 +203,7 @@ index 556666e7fe..7baea2bb5a 100644
  #ifdef MOZ_WEBSPEECH
  #  include "mozilla/dom/SpeechSynthesis.h"
  #endif
-@@ -7792,6 +7794,18 @@ void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aR
+@@ -7829,6 +7831,18 @@ void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aR
    RoverfoxStorageManager::RemoveSetter("setTimezone");
  }
  
@@ -223,10 +223,10 @@ index 556666e7fe..7baea2bb5a 100644
    MOZ_ASSERT(aSharedWorker);
    MOZ_ASSERT(!mSharedWorkers.Contains(aSharedWorker));
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 4090206bfb..3749987acf 100644
+index b83c6d69da..bbc19a2f39 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -686,6 +686,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -694,6 +694,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
  
    void SetTimezone(const nsAString& timezone, mozilla::ErrorResult& aRv);
  
@@ -238,10 +238,10 @@ index 4090206bfb..3749987acf 100644
  
    void ForgetSharedWorker(mozilla::dom::SharedWorker* aSharedWorker);
 diff --git a/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp b/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
-index 74ec5d7..e754f69 100644
+index c8ea13b6d1..dfcb15ee5e 100644
 --- a/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
 +++ b/dom/media/webrtc/jsapi/PeerConnectionImpl.cpp
-@@ -100,6 +100,12 @@
+@@ -102,6 +102,12 @@
  #include "mozilla/glean/DomMediaWebrtcMetrics.h"
  #include "mozilla/net/DataChannelProtocol.h"
  #include "mozilla/net/WebrtcProxyConfig.h"
@@ -254,7 +254,7 @@ index 74ec5d7..e754f69 100644
  #include "nsContentUtils.h"
  #include "nsDOMJSUtils.h"
  #include "nsGlobalWindowInner.h"
-@@ -230,6 +236,11 @@ class DataChannel;
+@@ -232,6 +238,11 @@ class DataChannel;
  
  namespace mozilla {
  
@@ -266,7 +266,7 @@ index 74ec5d7..e754f69 100644
  void PeerConnectionAutoTimer::RegisterConnection() { mRefCnt++; }
  
  void PeerConnectionAutoTimer::UnregisterConnection(bool aContainedAV) {
-@@ -1622,7 +1633,15 @@ PeerConnectionImpl::SetLocalDescription(int32_t aAction, const char* aSDP) {
+@@ -1630,7 +1641,15 @@ PeerConnectionImpl::SetLocalDescription(int32_t aAction, const char* aSDP) {
      }
    };
  
@@ -283,7 +283,7 @@ index 74ec5d7..e754f69 100644
  
    SyncToJsep();
  
-@@ -1788,11 +1807,40 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+@@ -1796,11 +1815,40 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
      MOZ_CRASH("Failed to create a promise!");
    }
  
@@ -326,7 +326,7 @@ index 74ec5d7..e754f69 100644
              RefPtr report = MakeRefPtr<RTCStatsReport>(window);
              report->Incorporate(*aReport);
              promise->MaybeResolve(std::move(report));
-@@ -3332,12 +3380,22 @@ const std::string& PeerConnectionImpl::GetName() {
+@@ -3346,12 +3394,22 @@ const std::string& PeerConnectionImpl::GetName() {
    return mName;
  }
  
@@ -350,7 +350,7 @@ index 74ec5d7..e754f69 100644
    if (mForceIceTcp && std::string::npos != candidate.find(" UDP ")) {
      CSFLogWarn(LOGTAG, "Blocking local UDP candidate: %s", candidate.c_str());
      STAMP_TIMECARD(mTimeCard, "UDP Ice Candidate blocked");
-@@ -3400,9 +3458,335 @@ void PeerConnectionImpl::SendLocalIceCandidateToContent(
+@@ -3414,9 +3472,335 @@ void PeerConnectionImpl::SendLocalIceCandidateToContent(
      uint16_t level, const std::string& mid, const std::string& candidate,
      const std::string& ufrag) {
    STAMP_TIMECARD(mTimeCard, "Send Ice Candidate to content");
@@ -688,7 +688,7 @@ index 74ec5d7..e754f69 100644
                                ObString(ufrag.c_str()), rv);
  }
  
-@@ -3534,6 +3918,46 @@ void PeerConnectionImpl::IceConnectionStateChange(
+@@ -3548,6 +3932,46 @@ void PeerConnectionImpl::IceConnectionStateChange(
    // 12. If connectionIceConnectionStateChanged is true, fire an event
    //     named iceconnectionstatechange at connection.
    if (connectionIceConnectionStateChanged) {
@@ -735,7 +735,7 @@ index 74ec5d7..e754f69 100644
      pcObserver->OnStateChange(PCObserverStateType::IceConnectionState, rv);
    }
  
-@@ -3698,6 +4122,12 @@ void PeerConnectionImpl::IceGatheringStateChange(
+@@ -3712,6 +4136,12 @@ void PeerConnectionImpl::IceGatheringStateChange(
      return;
    }
  
@@ -748,7 +748,7 @@ index 74ec5d7..e754f69 100644
    // Set transport.[[IceGathererState]] to gathering.
    // or
    // Set transport.[[IceGathererState]] to complete.
-@@ -3810,11 +4240,27 @@ void PeerConnectionImpl::UpdateDefaultCandidate(
+@@ -3824,11 +4254,27 @@ void PeerConnectionImpl::UpdateDefaultCandidate(
      const std::string& defaultRtcpAddr, uint16_t defaultRtcpPort,
      const std::string& transportId) {
    CSFLogDebug(LOGTAG, "%s", __FUNCTION__);
@@ -778,7 +778,7 @@ index 74ec5d7..e754f69 100644
          transportId);
    }
  }
-@@ -4313,14 +4759,35 @@ bool PeerConnectionImpl::ShouldForceProxy() const {
+@@ -4327,14 +4773,35 @@ bool PeerConnectionImpl::ShouldForceProxy() const {
    // Ok, we're supposed to be proxy_only, but only if a proxy is configured.
    // Let's just see if the document was loaded via a proxy.
  
@@ -821,7 +821,7 @@ index 74ec5d7..e754f69 100644
  }
  
  void PeerConnectionImpl::EnsureTransports(const JsepSession& aSession) {
-@@ -4595,8 +5062,10 @@ bool PeerConnectionImpl::GetPrefDefaultAddressOnly() const {
+@@ -4609,8 +5076,10 @@ bool PeerConnectionImpl::GetPrefDefaultAddressOnly() const {
  
    uint64_t winId = mWindow->WindowID();
  
@@ -835,7 +835,7 @@ index 74ec5d7..e754f69 100644
        !MediaManager::Get()->IsActivelyCapturingOrHasAPermission(winId);
    return default_address_only;
 diff --git a/dom/media/webrtc/jsapi/PeerConnectionImpl.h b/dom/media/webrtc/jsapi/PeerConnectionImpl.h
-index ce785e2..fdeb867 100644
+index e0a549325f..19bc4e60cc 100644
 --- a/dom/media/webrtc/jsapi/PeerConnectionImpl.h
 +++ b/dom/media/webrtc/jsapi/PeerConnectionImpl.h
 @@ -616,8 +616,19 @@ class PeerConnectionImpl final
@@ -871,13 +871,13 @@ index ce785e2..fdeb867 100644
    RefPtr<MediaTransportHandler> mTransportHandler;
  
 diff --git a/dom/media/webrtc/jsapi/moz.build b/dom/media/webrtc/jsapi/moz.build
-index 92c2255785..d1c4a6788a 100644
+index 98517ce2ec..167c9c66f6 100644
 --- a/dom/media/webrtc/jsapi/moz.build
 +++ b/dom/media/webrtc/jsapi/moz.build
-@@ -72,3 +72,6 @@ EXPORTS.mozilla.dom += [
+@@ -89,3 +89,6 @@ SOURCE_HEADERS += [
+     "WebrtcGlobalParent.h",
+     "WebrtcGlobalStatsHistory.h",
  ]
- 
- FINAL_LIBRARY = "xul"
 +
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
@@ -1026,7 +1026,7 @@ index 9a3aa1311a..e564905a2e 100644
        addrs.AppendElement(addr);
      }
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index d6bf3c6b30..52a8264e2e 100644
+index 2e64ce85f6..becc14412c 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
 @@ -959,6 +959,17 @@ partial interface Window {

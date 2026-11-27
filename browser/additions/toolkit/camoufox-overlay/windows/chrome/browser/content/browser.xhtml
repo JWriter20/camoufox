@@ -87,6 +87,7 @@
   <link rel="localization" href="toolkit/branding/brandings.ftl"/>
   <link rel="localization" href="toolkit/global/contextual-identity.ftl"/>
   <link rel="localization" href="toolkit/global/textActions.ftl"/>
+  <link rel="localization" href="toolkit/global/viewSource.ftl"/>
   <link rel="localization" href="toolkit/printing/printUI.ftl"/>
   <link rel="localization" href="browser/sidebar.ftl"/>
   <link rel="localization" href="browser/syncedTabs.ftl"/>
@@ -96,7 +97,7 @@
   <link rel="localization" href="preview/credentialChooser.ftl" />
   <link rel="localization" href="preview/enUS-searchFeatures.ftl" />
   <link rel="localization" href="preview/interventions.ftl" />
-  <link rel="localization" href="preview/miniWindow.ftl"/>
+  <link rel="localization" href="browser/miniWindow.ftl"/>
   <link rel="localization" href="preview/onboarding.ftl"/>
   <link rel="localization" href="preview/smartTabGroups.ftl"/>
   <link rel="localization" href="preview/genai.ftl"/>
@@ -507,6 +508,7 @@
                   tbattr="tabbrowser-multiple-visible"/>
         <menuitem id="context_openTabInMiniWindow"
                   data-lazy-l10n-id="move-to-mini-window"
+                  data-l10n-args='{"tabCount": 1}'
                   hidden="true"/>
         <menuseparator id="moveTabSeparator" hidden="true"/>
         <menuseparator id="context_moveTabToGroupSeparator" hidden="true"/>
@@ -821,7 +823,7 @@
               data-l10n-attrs="style">
           <button id="editBookmarkPanelDoneButton"
                   class="footer-button"
-                  data-l10n-id="bookmark-panel-save-button"
+                  data-l10n-id="bookmark-panel-save-button2"
                   default="true"/>
           <button id="editBookmarkPanelRemoveButton"
                   class="footer-button"/>
@@ -1233,12 +1235,16 @@
       </menugroup>
       <menuseparator id="context-sep-navigation"/>
       <menuitem id="context-viewsource-goToLine"
+                data-l10n-id="view-source-context-go-to-line"
+                intended-duplicate-accesskey="context-copylink context-copyemail"
                 />
       <menuitem id="context-viewsource-wrapLongLines"
                 type="checkbox"
+                data-l10n-id="view-source-context-wrap-long-lines-2"
                 />
       <menuitem id="context-viewsource-highlightSyntax"
                 type="checkbox"
+                data-l10n-id="view-source-context-highlight-syntax-2"
                 />
       <menuseparator id="context-sep-viewsource-commands"/>
       <menuitem id="spell-no-suggestions"
@@ -1291,6 +1297,7 @@
       <menuitem id="context-openlinksmartwindow"
                 class="context-menu-open-link"
                 data-l10n-id="main-context-menu-open-link-new-smart-window"
+                intended-duplicate-accesskey="context-searchselect context-setDesktopBackground context-video-saveimage"
                 />
       <menuitem id="context-previewlink"
                 data-l10n-id="main-context-menu-preview-link"
@@ -1319,7 +1326,8 @@
       <menu id="context-sendlinktodevice"
             class="sync-ui-item"
             data-l10n-id="main-context-menu-link-send-to-device"
-            hidden="true">
+            hidden="true"
+            intended-duplicate-accesskey="context-translate-selection spell-undo-add-to-dictionary">
             <menupopup id="context-sendlinktodevice-popup"/>
       </menu>
       <menuseparator id="context-sep-sendlinktodevice" class="sync-ui-item"
@@ -1442,6 +1450,7 @@
                 />
       <menuitem id="context-visual-search"
                 hidden="true"
+                intended-duplicate-accesskey="context-viewpartialsource-selection"
                 />
       <menuseparator id="context-sep-setbackground"/>
       <menuitem id="context-setDesktopBackground"
@@ -1469,33 +1478,40 @@
       <menuseparator id="passwordmgr-items-separator"/>
       <menuitem id="context-undo"
                 data-l10n-id="text-action-undo"
-                command="cmd_undo"/>
+                command="cmd_undo"
+                intended-duplicate-accesskey="context-stripOnShareLink"/>
       <menuitem id="context-redo"
                 data-l10n-id="text-action-redo"
-                command="cmd_redo"/>
+                command="cmd_redo"
+                intended-duplicate-accesskey="context-print-selection"/>
       <menuseparator id="context-sep-redo"/>
       <menuitem id="context-cut"
                 data-l10n-id="text-action-cut"
-                command="cmd_cut"/>
+                command="cmd_cut"
+                intended-duplicate-accesskey="context-openlinkintab context-openlinkincontainertab"/>
       <menuitem id="context-copy"
                 data-l10n-id="text-action-copy"
                 command="cmd_copy"/>
       <menuitem id="context-paste"
                 data-l10n-id="text-action-paste"
-                command="cmd_paste"/>
+                command="cmd_paste"
+                intended-duplicate-accesskey="context-openlinkprivate"/>
       <menuitem id="context-paste-no-formatting"
                 data-l10n-id="text-action-paste-no-formatting"
-                command="cmd_pasteNoFormatting"/>
+                command="cmd_pasteNoFormatting"
+                intended-duplicate-accesskey="context-openlinkinsplitview"/>
       <menuitem id="context-delete"
                 data-l10n-id="text-action-delete"
-                command="cmd_delete"/>
+                command="cmd_delete"
+                intended-duplicate-accesskey="context-openlink"/>
       <menuitem id="context-selectall"
                 data-l10n-id="text-action-select-all"
-                command="cmd_selectAll"/>
+                command="cmd_selectAll"
+                intended-duplicate-accesskey="spell-add-dictionaries-main"/>
       <menuitem id="context-pdfjs-comment-selection"
-                data-l10n-id="text-action-comment-selection-1"/>
+                data-l10n-id="text-action-comment-selection-2"/>
       <menuitem id="context-pdfjs-highlight-selection"
-                data-l10n-id="text-action-highlight-selection"/>
+                data-l10n-id="text-action-highlight-selection-2"/>
       <menuitem id="context-reveal-password"
                 type="checkbox"
                 data-l10n-id="main-context-menu-reveal-password"/>
@@ -1503,29 +1519,35 @@
                 data-l10n-id="main-context-menu-print-selection-2"/>
       <menuseparator id="context-sep-selectall"/>
       <menuitem id="context-copy-link-to-highlight"
-                data-l10n-id="text-action-copy-link-to-highlight"
+                data-l10n-id="text-action-copy-link-to-highlight-2"
                 />
       <menuitem id="context-copy-clean-link-to-highlight"
-                data-l10n-id="text-action-copy-clean-link-to-highlight"
+                data-l10n-id="text-action-copy-clean-link-to-highlight-2"
+                intended-duplicate-accesskey="context-savelink"
                 />
       <menuitem id="context-remove-highlight"
-                data-l10n-id="text-action-remove-highlight"
+                data-l10n-id="text-action-remove-highlight-2"
+                intended-duplicate-accesskey="context-copy-link-to-highlight"
                 />
       <menuseparator id="context-sep-highlights"/>
 
       <menuitem id="context-pdfjs-undo"
                 data-l10n-id="text-action-undo"/>
       <menuitem id="context-pdfjs-redo"
-                data-l10n-id="text-action-redo"/>
+                data-l10n-id="text-action-redo"
+                intended-duplicate-accesskey="context-print-selection"/>
       <menuseparator id="context-sep-pdfjs-redo"/>
       <menuitem id="context-pdfjs-cut"
-                data-l10n-id="text-action-cut"/>
+                data-l10n-id="text-action-cut"
+                intended-duplicate-accesskey="context-take-screenshot"/>
       <menuitem id="context-pdfjs-copy"
                 data-l10n-id="text-action-copy"/>
       <menuitem id="context-pdfjs-paste"
-                data-l10n-id="text-action-paste"/>
+                data-l10n-id="text-action-paste"
+                intended-duplicate-accesskey="context-savepage"/>
       <menuitem id="context-pdfjs-delete"
-                data-l10n-id="text-action-delete"/>
+                data-l10n-id="text-action-delete"
+                intended-duplicate-accesskey="context-bidi-page-direction-toggle"/>
       <menuitem id="context-pdfjs-select-all"
                 data-l10n-id="text-action-select-all"/>
       <menuseparator id="context-sep-pdfjs-select-all"/>
@@ -1553,7 +1575,8 @@
       <menu id="context-ask-chat"/>
       <menuitem id="context-create-aitab"
                 data-l10n-id="main-context-menu-create-aitab"
-                hidden="true"/>
+                hidden="true"
+                intended-duplicate-accesskey="context-copy context-pdfjs-copy context-media-showcontrols context-media-hidecontrols"/>
 
       <menuseparator id="frame-sep"/>
       <menu id="frame" data-l10n-id="main-context-menu-frame">
@@ -1600,7 +1623,8 @@
                 data-l10n-id="text-action-spell-add-dictionaries"
                 />
       <menu id="spell-dictionaries"
-            data-l10n-id="text-action-spell-dictionaries">
+            data-l10n-id="text-action-spell-dictionaries"
+            intended-duplicate-accesskey="context-copylink context-copyemail">
           <menupopup id="spell-dictionaries-menu">
               <menuseparator id="spell-language-separator"/>
               <menuitem id="spell-add-dictionaries"
@@ -1625,7 +1649,7 @@
       <menuitem id="context-inspect-a11y"
                 hidden="true"
                 data-l10n-id="main-context-menu-inspect-a11y-properties2"
-                intended-duplicate-accesskey=""
+                intended-duplicate-accesskey="context-copyimage-contents"
                 />
       <menuitem id="context-inspect"
                 hidden="true"
@@ -2041,8 +2065,8 @@
 
     <popupnotification id="speech-recognition-model-download-notification" hidden="true">
       <popupnotificationheader id="speech-recognition-model-download-header">
-        <html:span id="speech-recognition-model-download-header-text"
-                   data-l10n-id="speech-recognition-model-download-header"/>
+        <html:h1 id="speech-recognition-model-download-header-text"
+                 data-l10n-id="speech-recognition-model-download-header"/>
       </popupnotificationheader>
     </popupnotification>
 
@@ -5217,14 +5241,6 @@
             </vbox>
           </hbox>
         </toolbarbutton>
-        <toolbarbutton id="PanelUI-fxa-menu-share-firefox" class="fxa-cta-button subviewbutton subviewbutton-iconic">
-          <hbox align="center">
-            <image class="PanelUI-fxa-menu-share-firefox-button ctaMenuLogo" role="presentation" />
-            <vbox flex="1">
-              <label crop="end" data-l10n-id="appmenuitem-share-firefox-title2" />
-            </vbox>
-          </hbox>
-        </toolbarbutton>
       </vbox>
     </vbox>
   </panelview>
@@ -5429,6 +5445,38 @@
                 data-l10n-id="reset-pbm-panel-confirm-button2"
                 ></button>
       </html:moz-button-group>
+    </vbox>
+  </panelview>
+
+  <panelview id="fire-button-panel" class="PanelUI-subView" role="document">
+    <vbox id="fire-button-panel-container" role="alertdialog" aria-labelledby="fire-button-panel-header">
+      <hbox id="fire-button-panel-header">
+        <description data-l10n-id="fire-button-panel-heading" role="heading" aria-level="2"/>
+      </hbox>
+
+      <description id="fire-button-panel-description" data-l10n-id="fire-button-panel-description"/>
+      <description id="fire-button-panel-choose-description" data-l10n-id="fire-button-panel-choose-description"/>
+
+      <hbox id="fire-button-panel-footer-row" class="panel-footer">
+        <!-- A button rather than an anchor: this opens a dialog, it does not
+             navigate anywhere. text-link gives it the link appearance. -->
+        <button id="fire-button-panel-choose-link"
+                class="text-link"
+                data-l10n-id="fire-button-panel-choose-link"
+                ></button>
+        <html:moz-button-group id="fire-button-panel-footer">
+          <html:moz-button id="fire-button-panel-cancel-button"
+                           data-l10n-id="fire-button-panel-cancel-button"
+                           data-l10n-attrs="accesskey"
+                           />
+          <html:moz-button slot="primary"
+                           type="destructive"
+                           id="fire-button-panel-confirm-button"
+                           data-l10n-id="fire-button-panel-confirm-button"
+                           data-l10n-attrs="accesskey"
+                           />
+        </html:moz-button-group>
+      </hbox>
     </vbox>
   </panelview>
 
@@ -6178,14 +6226,14 @@
       <menuitem id="helpSwitchDevice"
                 data-l10n-id="menu-help-switch-device"
                 appmenu-data-l10n-id="appmenu-help-switch-device"/>
-      <menuseparator id="aboutSeparator"/>
-      <menuitem id="aboutName"
-                data-l10n-id="menu-about"
-                appmenu-data-l10n-id="appmenu-about"/>
       <menuitem id="menu_referralsPage"
                 image="chrome://browser/content/logos/share-firefox.svg"
                 data-l10n-id="menu-referrals2"
                 appmenu-data-l10n-id="appmenu-referrals2"/>
+      <menuseparator id="aboutSeparator"/>
+      <menuitem id="aboutName"
+                data-l10n-id="menu-about"
+                appmenu-data-l10n-id="appmenu-about"/>
       <menuseparator id="helpPolicySeparator" hidden="true"/>
       <menuitem id="helpPolicySupport" hidden="true"/>
     </menupopup>
@@ -6281,7 +6329,7 @@
                        class="toolbarbutton-1 chromeclass-toolbar-additional tabs-alltabs-button"
                        delegatesanchor="true"
                        badged="true"
-                       data-l10n-id="tabs-toolbar-list-all-tabs"
+                       data-l10n-id="tabs-toolbar-list-all-tabs-2"
                        closemenu="none"
                        removable="true"/>
       </hbox>
@@ -6997,6 +7045,7 @@
       <spacer id="sidebar-spacer"/>
       <toolbarbutton id="sidebar-close" class="close-icon tabbable" data-l10n-id="sidebar-close-button"/>
     </box>
+    <html:sidebar-panel-header id="sidebar-panel-header"/>
     <stack class="sidebar-browser-stack">
       <browser id="sidebar" autoscroll="false" disablehistory="true" disablefullscreen="true" tooltip="aHTMLTooltip"/>
     </stack>

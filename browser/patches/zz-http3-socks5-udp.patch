@@ -1,0 +1,2788 @@
+diff --git a/dom/media/webrtc/transport/WebrtcUdpAssociation.h b/dom/media/webrtc/transport/WebrtcUdpAssociation.h
+deleted file mode 100644
+index 7fe6a544a9..0000000000
+--- a/dom/media/webrtc/transport/WebrtcUdpAssociation.h
++++ /dev/null
+@@ -1,88 +0,0 @@
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+- * You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-#ifndef webrtc_udp_association_h_
+-#define webrtc_udp_association_h_
+-
+-#include <memory>
+-
+-#include "mozilla/net/DNS.h"
+-#include "nsCOMPtr.h"
+-#include "nsIAsyncInputStream.h"
+-#include "nsIAsyncOutputStream.h"
+-#include "nsISupportsImpl.h"
+-#include "nsString.h"
+-#include "nsTArray.h"
+-
+-class nsIEventTarget;
+-class nsIProxyInfo;
+-class nsISocketTransport;
+-
+-namespace mozilla {
+-
+-class NrSocketProxyConfig;
+-
+-namespace net {
+-
+-// Camoufox: what a UDP ASSOCIATE tells the ICE socket it serves, on the socket
+-// thread. OnRelayFailed() ends it: a proxy that is not SOCKS5, one that
+-// refuses the association, or a control connection that closed.
+-class WebrtcUdpAssociationOwner {
+- public:
+-  virtual void OnRelayReady(const NetAddr& aRelay) = 0;
+-  virtual void OnRelayFailed() = 0;
+-
+- protected:
+-  virtual ~WebrtcUdpAssociationOwner() = default;
+-};
+-
+-// Camoufox: a SOCKS5 UDP ASSOCIATE (RFC 1928 §7) on the proxy of the tab an
+-// ICE socket belongs to, for the life of that socket. The parent resolves the
+-// proxy with the tab's load info, as for the tab's own loads, so a context's
+-// proxy filter and its credentials apply. The control connection then runs
+-// from this process, where the datagrams are sent, so the relay sees both
+-// from the same address.
+-class WebrtcUdpAssociation final : public nsIInputStreamCallback,
+-                                   public nsIOutputStreamCallback {
+- public:
+-  NS_DECL_THREADSAFE_ISUPPORTS
+-  NS_DECL_NSIINPUTSTREAMCALLBACK
+-  NS_DECL_NSIOUTPUTSTREAMCALLBACK
+-
+-  // On the socket thread. aOwner must call Close() before it goes away.
+-  static already_AddRefed<WebrtcUdpAssociation> Start(
+-      WebrtcUdpAssociationOwner* aOwner,
+-      const std::shared_ptr<NrSocketProxyConfig>& aConfig);
+-  void Close();
+-
+- private:
+-  WebrtcUdpAssociation(WebrtcUdpAssociationOwner* aOwner,
+-                       const std::shared_ptr<NrSocketProxyConfig>& aConfig);
+-  ~WebrtcUdpAssociation();
+-
+-  void Lookup();
+-  void OnProxy(const nsCString& aType, const nsCString& aHost, int32_t aPort,
+-               const nsCString& aUsername, const nsCString& aPassword);
+-  void Parse();
+-  void Send(const nsTArray<uint8_t>& aBytes);
+-  void Fail(const char* aWhy);
+-
+-  enum class Step { Lookup, Greeting, Auth, Reply, Associated, Done };
+-  Step mStep = Step::Lookup;
+-  WebrtcUdpAssociationOwner* mOwner;
+-  std::shared_ptr<NrSocketProxyConfig> mConfig;
+-  nsCString mUsername;
+-  nsCString mPassword;
+-  nsCOMPtr<nsIEventTarget> mSocketThread;
+-  nsCOMPtr<nsISocketTransport> mTransport;
+-  nsCOMPtr<nsIAsyncInputStream> mIn;
+-  nsCOMPtr<nsIAsyncOutputStream> mOut;
+-  nsTArray<uint8_t> mInBuf;
+-  nsTArray<uint8_t> mOutBuf;
+-};
+-
+-}  // namespace net
+-}  // namespace mozilla
+-
+-#endif  // webrtc_udp_association_h_
+diff --git a/dom/media/webrtc/transport/common.build b/dom/media/webrtc/transport/common.build
+index 6e7a349494..b7d83085ea 100644
+--- a/dom/media/webrtc/transport/common.build
++++ b/dom/media/webrtc/transport/common.build
+@@ -29,7 +29,6 @@ transport_lcppsrcs = [
+     "transportlayerloopback.cpp",
+     "transportlayersrtp.cpp",
+     "WebrtcTCPSocketWrapper.cpp",
+-    "WebrtcUdpAssociation.cpp",
+ ]
+ 
+ transport_cppsrcs = [
+diff --git a/dom/media/webrtc/transport/nr_socket_prsock.cpp b/dom/media/webrtc/transport/nr_socket_prsock.cpp
+index a1f2c78aaf..ee6fb75f85 100644
+--- a/dom/media/webrtc/transport/nr_socket_prsock.cpp
++++ b/dom/media/webrtc/transport/nr_socket_prsock.cpp
+@@ -96,6 +96,8 @@ nrappkit copyright:
+ #include "nsCOMPtr.h"
+ #include "nsComponentManagerUtils.h"
+ #include "nsDebug.h"
++#include "nsIProtocolProxyService.h"
++#include "nsIProxyInfo.h"
+ #include "nsISocketFilter.h"
+ #include "nsISocketTransportService.h"
+ #include "nsISupportsImpl.h"
+@@ -132,6 +134,8 @@ nrappkit copyright:
+ #  undef strlcpy
+ 
+ #  include "mozilla/dom/network/UDPSocketChild.h"
++#  include "mozilla/net/ProxyConfigLookup.h"
++#  include "mozilla/net/WebrtcProxyConfig.h"
+ 
+ #  ifdef LOG_TEMP_INFO
+ #    define LOG_INFO LOG_TEMP_INFO
+@@ -1021,7 +1025,40 @@ NrUdpRelaySocket::~NrUdpRelaySocket() { EndRelay(); }
+ int NrUdpRelaySocket::create(nr_transport_addr* addr) {
+   int r = NrSocket::create(addr);
+   if (!r) {
+-    association_ = net::WebrtcUdpAssociation::Start(this, config_);
++    association_ = new net::Socks5UdpAssociation(this);
++    // The parent resolves the proxy with the tab's load info, as for the
++    // tab's own loads, so a context's proxy filter and its credentials apply.
++    NS_DispatchToMainThread(NS_NewRunnableFunction(
++        "NrUdpRelaySocket::LookupProxy",
++        [association = association_, config = config_]() {
++          auto onProxy = [association](nsIProxyInfo* aInfo, nsresult aStatus) {
++            nsCString type, host, username, password;
++            int32_t port = 0;
++            if (NS_SUCCEEDED(aStatus) && aInfo) {
++              aInfo->GetType(type);
++              aInfo->GetHost(host);
++              aInfo->GetPort(&port);
++              aInfo->GetUsername(username);
++              aInfo->GetPassword(password);
++            }
++            nsCOMPtr<nsIEventTarget> sts =
++                do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID);
++            sts->Dispatch(NS_NewRunnableFunction(
++                "NrUdpRelaySocket::OnProxy",
++                [association, type, host, port, username, password]() {
++                  association->Connect(type, host, port, username, password);
++                }));
++          };
++          // The same resolution as WebrtcTCPSocket's, for the page's own URI.
++          nsresult rv = net::ProxyConfigLookup::Create(
++              std::function<void(nsIProxyInfo*, nsresult)>(onProxy), nullptr,
++              nsIProtocolProxyService::RESOLVE_PREFER_HTTPS_PROXY |
++                  nsIProtocolProxyService::RESOLVE_ALWAYS_TUNNEL,
++              false, nullptr, Some(config->GetConfig().loadInfoArgs()));
++          if (NS_FAILED(rv)) {
++            onProxy(nullptr, rv);
++          }
++        }));
+   }
+   return r;
+ }
+diff --git a/dom/media/webrtc/transport/nr_socket_prsock.h b/dom/media/webrtc/transport/nr_socket_prsock.h
+index f2e3948afb..74e9b52e2b 100644
+--- a/dom/media/webrtc/transport/nr_socket_prsock.h
++++ b/dom/media/webrtc/transport/nr_socket_prsock.h
+@@ -69,7 +69,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include "transport_addr.h"
+ 
+ #if defined(MOZILLA_INTERNAL_API)
+-#  include "WebrtcUdpAssociation.h"
++#  include "mozilla/net/Socks5UdpAssociation.h"
+ #endif
+ 
+ // Stub declaration for nICEr type
+@@ -216,7 +216,7 @@ class NrSocket : public NrSocketBase, public nsASocketHandler {
+ // once. Only a datagram that stays on this host (StaysOnHost: the other end
+ // of a page's loopback connection) leaves from this host socket.
+ class NrUdpRelaySocket final : public NrSocket,
+-                               public net::WebrtcUdpAssociationOwner {
++                               public net::Socks5UdpAssociationOwner {
+  public:
+   explicit NrUdpRelaySocket(
+       const std::shared_ptr<NrSocketProxyConfig>& aConfig);
+@@ -231,7 +231,7 @@ class NrUdpRelaySocket final : public NrSocket,
+                  int line) override;
+   int cancel(int how) override;
+ 
+-  // net::WebrtcUdpAssociationOwner
++  // net::Socks5UdpAssociationOwner
+   void OnRelayReady(const net::NetAddr& aRelay) override;
+   void OnRelayFailed() override;
+ 
+@@ -243,7 +243,7 @@ class NrUdpRelaySocket final : public NrSocket,
+   enum class State { Associating, Relaying, Failed };
+   State state_ = State::Associating;
+   std::shared_ptr<NrSocketProxyConfig> config_;
+-  RefPtr<net::WebrtcUdpAssociation> association_;
++  RefPtr<net::Socks5UdpAssociation> association_;
+   // The socket that talks to the relay. It is not bound to the host address,
+   // so it leaves from the address the control connection does, which is the
+   // only one the relay accepts.
+diff --git a/dom/media/webrtc/transport/WebrtcUdpAssociation.cpp b/netwerk/base/Socks5UdpAssociation.cpp
+similarity index 72%
+rename from dom/media/webrtc/transport/WebrtcUdpAssociation.cpp
+rename to netwerk/base/Socks5UdpAssociation.cpp
+index 4f6fb48fdb..9803c67c94 100644
+--- a/dom/media/webrtc/transport/WebrtcUdpAssociation.cpp
++++ b/netwerk/base/Socks5UdpAssociation.cpp
+@@ -2,14 +2,9 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+-#include "WebrtcUdpAssociation.h"
++#include "Socks5UdpAssociation.h"
+ 
+-#include "mozilla/net/ProxyConfigLookup.h"
+ #include "mozilla/Logging.h"
+-#include "mozilla/net/WebrtcProxyConfig.h"
+-#include "nr_socket_proxy_config.h"
+-#include "nsIProtocolProxyService.h"
+-#include "nsIProxyInfo.h"
+ #include "nsISocketTransport.h"
+ #include "nsISocketTransportService.h"
+ #include "nsNetCID.h"
+@@ -18,76 +13,31 @@
+ 
+ namespace mozilla::net {
+ 
+-static LazyLogModule gUdpAssociationLog("WebrtcUdpAssociation");
++static LazyLogModule gUdpAssociationLog("Socks5UdpAssociation");
+ #define UDP_ASSOC_LOG(...) \
+   MOZ_LOG(gUdpAssociationLog, LogLevel::Info, (__VA_ARGS__))
+ 
+-NS_IMPL_ISUPPORTS(WebrtcUdpAssociation, nsIInputStreamCallback,
++NS_IMPL_ISUPPORTS(Socks5UdpAssociation, nsIInputStreamCallback,
+                   nsIOutputStreamCallback)
+ 
+-WebrtcUdpAssociation::WebrtcUdpAssociation(
+-    WebrtcUdpAssociationOwner* aOwner,
+-    const std::shared_ptr<NrSocketProxyConfig>& aConfig)
++Socks5UdpAssociation::Socks5UdpAssociation(Socks5UdpAssociationOwner* aOwner)
+     : mOwner(aOwner),
+-      mConfig(aConfig),
+       mSocketThread(do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID)) {}
+ 
+-WebrtcUdpAssociation::~WebrtcUdpAssociation() = default;
++Socks5UdpAssociation::~Socks5UdpAssociation() = default;
+ 
+-// static
+-already_AddRefed<WebrtcUdpAssociation> WebrtcUdpAssociation::Start(
+-    WebrtcUdpAssociationOwner* aOwner,
+-    const std::shared_ptr<NrSocketProxyConfig>& aConfig) {
+-  RefPtr<WebrtcUdpAssociation> association =
+-      new WebrtcUdpAssociation(aOwner, aConfig);
+-  NS_DispatchToMainThread(
+-      NewRunnableMethod("WebrtcUdpAssociation::Lookup", association,
+-                        &WebrtcUdpAssociation::Lookup));
+-  return association.forget();
+-}
+-
+-void WebrtcUdpAssociation::Lookup() {
+-  MOZ_ASSERT(NS_IsMainThread());
+-  RefPtr<WebrtcUdpAssociation> self = this;
+-  auto onProxy = [self](nsIProxyInfo* aInfo, nsresult aStatus) {
+-    nsCString type, host, username, password;
+-    int32_t port = 0;
+-    if (NS_SUCCEEDED(aStatus) && aInfo) {
+-      aInfo->GetType(type);
+-      aInfo->GetHost(host);
+-      aInfo->GetPort(&port);
+-      aInfo->GetUsername(username);
+-      aInfo->GetPassword(password);
+-    }
+-    self->mSocketThread->Dispatch(NS_NewRunnableFunction(
+-        "WebrtcUdpAssociation::OnProxy",
+-        [self, type, host, port, username, password]() {
+-          self->OnProxy(type, host, port, username, password);
+-        }));
+-  };
+-  // The same resolution as WebrtcTCPSocket's, for the page's own URI.
+-  nsresult rv = ProxyConfigLookup::Create(
+-      std::function<void(nsIProxyInfo*, nsresult)>(onProxy), nullptr,
+-      nsIProtocolProxyService::RESOLVE_PREFER_HTTPS_PROXY |
+-          nsIProtocolProxyService::RESOLVE_ALWAYS_TUNNEL,
+-      false, nullptr, Some(mConfig->GetConfig().loadInfoArgs()));
+-  if (NS_FAILED(rv)) {
+-    onProxy(nullptr, rv);
+-  }
+-}
+-
+-void WebrtcUdpAssociation::OnProxy(const nsCString& aType,
+-                                   const nsCString& aHost, int32_t aPort,
+-                                   const nsCString& aUsername,
+-                                   const nsCString& aPassword) {
++void Socks5UdpAssociation::Connect(const nsACString& aType,
++                                   const nsACString& aHost, int32_t aPort,
++                                   const nsACString& aUsername,
++                                   const nsACString& aPassword) {
+   MOZ_ASSERT(mSocketThread->IsOnCurrentThread());
+-  if (mStep != Step::Lookup) {
++  if (mStep != Step::Proxy) {
+     return;
+   }
+   // "socks" is SOCKS5; "socks4" has no UDP.
+-  if (!aType.EqualsLiteral("socks")) {
+-    UDP_ASSOC_LOG("WebrtcUdpAssociation %p: proxy type '%s' carries no UDP",
+-                  this, aType.get());
++  if (!aType.EqualsLiteral("socks") && !aType.EqualsLiteral("socks5")) {
++    UDP_ASSOC_LOG("Socks5UdpAssociation %p: proxy type '%s' carries no UDP",
++                  this, PromiseFlatCString(aType).get());
+     return Fail("the proxy is not SOCKS5");
+   }
+   if (aUsername.Length() > 255 || aPassword.Length() > 255) {
+@@ -130,13 +80,13 @@ void WebrtcUdpAssociation::OnProxy(const nsCString& aType,
+   mIn->AsyncWait(this, 0, 0, mSocketThread);
+ }
+ 
+-void WebrtcUdpAssociation::Send(const nsTArray<uint8_t>& aBytes) {
++void Socks5UdpAssociation::Send(const nsTArray<uint8_t>& aBytes) {
+   mOutBuf.AppendElements(aBytes);
+   mOut->AsyncWait(this, 0, 0, mSocketThread);
+ }
+ 
+ NS_IMETHODIMP
+-WebrtcUdpAssociation::OnOutputStreamReady(nsIAsyncOutputStream* aStream) {
++Socks5UdpAssociation::OnOutputStreamReady(nsIAsyncOutputStream* aStream) {
+   if (mStep == Step::Done) {
+     return NS_OK;
+   }
+@@ -158,7 +108,7 @@ WebrtcUdpAssociation::OnOutputStreamReady(nsIAsyncOutputStream* aStream) {
+ }
+ 
+ NS_IMETHODIMP
+-WebrtcUdpAssociation::OnInputStreamReady(nsIAsyncInputStream* aStream) {
++Socks5UdpAssociation::OnInputStreamReady(nsIAsyncInputStream* aStream) {
+   if (mStep == Step::Done) {
+     return NS_OK;
+   }
+@@ -185,7 +135,7 @@ WebrtcUdpAssociation::OnInputStreamReady(nsIAsyncInputStream* aStream) {
+   return NS_OK;
+ }
+ 
+-void WebrtcUdpAssociation::Parse() {
++void Socks5UdpAssociation::Parse() {
+   while (true) {
+     switch (mStep) {
+       case Step::Greeting: {
+@@ -248,7 +198,7 @@ void WebrtcUdpAssociation::Parse() {
+           return;
+         }
+         if (mInBuf[0] != 5 || mInBuf[1] != 0) {
+-          UDP_ASSOC_LOG("WebrtcUdpAssociation %p: UDP ASSOCIATE refused (%u)",
++          UDP_ASSOC_LOG("Socks5UdpAssociation %p: UDP ASSOCIATE refused (%u)",
+                         this, mInBuf[1]);
+           return Fail("the proxy refused UDP ASSOCIATE");
+         }
+@@ -286,6 +236,7 @@ void WebrtcUdpAssociation::Parse() {
+           relay.inet.port = port;
+         }
+         mInBuf.Clear();
++        mRoundTrip = TimeStamp::Now() - mAsked;
+         mStep = Step::Associated;
+         mOwner->OnRelayReady(relay);
+         return;
+@@ -296,21 +247,22 @@ void WebrtcUdpAssociation::Parse() {
+     }
+     // UDP ASSOCIATE, from a sending address the client does not know yet.
+     mStep = Step::Reply;
++    mAsked = TimeStamp::Now();
+     Send(nsTArray<uint8_t>{5, 3, 0, 1, 0, 0, 0, 0, 0, 0});
+   }
+ }
+ 
+-void WebrtcUdpAssociation::Fail(const char* aWhy) {
+-  UDP_ASSOC_LOG("WebrtcUdpAssociation %p: %s; no UDP leaves for the internet",
++void Socks5UdpAssociation::Fail(const char* aWhy) {
++  UDP_ASSOC_LOG("Socks5UdpAssociation %p: %s; no UDP leaves for the internet",
+                 this, aWhy);
+-  WebrtcUdpAssociationOwner* owner = mOwner;
++  Socks5UdpAssociationOwner* owner = mOwner;
+   Close();
+   if (owner) {
+     owner->OnRelayFailed();
+   }
+ }
+ 
+-void WebrtcUdpAssociation::Close() {
++void Socks5UdpAssociation::Close() {
+   MOZ_ASSERT(mSocketThread->IsOnCurrentThread());
+   mOwner = nullptr;
+   mStep = Step::Done;
+diff --git a/netwerk/base/Socks5UdpAssociation.h b/netwerk/base/Socks5UdpAssociation.h
+new file mode 100644
+index 0000000000..65eaee8c4e
+--- /dev/null
++++ b/netwerk/base/Socks5UdpAssociation.h
+@@ -0,0 +1,83 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
++ * You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef mozilla_net_Socks5UdpAssociation_h
++#define mozilla_net_Socks5UdpAssociation_h
++
++#include "mozilla/TimeStamp.h"
++#include "mozilla/net/DNS.h"
++#include "nsCOMPtr.h"
++#include "nsIAsyncInputStream.h"
++#include "nsIAsyncOutputStream.h"
++#include "nsISupportsImpl.h"
++#include "nsString.h"
++#include "nsTArray.h"
++
++class nsIEventTarget;
++class nsISocketTransport;
++
++namespace mozilla {
++namespace net {
++
++// Camoufox: what a UDP ASSOCIATE tells the socket it serves, on the socket
++// thread. OnRelayFailed() ends it: a proxy that is not SOCKS5, one that
++// refuses the association, or a control connection that closed.
++class Socks5UdpAssociationOwner {
++ public:
++  virtual void OnRelayReady(const NetAddr& aRelay) = 0;
++  virtual void OnRelayFailed() = 0;
++
++ protected:
++  virtual ~Socks5UdpAssociationOwner() = default;
++};
++
++// Camoufox: a SOCKS5 UDP ASSOCIATE (RFC 1928 §7), for the life of the UDP
++// socket it serves: one per ICE socket and one per QUIC connection, as each
++// has one UDP socket of its own without a proxy. The control connection runs
++// from the process that sends the datagrams, so the relay sees both from the
++// same address.
++class Socks5UdpAssociation final : public nsIInputStreamCallback,
++                                   public nsIOutputStreamCallback {
++ public:
++  NS_DECL_THREADSAFE_ISUPPORTS
++  NS_DECL_NSIINPUTSTREAMCALLBACK
++  NS_DECL_NSIOUTPUTSTREAMCALLBACK
++
++  // aOwner must call Close() before it goes away.
++  explicit Socks5UdpAssociation(Socks5UdpAssociationOwner* aOwner);
++  // On the socket thread, once, with the proxy the owner's traffic uses
++  // (nsIProxyInfo's type, host, port and credentials).
++  void Connect(const nsACString& aType, const nsACString& aHost, int32_t aPort,
++               const nsACString& aUsername, const nsACString& aPassword);
++  void Close();
++  // How long the proxy took to answer the UDP ASSOCIATE request: one round
++  // trip to it. Zero until the relay is ready.
++  TimeDuration RoundTrip() const { return mRoundTrip; }
++
++ private:
++  ~Socks5UdpAssociation();
++
++  void Parse();
++  void Send(const nsTArray<uint8_t>& aBytes);
++  void Fail(const char* aWhy);
++
++  enum class Step { Proxy, Greeting, Auth, Reply, Associated, Done };
++  Step mStep = Step::Proxy;
++  Socks5UdpAssociationOwner* mOwner;
++  nsCString mUsername;
++  nsCString mPassword;
++  nsCOMPtr<nsIEventTarget> mSocketThread;
++  nsCOMPtr<nsISocketTransport> mTransport;
++  nsCOMPtr<nsIAsyncInputStream> mIn;
++  nsCOMPtr<nsIAsyncOutputStream> mOut;
++  nsTArray<uint8_t> mInBuf;
++  nsTArray<uint8_t> mOutBuf;
++  TimeStamp mAsked;
++  TimeDuration mRoundTrip;
++};
++
++}  // namespace net
++}  // namespace mozilla
++
++#endif  // mozilla_net_Socks5UdpAssociation_h
+diff --git a/netwerk/base/moz.build b/netwerk/base/moz.build
+index 9f9b338136..0cae900504 100644
+--- a/netwerk/base/moz.build
++++ b/netwerk/base/moz.build
+@@ -176,6 +176,7 @@ EXPORTS.mozilla.net += [
+     "RedirectChannelRegistrar.h",
+     "RequestContextService.h",
+     "SimpleURIUnknownSchemes.h",
++    "Socks5UdpAssociation.h",
+     "SSLTokensCache.h",
+     "ThrottleQueue.h",
+ ]
+@@ -250,6 +251,7 @@ UNIFIED_SOURCES += [
+     "SimpleBuffer.cpp",
+     "SimpleChannel.cpp",
+     "SimpleURIUnknownSchemes.cpp",
++    "Socks5UdpAssociation.cpp",
+     "SSLTokensCache.cpp",
+     "SuspendableChannelWrapper.cpp",
+     "ThrottleQueue.cpp",
+diff --git a/netwerk/base/nsProxyInfo.cpp b/netwerk/base/nsProxyInfo.cpp
+index 8d79d80395..08f69a8ba5 100644
+--- a/netwerk/base/nsProxyInfo.cpp
++++ b/netwerk/base/nsProxyInfo.cpp
+@@ -181,8 +181,21 @@ bool nsProxyInfo::IsSOCKS() {
+          mType == kProxyType_SOCKS5;
+ }
+ 
++bool nsProxyInfo::IsSOCKS5() {
++  return mType == kProxyType_SOCKS || mType == kProxyType_SOCKS5;
++}
++
++bool nsProxyInfo::ConnectsAsDirect() {
++  return IsDirect() ||
++         (IsSOCKS5() && !(mFlags & TRANSPARENT_PROXY_RESOLVES_HOST));
++}
++
+ bool nsProxyInfo::IsHttp3Proxy() { return mType == kProxyType_MASQUE; }
+ 
++bool nsProxyInfo::CarriesHttp3() {
++  return IsDirect() || IsSOCKS5() || IsHttp3Proxy();
++}
++
+ /* static */
+ void nsProxyInfo::SerializeProxyInfo(nsProxyInfo* aProxyInfo,
+                                      nsTArray<ProxyInfoCloneArgs>& aResult) {
+diff --git a/netwerk/base/nsProxyInfo.h b/netwerk/base/nsProxyInfo.h
+index 70621a068d..988aac5b9c 100644
+--- a/netwerk/base/nsProxyInfo.h
++++ b/netwerk/base/nsProxyInfo.h
+@@ -52,7 +52,17 @@ class nsProxyInfo final : public nsIProxyInfo {
+   bool IsHTTP();
+   bool IsHTTPS();
+   bool IsSOCKS();
++  // Camoufox: SOCKS5, which relays UDP (UDP ASSOCIATE) as well as TCP.
++  bool IsSOCKS5();
++  // Camoufox: no proxy, or a SOCKS5 proxy that is given the addresses this
++  // browser resolved. Such a proxy is to a connection what the network is, so
++  // what a server can see of the connection (early data, coalescing) is
++  // decided as it is with no proxy.
++  bool ConnectsAsDirect();
+   bool IsHttp3Proxy();
++  // Camoufox: HTTP/3 can reach the origin: with no proxy, through a SOCKS5
++  // relay (given addresses or names), or through a MASQUE proxy.
++  bool CarriesHttp3();
+ 
+   static void SerializeProxyInfo(nsProxyInfo* aProxyInfo,
+                                  nsTArray<ProxyInfoCloneArgs>& aResult);
+diff --git a/netwerk/base/nsSocketTransport2.cpp b/netwerk/base/nsSocketTransport2.cpp
+index 12c77533a5..b5b446068f 100644
+--- a/netwerk/base/nsSocketTransport2.cpp
++++ b/netwerk/base/nsSocketTransport2.cpp
+@@ -35,6 +35,7 @@
+ #include "nsNetUtil.h"
+ #include "nsPrintfCString.h"
+ #include "nsProxyInfo.h"
++#include "nsSOCKSIOLayer.h"
+ #include "nsSocketProviderService.h"
+ #include "nsStreamUtils.h"
+ #include "nsThreadUtils.h"
+@@ -2865,6 +2866,14 @@ nsSocketTransport::GetQoSBits(uint8_t* aQoSBits) {
+   return NS_OK;
+ }
+ 
++TimeDuration nsSocketTransport::ProxyLost() {
++  // The handshake with the proxy is part of connecting, when the streams
++  // have no descriptor yet.
++  MutexAutoLock lock(mLock);
++  return mProxyTransparent && mFD.IsInitialized() ? nsSOCKSIOLayerLost(mFD)
++                                                  : TimeDuration();
++}
++
+ NS_IMETHODIMP
+ nsSocketTransport::GetRecvBufferSize(uint32_t* aSize) {
+   PRFileDescAutoLock fd(this);
+diff --git a/netwerk/base/nsSocketTransport2.h b/netwerk/base/nsSocketTransport2.h
+index ed81b052e2..fb7f005e4e 100644
+--- a/netwerk/base/nsSocketTransport2.h
++++ b/netwerk/base/nsSocketTransport2.h
+@@ -108,6 +108,8 @@ class nsSocketTransport final : public nsASocketHandler,
+   uint64_t ByteCountReceived() override;
+   uint64_t ByteCountSent() override;
+   bool IsTRRConnection() override;
++  // Camoufox: nsSOCKSIOLayerLost() of a socket behind a SOCKS proxy.
++  TimeDuration ProxyLost();
+   static void CloseSocket(PRFileDesc* aFd);
+ 
+  protected:
+diff --git a/netwerk/dns/TRR.cpp b/netwerk/dns/TRR.cpp
+index a960b375a0..fea243bd92 100644
+--- a/netwerk/dns/TRR.cpp
++++ b/netwerk/dns/TRR.cpp
+@@ -48,8 +48,39 @@ namespace mozilla {
+ namespace net {
+ 
+ NS_IMPL_ISUPPORTS_INHERITED(TRR, Runnable, nsIStreamListener, nsITimerCallback,
++                            nsIInterfaceRequestor, nsIProgressEventSink,
+                             nsIRunnablePriority)
+ 
++NS_IMETHODIMP
++TRR::GetInterface(const nsIID& aIID, void** aResult) {
++  if (aIID.Equals(NS_GET_IID(nsIProgressEventSink))) {
++    return QueryInterface(aIID, aResult);
++  }
++  return NS_ERROR_NO_INTERFACE;
++}
++
++NS_IMETHODIMP
++TRR::OnStatus(nsIRequest* aRequest, nsresult aStatus,
++              const char16_t* aStatusArg) {
++  if (aStatus == NS_NET_STATUS_SENDING_TO) {
++    Sent();
++  }
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++TRR::OnProgress(nsIRequest* aRequest, int64_t aProgress,
++                int64_t aProgressMax) {
++  return NS_OK;
++}
++
++void TRR::Sent() {
++  if (mWaiting) {
++    mWaiting = false;
++    TRRService::QuerySent();
++  }
++}
++
+ NS_IMETHODIMP
+ TRR::GetPriority(uint32_t* aPriority) {
+   if (StaticPrefs::network_trr_high_priority_events()) {
+@@ -398,10 +429,14 @@ nsresult TRR::SendHTTPRequest() {
+     return rv;
+   }
+ 
++  rv = httpChannel->SetNotificationCallbacks(this);
++  NS_ENSURE_SUCCESS(rv, rv);
+   rv = httpChannel->AsyncOpen(this);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
++  mWaiting = true;
++  TRRService::QueryWaiting();
+ 
+   // If the asyncOpen succeeded we can say that we actually attempted to
+   // use the TRR connection.
+@@ -609,6 +644,7 @@ nsresult TRR::ReturnData(nsIChannel* aChannel) {
+         NS_SUCCEEDED(timedChan->GetResponseEnd(&end)) && !start.IsNull() &&
+         !end.IsNull()) {
+       trrFetchDurationNetworkOnly = Some(end - start);
++      TRRService::AnswerTook(*trrFetchDurationNetworkOnly);
+     }
+   }
+ 
+@@ -899,6 +935,7 @@ TRR::OnStopRequest(nsIRequest* aRequest, nsresult aStatusCode) {
+   // The dtor will be run after the function returns
+   LOG(("TRR:OnStopRequest %p %s %d failed=%d code=%X\n", this, mHost.get(),
+        mType, mFailed, (unsigned int)aStatusCode));
++  Sent();
+   nsCOMPtr<nsIChannel> channel;
+   channel.swap(mChannel);
+ 
+diff --git a/netwerk/dns/TRR.h b/netwerk/dns/TRR.h
+index a476afd9ca..90a7a2c639 100644
+--- a/netwerk/dns/TRR.h
++++ b/netwerk/dns/TRR.h
+@@ -10,6 +10,7 @@
+ #include "nsClassHashtable.h"
+ #include "nsIChannel.h"
+ #include "nsIInterfaceRequestor.h"
++#include "nsIProgressEventSink.h"
+ #include "nsIStreamListener.h"
+ #include "nsITRRSkipReason.h"
+ #include "nsThreadUtils.h"
+@@ -27,11 +28,15 @@ class TRRServiceChannel;
+ class TRR : public Runnable,
+             public nsITimerCallback,
+             public nsIStreamListener,
++            public nsIInterfaceRequestor,
++            public nsIProgressEventSink,
+             public nsIRunnablePriority {
+  public:
+   NS_DECL_ISUPPORTS_INHERITED
+   NS_DECL_NSIREQUESTOBSERVER
+   NS_DECL_NSISTREAMLISTENER
++  NS_DECL_NSIINTERFACEREQUESTOR
++  NS_DECL_NSIPROGRESSEVENTSINK
+   NS_DECL_NSITIMERCALLBACK
+   NS_DECL_NSIRUNNABLEPRIORITY
+ 
+@@ -125,6 +130,9 @@ class TRR : public Runnable,
+   // we get from the prefs.
+   uint32_t mTimeoutMs = 0;
+   nsCOMPtr<nsITimer> mTimeout;
++  // Camoufox: the query is open and not yet sent (TRRService::QueryWaiting).
++  bool mWaiting = false;
++  void Sent();
+   nsCString mCname;
+   uint32_t mCnameLoop = kCnameChaseMax;  // loop detection counter
+ 
+diff --git a/netwerk/dns/TRRService.cpp b/netwerk/dns/TRRService.cpp
+index 8ec6a5667a..85081c1f09 100644
+--- a/netwerk/dns/TRRService.cpp
++++ b/netwerk/dns/TRRService.cpp
+@@ -8,6 +8,7 @@
+ #include "TRR.h"
+ #include "mozilla/Preferences.h"
+ #include "mozilla/ProfilerMarkers.h"
++#include "mozilla/StaticMutex.h"
+ #include "mozilla/StaticPrefs_network.h"
+ #include "mozilla/Telemetry.h"
+ #include "mozilla/Tokenizer.h"
+@@ -110,6 +111,61 @@ const nsCString& TRRService::ProviderKey() {
+   return kTRRDomains[sCurrentTRRModeIndex][sDomainIndex];
+ }
+ 
++static StaticMutex sAnswerTimeLock;
++static TimeDuration sAnswerTime MOZ_GUARDED_BY(sAnswerTimeLock);
++static TimeDuration sAnswerTimeVariation MOZ_GUARDED_BY(sAnswerTimeLock);
++
++// static
++void TRRService::AnswerTook(TimeDuration aTime) {
++  StaticMutexAutoLock lock(sAnswerTimeLock);
++  if (!sAnswerTime) {
++    sAnswerTime = aTime;
++    sAnswerTimeVariation = aTime / int64_t(2);
++    return;
++  }
++  // RFC 6298 section 2.3: beta is 1/4 and alpha 1/8.
++  const TimeDuration off =
++      aTime > sAnswerTime ? aTime - sAnswerTime : sAnswerTime - aTime;
++  sAnswerTimeVariation = (sAnswerTimeVariation * 3 + off) / int64_t(4);
++  sAnswerTime = (sAnswerTime * 7 + aTime) / int64_t(8);
++}
++
++// static
++TimeDuration TRRService::AnswerTimeout() {
++  StaticMutexAutoLock lock(sAnswerTimeLock);
++  return sAnswerTime + sAnswerTimeVariation * 4;
++}
++
++static uint32_t sQueriesWaiting MOZ_GUARDED_BY(sAnswerTimeLock);
++static TimeStamp sQueriesWaitingSince MOZ_GUARDED_BY(sAnswerTimeLock);
++static TimeDuration sQueriesWaited MOZ_GUARDED_BY(sAnswerTimeLock);
++
++// static
++void TRRService::QueryWaiting() {
++  StaticMutexAutoLock lock(sAnswerTimeLock);
++  if (!sQueriesWaiting++) {
++    sQueriesWaitingSince = TimeStamp::Now();
++  }
++}
++
++// static
++void TRRService::QuerySent() {
++  StaticMutexAutoLock lock(sAnswerTimeLock);
++  MOZ_RELEASE_ASSERT(sQueriesWaiting);
++  if (!--sQueriesWaiting) {
++    sQueriesWaited += TimeStamp::Now() - sQueriesWaitingSince;
++  }
++}
++
++// static
++TimeDuration TRRService::QueriesWaited() {
++  StaticMutexAutoLock lock(sAnswerTimeLock);
++  if (!sQueriesWaiting) {
++    return sQueriesWaited;
++  }
++  return sQueriesWaited + (TimeStamp::Now() - sQueriesWaitingSince);
++}
++
+ NS_IMPL_ISUPPORTS_INHERITED(TRRService, TRRServiceBase, nsIObserver,
+                             nsISupportsWeakReference)
+ 
+diff --git a/netwerk/dns/TRRService.h b/netwerk/dns/TRRService.h
+index f17c4fcd4d..fd4cf619f3 100644
+--- a/netwerk/dns/TRRService.h
++++ b/netwerk/dns/TRRService.h
+@@ -100,6 +100,21 @@ class TRRService : public TRRServiceBase,
+   // Only called when TRR mode changed.
+   static void SetCurrentTRRMode(nsIDNSService::ResolverMode aMode);
+ 
++  // Camoufox: how long the resolver's answers take, from the answers so far
++  // (AnswerTook, the time between a query's request and the end of its
++  // response). AnswerTimeout is the time after which an answer is late: RFC
++  // 6298's retransmission timeout, the smoothed answer time and four times
++  // its variation. Zero before the first answer.
++  static void AnswerTook(TimeDuration aTime);
++  static TimeDuration AnswerTimeout();
++  // Camoufox: how long queries have waited to be sent, for a connection to
++  // the resolver or behind other queries: the time, since the process
++  // started, during which at least one query was opened (QueryWaiting) and
++  // not yet sent (QuerySent).
++  static void QueryWaiting();
++  static void QuerySent();
++  static TimeDuration QueriesWaited();
++
+   void InitTRRConnectionInfo(bool aForceReinit = false) override;
+ 
+   void DontUseTRRThread() { mDontUseTRRThread = true; }
+diff --git a/netwerk/protocol/http/AlternateServices.cpp b/netwerk/protocol/http/AlternateServices.cpp
+index 289b877ccb..2f35918593 100644
+--- a/netwerk/protocol/http/AlternateServices.cpp
++++ b/netwerk/protocol/http/AlternateServices.cpp
+@@ -458,7 +458,8 @@ void AltSvcMapping::GetConnectionInfo(
+   ci = ci->Mutate()
+            .SetInsecureScheme(!mHttps && !mMixedScheme)
+            .SetHappyEyeballsEnabled(
+-               StaticPrefs::network_http_happy_eyeballs_enabled() && !pi)
++               StaticPrefs::network_http_happy_eyeballs_enabled() &&
++               (!pi || pi->ConnectsAsDirect()))
+            .SetPrivate(mPrivate)
+            .Finalize();
+   ci.forget(outCI);
+@@ -905,7 +906,7 @@ void AltSvcCache::UpdateAltServiceMapping(
+   }
+ 
+   if (map->IsHttp3()) {
+-    bool isProxyAllowed = pi ? (pi->IsDirect() || pi->IsHttp3Proxy()) : true;
++    bool isProxyAllowed = pi ? pi->CarriesHttp3() : true;
+     if (!isProxyAllowed) {
+       LOG(
+           ("AltSvcCache::UpdateAltServiceMapping %p map %p ignored h3 because "
+@@ -934,7 +935,8 @@ void AltSvcCache::UpdateAltServiceMapping(
+   // validation would resolve the host client-side and leak it outside a SOCKS
+   // remote-DNS proxy. TODO: handle this in the Happy Eyeballs code once it
+   // supports establishing proxy connections.
+-  if (StaticPrefs::network_http_happy_eyeballs_enabled() && !pi) {
++  if (StaticPrefs::network_http_happy_eyeballs_enabled() &&
++      (!pi || pi->ConnectsAsDirect())) {
+     // Validating an h3 alternate must establish an h3 connection; don't let
+     // Happy Eyeballs race h1/h2 and settle on a non-h3 connection.
+     ci = ci->Mutate()
+@@ -1211,7 +1213,8 @@ void Http3FirstAltSvcMapping::GetConnectionInfo(
+       mAlternateHost, mAlternatePort, mIsHttp3, false);
+   ci = ci->Mutate()
+            .SetHappyEyeballsEnabled(
+-               StaticPrefs::network_http_happy_eyeballs_enabled() && !pi)
++               StaticPrefs::network_http_happy_eyeballs_enabled() &&
++               (!pi || pi->ConnectsAsDirect()))
+            .SetPrivate(mPrivate)
+            .Finalize();
+   ci.forget(outCI);
+diff --git a/netwerk/protocol/http/ConnectionEntry.cpp b/netwerk/protocol/http/ConnectionEntry.cpp
+index 82a56487ab..6af28a4997 100644
+--- a/netwerk/protocol/http/ConnectionEntry.cpp
++++ b/netwerk/protocol/http/ConnectionEntry.cpp
+@@ -69,6 +69,17 @@ bool ConnectionEntry::HasActiveH3Connection() const {
+          mConnectionAttemptPool->UnconnectedUDPConnsLength() > 0;
+ }
+ 
++Maybe<TimeDuration> ConnectionEntry::Http3RelayLag(
++    uint32_t aRoundTrips) const {
++  for (const auto& conn : mActiveConns) {
++    RefPtr<HttpConnectionUDP> connUDP = do_QueryObject(conn);
++    if (connUDP && connUDP->RelayLag(aRoundTrips)) {
++      return connUDP->RelayLag(aRoundTrips);
++    }
++  }
++  return Nothing();
++}
++
+ bool ConnectionEntry::AvailableForDispatchNow() {
+   if (mIdleConns.Length() && mIdleConns[0]->CanReuseLikely()) {
+     return true;
+@@ -1048,7 +1059,7 @@ bool ConnectionEntry::MaybeProcessCoalescingKeys(nsIDNSAddrRecord* dnsRecord,
+ bool ConnectionEntry::MaybeProcessCoalescingKeys(
+     const nsTArray<NetAddr>& aAddresses, bool aIsHttp3) {
+   if (!mConnInfo || !mConnInfo->EndToEndSSL() || (!aIsHttp3 && !AllowHttp2()) ||
+-      mConnInfo->UsingProxy() || !mCoalescingKeys.IsEmpty()) {
++      !mConnInfo->ConnectsAsDirect() || !mCoalescingKeys.IsEmpty()) {
+     return false;
+   }
+ 
+@@ -1112,7 +1123,8 @@ bool ConnectionEntry::AllowToRetryDifferentIPFamilyForHttp3(nsresult aError) {
+       ("ConnectionEntry::AllowToRetryDifferentIPFamilyForHttp3 %p "
+        "error=%" PRIx32,
+        this, static_cast<uint32_t>(aError)));
+-  if (mConnInfo->GetHappyEyeballsEnabled()) {
++  // Camoufox: a proxy given the name picks the address, and its family.
++  if (mConnInfo->GetHappyEyeballsEnabled() || !mConnInfo->ConnectsAsDirect()) {
+     return false;
+   }
+   if (!mConnInfo->IsHttp3() && !mConnInfo->IsHttp3ProxyConnection()) {
+diff --git a/netwerk/protocol/http/ConnectionEntry.h b/netwerk/protocol/http/ConnectionEntry.h
+index 86760ca45f..ef3fff03e1 100644
+--- a/netwerk/protocol/http/ConnectionEntry.h
++++ b/netwerk/protocol/http/ConnectionEntry.h
+@@ -238,6 +238,9 @@ class ConnectionEntry : public SupportsWeakPtr {
+   // HasUsableH3Connection(), or an h3 connection attempt still in flight.
+   bool HasActiveH3Connection() const;
+ 
++  // Camoufox: HttpConnectionUDP::RelayLag() of this entry's h3 connection.
++  Maybe<TimeDuration> Http3RelayLag(uint32_t aRoundTrips) const;
++
+   bool RemoveTransFromPendingQ(nsHttpTransaction* aTrans);
+ 
+   // Notify that a transaction was removed directly from a per-window pending
+diff --git a/netwerk/protocol/http/ConnectionEstablisher.cpp b/netwerk/protocol/http/ConnectionEstablisher.cpp
+index 05047d8358..1ed103abda 100644
+--- a/netwerk/protocol/http/ConnectionEstablisher.cpp
++++ b/netwerk/protocol/http/ConnectionEstablisher.cpp
+@@ -13,6 +13,8 @@
+ #include "nsHttpHandler.h"
+ #include "nsHttpTransaction.h"
+ #include "nsIDNSRecord.h"
++#include "nsQueryObject.h"
++#include "nsSocketTransport2.h"
+ #include "nsSocketTransportService2.h"
+ 
+ // Log on level :5, instead of default :4.
+@@ -497,6 +499,16 @@ void TCPConnectionEstablisher::Close(nsresult aReason) {
+   Finish(aReason);
+ }
+ 
++TimeDuration TCPConnectionEstablisher::ProxyLost() const {
++  nsCOMPtr<nsISocketTransport> transport = mSocketTransport;
++  if (!transport && mResultConn) {
++    transport = mResultConn->Transport();
++  }
++  return transport ? static_cast<nsSocketTransport*>(transport.get())
++                         ->ProxyLost()
++                   : TimeDuration();
++}
++
+ nsresult TCPConnectionEstablisher::CreateAndConfigureSocketTransport() {
+   nsresult rv = NS_OK;
+   nsTArray<nsCString> socketTypes;
+@@ -768,6 +780,11 @@ void UDPConnectionEstablisher::Close(nsresult aReason) {
+   Finish(aReason);
+ }
+ 
++TimeDuration UDPConnectionEstablisher::ProxyLost() const {
++  RefPtr<HttpConnectionUDP> conn = do_QueryObject(mResultConn);
++  return conn ? conn->RelayLost() : TimeDuration();
++}
++
+ nsresult UDPConnectionEstablisher::CreateAndConfigureUDPConn() {
+   LOG(
+       ("UDPConnectionEstablisher::CreateAndConfigureUDPConn [this=%p "
+diff --git a/netwerk/protocol/http/ConnectionEstablisher.h b/netwerk/protocol/http/ConnectionEstablisher.h
+index 36c6c41a02..78e3bed07d 100644
+--- a/netwerk/protocol/http/ConnectionEstablisher.h
++++ b/netwerk/protocol/http/ConnectionEstablisher.h
+@@ -76,6 +76,10 @@ class ConnectionEstablisher : public nsITransportEventSink,
+   void ClearResultConnection();
+   HttpConnectionBase* ResultConn() const { return mResultConn; }
+   virtual bool IsUDP() const { return false; }
++  // Camoufox: the time this attempt has lost to a SOCKS5 proxy so far: a TCP
++  // socket's handshake with the proxy (nsSocketTransport::ProxyLost), a QUIC
++  // connection's relay (HttpConnectionUDP::RelayLost).
++  virtual TimeDuration ProxyLost() const = 0;
+   bool HasConnected() const { return mHasConnected; }
+   bool RefusedForLocalAddress() const { return mRefusedForLocalAddress; }
+ 
+@@ -139,6 +143,7 @@ class TCPConnectionEstablisher : public ConnectionEstablisher,
+   bool Start(DoneCallback&& aCallback) override;
+   void ResetSpeculativeFlags() override;
+   void Close(nsresult aReason) override;
++  TimeDuration ProxyLost() const override;
+ 
+  private:
+   ~TCPConnectionEstablisher();
+@@ -166,6 +171,7 @@ class UDPConnectionEstablisher : public ConnectionEstablisher {
+   void ResetSpeculativeFlags() override {}
+   void Close(nsresult aReason) override;
+   bool IsUDP() const override { return true; }
++  TimeDuration ProxyLost() const override;
+ 
+  private:
+   ~UDPConnectionEstablisher();
+diff --git a/netwerk/protocol/http/DnsAndConnectSocket.cpp b/netwerk/protocol/http/DnsAndConnectSocket.cpp
+index 869dc9799f..69705328bc 100644
+--- a/netwerk/protocol/http/DnsAndConnectSocket.cpp
++++ b/netwerk/protocol/http/DnsAndConnectSocket.cpp
+@@ -70,7 +70,9 @@ DnsAndConnectSocket::DnsAndConnectSocket(nsHttpConnectionInfo* ci,
+   LOG(("Creating DnsAndConnectSocket [this=%p trans=%p ent=%s key=%s]\n", this,
+        trans, mConnInfo->Origin(), mConnInfo->HashKey().get()));
+ 
+-  if (mConnInfo->UsingProxy()) {
++  // Camoufox: a SOCKS5 proxy carries QUIC whether it is given addresses or
++  // names.
++  if (mConnInfo->UsingProxy() && !mConnInfo->ProxyCarriesUdp()) {
+     mIsHttp3 = mConnInfo->IsHttp3ProxyConnection();
+   } else {
+     mIsHttp3 = mConnInfo->IsHttp3();
+@@ -246,6 +248,21 @@ nsresult DnsAndConnectSocket::SetupEvent(SetupEvents event) {
+         mState = DnsAndSocketState::DONE;
+       } else if (mPrimaryTransport.FirstResolving()) {
+         mState = DnsAndSocketState::RESOLVING;
++      } else if (mIsHttp3 && mPrimaryTransport.Resolved()) {
++        // Camoufox: the proxy resolves the name, so there is nothing to wait
++        // for. The connection is made once the entry holds this attempt.
++        mState = DnsAndSocketState::RESOLVING;
++        rv = NS_DispatchToCurrentThread(NS_NewRunnableFunction(
++            "DnsAndConnectSocket::SetupConn",
++            [self = RefPtr{this}]() {
++              if (self->mState == DnsAndSocketState::DONE) {
++                return;
++              }
++              self->SetupConn(true, NS_OK);
++              if (self->mState != DnsAndSocketState::DONE) {
++                self->SetupEvent(SetupEvents::PRIMARY_DONE_EVENT);
++              }
++            }));
+       } else if (!mIsHttp3 && mPrimaryTransport.ConnectingOrRetry()) {
+         mState = DnsAndSocketState::CONNECTING;
+         SetupBackupTimer();
+@@ -773,7 +790,7 @@ DnsAndConnectSocket::OnTransportStatus(nsITransport* trans, nsresult status,
+     // (see nsHttpConnection::HandshakeDoneInternal) when
+     // network.lna.defer_https_check is set; this avoids spurious prompts
+     // when DNS misdirects a public hostname to a private address.
+-    if (mConnInfo->FirstHopSSL() && !mConnInfo->UsingProxy() &&
++    if (mConnInfo->FirstHopSSL() && mConnInfo->ConnectsAsDirect() &&
+         StaticPrefs::network_lna_blocking()) {
+       NetAddr peerAddr;
+       if (NS_SUCCEEDED(transport->mSocketTransport->GetPeerAddr(&peerAddr))) {
+@@ -957,6 +974,11 @@ nsresult DnsAndConnectSocket::TransportSetup::Init(
+     DnsAndConnectSocket* dnsAndSock) {
+   nsresult rv;
+   mSynStarted = TimeStamp::Now();
++  if (mSkipDnsResolution && dnsAndSock->mIsHttp3) {
++    // Camoufox: QUIC to a proxy that resolves names needs no address.
++    mState = TransportSetup::TransportSetupState::RESOLVED;
++    return NS_OK;
++  }
+   if (mSkipDnsResolution) {
+     mState = TransportSetup::TransportSetupState::CONNECTING;
+     rv = SetupStreams(dnsAndSock);
+diff --git a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
+index e499817a90..b06e927d7f 100644
+--- a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
++++ b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.cpp
+@@ -15,6 +15,7 @@
+ #include "PendingTransactionInfo.h"
+ #include "mozilla/StaticPrefs_network.h"
+ #include "mozilla/net/NeckoChannelParams.h"
++#include "mozilla/net/TRRService.h"
+ #include "nsDNSService2.h"
+ #include "nsHttpConnectionMgr.h"
+ #include "nsHttpHandler.h"
+@@ -40,6 +41,7 @@ using happy_eyeballs::happy_eyeballs_process_dns_response_aaaa;
+ using happy_eyeballs::happy_eyeballs_process_dns_response_https;
+ using happy_eyeballs::happy_eyeballs_process_ech_retry;
+ using happy_eyeballs::happy_eyeballs_process_output;
++using happy_eyeballs::happy_eyeballs_set_relay_lag;
+ 
+ static void NotifyConnectionActivity(nsHttpConnectionInfo* aConnInfo,
+                                      uint32_t aSubtype) {
+@@ -553,6 +555,9 @@ nsresult HappyEyeballsConnectionAttempt::ProcessHappyEyeballsOutput() {
+ 
+   nsresult rv = NS_OK;
+ 
++  happy_eyeballs_set_relay_lag(
++      mHappyEyeballs, static_cast<uint64_t>(RelayLag().ToMilliseconds()));
++
+   while (!IsTerminal()) {
+     happy_eyeballs::Output event{};
+     nsTArray<uint8_t> echConfig;
+@@ -877,6 +882,10 @@ void HappyEyeballsConnectionAttempt::DNSLookup(
+   if (NS_SUCCEEDED(rv) && request) {
+     requestInfo->SetRequest(request);
+     mDnsRequestTable.InsertOrUpdate(request, requestInfo);
++    if (mDnsAsked.IsNull()) {
++      mDnsAsked = TimeStamp::Now();
++      mDnsQueriesWaited = TRRService::QueriesWaited();
++    }
+     return;
+   }
+ 
+@@ -1200,13 +1209,29 @@ void HappyEyeballsConnectionAttempt::CancelConnection(uint64_t aId) {
+ 
+   RefPtr<ConnectionEstablisher> conn = mConnectionEstablisherTable.Get(aId);
+   if (conn) {
+-    conn->Close(NS_ERROR_ABORT);
++    CloseLoser(conn);
+     mConnectionEstablisherTable.Remove(aId);
+   } else {
+     LOG(("No matching connection found for id=%" PRIu64, aId));
+   }
+ }
+ 
++void HappyEyeballsConnectionAttempt::CloseLoser(
++    ConnectionEstablisher* aEstablisher) {
++  const TimeDuration lost = aEstablisher->ProxyLost();
++  if (!lost) {
++    aEstablisher->Close(NS_ERROR_ABORT);
++    return;
++  }
++  NS_DelayedDispatchToCurrentThread(
++      NS_NewRunnableFunction(
++          "HappyEyeballsConnectionAttempt::CloseLoser",
++          [establisher = RefPtr{aEstablisher}] {
++            establisher->Close(NS_ERROR_ABORT);
++          }),
++      static_cast<uint32_t>(lost.ToMilliseconds()));
++}
++
+ void HappyEyeballsConnectionAttempt::CloseHttpTransaction(
+     happy_eyeballs::FailureReason aReason, ConnectionEntry* aEntry) {
+   LOG(("HappyEyeballsConnectionAttempt::CloseHttpTransaction %p reason=%d",
+@@ -1738,7 +1763,7 @@ void HappyEyeballsConnectionAttempt::EnterDone() {
+   mConnectionEstablisherTable.Clear();
+ 
+   for (auto& conn : establishers) {
+-    conn->Close(NS_ERROR_ABORT);
++    CloseLoser(conn);
+   }
+ 
+   if (mTimer) {
+@@ -1875,6 +1900,28 @@ void HappyEyeballsConnectionAttempt::Transition(State aNext,
+ 
+ void HappyEyeballsConnectionAttempt::PrintDiagnostics(nsCString& log) {}
+ 
++TimeDuration HappyEyeballsConnectionAttempt::DnsLost() {
++  nsProxyInfo* proxy = mConnInfo->ProxyInfo();
++  if (mDnsAsked.IsNull() || !proxy || !proxy->ConnectsAsDirect()) {
++    return mDnsLost;
++  }
++  // What has been counted as lost is not given back when the answer timeout
++  // falls, or the clock would jump forward by it.
++  const TimeDuration unsent = TRRService::QueriesWaited() - mDnsQueriesWaited;
++  const TimeDuration sent = TimeStamp::Now() - mDnsAsked - unsent;
++  mDnsWaited = std::max(
++      mDnsWaited, unsent + std::min(sent, TRRService::AnswerTimeout()));
++  return mDnsLost + mDnsWaited;
++}
++
++TimeDuration HappyEyeballsConnectionAttempt::RelayLag() {
++  TimeDuration lag = DnsLost();
++  for (const auto& establisher : mConnectionEstablisherTable.Values()) {
++    lag += establisher->ProxyLost();
++  }
++  return lag;
++}
++
+ uint32_t HappyEyeballsConnectionAttempt::UnconnectedUDPConnsLength() const {
+   uint32_t len = 0;
+   for (auto iter = mConnectionEstablisherTable.ConstIter(); !iter.Done();
+@@ -1958,6 +2005,15 @@ HappyEyeballsConnectionAttempt::OnLookupComplete(nsICancelable* request,
+   happy_eyeballs::DnsRecordType type = info->Type();
+   mDnsRequestTable.Remove(request);
+ 
++  // Camoufox: the answer is taken at the time it reached the proxy's exit.
++  happy_eyeballs_set_relay_lag(
++      mHappyEyeballs, static_cast<uint64_t>(RelayLag().ToMilliseconds()));
++  if (mDnsRequestTable.IsEmpty()) {
++    mDnsLost = DnsLost();
++    mDnsAsked = TimeStamp();
++    mDnsWaited = TimeDuration();
++  }
++
+   switch (type) {
+     case happy_eyeballs::DnsRecordType::A:
+       return OnARecord(rec, status, id);
+diff --git a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
+index 1bf8bf81e7..7f4b6fbd9c 100644
+--- a/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
++++ b/netwerk/protocol/http/HappyEyeballsConnectionAttempt.h
+@@ -198,6 +198,30 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
+ 
+   nsresult ProcessHappyEyeballsOutput();
+ 
++  // Camoufox: behind a SOCKS5 proxy an attempt sends nothing until the proxy
++  // has been asked for it, and its answer crosses the proxy, so the delay
++  // before the next attempt would run out on an attempt a Firefox at the
++  // proxy's exit would still be waiting for. This is the time the attempts
++  // in progress have lost that way (ConnectionEstablisher::ProxyLost), which
++  // the state machine's clock is set back by. A lookup crosses the proxy as
++  // well (DnsLost), or the wait for the HTTPS record would run out on an
++  // answer a Firefox there would have.
++  TimeDuration RelayLag();
++  // Camoufox: the time lookups have lost to a proxy that connects as direct.
++  // A Firefox at the exit has its resolver beside it, so the clock stands
++  // still while an answer is outstanding: while queries wait to be sent, for
++  // a connection to the resolver through the proxy (TRRService::QueriesWaited),
++  // then for as long as the resolver's answers take once sent
++  // (TRRService::AnswerTimeout). An answer later than that is waited for as
++  // stock waits for any.
++  TimeDuration DnsLost();
++  // Camoufox: closes an attempt that lost the race. Behind a SOCKS5 proxy it
++  // reached the origin later than it was started by what the proxy cost it
++  // (ConnectionEstablisher::ProxyLost), so it is closed that much later: the
++  // origin sees it for as long as it sees the one a Firefox at the proxy's
++  // exit gives up.
++  void CloseLoser(ConnectionEstablisher* aEstablisher);
++
+   // Report the domain lookup span: domainLookupStart is the first DNS query
+   // (any type), domainLookupEnd is the start of the first connection attempt.
+   void DnsLookupTimings(TimeStamp& aStart, TimeStamp& aEnd) const;
+@@ -305,6 +329,13 @@ class HappyEyeballsConnectionAttempt final : public ConnectionAttempt,
+ 
+   nsRefPtrHashtable<nsPtrHashKey<nsICancelable>, DnsRequestInfo>
+       mDnsRequestTable;
++  // Camoufox: when the stretch of lookups under way began, how long queries
++  // had waited to be sent by then, what it has lost so far, and what the
++  // finished ones lost (DnsLost).
++  TimeStamp mDnsAsked;
++  TimeDuration mDnsQueriesWaited;
++  TimeDuration mDnsWaited;
++  TimeDuration mDnsLost;
+ 
+   nsRefPtrHashtable<nsUint64HashKey, ConnectionEstablisher>
+       mConnectionEstablisherTable;
+diff --git a/netwerk/protocol/http/Http2Session.cpp b/netwerk/protocol/http/Http2Session.cpp
+index 92fe5508d5..b9d38b1703 100644
+--- a/netwerk/protocol/http/Http2Session.cpp
++++ b/netwerk/protocol/http/Http2Session.cpp
+@@ -2495,7 +2495,7 @@ nsresult Http2Session::RecvOrigin(Http2Session* self) {
+     return NS_OK;
+   }
+ 
+-  if (self->ConnectionInfo()->UsingProxy()) {
++  if (!self->ConnectionInfo()->ConnectsAsDirect()) {
+     LOG3(("Http2Session::RecvOrigin %p must not use proxy", self));
+     self->ResetDownstreamState();
+     return NS_OK;
+diff --git a/netwerk/protocol/http/Http3Session.cpp b/netwerk/protocol/http/Http3Session.cpp
+index c9194c225a..665a71218c 100644
+--- a/netwerk/protocol/http/Http3Session.cpp
++++ b/netwerk/protocol/http/Http3Session.cpp
+@@ -2669,7 +2669,7 @@ bool Http3Session::RealJoinConnection(const nsACString& hostname, int32_t port,
+   }
+ 
+   nsHttpConnectionInfo* ci = ConnectionInfo();
+-  if (ci->UsingProxy()) {
++  if (!ci->ConnectsAsDirect()) {
+     MOZ_ASSERT(false,
+                "RealJoinConnection should not be called when using proxy");
+     return false;
+diff --git a/netwerk/protocol/http/Http3Session.h b/netwerk/protocol/http/Http3Session.h
+index cd8b2a8e29..b1d015c066 100644
+--- a/netwerk/protocol/http/Http3Session.h
++++ b/netwerk/protocol/http/Http3Session.h
+@@ -348,6 +348,16 @@ class Http3Session final : public Http3SessionBase,
+       PRIntervalTime aRtt, bool aIsExtendedCONNECT);
+   void SetIsInTunnel() { mIsInTunnel = true; }
+ 
++  // Camoufox: see HttpConnectionUDP::mSocks5.
++  nsresult Socks5(const nsACString& aName, const NetAddr& aPlaceholder) {
++    return mHttp3Connection->Socks5(aName, aPlaceholder);
++  }
++  nsresult Socks5Relay(const NetAddr& aRelay, int64_t aSocket,
++                       bool aReplaced) {
++    return mHttp3Connection->Socks5Relay(aRelay, aSocket, aReplaced);
++  }
++  void Socks5Failed() { mHttp3Connection->Socks5Failed(); }
++
+   void SetDontExclude() { mDontExclude = true; }
+ 
+  private:
+diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/HttpBaseChannel.cpp
+index 9e54d6d8bf..5f9be9249e 100644
+--- a/netwerk/protocol/http/HttpBaseChannel.cpp
++++ b/netwerk/protocol/http/HttpBaseChannel.cpp
+@@ -6777,9 +6777,9 @@ void HttpBaseChannel::DoDiagnosticAssertWhenOnStopNotCalledOnDestroy() {}
+ 
+ bool HttpBaseChannel::Http3Allowed() const {
+   bool allowedProxyInfo =
+-      mProxyInfo ? (static_cast<nsProxyInfo*>(mProxyInfo.get())->IsDirect() ||
+-                    static_cast<nsProxyInfo*>(mProxyInfo.get())->IsHttp3Proxy())
+-                 : true;
++      mProxyInfo
++          ? static_cast<nsProxyInfo*>(mProxyInfo.get())->CarriesHttp3()
++          : true;
+   // TODO: When mUpgradeProtocolCallback is not null, we should allow HTTP/3 for
+   // connect-udp.
+   return !mUpgradeProtocolCallback && allowedProxyInfo &&
+diff --git a/netwerk/protocol/http/HttpConnectionUDP.cpp b/netwerk/protocol/http/HttpConnectionUDP.cpp
+index c662beac36..8715a8b37f 100644
+--- a/netwerk/protocol/http/HttpConnectionUDP.cpp
++++ b/netwerk/protocol/http/HttpConnectionUDP.cpp
+@@ -20,6 +20,7 @@
+ #include "Http3Session.h"
+ #include "HttpConnectionUDP.h"
+ #include "mozilla/StaticPrefs_network.h"
++#include "nsProxyInfo.h"
+ #include "mozilla/glean/NetwerkMetrics.h"
+ #include "nsComponentManagerUtils.h"
+ #include "nsHttpConnectionMgr.h"
+@@ -196,6 +197,10 @@ HttpConnectionUDP::~HttpConnectionUDP() {
+     mForceSendTimer = nullptr;
+   }
+ 
++  if (mSocks5) {
++    mSocks5->Close();
++  }
++
+   MOZ_ASSERT(mQueuedHttpConnectTransaction.IsEmpty(),
+              "Should not have any queued transactions");
+   MOZ_ASSERT(mQueuedConnectUdpTransaction.IsEmpty(),
+@@ -245,6 +250,26 @@ nsresult HttpConnectionUDP::Init(nsHttpConnectionInfo* info,
+     return mErrorBeforeConnect;
+   }
+ 
++  nsresult rv;
++  // Camoufox: a SOCKS5 proxy that resolves names is sent the origin's name,
++  // and nothing is looked up here. The connection is made to a placeholder
++  // (TEST-NET-1, RFC 5737) that stands for the name.
++  if (!mConnInfo->ConnectsAsDirect() && mConnInfo->ProxyCarriesUdp()) {
++    mSocks5Name = mConnInfo->GetRoutedHost().IsEmpty()
++                      ? mConnInfo->GetOrigin()
++                      : mConnInfo->GetRoutedHost();
++    NetAddr placeholder;
++    MOZ_ALWAYS_SUCCEEDS(placeholder.InitFromString(
++        "192.0.2.1"_ns, !mConnInfo->GetRoutedHost().IsEmpty()
++                            ? mConnInfo->RoutedPort()
++                            : mConnInfo->OriginPort()));
++    mSocket = do_CreateInstance("@mozilla.org/network/udp-socket;1", &rv);
++    if (NS_FAILED(rv)) {
++      return rv;
++    }
++    return InitCommon(mSocket, placeholder, callbacks, caps, false);
++  }
++
+   nsCOMPtr<nsIDNSAddrRecord> dnsAddrRecord = do_QueryInterface(dnsRecord);
+   if (!dnsAddrRecord) {
+     return NS_ERROR_FAILURE;
+@@ -259,7 +284,7 @@ nsresult HttpConnectionUDP::Init(nsHttpConnectionInfo* info,
+           : (!mConnInfo->GetRoutedHost().IsEmpty() ? mConnInfo->RoutedPort()
+                                                    : mConnInfo->OriginPort());
+ 
+-  nsresult rv = dnsAddrRecord->GetNextAddr(port, &peerAddr);
++  rv = dnsAddrRecord->GetNextAddr(port, &peerAddr);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
+@@ -299,6 +324,113 @@ nsresult HttpConnectionUDP::InitWithSocket(nsHttpConnectionInfo* info,
+   return InitCommon(aSocket, aPeerAddr, callbacks, caps, true);
+ }
+ 
++nsresult HttpConnectionUDP::BindSocket(nsIUDPSocket* aSocket,
++                                       uint16_t aFamily) {
++  NetAddr local;
++  local.raw.family = aFamily;
++  nsresult rv = aSocket->InitWithAddress(&local, nullptr, false, 1);
++  if (NS_FAILED(rv)) {
++    return rv;
++  }
++
++  rv = aSocket->SetRecvBufferSize(
++      StaticPrefs::network_http_http3_recvBufferSize());
++  if (NS_FAILED(rv)) {
++    LOG(("HttpConnectionUDP::BindSocket SetRecvBufferSize failed %d [this=%p]",
++         static_cast<uint32_t>(rv), this));
++    aSocket->Close();
++    return rv;
++  }
++
++  if (aFamily == AF_INET) {
++    rv = aSocket->SetDontFragment(true);
++    if (NS_FAILED(rv)) {
++      LOG(("HttpConnectionUDP::BindSocket SetDontFragment failed %d [this=%p]",
++           static_cast<uint32_t>(rv), this));
++    }
++  }
++  return NS_OK;
++}
++
++// Camoufox: the relay is reached from a socket of its own address family,
++// which is the proxy's and not always the peer's.
++void HttpConnectionUDP::OnRelayReady(const NetAddr& aRelay) {
++  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
++  mRelayPending = false;
++  if (!mHttp3Session || !mSocket) {
++    return;
++  }
++  if (mHttp3Session->IsClosing()) {
++    // Closed before it could send: all it has to say is that it closed, to a
++    // peer that never heard of it. With no proxy the peer has its first
++    // flight by then.
++    mHttp3Session->Socks5Failed();
++    return;
++  }
++  NetAddr peer;
++  mPeerAddr->GetNetAddr(&peer);
++  nsCOMPtr<nsIUDPSocket> replaced;
++  if (aRelay.raw.family != peer.raw.family) {
++    nsresult rv;
++    nsCOMPtr<nsIUDPSocket> socket =
++        do_CreateInstance("@mozilla.org/network/udp-socket;1", &rv);
++    if (NS_FAILED(rv) || NS_FAILED(BindSocket(socket, aRelay.raw.family))) {
++      return OnRelayFailed();
++    }
++    socket->SetOriginAttributes(mConnInfo->GetOriginAttributes());
++    if (NS_FAILED(socket->SyncListen(this))) {
++      socket->Close();
++      return OnRelayFailed();
++    }
++    replaced = std::move(mSocket);
++    mSocket = socket;
++  }
++  if (NS_FAILED(mHttp3Session->Socks5Relay(
++          aRelay, mSocket->GetFileDescriptor(), !!replaced))) {
++    return OnRelayFailed();
++  }
++  if (replaced) {
++    replaced->Close();
++  }
++  mRelayReady = true;
++  mRelaySetup = TimeStamp::Now() - mRelayAsked;
++  (void)SendData();
++}
++
++Maybe<TimeDuration> HttpConnectionUDP::RelayLag(uint32_t aRoundTrips) const {
++  if (mRelayPending) {
++    return Some(TimeDuration::Forever());
++  }
++  return mRelayReady ? Some(mRelaySetup +
++                            mSocks5->RoundTrip().MultDouble(aRoundTrips))
++                     : Nothing();
++}
++
++TimeDuration HttpConnectionUDP::RelayLost() const {
++  if (mRelayPending) {
++    return TimeStamp::Now() - mRelayAsked;
++  }
++  return mSocks5 ? RelayLag(1).valueOr(TimeDuration()) : TimeDuration();
++}
++
++void HttpConnectionUDP::OnRelayFailed() {
++  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
++  mRelayPending = false;
++  if (!mHttp3Session) {
++    return;
++  }
++  mHttp3Session->Socks5Failed();
++  if (mRelayReady) {
++    // An association lost in use is a socket that failed, which ends the
++    // connection at once. Its requests go to a new one instead of waiting
++    // out the idle timeout.
++    RefPtr<HttpConnectionUDP> self(this);
++    CloseTransaction(mHttp3Session, NS_ERROR_NET_RESET);
++    return;
++  }
++  (void)SendData();
++}
++
+ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+                                        const NetAddr& aPeerAddr,
+                                        nsIInterfaceRequestor* callbacks,
+@@ -314,32 +446,12 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+     mSocket->MarkAsTRRServiceChannel();
+   }
+ 
+-  NetAddr local;
+-  local.raw.family = aPeerAddr.raw.family;
+-  nsresult rv = mSocket->InitWithAddress(&local, nullptr, false, 1);
+-  if (NS_FAILED(rv)) {
+-    mSocket = nullptr;
+-    return rv;
+-  }
+-
+-  rv = mSocket->SetRecvBufferSize(
+-      StaticPrefs::network_http_http3_recvBufferSize());
++  nsresult rv = BindSocket(mSocket, aPeerAddr.raw.family);
+   if (NS_FAILED(rv)) {
+-    LOG(("HttpConnectionUDP::InitCommon SetRecvBufferSize failed %d [this=%p]",
+-         static_cast<uint32_t>(rv), this));
+-    mSocket->Close();
+     mSocket = nullptr;
+     return rv;
+   }
+ 
+-  if (aPeerAddr.raw.family == AF_INET) {
+-    rv = mSocket->SetDontFragment(true);
+-    if (NS_FAILED(rv)) {
+-      LOG(("HttpConnectionUDP::InitCommon SetDontFragment failed %d [this=%p]",
+-           static_cast<uint32_t>(rv), this));
+-    }
+-  }
+-
+   // get the resulting socket address.
+   rv = mSocket->GetLocalAddr(getter_AddRefs(mSelfAddr));
+   if (NS_FAILED(rv)) {
+@@ -389,6 +501,15 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+   mIsInTunnel = isInTunnel;
+   if (mIsInTunnel) {
+     mHttp3Session->SetIsInTunnel();
++  } else if (mConnInfo->ProxyCarriesUdp()) {
++    rv = mHttp3Session->Socks5(mSocks5Name, aPeerAddr);
++    if (NS_FAILED(rv)) {
++      mSocket->Close();
++      mSocket = nullptr;
++      mHttp3Session = nullptr;
++      return rv;
++    }
++    mSocks5 = new Socks5UdpAssociation(this);
+   }
+ 
+   ChangeConnectionState(ConnectionState::INITED);
+@@ -403,6 +524,14 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+     return rv;
+   }
+ 
++  if (mSocks5) {
++    nsProxyInfo* proxy = mConnInfo->ProxyInfo();
++    mRelayPending = true;
++    mRelayAsked = TimeStamp::Now();
++    mSocks5->Connect(nsDependentCString(proxy->Type()), proxy->Host(),
++                     proxy->Port(), proxy->Username(), proxy->Password());
++  }
++
+   return NS_OK;
+ }
+ 
+@@ -416,7 +545,7 @@ nsresult HttpConnectionUDP::Activate(nsAHttpTransaction* trans, uint32_t caps,
+   nsHttpTransaction* hTrans = trans->QueryHttpTransaction();
+   nsHttpConnectionInfo* transCI = trans->ConnectionInfo();
+   NetAddr peerAddr;
+-  if (!transCI->UsingProxy() && hTrans &&
++  if (transCI->ConnectsAsDirect() && hTrans &&
+       NS_SUCCEEDED(GetPeerAddr(&peerAddr))) {
+     // set the targetIpAddressSpace in the transaction object, this might be
+     // needed by the channel for determining the kind of LNA permissions and/or
+@@ -697,6 +826,9 @@ void HttpConnectionUDP::Close(nsresult reason, bool aIsShutdown) {
+   if (socket) {
+     socket->Close();
+   }
++  if (RefPtr<Socks5UdpAssociation> socks5 = std::move(mSocks5)) {
++    socks5->Close();
++  }
+   if (mHttp3Session) {
+     mHttp3Session->SetCleanShutdown(true);
+     mHttp3Session->Close(reason);
+@@ -1265,6 +1397,10 @@ NS_IMETHODIMP HttpConnectionUDP::OnPacketReceived(nsIUDPSocket* aSocket) {
+ 
+ NS_IMETHODIMP HttpConnectionUDP::OnStopListening(nsIUDPSocket* aSocket,
+                                                  nsresult aStatus) {
++  // Camoufox: the socket the relay's replaced.
++  if (aSocket != mSocket) {
++    return NS_OK;
++  }
+   // At this point, the UDP socket has already been closed. Set aIsShutdown to
+   // true to ensure that mHttp3Session is also closed.
+   CloseTransaction(mHttp3Session, aStatus, true);
+@@ -1279,6 +1415,11 @@ nsresult HttpConnectionUDP::GetSelfAddr(NetAddr* addr) {
+ }
+ 
+ nsresult HttpConnectionUDP::GetPeerAddr(NetAddr* addr) {
++  // Camoufox: the placeholder is not the peer, whose address only the proxy
++  // knows.
++  if (!mSocks5Name.IsEmpty()) {
++    return NS_ERROR_NOT_AVAILABLE;
++  }
+   if (mPeerAddr) {
+     return mPeerAddr->GetNetAddr(addr);
+   }
+diff --git a/netwerk/protocol/http/HttpConnectionUDP.h b/netwerk/protocol/http/HttpConnectionUDP.h
+index b401912ab9..dff101123a 100644
+--- a/netwerk/protocol/http/HttpConnectionUDP.h
++++ b/netwerk/protocol/http/HttpConnectionUDP.h
+@@ -11,6 +11,7 @@
+ #include "HttpTrafficAnalyzer.h"
+ #include "TimingStruct.h"
+ #include "mozilla/Mutex.h"
++#include "mozilla/net/Socks5UdpAssociation.h"
+ #include "nsAHttpTransaction.h"
+ #include "nsCOMPtr.h"
+ #include "nsHttpConnectionInfo.h"
+@@ -46,7 +47,8 @@ class ASpdySession;
+ 
+ class HttpConnectionUDP final : public HttpConnectionBase,
+                                 public nsIUDPSocketSyncListener,
+-                                public nsIInterfaceRequestor {
++                                public nsIInterfaceRequestor,
++                                public Socks5UdpAssociationOwner {
+  private:
+   virtual ~HttpConnectionUDP();
+ 
+@@ -59,6 +61,20 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+ 
+   HttpConnectionUDP();
+ 
++  void OnRelayReady(const NetAddr& aRelay) override;
++  void OnRelayFailed() override;
++  // Camoufox: how much later than a connection with no proxy this one could
++  // hear from its peer after aRoundTrips exchanges with it: the time its
++  // relay took to set up, and that many round trips to the proxy. Forever
++  // while the relay is being set up, Nothing with no relay. The timers that
++  // give up on HTTP/3 wait this much longer
++  // (nsHttpTransaction::FallbackWaitsForRelay).
++  Maybe<TimeDuration> RelayLag(uint32_t aRoundTrips) const;
++  // Camoufox: RelayLag(1), or while the relay is being set up the time that
++  // has taken so far: what the clock of a Firefox at the proxy's exit is
++  // behind by (HappyEyeballsConnectionAttempt::RelayLag).
++  TimeDuration RelayLost() const;
++
+   [[nodiscard]] nsresult Init(nsHttpConnectionInfo* info,
+                               nsIDNSRecord* dnsRecord, nsresult status,
+                               nsIInterfaceRequestor* callbacks, uint32_t caps);
+@@ -118,6 +134,7 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+   nsresult InitCommon(nsIUDPSocket* aSocket, const NetAddr& aPeerAddr,
+                       nsIInterfaceRequestor* callbacks, uint32_t caps,
+                       bool isInTunnel);
++  nsresult BindSocket(nsIUDPSocket* aSocket, uint16_t aFamily);
+   [[nodiscard]] nsresult OnTransactionDone(nsresult reason);
+   nsresult RecvData();
+   nsresult SendData();
+@@ -146,6 +163,15 @@ class HttpConnectionUDP final : public HttpConnectionBase,
+ 
+   PRIntervalTime mLastRequestBytesSentTime = 0;
+   nsCOMPtr<nsIUDPSocket> mSocket;
++  // Camoufox: behind a SOCKS5 proxy, the UDP ASSOCIATE whose relay carries
++  // every datagram of this connection. Nothing is sent around it.
++  RefPtr<Socks5UdpAssociation> mSocks5;
++  // The origin's name the relay is sent, when the proxy resolves names.
++  nsCString mSocks5Name;
++  bool mRelayReady = false;
++  bool mRelayPending = false;
++  TimeStamp mRelayAsked;
++  TimeDuration mRelaySetup;
+ 
+   nsCOMPtr<nsINetAddr> mSelfAddr;
+   nsCOMPtr<nsINetAddr> mPeerAddr;
+diff --git a/netwerk/protocol/http/TRRServiceChannel.cpp b/netwerk/protocol/http/TRRServiceChannel.cpp
+index 11cd97fa16..8a39698903 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.cpp
++++ b/netwerk/protocol/http/TRRServiceChannel.cpp
+@@ -760,6 +760,14 @@ void TRRServiceChannel::MaybeStartDNSPrefetch() {
+ NS_IMETHODIMP
+ TRRServiceChannel::OnTransportStatus(nsITransport* trans, nsresult status,
+                                      int64_t progress, int64_t progressMax) {
++  // Camoufox: TRR is told when its query is sent, as nsHttpChannel tells it.
++  if (!mProgressSink) {
++    GetCallback(mProgressSink);
++  }
++  if (mProgressSink && NS_SUCCEEDED(mStatus) && LoadIsPending()) {
++    nsCOMPtr<nsIProgressEventSink> progressSink(mProgressSink);
++    progressSink->OnStatus(this, status, u"");
++  }
+   return NS_OK;
+ }
+ 
+diff --git a/netwerk/protocol/http/TlsHandshaker.cpp b/netwerk/protocol/http/TlsHandshaker.cpp
+index 14fe3c54ec..d16bbb191a 100644
+--- a/netwerk/protocol/http/TlsHandshaker.cpp
++++ b/netwerk/protocol/http/TlsHandshaker.cpp
+@@ -138,7 +138,8 @@ nsresult TlsHandshaker::InitSSLParams(bool connectingToProxy,
+   }
+ 
+   // If proxy is use or 0RTT is excluded for a origin, don't use early-data.
+-  if (mConnInfo->UsingProxy() || gHttpHandler->Is0RttTcpExcluded(mConnInfo)) {
++  if (!mConnInfo->ConnectsAsDirect() ||
++      gHttpHandler->Is0RttTcpExcluded(mConnInfo)) {
+     ssl->DisableEarlyData();
+   }
+ 
+@@ -288,7 +289,7 @@ void TlsHandshaker::Check0RttEnabled(nsITLSSocketControl* ssl) {
+     }
+   }
+ 
+-  if (mConnInfo->UsingProxy()) {
++  if (!mConnInfo->ConnectsAsDirect()) {
+     return;
+   }
+ 
+diff --git a/netwerk/protocol/http/happy_eyeballs_glue/src/lib.rs b/netwerk/protocol/http/happy_eyeballs_glue/src/lib.rs
+index c02ca3f640..fda7ce41aa 100644
+--- a/netwerk/protocol/http/happy_eyeballs_glue/src/lib.rs
++++ b/netwerk/protocol/http/happy_eyeballs_glue/src/lib.rs
+@@ -132,6 +132,7 @@ pub unsafe extern "C" fn happy_eyeballs_create(
+                 inner: he,
+                 profiler,
+                 metrics,
++                relay_lag: Duration::ZERO,
+             });
+             boxed
+                 .profiler
+@@ -146,6 +147,15 @@ pub unsafe extern "C" fn happy_eyeballs_create(
+     NS_OK
+ }
+ 
++/// Camoufox: the time the attempts have lost to a SOCKS5 UDP relay so far
++/// (HappyEyeballsConnectionAttempt::RelayLag).
++#[no_mangle]
++pub unsafe extern "C" fn happy_eyeballs_set_relay_lag(he: *mut HappyEyeballs, lag_ms: u64) {
++    if let Some(he) = unsafe { he.as_mut() } {
++        he.relay_lag = Duration::from_millis(lag_ms);
++    }
++}
++
+ #[no_mangle]
+ pub unsafe extern "C" fn happy_eyeballs_process_dns_response_a(
+     he: *mut HappyEyeballs,
+@@ -278,9 +288,17 @@ pub struct HappyEyeballs {
+     inner: happy_eyeballs::HappyEyeballs,
+     profiler: profiler::Profiler,
+     metrics: metrics::Metrics,
++    relay_lag: Duration,
+ }
+ 
+ impl HappyEyeballs {
++    /// Camoufox: the clock of a Firefox at the proxy's exit, where no attempt
++    /// waits for a relay: the delays between attempts run on it.
++    fn now(&self) -> Instant {
++        let now = Instant::now();
++        now.checked_sub(self.relay_lag).unwrap_or(now)
++    }
++
+     fn process_dns_response_a(
+         &mut self,
+         id: u64,
+@@ -303,7 +321,7 @@ impl HappyEyeballs {
+ 
+         let result = happy_eyeballs::DnsResult::A(Ok(addrs));
+         let input = happy_eyeballs::Input::DnsResult { id, result, stale };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -330,7 +348,7 @@ impl HappyEyeballs {
+ 
+         let result = happy_eyeballs::DnsResult::Aaaa(Ok(addrs));
+         let input = happy_eyeballs::Input::DnsResult { id, result, stale };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -404,7 +422,7 @@ impl HappyEyeballs {
+ 
+         let result = happy_eyeballs::DnsResult::Https(Ok(infos));
+         let input = happy_eyeballs::Input::DnsResult { id, result, stale };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -426,7 +444,7 @@ impl HappyEyeballs {
+         };
+ 
+         let input = happy_eyeballs::Input::ConnectionResult { id, result };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -440,7 +458,7 @@ impl HappyEyeballs {
+         ));
+ 
+         let input = happy_eyeballs::Input::ConnectionResult { id, result };
+-        self.inner.process_input(input, Instant::now());
++        self.inner.process_input(input, self.now());
+ 
+         NS_OK
+     }
+@@ -451,7 +469,7 @@ impl HappyEyeballs {
+         ech_config: &mut ThinVec<u8>,
+         dns_hostname: &mut nsACString,
+     ) -> nsresult {
+-        let out = self.inner.process_output(std::time::Instant::now());
++        let out = self.inner.process_output(self.now());
+         ech_config.clear();
+         dns_hostname.truncate();
+         match out {
+diff --git a/netwerk/protocol/http/moz.build b/netwerk/protocol/http/moz.build
+index e89655b919..6343d68765 100644
+--- a/netwerk/protocol/http/moz.build
++++ b/netwerk/protocol/http/moz.build
+@@ -238,6 +238,7 @@ LOCAL_INCLUDES += [
+     "/netwerk/cookie",
+     "/netwerk/dns",
+     "/netwerk/ipc",
++    "/netwerk/socket",
+     "/netwerk/socket/neqo_glue",
+     "/netwerk/url-classifier",
+ ]
+diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
+index 050d925fe3..174573426c 100644
+--- a/netwerk/protocol/http/nsHttpChannel.cpp
++++ b/netwerk/protocol/http/nsHttpChannel.cpp
+@@ -8359,7 +8359,8 @@ nsresult nsHttpChannel::BeginConnect() {
+       return false;
+     }
+ 
+-    if (mProxyInfo) {
++    // Camoufox: a proxy that connects as direct races as no proxy does.
++    if (!mConnectionInfo->ConnectsAsDirect()) {
+       return false;
+     }
+ 
+diff --git a/netwerk/protocol/http/nsHttpConnection.cpp b/netwerk/protocol/http/nsHttpConnection.cpp
+index 33d5659b50..add5762755 100644
+--- a/netwerk/protocol/http/nsHttpConnection.cpp
++++ b/netwerk/protocol/http/nsHttpConnection.cpp
+@@ -611,7 +611,7 @@ nsresult nsHttpConnection::Activate(nsAHttpTransaction* trans, uint32_t caps,
+   // See Bug 1968908
+   nsHttpTransaction* httpTrans = mTransaction->QueryHttpTransaction();
+ 
+-  if (httpTrans && httpTrans->Connection() && !mConnInfo->UsingProxy()) {
++  if (httpTrans && httpTrans->Connection() && mConnInfo->ConnectsAsDirect()) {
+     NetAddr peerAddr;
+     httpTrans->Connection()->GetPeerAddr(&peerAddr);
+     auto addrSpace = peerAddr.GetIpAddressSpace();
+@@ -715,7 +715,7 @@ nsresult nsHttpConnection::AddTransaction(nsAHttpTransaction* httpTransaction,
+   // info of the transaction to ensure it is routed on the right tunnel
+   nsHttpTransaction* httpTrans = httpTransaction->QueryHttpTransaction();
+   nsHttpConnectionInfo* transCI = httpTransaction->ConnectionInfo();
+-  if (httpTrans && !transCI->UsingProxy()) {
++  if (httpTrans && transCI->ConnectsAsDirect()) {
+     // this is a httptransaction object, being dispatched into a H2 session
+     // ensure it does not violate local network access.
+     NetAddr peerAddr;
+@@ -2576,7 +2576,8 @@ void nsHttpConnection::HandshakeDoneInternal() {
+   // failure tears down the HE attempt and propagates
+   // NS_ERROR_LOCAL_NETWORK_ACCESS_DENIED to the real txn so the channel
+   // can run its prompt-and-replay path.
+-  if (mTransaction && mConnInfo->FirstHopSSL() && !mConnInfo->UsingProxy() &&
++  if (mTransaction && mConnInfo->FirstHopSSL() &&
++      mConnInfo->ConnectsAsDirect() &&
+       StaticPrefs::network_lna_blocking() &&
+       StaticPrefs::network_lna_defer_https_check()) {
+     NetAddr peerAddr;
+diff --git a/netwerk/protocol/http/nsHttpConnectionInfo.cpp b/netwerk/protocol/http/nsHttpConnectionInfo.cpp
+index cf3ccd7190..4ecf6a989a 100644
+--- a/netwerk/protocol/http/nsHttpConnectionInfo.cpp
++++ b/netwerk/protocol/http/nsHttpConnectionInfo.cpp
+@@ -693,6 +693,14 @@ bool nsHttpConnectionInfo::UsingProxy() const {
+   return !mProxyInfo->IsDirect();
+ }
+ 
++bool nsHttpConnectionInfo::ProxyCarriesUdp() const {
++  return mProxyInfo && mProxyInfo->IsSOCKS5();
++}
++
++bool nsHttpConnectionInfo::ConnectsAsDirect() const {
++  return !mProxyInfo || mProxyInfo->ConnectsAsDirect();
++}
++
+ bool nsHttpConnectionInfo::HostIsLocalIPLiteral() const {
+   NetAddr netAddr;
+   // If the host/proxy host is not an IP address literal, return false.
+diff --git a/netwerk/protocol/http/nsHttpConnectionInfo.h b/netwerk/protocol/http/nsHttpConnectionInfo.h
+index 2c272acae9..b5cd8b67ed 100644
+--- a/netwerk/protocol/http/nsHttpConnectionInfo.h
++++ b/netwerk/protocol/http/nsHttpConnectionInfo.h
+@@ -253,6 +253,13 @@ class nsHttpConnectionInfo final : public ARefBase {
+   // Returns true for any kind of proxy (http, socks, https, etc..)
+   bool UsingProxy() const;
+ 
++  // Camoufox: a SOCKS5 proxy relays UDP, so HTTP/3 goes through it
++  // (Socks5UdpAssociation) instead of being given up.
++  bool ProxyCarriesUdp() const;
++
++  // Camoufox: see nsProxyInfo::ConnectsAsDirect().
++  bool ConnectsAsDirect() const;
++
+   // Returns true when proxying over HTTP or HTTPS
+   bool UsingHttpProxy() const { return mUsingHttpProxy || mUsingHttpsProxy; }
+ 
+diff --git a/netwerk/protocol/http/nsHttpConnectionMgr.cpp b/netwerk/protocol/http/nsHttpConnectionMgr.cpp
+index 9f7500a340..b0217fe81a 100644
+--- a/netwerk/protocol/http/nsHttpConnectionMgr.cpp
++++ b/netwerk/protocol/http/nsHttpConnectionMgr.cpp
+@@ -4223,6 +4223,42 @@ void nsHttpConnectionMgr::CheckTransInPendingQueue(nsHttpTransaction* aTrans) {
+   MOZ_ASSERT(!foundInPendingQ);
+ }
+ 
++Maybe<TimeDuration> nsHttpConnectionMgr::Http3RelayLag(
++    nsHttpConnectionInfo* ci, uint32_t aRoundTrips) {
++  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
++  ConnectionEntry* ent = mCT.GetWeak(ci->HashKey());
++  return ent ? ent->Http3RelayLag(aRoundTrips) : Nothing();
++}
++
++Maybe<TimeDuration> nsHttpConnectionMgr::Http3BlockerRelayLag(
++    nsHttpTransaction* aTrans, uint32_t aRoundTrips) {
++  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
++  Maybe<TimeDuration> longest;
++  nsIRequestContext* context = aTrans->RequestContext();
++  if (!context) {
++    return longest;
++  }
++  for (const auto& active : mActiveTransactions) {
++    const nsTArray<RefPtr<nsHttpTransaction>>* transactions =
++        active.Get(aTrans->BrowserId());
++    if (!transactions) {
++      continue;
++    }
++    for (const auto& trans : *transactions) {
++      if (trans == aTrans || trans->RequestContext() != context ||
++          !trans->IsDispatchedAsBlocking()) {
++        continue;
++      }
++      Maybe<TimeDuration> lag =
++          Http3RelayLag(trans->ConnectionInfo(), aRoundTrips);
++      if (lag && (!longest || *lag > *longest)) {
++        longest = lag;
++      }
++    }
++  }
++  return longest;
++}
++
+ bool nsHttpConnectionMgr::AllowToRetryDifferentIPFamilyForHttp3(
+     nsHttpConnectionInfo* ci, nsresult aError) {
+   ConnectionEntry* ent = mCT.GetWeak(ci->HashKey());
+diff --git a/netwerk/protocol/http/nsHttpConnectionMgr.h b/netwerk/protocol/http/nsHttpConnectionMgr.h
+index a89e066c25..47d91713cf 100644
+--- a/netwerk/protocol/http/nsHttpConnectionMgr.h
++++ b/netwerk/protocol/http/nsHttpConnectionMgr.h
+@@ -213,6 +213,13 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
+   // connection
+   bool BeConservativeIfProxied(nsIProxyInfo* proxy);
+ 
++  // Camoufox: ConnectionEntry::Http3RelayLag() of ci's entry.
++  Maybe<TimeDuration> Http3RelayLag(nsHttpConnectionInfo* ci,
++                                    uint32_t aRoundTrips);
++  // Camoufox: the longest Http3RelayLag() of the transactions aTrans is held
++  // back by, the ones its request context is blocked on.
++  Maybe<TimeDuration> Http3BlockerRelayLag(nsHttpTransaction* aTrans,
++                                           uint32_t aRoundTrips);
+   bool AllowToRetryDifferentIPFamilyForHttp3(nsHttpConnectionInfo* ci,
+                                              nsresult aError);
+   void SetRetryDifferentIPFamilyForHttp3(nsHttpConnectionInfo* ci,
+diff --git a/netwerk/protocol/http/nsHttpTransaction.cpp b/netwerk/protocol/http/nsHttpTransaction.cpp
+index 69c3e9c2cd..6e192f71d7 100644
+--- a/netwerk/protocol/http/nsHttpTransaction.cpp
++++ b/netwerk/protocol/http/nsHttpTransaction.cpp
+@@ -3930,6 +3930,11 @@ void nsHttpTransaction::MaybeCancelFallbackTimer() {
+     mHttp3TunnelFallbackTimer->Cancel();
+     mHttp3TunnelFallbackTimer = nullptr;
+   }
++
++  if (mBackupHeadStartTimer) {
++    mBackupHeadStartTimer->Cancel();
++    mBackupHeadStartTimer = nullptr;
++  }
+ }
+ 
+ void nsHttpTransaction::OnBackupConnectionReady(bool aTriggeredByHTTPSRR) {
+@@ -3946,6 +3951,18 @@ void nsHttpTransaction::OnBackupConnectionReady(bool aTriggeredByHTTPSRR) {
+     return;
+   }
+ 
++  // Camoufox: see FallbackWaitsForRelay.
++  if (mBackupHeadStart) {
++    const uint32_t headStart =
++        static_cast<uint32_t>(mBackupHeadStart.ToMilliseconds());
++    mBackupHeadStart = TimeDuration();
++    mBackupHeadStartByHTTPSRR = aTriggeredByHTTPSRR;
++    CreateAndStartTimer(mBackupHeadStartTimer, this, headStart);
++    if (mBackupHeadStartTimer) {
++      return;
++    }
++  }
++
+   if (mConnection) {
+     if (mConnection->Version() != HttpVersion::v3_0) {
+       LOG(("Already have non-HTTP/3 conn:%p", mConnection.get()));
+@@ -4002,12 +4019,71 @@ static void CreateBackupConnection(
+   gHttpHandler->ConnMgr()->DoFallbackConnection(trans, false);
+ }
+ 
++// Camoufox: the timers that start a TCP connection beside an HTTP/3 one give
++// QUIC that long to answer. Behind a SOCKS5 proxy QUIC's first datagram waits
++// for the relay, and its answer crosses the proxy, so a timer that ran out
++// starts again for what that cost (HttpConnectionUDP::RelayLag): TCP is tried
++// when a Firefox at the proxy's exit would try it. aDelay, the timer's own
++// length, is how often a relay still being set up is looked at again; the
++// lag is longer than that, so the look after the relay is ready comes before
++// the timer is due. The timers run for a request held back by its page's
++// blocking ones too (a stylesheet), which has no connection yet: it waits for
++// what the proxy cost those, a handshake and a response. Let go by then, as
++// it would be at the exit, it waits for its own relay. Still held back, it
++// starts TCP, which is going to race a QUIC connection that has not been
++// asked for. A ClientHello sent behind the CONNECT request reaches the origin
++// a round trip to the proxy sooner than a first datagram, which waits for the
++// reply to UDP ASSOCIATE, so OnBackupConnectionReady gives that head start
++// back before it takes the request from QUIC.
++bool nsHttpTransaction::FallbackWaitsForRelay(nsCOMPtr<nsITimer>& aTimer,
++                                              uint32_t aDelay) {
++  if (!mConnInfo->ProxyCarriesUdp()) {
++    return false;
++  }
++  nsHttpConnectionMgr* mgr = gHttpHandler->ConnMgr();
++  bool* waited = &mFallbackWaitedForRelay;
++  Maybe<TimeDuration> lag = mgr->Http3RelayLag(mConnInfo, 1);
++  if (!lag && !mConnection) {
++    waited = &mFallbackWaitedForBlocker;
++    lag = mgr->Http3BlockerRelayLag(this, 2);
++    Maybe<TimeDuration> more = mgr->Http3BlockerRelayLag(this, 3);
++    if (*waited && lag && more && *more != TimeDuration::Forever() &&
++        StaticPrefs::network_proxy_socks5_optimistic_data()) {
++      mBackupHeadStart = *more - *lag;
++    }
++  }
++  if (!lag || *waited) {
++    return false;
++  }
++  const TimeStamp now = TimeStamp::Now();
++  if (mFallbackDue.IsNull()) {
++    mFallbackDue = now;
++  }
++  if (*lag == TimeDuration::Forever()) {
++    CreateAndStartTimer(aTimer, this, aDelay);
++    return !!aTimer;
++  }
++  *waited = true;
++  mFallbackDue += *lag;
++  const double left = (mFallbackDue - now).ToMilliseconds();
++  if (left < 1) {
++    return false;
++  }
++  CreateAndStartTimer(aTimer, this, static_cast<uint32_t>(left));
++  return !!aTimer;
++}
++
+ void nsHttpTransaction::OnHttp3BackupTimer() {
+   LOG(("nsHttpTransaction::OnHttp3BackupTimer [%p]", this));
+   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+   MOZ_ASSERT(mConnInfo->IsHttp3() || mConnInfo->IsHttp3ProxyConnection());
+ 
+   mHttp3BackupTimer = nullptr;
++  if (FallbackWaitsForRelay(
++          mHttp3BackupTimer,
++          StaticPrefs::network_http_http3_backup_timer_delay())) {
++    return;
++  }
+ 
+   if (mConnInfo->IsHttp3ProxyConnection()) {
+     mBackupConnInfo = mConnInfo->CreateConnectUDPFallbackConnInfo();
+@@ -4068,6 +4144,11 @@ void nsHttpTransaction::OnFastFallbackTimer() {
+        mConnected));
+ 
+   mFastFallbackTimer = nullptr;
++  if (FallbackWaitsForRelay(
++          mFastFallbackTimer,
++          StaticPrefs::network_dns_httpssvc_http3_fast_fallback_timeout())) {
++    return;
++  }
+ 
+   MOZ_ASSERT(mHTTPSSVCRecord && mOrigConnInfo);
+   if (!mHTTPSSVCRecord || !mOrigConnInfo) {
+@@ -4154,6 +4235,9 @@ nsHttpTransaction::Notify(nsITimer* aTimer) {
+     OnHttp3BackupTimer();
+   } else if (aTimer == mHttp3TunnelFallbackTimer) {
+     OnHttp3TunnelFallbackTimer();
++  } else if (aTimer == mBackupHeadStartTimer) {
++    mBackupHeadStartTimer = nullptr;
++    OnBackupConnectionReady(mBackupHeadStartByHTTPSRR);
+   }
+ 
+   return NS_OK;
+diff --git a/netwerk/protocol/http/nsHttpTransaction.h b/netwerk/protocol/http/nsHttpTransaction.h
+index 675ebefd97..a2377ec3a5 100644
+--- a/netwerk/protocol/http/nsHttpTransaction.h
++++ b/netwerk/protocol/http/nsHttpTransaction.h
+@@ -127,6 +127,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
+   nsIRequestContext* RequestContext() override { return mRequestContext.get(); }
+   void DispatchedAsBlocking();
+   void RemoveDispatchedAsBlocking();
++  bool IsDispatchedAsBlocking() const { return mDispatchedAsBlocking; }
+ 
+   void DisableSpdy() override;
+   void DisableHttp2ForProxy() override;
+@@ -644,6 +645,8 @@ class nsHttpTransaction final : public nsAHttpTransaction,
+   // Starts the timer that opens a TCP backup connection if this HTTP/3
+   // transaction is not connected in time. Only the first call has an effect.
+   void MaybeStartHttp3BackupTimer();
++  // Camoufox: see the definition.
++  bool FallbackWaitsForRelay(nsCOMPtr<nsITimer>& aTimer, uint32_t aDelay);
+ 
+  private:
+   TransactionObserverFunc mTransactionObserver;
+@@ -692,6 +695,14 @@ class nsHttpTransaction final : public nsAHttpTransaction,
+   nsCOMPtr<nsITimer> mFastFallbackTimer;
+   nsCOMPtr<nsITimer> mHttp3BackupTimer;
+   nsCOMPtr<nsITimer> mHttp3TunnelFallbackTimer;
++  TimeStamp mFallbackDue;
++  bool mFallbackWaitedForRelay = false;
++  bool mFallbackWaitedForBlocker = false;
++  // Camoufox: how long a backup connection that is ready waits before it
++  // takes this transaction (FallbackWaitsForRelay), and the timer for it.
++  TimeDuration mBackupHeadStart;
++  nsCOMPtr<nsITimer> mBackupHeadStartTimer;
++  bool mBackupHeadStartByHTTPSRR = false;
+   RefPtr<nsHttpConnectionInfo> mBackupConnInfo;
+   // The value of mConnInfo when this transaction was activated.
+   // Describes the server that the associated connection is connected to.
+diff --git a/netwerk/socket/neqo_glue/NeqoHttp3Conn.h b/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
+index 9ab8ba7234..a4dd37afac 100644
+--- a/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
++++ b/netwerk/socket/neqo_glue/NeqoHttp3Conn.h
+@@ -51,6 +51,16 @@ class NeqoHttp3Conn final {
+ 
+   void Close(uint64_t aError) { neqo_http3conn_close(this, aError); }
+ 
++  // Camoufox: the connection's datagrams go through a SOCKS5 UDP relay.
++  nsresult Socks5(const nsACString& aName, const NetAddr& aPlaceholder) {
++    return neqo_http3conn_socks5(this, &aName, &aPlaceholder);
++  }
++  nsresult Socks5Relay(const NetAddr& aRelay, int64_t aSocket,
++                       bool aReplaced) {
++    return neqo_http3conn_socks5_relay(this, &aRelay, aSocket, aReplaced);
++  }
++  void Socks5Failed() { neqo_http3conn_socks5_failed(this); }
++
+   nsresult GetSecInfo(NeqoSecretInfo* aSecInfo) {
+     return neqo_http3conn_tls_info(this, aSecInfo);
+   }
+diff --git a/netwerk/socket/neqo_glue/src/lib.rs b/netwerk/socket/neqo_glue/src/lib.rs
+index 60be32d98a..b2b91903b9 100644
+--- a/netwerk/socket/neqo_glue/src/lib.rs
++++ b/netwerk/socket/neqo_glue/src/lib.rs
+@@ -63,6 +63,8 @@ use winapi::{
+ use xpcom::{AtomicRefcnt, RefCounted, RefPtr};
+ use zlib_rs::{decompress_slice, InflateConfig, ReturnCode};
+ 
++mod socks5;
++
+ std::thread_local! {
+     static RECV_BUF: RefCell<neqo_udp::RecvBuf> = RefCell::new(neqo_udp::RecvBuf::default());
+ }
+@@ -132,6 +134,9 @@ pub struct NeqoHttp3Conn {
+     /// Buffered outbound datagram from previous send that failed with
+     /// WouldBlock. To be sent once UDP socket has write-availability again.
+     buffered_outbound_datagram: Option<datagram::Batch>,
++    /// Camoufox: the SOCKS5 UDP relay every datagram goes through, behind a
++    /// SOCKS5 proxy.
++    socks5: Option<socks5::Relay>,
+ 
+     datagram_segment_size_sent: LocalMemoryDistribution<'static>,
+     datagram_segment_size_received: LocalMemoryDistribution<'static>,
+@@ -190,6 +195,51 @@ fn mock_udp_send_would_block(dest: SocketAddr) -> bool {
+     }
+ }
+ 
++/// The socket NSPR owns, borrowed for neqo's IO.
++fn borrow_socket(socket: i64) -> Result<neqo_udp::Socket<BorrowedSocket>, nsresult> {
++    #[cfg(unix)]
++    let borrowed = {
++        use std::os::fd::{BorrowedFd, RawFd};
++        if socket == -1 {
++            qerror!("got invalid socked {}", socket);
++            return Err(NS_ERROR_INVALID_ARG);
++        }
++        let raw: RawFd = socket.try_into().map_err(|e| {
++            qerror!("got invalid socked {}: {}", socket, e);
++            NS_ERROR_INVALID_ARG
++        })?;
++        unsafe { BorrowedFd::borrow_raw(raw) }
++    };
++    #[cfg(windows)]
++    let borrowed = {
++        use std::os::windows::io::{BorrowedSocket, RawSocket};
++        if socket as usize == winapi::um::winsock2::INVALID_SOCKET {
++            qerror!("got invalid socked {}", socket);
++            return Err(NS_ERROR_INVALID_ARG);
++        }
++        let raw: RawSocket = socket.try_into().map_err(|e| {
++            qerror!("got invalid socked {}: {}", socket, e);
++            NS_ERROR_INVALID_ARG
++        })?;
++        unsafe { BorrowedSocket::borrow_raw(raw) }
++    };
++    let s = neqo_udp::Socket::new(borrowed).map_err(|e| {
++        qerror!("failed to initialize socket {}: {}", socket, e);
++        into_nsresult(&e)
++    })?;
++    // Called after Socket::new (which sets up IP_RECVTOS etc.) since
++    // enable_apple_fast_path only sets the fast-path flag on the
++    // already-constructed UdpSocketState.
++    #[cfg(target_vendor = "apple")]
++    if APPLE_FAST_PATH.load(Ordering::Relaxed)
++        && static_prefs::pref!("network.http.http3.apple_fast_datapath")
++    {
++        // SAFETY: The probe has verified the APIs work on this OS version.
++        unsafe { s.enable_apple_fast_path() }
++    }
++    Ok(s)
++}
++
+ fn netaddr_to_socket_addr(arg: *const NetAddr) -> Result<SocketAddr, nsresult> {
+     if arg.is_null() {
+         return Err(NS_ERROR_INVALID_ARG);
+@@ -403,51 +453,7 @@ impl NeqoHttp3Conn {
+         // Nss init.
+         init().map_err(|_| NS_ERROR_UNEXPECTED)?;
+ 
+-        let socket = socket
+-            .map(|socket| {
+-                #[cfg(unix)]
+-                let borrowed = {
+-                    use std::os::fd::{BorrowedFd, RawFd};
+-                    if socket == -1 {
+-                        qerror!("got invalid socked {}", socket);
+-                        return Err(NS_ERROR_INVALID_ARG);
+-                    }
+-                    let raw: RawFd = socket.try_into().map_err(|e| {
+-                        qerror!("got invalid socked {}: {}", socket, e);
+-                        NS_ERROR_INVALID_ARG
+-                    })?;
+-                    unsafe { BorrowedFd::borrow_raw(raw) }
+-                };
+-                #[cfg(windows)]
+-                let borrowed = {
+-                    use std::os::windows::io::{BorrowedSocket, RawSocket};
+-                    if socket as usize == winapi::um::winsock2::INVALID_SOCKET {
+-                        qerror!("got invalid socked {}", socket);
+-                        return Err(NS_ERROR_INVALID_ARG);
+-                    }
+-                    let raw: RawSocket = socket.try_into().map_err(|e| {
+-                        qerror!("got invalid socked {}: {}", socket, e);
+-                        NS_ERROR_INVALID_ARG
+-                    })?;
+-                    unsafe { BorrowedSocket::borrow_raw(raw) }
+-                };
+-                let s = neqo_udp::Socket::new(borrowed).map_err(|e| {
+-                    qerror!("failed to initialize socket {}: {}", socket, e);
+-                    into_nsresult(&e)
+-                })?;
+-                // Called after Socket::new (which sets up IP_RECVTOS etc.) since
+-                // enable_apple_fast_path only sets the fast-path flag on the
+-                // already-constructed UdpSocketState.
+-                #[cfg(target_vendor = "apple")]
+-                if APPLE_FAST_PATH.load(Ordering::Relaxed)
+-                    && static_prefs::pref!("network.http.http3.apple_fast_datapath")
+-                {
+-                    // SAFETY: The probe has verified the APIs work on this OS version.
+-                    unsafe { s.enable_apple_fast_path() }
+-                }
+-                Ok(s)
+-            })
+-            .transpose()?;
++        let socket = socket.map(borrow_socket).transpose()?;
+ 
+         let origin_conv = str::from_utf8(origin).map_err(|_| NS_ERROR_INVALID_ARG)?;
+ 
+@@ -642,6 +648,7 @@ impl NeqoHttp3Conn {
+             datagram_segments_received: networking::http_3_udp_datagram_segments_received
+                 .start_buffer(),
+             buffered_outbound_datagram: None,
++            socks5: None,
+             would_block_counter: WouldBlockCounter::new(),
+             webtransport_send_groups: HashMap::new(),
+             #[cfg(not(target_os = "android"))]
+@@ -1280,7 +1287,19 @@ pub unsafe extern "C" fn neqo_http3conn_process_input(
+                 d
+             });
+ 
+-            conn.conn.process_multiple_input(dgrams, Instant::now());
++            if let Some(relay) = conn.socks5.as_mut() {
++                // Camoufox: the peer's datagrams, out of the relay's.
++                let local = conn.local_addr;
++                let dgrams: Vec<Datagram> = dgrams
++                    .filter_map(|d| {
++                        let (from, payload) = relay.unwrap(d.source(), &d)?;
++                        Some(Datagram::new(from, local, d.tos(), payload))
++                    })
++                    .collect();
++                conn.conn.process_multiple_input(dgrams, Instant::now());
++            } else {
++                conn.conn.process_multiple_input(dgrams, Instant::now());
++            }
+ 
+             conn.datagram_size_received.accumulate(sum as u64);
+             conn.datagram_segments_received.accumulate(segment_count);
+@@ -1375,6 +1394,14 @@ pub extern "C" fn neqo_http3conn_process_output_and_send(
+     set_timer_func: SetTimerFunc,
+ ) -> ProcessOutputAndSendResult {
+     let mut bytes_written: usize = 0;
++    // Camoufox: until the SOCKS5 relay is known the handshake has nowhere to
++    // go, and it must not start its timers either.
++    if conn.socks5.as_ref().is_some_and(socks5::Relay::pending) {
++        return ProcessOutputAndSendResult {
++            result: NS_OK,
++            bytes_written: 0,
++        };
++    }
+     loop {
+         let Ok(max_gso_segments) = min(
+             static_prefs::pref!("network.http.http3.max_gso_segments")
+@@ -1385,6 +1412,7 @@ pub extern "C" fn neqo_http3conn_process_output_and_send(
+                 .expect("non NSPR IO")
+                 .max_gso_segments(),
+         )
++        .min(conn.socks5.as_ref().map_or(usize::MAX, |_| socks5::MAX_SEGMENTS))
+         .try_into() else {
+             qerror!("Socket return GSO size of 0");
+             return ProcessOutputAndSendResult {
+@@ -1417,10 +1445,18 @@ pub extern "C" fn neqo_http3conn_process_output_and_send(
+                     };
+                 }
+ 
++                // Camoufox: behind a SOCKS5 proxy the batch goes to the relay,
++                // or nowhere when the proxy carries no UDP.
++                let wire = match conn.socks5.as_ref() {
++                    Some(relay) => relay.wrap(&dg).map(Cow::Owned),
++                    None => Some(Cow::Borrowed(&dg)),
++                };
+                 let send_result = if mock_udp_send_would_block(dg.destination()) {
+                     Err(io::Error::from(io::ErrorKind::WouldBlock))
++                } else if let Some(wire) = wire.as_deref() {
++                    conn.socket.as_mut().expect("non NSPR IO").send(wire)
+                 } else {
+-                    conn.socket.as_mut().expect("non NSPR IO").send(&dg)
++                    Ok(())
+                 };
+                 match send_result {
+                     Ok(()) => {}
+@@ -1457,7 +1493,7 @@ pub extern "C" fn neqo_http3conn_process_output_and_send(
+                         // <https://github.com/quinn-rs/quinn/issues/2399>.
+                         qdebug!("Failed to send datagram batch size {} with error {e}. Missing GSO support? Resending as individual datagrams.", dg.num_datagrams());
+                         let socket = conn.socket.as_mut().expect("non NSPR IO");
+-                        for single in dg.iter() {
++                        for single in wire.iter().flat_map(|wire| wire.iter()) {
+                             let single = datagram::Batch::from(single.to_owned());
+                             if let Err(e) = socket.send(&single) {
+                                 qwarn!("failed to resend datagram without GSO: {e}");
+@@ -1518,6 +1554,81 @@ pub extern "C" fn neqo_http3conn_process_output_and_send(
+     }
+ }
+ 
++/// Camoufox: the connection is behind a SOCKS5 proxy. Nothing is sent until
++/// `neqo_http3conn_socks5_relay` or `neqo_http3conn_socks5_failed`. A proxy
++/// that resolves names is sent `name` in place of `placeholder`, the address
++/// the connection was made to; an empty `name` sends addresses.
++///
++/// # Safety
++///
++/// Use of raw (i.e. unsafe) pointers as arguments.
++#[no_mangle]
++pub unsafe extern "C" fn neqo_http3conn_socks5(
++    conn: &mut NeqoHttp3Conn,
++    name: &nsACString,
++    placeholder: *const NetAddr,
++) -> nsresult {
++    if conn.socket.is_none() {
++        return NS_ERROR_NOT_AVAILABLE;
++    }
++    conn.socks5 = if name.is_empty() {
++        Some(socks5::Relay::new())
++    } else {
++        let placeholder = match netaddr_to_socket_addr(placeholder) {
++            Ok(a) => a,
++            Err(e) => return e,
++        };
++        match socks5::Relay::named(name, placeholder) {
++            Some(r) => Some(r),
++            None => return NS_ERROR_INVALID_ARG,
++        }
++    };
++    NS_OK
++}
++
++/// Camoufox: the UDP ASSOCIATE was granted. `socket` reaches the relay, and
++/// `replaced` says it is not the one the connection was made with (the relay's
++/// address family differs from the peer's).
++///
++/// # Safety
++///
++/// Use of raw (i.e. unsafe) pointers as arguments.
++#[no_mangle]
++pub unsafe extern "C" fn neqo_http3conn_socks5_relay(
++    conn: &mut NeqoHttp3Conn,
++    relay: *const NetAddr,
++    socket: i64,
++    replaced: bool,
++) -> nsresult {
++    let relay = match netaddr_to_socket_addr(relay) {
++        Ok(relay) => relay,
++        Err(e) => return e,
++    };
++    if replaced {
++        match borrow_socket(socket) {
++            Ok(s) => conn.socket = Some(s),
++            Err(e) => return e,
++        }
++    }
++    // After the socket is borrowed: borrowing forbids fragmenting.
++    if let Err(e) = socks5::allow_fragmenting(socket, relay.is_ipv4()) {
++        qwarn!("the socket to the SOCKS5 relay keeps don't-fragment: {e}");
++    }
++    let Some(socks5) = conn.socks5.as_mut() else {
++        return NS_ERROR_UNEXPECTED;
++    };
++    socks5.set_relay(relay);
++    NS_OK
++}
++
++/// Camoufox: the proxy carries no UDP for this connection.
++#[no_mangle]
++pub extern "C" fn neqo_http3conn_socks5_failed(conn: &mut NeqoHttp3Conn) {
++    if let Some(socks5) = conn.socks5.as_mut() {
++        socks5.set_failed();
++    }
++}
++
+ #[no_mangle]
+ pub extern "C" fn neqo_http3conn_close(conn: &mut NeqoHttp3Conn, error: u64) {
+     conn.conn.close(Instant::now(), error, "");
+diff --git a/netwerk/socket/neqo_glue/src/socks5.rs b/netwerk/socket/neqo_glue/src/socks5.rs
+new file mode 100644
+index 0000000000..9d215013bc
+--- /dev/null
++++ b/netwerk/socket/neqo_glue/src/socks5.rs
+@@ -0,0 +1,259 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++//! Camoufox: a QUIC connection behind a SOCKS5 proxy sends its datagrams to
++//! the relay of a UDP ASSOCIATE (RFC 1928 §7), each under the request header
++//! naming where it goes, and reads the peer's from the same relay. The
++//! association is made by `mozilla::net::Socks5UdpAssociation`; this is only
++//! the framing, so the socket, its ECN marks and its batching stay the ones a
++//! direct connection uses.
++//!
++//! A proxy that resolves names is sent the origin's name (ATYP 3), never an
++//! address looked up here. The connection is made to a placeholder address,
++//! which stands for the name on the way out and for the peer on the way back,
++//! however the relay addresses its replies.
++
++use std::{
++    io,
++    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
++    num::NonZeroUsize,
++};
++
++use libc::c_int;
++use neqo_common::datagram;
++
++/// One datagram to a send: the kernel refuses a segmented send whose segments
++/// do not fit the link, where a single datagram is fragmented
++/// (`allow_fragmenting`).
++pub const MAX_SEGMENTS: usize = 1;
++
++const ATYP_IPV4: u8 = 1;
++const ATYP_NAME: u8 = 3;
++const ATYP_IPV6: u8 = 4;
++
++enum State {
++    /// The association is being made. Nothing is sent: the handshake starts
++    /// when it can leave, as it does with no proxy.
++    Pending,
++    Relay(SocketAddr),
++    /// The proxy carries no UDP. Datagrams are dropped silently, as on a
++    /// machine whose UDP is blocked, so the fall back to TCP is stock's.
++    Failed,
++}
++
++/// The origin's name, sent in place of the placeholder the connection is
++/// made to.
++struct Named {
++    name: Vec<u8>,
++    placeholder: SocketAddr,
++    /// The address the relay reports the peer's replies from, once it has.
++    resolved: Option<SocketAddr>,
++}
++
++pub struct Relay {
++    state: State,
++    named: Option<Named>,
++}
++
++impl Relay {
++    pub const fn new() -> Self {
++        Self {
++            state: State::Pending,
++            named: None,
++        }
++    }
++
++    /// The relay is sent `name` for every datagram to `placeholder`.
++    pub fn named(name: &[u8], placeholder: SocketAddr) -> Option<Self> {
++        if name.is_empty() || name.len() > usize::from(u8::MAX) {
++            return None;
++        }
++        Some(Self {
++            state: State::Pending,
++            named: Some(Named {
++                name: name.to_vec(),
++                placeholder,
++                resolved: None,
++            }),
++        })
++    }
++
++    pub fn set_relay(&mut self, relay: SocketAddr) {
++        self.state = State::Relay(relay);
++    }
++
++    pub fn set_failed(&mut self) {
++        self.state = State::Failed;
++    }
++
++    pub const fn pending(&self) -> bool {
++        matches!(self.state, State::Pending)
++    }
++
++    fn header(&self, to: SocketAddr) -> Vec<u8> {
++        let mut h = vec![0, 0, 0];
++        match &self.named {
++            Some(n) if n.placeholder == to => {
++                h.push(ATYP_NAME);
++                h.push(u8::try_from(n.name.len()).expect("checked in named"));
++                h.extend_from_slice(&n.name);
++                h.extend_from_slice(&to.port().to_be_bytes());
++                return h;
++            }
++            _ => {}
++        }
++        match to.ip() {
++            IpAddr::V4(ip) => {
++                h.push(ATYP_IPV4);
++                h.extend_from_slice(&ip.octets());
++            }
++            IpAddr::V6(ip) => {
++                h.push(ATYP_IPV6);
++                h.extend_from_slice(&ip.octets());
++            }
++        }
++        h.extend_from_slice(&to.port().to_be_bytes());
++        h
++    }
++
++    /// The batch as the relay takes it, or `None` when it is to be dropped.
++    /// Every segment grows by the same header, so the batch stays one a
++    /// segmenting socket accepts.
++    pub fn wrap(&self, batch: &datagram::Batch) -> Option<datagram::Batch> {
++        let State::Relay(relay) = self.state else {
++            return None;
++        };
++        let header = self.header(batch.destination());
++        let size = batch.datagram_size().get();
++        let mut data =
++            Vec::with_capacity(batch.data().len() + batch.num_datagrams() * header.len());
++        for segment in batch.data().chunks(size) {
++            data.extend_from_slice(&header);
++            data.extend_from_slice(segment);
++        }
++        Some(datagram::Batch::new(
++            batch.source(),
++            relay,
++            batch.tos(),
++            NonZeroUsize::new(size + header.len()).expect("not zero"),
++            data,
++        ))
++    }
++
++    /// The sender and payload of a datagram received from `from`. `None` for
++    /// one that is not the relay's, a fragment, or malformed. Behind a proxy
++    /// given the name, the peer's replies come from the placeholder, whether
++    /// the relay addresses them by the name or by the address it resolved.
++    pub fn unwrap<'a>(&mut self, from: SocketAddr, d: &'a [u8]) -> Option<(SocketAddr, &'a [u8])> {
++        let State::Relay(relay) = self.state else {
++            return None;
++        };
++        if canonical(from) != canonical(relay) || d.len() < 4 || d[..3] != [0, 0, 0] {
++            return None;
++        }
++        let (ip, rest) = match d[3] {
++            ATYP_IPV4 => {
++                let ip: [u8; 4] = d.get(4..8)?.try_into().ok()?;
++                (Some(IpAddr::V4(Ipv4Addr::from(ip))), &d[8..])
++            }
++            ATYP_IPV6 => {
++                let ip: [u8; 16] = d.get(4..20)?.try_into().ok()?;
++                (Some(IpAddr::V6(Ipv6Addr::from(ip))), &d[20..])
++            }
++            ATYP_NAME => {
++                let len = usize::from(*d.get(4)?);
++                let name = d.get(5..5 + len)?;
++                let named = self.named.as_ref()?;
++                if !name.eq_ignore_ascii_case(&named.name) {
++                    return None;
++                }
++                (None, &d[5 + len..])
++            }
++            _ => return None,
++        };
++        let port: [u8; 2] = rest.get(..2)?.try_into().ok()?;
++        let port = u16::from_be_bytes(port);
++        let payload = &rest[2..];
++        if payload.is_empty() {
++            return None;
++        }
++        let Some(ip) = ip else {
++            let placeholder = self.named.as_ref()?.placeholder;
++            return (port == placeholder.port()).then_some((placeholder, payload));
++        };
++        let sender = SocketAddr::new(ip, port);
++        if let Some(named) = self.named.as_mut() {
++            // The first reply from the origin's port is the address the relay
++            // resolved the name to.
++            if named.resolved.is_none() && port == named.placeholder.port() {
++                named.resolved = Some(canonical(sender));
++            }
++            if named.resolved == Some(canonical(sender)) {
++                return Some((named.placeholder, payload));
++            }
++        }
++        Some((sender, payload))
++    }
++}
++
++/// Lets a datagram to the relay be fragmented, undoing what the QUIC socket
++/// is set up with. The peer must receive the datagram a direct connection
++/// sends it, so it is not made smaller; with the relay header on it, it no
++/// longer fits a link that carries it bare (1252 bytes of QUIC is a 1280-byte
++/// IPv4 packet). Only the hop to the relay may fragment: the relay sends on a
++/// whole datagram.
++pub fn allow_fragmenting(socket: i64, ipv4: bool) -> io::Result<()> {
++    #[cfg(any(target_os = "linux", target_os = "android"))]
++    let options: &[(c_int, c_int, c_int)] = if ipv4 {
++        &[(libc::IPPROTO_IP, libc::IP_MTU_DISCOVER, libc::IP_PMTUDISC_DONT)]
++    } else {
++        &[
++            (libc::IPPROTO_IPV6, libc::IPV6_MTU_DISCOVER, libc::IPV6_PMTUDISC_WANT),
++            (libc::IPPROTO_IPV6, libc::IPV6_DONTFRAG, 0),
++        ]
++    };
++    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
++    let options: &[(c_int, c_int, c_int)] = if ipv4 {
++        &[(libc::IPPROTO_IP, libc::IP_DONTFRAG, 0)]
++    } else {
++        &[(libc::IPPROTO_IPV6, libc::IPV6_DONTFRAG, 0)]
++    };
++    // Winsock's IP_DONTFRAGMENT and IPV6_DONTFRAG are both 14.
++    #[cfg(windows)]
++    let options: &[(c_int, c_int, c_int)] = if ipv4 { &[(0, 14, 0)] } else { &[(41, 14, 0)] };
++
++    for (level, name, value) in options {
++        #[cfg(unix)]
++        // SAFETY: `value` is a c_int that outlives the call.
++        let failed = unsafe {
++            libc::setsockopt(
++                socket as c_int,
++                *level,
++                *name,
++                std::ptr::from_ref(value).cast(),
++                size_of::<c_int>() as libc::socklen_t,
++            )
++        } != 0;
++        #[cfg(windows)]
++        // SAFETY: `value` is a 4-byte integer that outlives the call.
++        let failed = unsafe {
++            winapi::um::winsock2::setsockopt(
++                socket as winapi::um::winsock2::SOCKET,
++                *level,
++                *name,
++                std::ptr::from_ref(value).cast(),
++                size_of::<c_int>() as c_int,
++            )
++        } != 0;
++        if failed {
++            return Err(io::Error::last_os_error());
++        }
++    }
++    Ok(())
++}
++
++/// A dual-stack socket reports an IPv4 sender as an IPv4-mapped address.
++fn canonical(addr: SocketAddr) -> SocketAddr {
++    SocketAddr::new(addr.ip().to_canonical(), addr.port())
++}
+diff --git a/netwerk/socket/nsSOCKSIOLayer.cpp b/netwerk/socket/nsSOCKSIOLayer.cpp
+index e169d1e4ff..23501240f9 100644
+--- a/netwerk/socket/nsSOCKSIOLayer.cpp
++++ b/netwerk/socket/nsSOCKSIOLayer.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "mozilla/Components.h"
+ #include "mozilla/Logging.h"
++#include "mozilla/Maybe.h"
+ #include "mozilla/net/DNS.h"
+ #include "nsCRT.h"
+ #include "nsICancelable.h"
+@@ -80,6 +81,7 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
+   void GetExternalProxyAddr(NetAddr& aExternalProxyAddr);
+   void GetDestinationAddr(NetAddr& aDestinationAddr);
+   void SetDestinationAddr(const NetAddr& aDestinationAddr);
++  mozilla::TimeDuration Lost() const;
+ 
+  private:
+   virtual ~nsSOCKSSocketInfo() {
+@@ -215,6 +217,13 @@ class nsSOCKSSocketInfo : public nsIDNSListener {
+   NetAddr mDestinationAddr;
+   PRIntervalTime mTimeout{PR_INTERVAL_NO_TIMEOUT};
+   nsCString mProxyUsername;  // Cache, from mProxy
++  // Camoufox: when the handshake began and when the greeting was sent, the
++  // round trip to the proxy its reply took, and how long the handshake had
++  // taken when the CONNECT request was sent (see Lost()).
++  mozilla::TimeStamp mBegan;
++  mozilla::TimeStamp mGreeted;
++  mozilla::TimeDuration mRoundTrip;
++  mozilla::Maybe<mozilla::TimeDuration> mSetup;
+ };
+ 
+ nsSOCKSSocketInfo::nsSOCKSSocketInfo() {
+@@ -1040,6 +1049,7 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+ 
+   switch (mState) {
+     case SOCKS_INITIAL:
++      mBegan = mozilla::TimeStamp::Now();
+       if (IsLocalProxy()) {
+         mState = SOCKS_DNS_COMPLETE;
+         mLookupStatus = NS_OK;
+@@ -1065,11 +1075,13 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+ 
+     case SOCKS5_WRITE_AUTH_REQUEST:
+       if (WriteToSocket(fd) != PR_SUCCESS) return PR_FAILURE;
++      mGreeted = mozilla::TimeStamp::Now();
+       WantRead(2);
+       mState = SOCKS5_READ_AUTH_RESPONSE;
+       return PR_SUCCESS;
+     case SOCKS5_READ_AUTH_RESPONSE:
+       if (ReadFromSocket(fd) != PR_SUCCESS) return PR_FAILURE;
++      mRoundTrip = mozilla::TimeStamp::Now() - mGreeted;
+       return ReadV5AuthResponse();
+     case SOCKS5_WRITE_USERNAME_REQUEST:
+       if (WriteToSocket(fd) != PR_SUCCESS) return PR_FAILURE;
+@@ -1081,6 +1093,7 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+       return ReadV5UsernameResponse();
+     case SOCKS5_WRITE_CONNECT_REQUEST:
+       if (WriteToSocket(fd) != PR_SUCCESS) return PR_FAILURE;
++      mSetup = mozilla::Some(mozilla::TimeStamp::Now() - mBegan);
+ 
+       // The SOCKS 5 response to the connection request is variable
+       // length. First, we'll read enough to tell how long the response
+@@ -1110,6 +1123,21 @@ PRStatus nsSOCKSSocketInfo::DoHandshake(PRFileDesc* fd, int16_t oflags) {
+   return PR_FAILURE;
+ }
+ 
++// Camoufox: how much later than a connection with no proxy this one hears
++// from its peer: the handshake up to the CONNECT request, and a round trip to
++// the proxy for that request and its reply, and one more for a ClientHello
++// that waits for the reply. Until the request is sent, the time the handshake
++// has taken so far (HappyEyeballsConnectionAttempt::RelayLag).
++mozilla::TimeDuration nsSOCKSSocketInfo::Lost() const {
++  if (mBegan.IsNull()) {
++    return mozilla::TimeDuration();
++  }
++  if (!mSetup) {
++    return mozilla::TimeStamp::Now() - mBegan;
++  }
++  return *mSetup + mRoundTrip.MultDouble(mOptimisticData ? 1 : 2);
++}
++
+ int16_t nsSOCKSSocketInfo::GetPollFlags() const {
+   switch (mState) {
+     case SOCKS_DNS_IN_PROGRESS:
+@@ -1484,6 +1512,12 @@ nsresult nsSOCKSIOLayerAddToSocket(int32_t family, const char* host,
+   return NS_OK;
+ }
+ 
++mozilla::TimeDuration nsSOCKSIOLayerLost(PRFileDesc* fd) {
++  PRFileDesc* layer = PR_GetIdentitiesLayer(fd, nsSOCKSIOLayerIdentity);
++  return layer ? ((nsSOCKSSocketInfo*)layer->secret)->Lost()
++               : mozilla::TimeDuration();
++}
++
+ bool IsHostLocalTarget(const nsACString& aHost) {
+ #if defined(XP_UNIX)
+   return StringBeginsWith(aHost, "file:"_ns);
+diff --git a/netwerk/socket/nsSOCKSIOLayer.h b/netwerk/socket/nsSOCKSIOLayer.h
+index d5282ae2fa..1cfc383edb 100644
+--- a/netwerk/socket/nsSOCKSIOLayer.h
++++ b/netwerk/socket/nsSOCKSIOLayer.h
+@@ -6,6 +6,7 @@
+ #ifndef nsSOCKSIOLayer_h_
+ #define nsSOCKSIOLayer_h_
+ 
++#include "mozilla/TimeStamp.h"
+ #include "nsIProxyInfo.h"
+ #include "nscore.h"
+ #include "prio.h"
+@@ -17,4 +18,7 @@ nsresult nsSOCKSIOLayerAddToSocket(int32_t family, const char* host,
+ 
+ bool IsHostLocalTarget(const nsACString& aHost);
+ 
++// Camoufox: nsSOCKSSocketInfo::Lost() of a socket with a SOCKS layer.
++mozilla::TimeDuration nsSOCKSIOLayerLost(PRFileDesc* fd);
++
+ #endif /* nsSOCKSIOLayer_h_ */

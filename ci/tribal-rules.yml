@@ -1079,3 +1079,245 @@ rules:
       and compile the patched sources for every other release target, and all
       of them set up the runner through .github/actions/build-host. Linking
       and packaging the cross-compiled targets is all a release does first.
+
+  - id: relay-hop-may-fragment
+    title: A QUIC datagram to a SOCKS5 relay may be fragmented on the way there, and is never made smaller
+    check: manual   # browser/tests/playwright/patches/http3-socks5-udp.py (the relay behind a 1280-byte link)
+    evidence:
+      - "stock Firefox 159 on its QUIC socket: HttpConnectionUDP sets PR_SockOpt_DontFrag on IPv4 (IP_PMTUDISC_DO on Linux, IP_DONTFRAG on macOS, IP_DONTFRAGMENT on Windows), then quinn-udp 0.5.15 sets IP_MTU_DISCOVER=IP_PMTUDISC_PROBE and, on IPv6, IPV6_MTU_DISCOVER=IPV6_PMTUDISC_PROBE and IPV6_DONTFRAG on Linux, IP_DONTFRAG and IPV6_DONTFRAG on macOS, IP_DONTFRAGMENT and IPV6_DONTFRAG on Windows; network.http.http3.pmtud is false, so a datagram is 1252 bytes to an IPv4 peer and 1232 to an IPv6 one"
+      - "the packet to the relay: payload plus a 10-byte (IPv4 peer) or 22-byte (IPv6 peer) header plus 28 (IPv4 relay) or 48 (IPv6 relay) bytes of IP and UDP: 1290, 1310, 1282 or 1302 bytes, all over 1280. A name is never the destination of a datagram: a proxy given names is sent no QUIC"
+      - "2026-11-21, a relay reached over a 1280-byte link, www.cloudflare.com/cdn-cgi/trace with proxy_dns='doh': http=http/2 on all four requests with don't-fragment kept, six sendmsg calls failing EMSGSIZE; the same with don't-fragment cleared and sends still segmented (UDP_SEGMENT 1262); http=http/3 from the second request with one datagram per send"
+      - "http3-socks5-udp.py, the relay in a container behind a docker network of MTU 1280: 13 of 14 checks pass before the change and the narrow-link one fails with every answer over TCP; after it the first datagrams the origin receives are 1252, 1252, 1252 and 285 bytes, and with no proxy 1252, 1252, 1252 and 284 (the guard compares the first two)"
+    rationale: >-
+      Shrinking the datagram to fit the hop would change what the server
+      receives, which is the one thing the relay must not change. Keeping
+      don't-fragment means no HTTP/3 behind any link under 1310 bytes, which
+      a direct Firefox on that link has. So the hop to the relay, which no
+      server sees, gives up don't-fragment (IP_PMTUDISC_DONT on Linux IPv4;
+      IPV6_PMTUDISC_WANT and no IPV6_DONTFRAG on IPv6, where only the sender
+      fragments) and segmented sends, which the kernel refuses to fragment.
+      The relay sends the datagram on whole, with don't-fragment set
+      (docs/proxy-dns.md).
+
+  - id: socks5-proxy-resolves-by-doh
+    title: Behind a SOCKS5 launch proxy the browser resolves names itself, by DoH through the proxy
+    check: manual   # browser/tests/playwright/patches/http3-socks5-udp.py, python/tests/test_proxy_dns.py
+    evidence:
+      - "crypto.cloudflare.com/cdn-cgi/trace, 2026-11-21, one build and one SOCKS5 proxy: sni=encrypted with no proxy and with proxy_dns='doh', sni=plaintext with proxy_dns='exit'"
+      - "www.cloudflare.com/cdn-cgi/trace, same day: http=http/3 with no proxy and with proxy_dns='doh'; a proxy given names is sent no QUIC (http3-socks5-udp.py)"
+      - "MOZ_LOG=nsHostResolver:5 over a proxy_dns='doh' session: no getaddrinfo call, and the one name the proxy was sent is the DoH host"
+      - "Remote Settings doh-config on 2026-11-21: rolloutEnabled for US, CA, RU and UA, each listing cloudflare-global (https://mozilla.cloudflare-dns.com/dns-query)"
+    rationale: >-
+      A proxy that is handed names leaves the browser without HTTPS records,
+      so it sends GREASE ECH where the same Firefox with no proxy sends a real
+      one, and never starts HTTP/3: both are visible to the server on every
+      connection. Resolving by DoH through the proxy removes both, and its
+      cost is that the resolver an authoritative DNS server sees is
+      Cloudflare's rather than the exit network's, which is what stock shows
+      in the rollout countries and what a user who turned DoH on shows
+      elsewhere. proxy_dns='exit' keeps the old behaviour for a proxy that
+      cannot carry DoH (docs/proxy-dns.md). A context's own proxy stays on
+      'exit': the browser has one DoH client, on the launch proxy.
+
+  - id: doh-mode-keeps-firefox-resolver-timeouts
+    title: proxy_dns='doh' keeps Firefox's DoH-only timeouts, and its HTTP/3 fallback timers
+    check: manual   # measured with a local SOCKS5 relay and DoH server that delay or refuse
+    evidence:
+      - "netwerk/dns/TRRService.cpp, GetRequestTimeout (Firefox 159): with network.trr.mode 3 a request waits network.trr.request_timeout_mode_trronly_ms (30000), not the 1500 of network.trr.request_timeout_ms; mode 3 also turns confirmation off (CONFIRM_DISABLED) and never blocklists a name"
+      - "2026-11-22, Firefox 159 build behind a local SOCKS5 relay: the CONNECT to the DoH host granted 8 s late, the page loads after 8.1 s; each DoH answer 8 s late, it loads after 16.1 s; the CONNECT refused with reply 2, the navigation fails with NS_ERROR_UNKNOWN_HOST at once (8 refused CONNECTs), and one started after the relay grants it loads"
+      - "same day, 60 new contexts per case, 30 ms and 60 ms each way between browser and relay, against the same delay to the origin with no proxy: with an HTTPS record (alpn=h3) the navigation was HTTP/3 in 60 of 60 in all four cases; with Alt-Svc alone the first HTTP/3 answer was the second fetch in 59 or 60 of 60 in all four"
+      - "same relay granting UDP ASSOCIATE 40, 120 and 300 ms later than a CONNECT: the navigation was HTTP/3 in 20 of 20 each time"
+    rationale: >-
+      A page that fails with NS_ERROR_UNKNOWN_HOST behind a proxy looks like a
+      DoH timeout that is too short. It is not: DoH alone waits 30 seconds,
+      longer than a system resolver, and the fast failure is a proxy refusing
+      the CONNECT to the DoH host, which no timeout or retry in the browser
+      answers. The HTTP/3 race is not shifted by the relay either: the
+      association costs the round trips a CONNECT costs, so QUIC keeps the
+      lead it has with no proxy. Leave network.trr.* timeouts and
+      network.http.http3.backup_timer_delay and
+      network.dns.httpssvc.http3_fast_fallback_timeout at Firefox's values
+      (docs/proxy-dns.md).
+
+  - id: speculative-connects-go-through-the-proxy
+    title: Behind a SOCKS proxy a speculative connection is opened, through the proxy
+    check: manual   # browser/tests/playwright/patches/link-preconnect-through-proxy.py
+    evidence:
+      - "Firefox 159, netwerk/base/nsIOService.cpp: IOServiceProxyCallback::OnProxyAvailable returns before the handler is called for any proxy type but 'direct' ('proxies dont do speculative connect'), and nsHttpHandler::SpeculativeConnectInternal builds its connection info with no proxy, so the gate is also what keeps that connection from going around the proxy"
+      - "every trigger goes through that one function: link rel=preconnect and a link's mousedown from a content process (NeckoParent::RecvSpeculativeConnect), a 103 Early Hints preconnect, the urlbar, and Juggler's own at a top-level navigation (PageHandler.js)"
+      - "2026-11-21, a page with link rel=preconnect to an https origin never otherwise used, the origin recording arrivals: stock Firefox 159 with no proxy opened the connection and sent a ClientHello in 5 of 6 launches; Camoufox behind a SOCKS5 proxy in 0 of 21 (9 with proxy_dns='doh', 12 with 'exit')"
+      - "the same page after the change: 9 of 9 launches with proxy_dns='doh' and 12 of 12 with 'exit', stock 6 of 6, the ClientHello's JA4 equal to stock's in every one, every connection arriving from the proxy's exit, and no name asked of this host's resolver"
+      - "nsSocketTransport::InitiateSocket refuses a speculative connection whose address is local (bug 853423); for a proxy given the name that address is the any address, which counts as local, so the refusal has to look at the host instead"
+      - "behind an HTTP proxy the speculative connection carries no request, so it would stop at the proxy with no CONNECT sent (measured: a TCP connection to the proxy and nothing after it)"
+    rationale: >-
+      Any page can put a preconnect link to an origin it controls and see
+      whether the connection arrives, so a browser that never opens one is
+      marked as proxied by one line of HTML. A SOCKS proxy carries a
+      connection as the network does, so the speculative one is opened as
+      stock opens it, with the connection info the request's channel will
+      build, proxy included: it cannot leave around the proxy, and the request
+      finds it. No HTTPS record is asked for a name the proxy resolves. An
+      HTTP proxy is left as Firefox has it, because nothing would reach the
+      origin (docs/proxy-dns.md).
+
+  - id: doh-request-is-not-prefetched
+    title: Behind a SOCKS proxy the DoH request's own host is never prefetched on this host
+    check: manual   # browser/tests/playwright/patches/doh-proxy-resolves-nothing-here.py
+    evidence:
+      - "Firefox 160, netwerk/protocol/http/TRRServiceChannel.cpp: BeginConnect calls MaybeStartDNSPrefetch, which skips only an HTTP proxy; nsHttpChannel skips any proxy that resolves the name (GetProxyDNSStrategyHelper). TRR is off for its own server's name, so the prefetch is a getaddrinfo on this host"
+      - "network.dns.disablePrefetch was the only other gate; uBlock Origin's 'Disable pre-fetching' sets it once the add-on has started, after the first DoH request of a launch, and Juggler leaves prefetch on behind a proxy that carries DoH (docs/proxy-dns.md)"
+      - "doh-proxy-resolves-nothing-here.py, 2026-11-25: 2 of 3 checks in 3 of 3 runs before the change, the DoH server's name resolved by this host's resolver; 3 of 3 checks in 3 of 3 runs after, the resolver log showing every page name answered by DoH and no getaddrinfo"
+      - "behind a remote SOCKS5 exit with uBlock Origin loaded, three launch variants three times each, same day: the DoH server's name was looked up on this host in 9 of 9 launches before the change and in 0 of 9 after, every other connection leaving by the exit both times"
+    rationale: >-
+      With proxy_dns='doh' the exit resolves the DoH server's name and the
+      browser resolves every other name through it, so this host's resolver
+      should be asked nothing. A prefetch of the DoH request's host told a
+      resolver beside the user which DoH server the browser uses, at every
+      launch, and a proxied stock Firefox never asks it. The DoH channel
+      follows nsHttpChannel's rule: no prefetch when the proxy resolves the
+      name. Do not rely on network.dns.disablePrefetch for this; it is on by
+      design in doh mode, and uBlock Origin sets it too late.
+
+  - id: http3-is-raced-on-the-exits-clock
+    title: Behind a SOCKS5 relay, the timers that start TCP beside QUIC wait for what the proxy cost
+    check: manual   # browser/tests/playwright/patches/http3-https-record-socks5.py, ublock-connections-socks5.py
+    evidence:
+      - "Firefox 160 release, netwerk/protocol/http/nsHttpTransaction.cpp: OnHTTPSRRAvailable arms mFastFallbackTimer for network.dns.httpssvc.http3_fast_fallback_timeout (50 ms) and OnFastFallbackTimer opens a TCP connection; an Alt-Svc route has mHttp3BackupTimer, network.http.http3.backup_timer_delay (100 ms). OnBackupConnectionReady moves the request to TCP if QUIC has not connected. These timers serve the requests Happy Eyeballs v3 does not take (connections-are-raced-as-release-races-them)"
+      - "behind a SOCKS5 proxy the first QUIC datagram leaves after the UDP ASSOCIATE (a TCP connect, greeting and request: two or three round trips to the proxy), so both timers ran out before QUIC had sent anything"
+      - "an origin with an HTTPS record (alpn h3,h2) and a SOCKS5 proxy 50 ms away each way, same build: with no proxy each of 3 names saw one QUIC connection and no TCP connection; behind the proxy each also saw a TCP connection; with proxy_optimistic_data the requests of new names went over TCP in 5 of 5 runs, and a QUIC connection closed before its relay was ready sent one datagram carrying only CONNECTION_CLOSE; with the association granted after a second, no QUIC at all"
+      - "once a TCP connection to the origin exists the backup is ready the moment the timer fires, so every later HTTP/3 attempt was closed before its relay was ready: one lone datagram each, on an association of its own"
+      - "a navigation behind the proxy opened two QUIC connections to its origin and one with no proxy: nsHttpHandler::SpeculativeConnectInternal keys the connection with the page's partition key, and a proxied request's connection has none (StoragePrincipalHelper::GetOriginAttributesForHttpConnection, privacy.partition.network_state.connection_with_proxy false), so the speculative connection was never used"
+      - "http3-https-record-socks5.py, 2026-11-22: 4 of 7 checks pass before the change and 7 of 7 after; an origin that answers nothing over QUIC is reached over TCP by the same connections either way"
+      - "Firefox 160: a page's render-blocking requests keep its other ones in the pending queue (nsHttpConnectionMgr, 'blocked by request context'), and the fast fallback timer of a queued request runs from its HTTPS record all the same; uBlock Origin's 'Disable pre-fetching' sets network.http.speculative-parallel-limit to 0, so no connection has been opened for it"
+      - "a page whose stylesheet, image, video, font, EventSource and fetch are at six names of one site, uBlock Origin loaded, no proxy, network.http.happy_eyeballs_enabled false, 2026-11-23: the site 4 ms away sees no TCP connection and every request over HTTP/3 (10 of 10 runs); 40 ms away a TCP connection for five names that carries nothing (5 of 5); 100 ms away a TCP connection for each name, which carry the EventSource, the fetch and the font (11 of 11); six QUIC connections at every distance"
+      - "the same page behind a SOCKS5 proxy 50 ms away each way with proxy_optimistic_data, before the change: one QUIC connection, and the image, video, font, EventSource and fetch over TCP at 4 ms and at 100 ms (ublock-connections-socks5.py, 4 of 6 checks in 2 of 2 runs)"
+      - "at 100 ms the stylesheet answered 209 ms after its record with no proxy and 612 ms after it behind the proxy, the 403 ms its relay's setup and two round trips come to; a TCP connection was ready 204 ms after it was started with no proxy and 407 ms behind the proxy, where its ClientHello travels behind the CONNECT request, while a QUIC connection's first datagram waits for the reply to UDP ASSOCIATE and its answer crosses the proxy: 305 ms, a round trip to the proxy more"
+      - "with a held request's timer waiting for the stylesheet's cost alone, the site saw what it sees with no proxy at 4 and 100 ms, and the EventSource, fetch and font over TCP at 40 ms (2 of 2 runs), where with no proxy QUIC wins by under 20 ms; with the TCP connection started a round trip later instead, the image and video, which join the stylesheet's QUIC connection, never opened the TCP connection they open with no proxy (2 of 2)"
+      - "with that round trip waited when the backup connection is ready: equal to no proxy at 4, 40 and 100 ms (3 of 3 runs at 40 ms); ublock-connections-socks5.py 6 of 6 checks in 5 of 5 runs"
+      - "the guard's DoH resolver speaks HTTP/1.1; with six connections reused, a page's answers came a round trip to the proxy apart (0, 122, 137 and 260 ms after the first) where with no proxy they came 20 ms apart, and a request whose record came late was not held like the others. A connection for each query, closed after its answer, brings them within 13 ms of each other both ways, as one HTTP/2 connection does"
+    rationale: >-
+      An origin sees which connections arrive, not only which one carries the
+      request: a TCP connection beside every QUIC one, or a request over
+      HTTP/2 to an origin whose record says h3, is what a Firefox at the
+      proxy's exit does only when QUIC is slow there. The timers measure the
+      origin's QUIC against a head start, so behind a relay they wait for
+      what the proxy added: the time the relay took to set up, and one round
+      trip to the proxy, measured on the UDP ASSOCIATE request. A request
+      held behind a page's blocking ones has no connection when its timer
+      runs out, so it waits for what the proxy cost those: their relay's
+      setup and two round trips, a handshake and a response. Let go by
+      then, as it would be at the exit, it waits for its own relay. Still
+      held, it starts TCP as it does at the exit, and what is left to match
+      is the race that TCP connection runs against a QUIC connection not yet
+      asked for: with proxy_optimistic_data TCP crosses the proxy one round
+      trip sooner than QUIC, so the request is taken from QUIC that much
+      after the backup is ready. Do not start the TCP connection later
+      instead: a request that joins another's QUIC connection would never
+      open it, and the origin counts connections. Do not turn
+      the timers off behind a proxy, and do not lengthen them by a constant:
+      an origin with no working QUIC must still be reached over TCP, as late
+      as the exit would reach it and no later than the proxy makes it. A
+      QUIC connection given up before its relay is ready sends nothing; its
+      only datagram would announce the close of a connection the origin never
+      saw. The speculative connection of a proxied request is keyed as the
+      request's is, without a partition key. What is not matched: timers
+      inside QUIC and TLS run on the whole path's round trip, so an origin
+      that rejects ECH, whose QUIC connection takes three probe timeouts to
+      close, is still raced over TCP sooner than at the exit
+      (docs/proxy-dns.md).
+
+  - id: connections-are-raced-as-release-races-them
+    title: Happy Eyeballs v3 is on as in release Firefox, and behind a SOCKS5 proxy given addresses it runs on the exit's clock
+    check: manual   # browser/tests/playwright/patches/ublock-connections-socks5.py, http3-https-record-socks5.py
+    evidence:
+      - "Nimbus rollout happy-eyeballs-release-rollout: 100% of release profiles from Firefox 157, since 2026-09-28, sets network.http.happy_eyeballs_enabled and nothing else (checked 2026-11-23). Camoufox's update channel is 'default', which no rollout targets, and a stock Firefox launched with Nimbus off runs without it too"
+      - "a page whose stylesheet, image, video, font, EventSource and fetch are at six names of one site and which has a <link rel=preconnect> to a seventh, uBlock Origin 1.75.4 loaded, no proxy, 2026-11-23. Stock Firefox 160.0.1 with the pref on and Camoufox with it on, 2 or 3 runs each at 4, 40 and 100 ms: the same connections at each distance (no TCP connection at 4 and 40 ms; at 100 ms a TCP ClientHello for each of the six names and no request over TCP; every request over HTTP/3). With the pref off both made a TCP connection for five names at 40 ms and carried the EventSource, fetch and font over TCP at 100 ms"
+      - "the preconnected name with uBlock Origin's network.http.speculative-parallel-limit 0: asked for A, AAAA and HTTPS with the pref off, asked nothing with it on (nsHttpHandler::SpeculativeConnectInternal: the Happy Eyeballs path returns before any lookup when the limit allows no connection). Seen from a name's authoritative server, Camoufox resolved the name and stock with uBlock Origin never did"
+      - "Firefox 160, nsHttpChannel.cpp and AlternateServices.cpp: Happy Eyeballs is skipped for any channel with a proxy. third_party/rust/happy-eyeballs: the next endpoint is attempted when the newest attempt is 50 ms old (connection_attempt_delay, doubled per attempt in progress), and the rest are cancelled when one connects"
+      - "behind a SOCKS5 proxy 50 ms away each way, the race on the browser's clock: a site 100 ms away saw no TCP connection where it sees six with no proxy (the TCP attempts were closed before they crossed the proxy), and an origin deaf to QUIC saw two TCP connections where it sees one (the second was started while the first was still in its SOCKS handshake)"
+      - "with the proxy's cost of the attempts in progress taken off the race's clock and added to a loser's close: ublock-connections-socks5.py 5 of 8 checks before the change and 8 of 8 after; http3-https-record-socks5.py 7 of 7"
+      - "third_party/rust/happy-eyeballs: once an address is known the HTTPS record is waited for 25 ms (resolution_delay). uBlock Origin resolves each request's name (browser.dns.resolve) and holds the request until it has, so in the launch's own context the race's A and AAAA queries are answered from the cache at once and the HTTPS query alone goes to the resolver. With no proxy the record is back inside the 25 ms; behind a SOCKS5 proxy it is a round trip to the proxy later, the wait ran out, and TCP was tried at the URL's port with no record: the origin got nearly every subresource request over TCP, with a GREASE ECH extension, where stock sends every one over HTTP/3 (2026-11-23)"
+      - "the guard did not see it: its page was opened in a new context, whose lookups are cached apart from the extension's, so all three queries crossed the proxy together; and its resolver gave each query a connection of its own, four round trips to the proxy where a DoH resolver's one HTTP/2 connection costs one. With the page in the launch's context and the resolver on HTTP/2: 6 of 8 checks before the change (every request over TCP behind the proxy, at 4 and at 100 ms), 8 of 8 after"
+      - "that wait was first lengthened by a round trip to the proxy, measured on the SOCKS5 greeting. A proxy whose endpoint runs on the browser's machine and forwards to its exit answers the greeting at once, so the round trip measured was nothing; and a DoH answer takes more than a round trip to the proxy, the resolver's own time being on top. Behind such a proxy every request still went over TCP to the URL's port, the page's own included, where stock sends every one over HTTP/3"
+      - "stock Firefox 160.0.1 with uBlock Origin, no proxy, a public DoH resolver, one page load: no connection race started a connection before its HTTPS answer had come, and every answer came within the 25 ms"
+      - "Firefox 160, netwerk/dns/TRR.cpp, ReturnData: every DoH answer has the time between its request and the end of its response (trrFetchDurationNetworkOnly), on a connection that is already open. RFC 6298 section 2: an answer is late after the smoothed time plus four times its variation"
+      - "the guard did not see it: its proxy answered the greeting from 50 ms away, and its HTTPS records named the URL's port, where a request without its record still found HTTP/1.1. With the greeting answered at once, the records (alpn h3,h2) naming another port and the page among the site's names, 2026-11-23: 6 of 8 checks before the change (behind the proxy every request, the page's first, over TCP to the URL's port, and at 100 ms seven QUIC connections that carried nothing), 8 of 8 after in 5 of 5 runs; stock Firefox 160.0.1 and Camoufox with no proxy see the same connections on it, 2 of 2 runs each at 4 and 100 ms"
+      - "the HTTPS record guard with the greeting answered at once, before and after the change: an origin deaf to QUIC sees two TCP connections behind the proxy and one with none (5 of 7 checks), because a TCP attempt's cost is measured on the greeting"
+      - "the clock first gave back time it had counted as lost when fast DoH answers lowered the timeout mid-lookup. Behind a remote SOCKS5 exit, 2026-11-25: 115 of 305 races saw it jump ahead (median 41 ms, at most 169 ms), 18 of them followed by a TCP connection beside a QUIC attempt still waiting; none once the lost time is kept"
+      - "the HTTPS record guard holding a QUIC association while a burst of fast answers lowers the timeout, run alternately on an idle machine, same day: 9 of 10 checks before the change in 5 of 5 runs (a TCP connection started before the association), 10 of 10 after in 5 of 5"
+      - "the HTTPS record guard's checks on an origin deaf to QUIC failed intermittently (origin 2 never tried over QUIC behind the proxy): its resolver spoke HTTP/1.1, so a query could wait for a new connection to the resolver, which no answer time had measured; with the resolver on HTTP/2 the same checks failed 0 of 40 under load. What a user can meet is a query waiting for a new connection to a resolver that has closed an idle one. Made deterministic, 2026-11-26: a cached name at another port, whose HTTPS query alone goes out after the resolver has closed its idle HTTP/2 connection, failed 10 of 10 behind the proxy, 0 of 10 with none, and stock Firefox 160.0.1 with none passed 5 of 5"
+      - "counting the wait for a connection in the answer times passed that 10 of 10, and failed 10 of 10 once the page had first had 90 names answered over the open connection: the timeout had learned that answers are quick. With the clock still while a query waits to be sent and the timeout counted from the send, 0 of 10 fail either way; the guard with that check passes 12 of 12 in 3 of 3 runs idle and 3 of 3 with eight busy loops on its two CPUs, and with QueriesWaited returning nothing fails that one check in 3 of 3"
+      - "the same exit against stock Firefox, uBlock Origin loaded, three launch variants three times each: 44 differing keys in the races' requests, QUIC and TCP connections before the change, 34, 34 and 18 in three runs after; an exit that resolves names, both builds side by side: 664 differing keys before, 624 after (TCP 52 to 32)"
+    rationale: >-
+      Which connections an origin sees, and which names a resolver is asked,
+      are decided by the connection race, and release Firefox races with
+      Happy Eyeballs v3. Without the rollout's pref Camoufox raced as no
+      release profile does, with or without a proxy. Firefox turns the race
+      off behind every proxy, where the proxy resolves the name and there is
+      nothing to race; a SOCKS5 proxy given addresses (proxy_dns 'doh')
+      connects as no proxy does, so the race stays on, as the HTTPS record
+      and HTTP/3 do. Its delays are measured against attempts that reach the
+      origin late by what the proxy costs: the association or the SOCKS
+      handshake, and the round trips to the proxy. The race's clock is set
+      back by that cost while an attempt is in progress, and an attempt that
+      lost is closed that much later. A lookup crosses the proxy as well,
+      and a Firefox at the exit has its resolver beside it: an answer in
+      flight through the proxy must not be what lets TCP start ahead. So
+      the clock stands still while an answer is outstanding: while its
+      query waits to be sent, for a connection to the resolver through the
+      proxy (TRRService::QueriesWaited), and once it is sent for at most
+      the time after which the resolver's answers are late: RFC 6298's
+      timeout over the answer times measured on the DoH requests
+      themselves, from request to response, the smoothed time plus four
+      times its variation (TRRService::AnswerTimeout). Do not count the
+      wait for a connection in the answer times instead: answers on an open
+      connection teach the timeout that answers are quick, and the next
+      query that needs a new connection is then counted late. Time the
+      clock has stood still is kept when that timeout falls while an
+      answer is outstanding: given back, it moves the clock ahead at once
+      and starts TCP beside an attempt still in progress. An answer that is
+      lost, or slower than that, is given up as stock gives it up, 25 ms
+      later, and the request goes over TCP without its record. Do not bound that wait by a round
+      trip to the proxy, and do not measure anything on the SOCKS greeting
+      for it: the endpoint that answers the greeting may be on the
+      browser's machine, and an answer costs the resolver's time as well.
+      Do not wait for the answer without a bound either: an origin whose
+      record never comes must still be reached. Do not
+      lengthen the delays by a constant, and do not turn the race off behind the proxy: both change
+      what the origin sees with the proxy's distance. A proxy given names
+      still runs no race and asks no resolver. What is not matched: an
+      attempt's cost is measured on the handshake with the proxy, so a
+      proxy whose latency changes after it is charged the old figure, and
+      a TCP attempt behind an endpoint on the browser's machine is charged
+      nothing (an origin deaf to QUIC sees a second TCP connection); a
+      lost HTTPS answer is given up later than at the exit, by that
+      timeout; and the clock stands still while any query waits to be
+      sent, not only the race's own, for at most the DoH request's
+      timeout.
+
+  - id: optimistic-data-is-opt-in-and-tls-only
+    title: A TLS ClientHello may travel behind the SOCKS5 CONNECT request, only when the launch asks for it
+    check: manual   # browser/tests/playwright/patches/socks5-optimistic-data.py, python/tests/test_proxy_dns.py
+    evidence:
+      - "an origin timing the gap between the TCP handshake's last ACK and the ClientHello: 0.4 to 1.5 ms from a Firefox with no proxy, 37 to 70 ms behind a SOCKS5 proxy, which is the round trip between the exit and the browser that the proxy's reply and the ClientHello make"
+      - "Firefox 160, netwerk/socket/nsSOCKSIOLayer.cpp: connectcontinue returns PR_SUCCESS only in SOCKS_CONNECTED, after ReadV5ConnectResponseBottom, and poll reports nothing but the handshake's own flags until then, so nsSocketTransport stays in STATE_CONNECTING and NSS, the layer above, cannot write"
+      - "socks5-optimistic-data.py on Firefox 160.0.1, 2026-11-22, a proxy that holds its reply until it has a whole ClientHello or 3 seconds pass: with the option every TLS connection's ClientHello (1869 bytes to an address, 1900 to a name, 2392 and 2455 when resuming) is at the proxy and at the origin before the reply, a speculative connection's included; without it no connection sends a byte before the reply; the ClientHello's size and extension list are equal either way; a plain HTTP connection sends nothing early; 20 of 20 checks"
+      - "the same guard on a build without the patch (Firefox 159, the pref set and unknown): no connection sends a byte before the reply, 10 of 20 checks pass"
+      - "a CONNECT refused when the proxy's hold is over (Firefox 160.0.1, 2026-11-26): NS_ERROR_CONNECTION_REFUSED with and without; to an address one navigation asks twice either way, its request taking one of the two speculative connections; to a name 5 times without the option and 2 or 3 with it, because a connection still waiting for the reply opens a backup after network.http.connection-retry-timeout, and with the option none is waiting. Refused at once, both speculative connections can fail before the request is dispatched, which then opens a third, with the option or without (10 launches: 3 asks in 4 with it, in 8 without), so the count of a quick refusal is a race, not the option's"
+      - "a proxy that discards the early bytes and then replies: with network.http.tls-handshake-timeout at Firefox's 30 seconds the navigation had not failed after 200 seconds and 6 CONNECTs; at 5 seconds it failed with NS_ERROR_NET_TIMEOUT after 25 seconds, or had not after 30, with 2; a navigation with no proxy to an origin that never answers a ClientHello had not failed after 60 seconds and 2 connections (before the speculative connection was keyed as the request's, the proxied one failed after 17 seconds)"
+      - "RFC 1928 section 6 says nothing of bytes that follow a request before its reply; a proxy that reads the request and then pipes forwards them, one that reads through a buffer it drops, or answers from a different process than the one that pipes, loses them, and the browser cannot tell a lost ClientHello from a slow server"
+    rationale: >-
+      The gap is on every TLS connection and no page script is needed to see
+      it, so it is worth closing, and it can only be closed by sending the
+      ClientHello before the proxy has said the destination is connected. That
+      is safe only when every hop forwards those bytes: one that discards them
+      answers the CONNECT and leaves every handshake waiting for a ServerHello
+      until network.http.tls-handshake-timeout, again and again. So it is a launch option, off
+      by default (proxy_optimistic_data, network.proxy.socks5_optimistic_data).
+      Do not turn it on by default, and do not add a retry without it: the
+      retry is a second connection the origin sees, later than the first by a
+      fixed timeout. Only a TLS layer's first flight goes ahead, because a
+      ClientHello waits for an answer whatever happened to it; a plain HTTP
+      request sent ahead of a refusal would be a request the browser believes
+      it made. The reply stays the SOCKS layer's to read, and a refusal is
+      reported with the error it has while connecting (docs/proxy-dns.md).

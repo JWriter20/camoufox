@@ -1,5 +1,5 @@
 diff --git a/dom/media/CubebUtils.cpp b/dom/media/CubebUtils.cpp
-index 72551b795a..5bbe58e8a3 100644
+index 959ce56d65..a48768f8e3 100644
 --- a/dom/media/CubebUtils.cpp
 +++ b/dom/media/CubebUtils.cpp
 @@ -46,6 +46,7 @@
@@ -10,7 +10,7 @@ index 72551b795a..5bbe58e8a3 100644
  
  #if defined(ENABLE_TESTS) || defined(FUZZING)
  #  define ENABLE_MOCK_CUBEB 1
-@@ -501,6 +502,8 @@ uint32_t PreferredSampleRate(bool aShouldResistFingerprinting) {
+@@ -491,6 +492,8 @@ uint32_t PreferredSampleRate(bool aShouldResistFingerprinting) {
    if (sCubebForcedSampleRate) {
      return sCubebForcedSampleRate;
    }
@@ -127,10 +127,10 @@ index 7ec59bf6d6..075cb42331 100644
     * The max audio output channel count the default audio output device
     * supports. This is cached here because it can be expensive to query. The
 diff --git a/dom/media/moz.build b/dom/media/moz.build
-index af9a8c99f0..caa1eaf516 100644
+index c2073164ee..423a266a71 100644
 --- a/dom/media/moz.build
 +++ b/dom/media/moz.build
-@@ -438,5 +438,7 @@ if CONFIG["CC_TYPE"] in ("clang", "gcc"):
+@@ -445,6 +445,8 @@ if CONFIG["CC_TYPE"] in ("clang", "gcc"):
  COMPILE_FLAGS["WARNINGS_CXXFLAGS"] += ["-Werror=switch"]
  
  FINAL_LIBRARY = "xul"
@@ -138,19 +138,20 @@ index af9a8c99f0..caa1eaf516 100644
 +LOCAL_INCLUDES += ["/camoucfg"]
  
  SPHINX_TREES["/media"] = "docs"
+ 
 diff --git a/dom/media/webaudio/AudioContext.cpp b/dom/media/webaudio/AudioContext.cpp
-index 6e7f17e7c3..66aea77f59 100644
+index 4c9157247f..7a6fc8be94 100644
 --- a/dom/media/webaudio/AudioContext.cpp
 +++ b/dom/media/webaudio/AudioContext.cpp
-@@ -4,6 +4,7 @@
+@@ -6,6 +6,7 @@
  
- #include "AudioContext.h"
+ #include <memory>
  
 +#include "MaskConfig.hpp"
  #include "AudioBuffer.h"
  #include "AudioBufferSourceNode.h"
  #include "AudioChannelService.h"
-@@ -561,6 +562,13 @@ double AudioContext::OutputLatency() {
+@@ -563,6 +564,13 @@ double AudioContext::OutputLatency() {
    }
    // When reduceFingerprinting is enabled, return a latency figure that is
    // fixed, but plausible for the platform.
@@ -164,7 +165,7 @@ index 6e7f17e7c3..66aea77f59 100644
    double latency_s = 0.0;
    if (mShouldResistFingerprinting) {
  #ifdef XP_MACOSX
-@@ -714,6 +722,11 @@ void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
+@@ -716,6 +724,11 @@ void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
  }
  
  uint32_t AudioContext::MaxChannelCount() const {
@@ -177,13 +178,13 @@ index 6e7f17e7c3..66aea77f59 100644
      return 2;
    }
 diff --git a/dom/media/webaudio/moz.build b/dom/media/webaudio/moz.build
-index 6ccf96569c..2a51a8f759 100644
+index 85c386ed6f..a0c59ff0b0 100644
 --- a/dom/media/webaudio/moz.build
 +++ b/dom/media/webaudio/moz.build
-@@ -150,3 +150,6 @@ include("/ipc/chromium/chromium-config.mozbuild")
- 
- FINAL_LIBRARY = "xul"
- LOCAL_INCLUDES += [".."]
+@@ -160,3 +160,6 @@ SOURCE_HEADERS += [
+     "PanningUtils.h",
+     "PlayingRefChangeHandler.h",
+ ]
 +
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]

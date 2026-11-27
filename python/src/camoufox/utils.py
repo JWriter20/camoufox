@@ -64,6 +64,10 @@ ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
 # Camoufox preferences to cache previous pages and requests
 CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
 
+# Behind a SOCKS5 proxy with proxy_dns='doh': names are resolved by DoH alone,
+# at the resolver Firefox's own DoH rollout uses (docs/proxy-dns.md).
+PROXY_DOH_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['proxyDohPrefs']
+
 # System colours stock Firefox reports on Windows in the default (light) theme:
 # measured on 152.0.4 (2026-09-24) and checked, all 92 CSS system colours,
 # against 158.0 on Windows 11 (browser/tests/playwright/patches/assets/
@@ -773,6 +777,75 @@ def is_domain_set(
             if prop in config:
                 return True
     return False
+
+
+def socks5_host(proxy: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The host of a SOCKS5 proxy, or None when `proxy` is not one."""
+    if not proxy:
+        return None
+    url = urlsplit(str(proxy.get('server', '')))
+    return url.hostname if url.scheme.lower() == 'socks5' else None
+
+
+def proxy_carries_no_udp(server: str) -> bool:
+    """Whether a Playwright proxy server is an HTTP(S) proxy (a bare host:port is one), which carries no UDP."""
+    scheme = server.split('://', 1)[0].lower() if '://' in server else 'http'
+    return scheme in ('http', 'https')
+
+
+def apply_proxy_dns(
+    proxy_dns: Optional[str],
+    proxy: Optional[Dict[str, Any]],
+    config: Dict[str, Any],
+    firefox_user_prefs: Dict[str, Any],
+    exit_looked_up: bool,
+) -> None:
+    """
+    Who resolves the names a proxied browser visits (docs/proxy-dns.md).
+
+    'doh', the default behind a SOCKS5 proxy: the browser, by DoH through the
+    proxy, as a Firefox at the exit resolves its own. It gets HTTPS records, so
+    it sends ECH and starts HTTP/3 where that Firefox does, and the proxy is
+    given addresses. 'exit': the proxy is given names. An HTTP proxy is always
+    given names.
+    """
+    if proxy_dns not in (None, 'doh', 'exit'):
+        raise ValueError(f"proxy_dns must be 'doh' or 'exit', not {proxy_dns!r}.")
+    host = socks5_host(proxy)
+    if host is None:
+        if proxy_dns == 'doh':
+            raise ValueError("proxy_dns='doh' needs a socks5:// proxy.")
+        return
+    if proxy_dns == 'exit':
+        return
+    merge_into(firefox_user_prefs, PROXY_DOH_PREFS)
+    # The proxy's own name cannot be asked through the proxy.
+    if not (valid_ipv4(host) or valid_ipv6(host)):
+        firefox_user_prefs.setdefault('network.trr.excluded-domains', host)
+    # The browser picks the address now, so it has to know whether the exit
+    # can reach an IPv6 one. Asked only of an exit the launch looks up (geoip).
+    if (
+        exit_looked_up
+        and 'network:ipv4Only' not in config
+        and 'webrtc:ipv6' not in config
+        and public_ipv6(Proxy(**proxy).as_string()) is None
+    ):
+        config['network:ipv4Only'] = True
+
+
+def apply_proxy_optimistic_data(
+    enabled: Optional[bool], proxy: Optional[Dict[str, Any]], firefox_user_prefs: Dict[str, Any]
+) -> None:
+    """
+    Send a connection's TLS ClientHello behind its SOCKS5 CONNECT request,
+    before the proxy's reply. Only for a proxy that forwards what it has
+    received once it has connected (docs/proxy-dns.md).
+    """
+    if not enabled:
+        return
+    if proxy is not None and socks5_host(proxy) is None:
+        raise ValueError("proxy_optimistic_data needs a socks5:// proxy.")
+    firefox_user_prefs['network.proxy.socks5_optimistic_data'] = True
 
 
 def _keeps_ipv6(
@@ -1628,6 +1701,8 @@ def launch_options(
     browser: Optional[str] = None,
     firefox_user_prefs: Optional[Dict[str, Any]] = None,
     proxy: Optional[Dict[str, str]] = None,
+    proxy_dns: Optional[Literal["doh", "exit"]] = None,
+    proxy_optimistic_data: Optional[bool] = None,
     enable_cache: Optional[bool] = None,
     args: Optional[List[str]] = None,
     env: Optional[Dict[str, Union[str, float, bool]]] = None,
@@ -1729,6 +1804,13 @@ def launch_options(
         proxy (Optional[Dict[str, str]]):
             Proxy to use for the browser.
             Note: If geoip is True, a request will be sent through this proxy to find the target IP.
+        proxy_dns (Optional[Literal["doh", "exit"]]):
+            Who resolves names behind a SOCKS5 proxy: 'doh' (default), the browser, by DoH
+            through the proxy; 'exit', the proxy. See docs/proxy-dns.md.
+        proxy_optimistic_data (Optional[bool]):
+            Send the TLS ClientHello behind the SOCKS5 CONNECT request, before the proxy's
+            reply. Only for a proxy that forwards those bytes; behind one that discards
+            them every HTTPS connection hangs. See docs/proxy-dns.md.
         enable_cache (Optional[bool]):
             Cache previous pages, requests, etc (uses more memory).
         args (Optional[List[str]]):
@@ -2543,6 +2625,14 @@ def launch_options(
         and not is_domain_set(config, 'geolocation')
     ):
         LeakWarning.warn('proxy_without_geoip')
+
+    # An HTTP proxy carries no UDP: WebRTC and HTTP/3 then act as on a machine whose firewall drops every
+    # datagram, which few people's does. A SOCKS5 proxy with UDP ASSOCIATE sends them from the exit.
+    if proxy and proxy_carries_no_udp(str(proxy.get('server', ''))):
+        LeakWarning.warn('proxy_http_no_udp', i_know_what_im_doing)
+
+    apply_proxy_dns(proxy_dns, proxy, config, firefox_user_prefs, exit_looked_up=bool(geoip))
+    apply_proxy_optimistic_data(proxy_optimistic_data, proxy, firefox_user_prefs)
 
     # After geoip, which decides whether the machine has IPv6 at all.
     set_host_ipv6_default(config, _identity_salt)

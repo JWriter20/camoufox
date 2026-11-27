@@ -27,6 +27,11 @@ custom_fingerprint: >-
 proxy_without_geoip: >-
     When using a proxy, it is heavily recommended that you pass `geoip=True`.
 
+proxy_http_no_udp: >-
+    An HTTP proxy carries no UDP, so WebRTC and HTTP/3 behave as on a machine whose firewall drops all UDP (no
+    server-reflexive candidate, STUN that never answers), which sites can tell from an ordinary user.
+    Use a SOCKS5 proxy that supports UDP ASSOCIATE (`socks5://...`): WebRTC and HTTP/3 then leave from the proxy's exit.
+
 ipv6_elsewhere: >-
     This machine's IPv6 address geolocates somewhere other than the IPv4 address the identity was drawn from,
     so the browser behaves as on an IPv4-only network and sites that only have an IPv6 address will not load.

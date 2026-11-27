@@ -105,6 +105,10 @@
     "browser.cache.disk_cache_ssl": true,
     "browser.cache.disk.smart_size.enabled": true
   },
+  "proxyDohPrefs": {
+    "network.trr.mode": 3,
+    "network.trr.uri": "https://mozilla.cloudflare-dns.com/dns-query"
+  },
   "windowsBehaviourPrefs": {
     "layout.word_select.eat_space_to_next_word": true,
     "general.autoScroll": true,

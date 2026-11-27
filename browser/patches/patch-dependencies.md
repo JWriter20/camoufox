@@ -143,7 +143,9 @@ context:
   document with no HTTP channel, so a direct launch stays direct and a proxied
   one never gathers around its proxy. The new patch keeps a srflx or
   relay address gathered through the proxy as it is, because a page's own STUN
-  server already saw that address. Behind an HTTP proxy, or a SOCKS5 proxy that
+  server already saw that address. It notes that address before the default
+  candidate (the m= port and c= address) takes it, so the SDP names the srflx
+  there too, as stock does once one is gathered. Behind an HTTP proxy, or a SOCKS5 proxy that
   refuses UDP, no srflx surfaces: the page reads a machine whose UDP is
   blocked, not one that made a STUN answer up.
 
@@ -154,6 +156,20 @@ proxy with the tab's load info, as it does for the tab's own loads. Juggler's
 per-context proxy filter then picks that context's proxy. The SOCKS5 control
 connection (`WebrtcUdpAssociation`) runs in the socket process, so the relay
 sees the control connection and the datagrams come from the same address.
+
+`zz-http3-socks5-udp.patch` applies after all three. It moves the association
+`webrtc-socks5-udp.patch` adds (`WebrtcUdpAssociation`) to
+`netwerk/base/Socks5UdpAssociation`, where WebRTC and HTTP/3 both use it, and
+sends each QUIC connection through an association of its own
+([docs/proxy-dns.md](../../docs/proxy-dns.md)). It also edits
+`network-patches.patch`'s neighbourhood in `netwerk/protocol/http/`.
+
+`zz-webrtc-relay-host-port.patch` applies after `zz-http3-socks5-udp.patch`,
+whose `Socks5UdpAssociation` it extends with `GetSelfAddr`. It sends relayed
+datagrams from the host candidate's port, through the host socket itself when
+the control connection leaves from the host candidate's address, so an exit
+that keeps ports reports the host candidate's port to a STUN server, as a home
+router that keeps ports does.
 
 ## Backports
 

@@ -1,7 +1,8 @@
 diff --git a/dom/xul/XULMenuParentElement.cpp b/dom/xul/XULMenuParentElement.cpp
+index 002314dbe8..e5a3736a3f 100644
 --- a/dom/xul/XULMenuParentElement.cpp
 +++ b/dom/xul/XULMenuParentElement.cpp
-@@ -20,9 +20,24 @@
+@@ -21,9 +21,24 @@
  #include "nsStringFwd.h"
  #include "nsXULElement.h"
  #include "nsXULPopupManager.h"
@@ -26,7 +27,7 @@ diff --git a/dom/xul/XULMenuParentElement.cpp b/dom/xul/XULMenuParentElement.cpp
  NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(XULMenuParentElement,
                                                 nsXULElement)
  NS_IMPL_CYCLE_COLLECTION_INHERITED(XULMenuParentElement, nsXULElement,
-@@ -152,13 +167,12 @@ void XULMenuParentElement::SetActiveMenu
+@@ -153,13 +168,12 @@ void XULMenuParentElement::SetActiveMenuChild(XULButtonElement* aChild,
    if (IsInMenuList()) {
      if (nsMenuPopupFrame* f = do_QueryFrame(GetPrimaryFrame())) {
        f->EnsureActiveMenuListItemIsVisible();
@@ -41,7 +42,7 @@ diff --git a/dom/xul/XULMenuParentElement.cpp b/dom/xul/XULMenuParentElement.cpp
          // Fire a command event as the new item, but we don't want to close the
          // menu, blink it, or update any other state of the menuitem. The
          // command event will cause the item to be selected.
-@@ -167,7 +181,6 @@ void XULMenuParentElement::SetActiveMenu
+@@ -168,7 +182,6 @@ void XULMenuParentElement::SetActiveMenuChild(XULButtonElement* aChild,
                                             nullptr, presShell, false, false,
                                             false, false);
        }
@@ -50,6 +51,7 @@ diff --git a/dom/xul/XULMenuParentElement.cpp b/dom/xul/XULMenuParentElement.cpp
    }
  }
 diff --git a/dom/xul/moz.build b/dom/xul/moz.build
+index e67710af18..4fd40cc975 100644
 --- a/dom/xul/moz.build
 +++ b/dom/xul/moz.build
 @@ -87,6 +87,9 @@ LOCAL_INCLUDES += [
@@ -63,16 +65,18 @@ diff --git a/dom/xul/moz.build b/dom/xul/moz.build
  
  FINAL_LIBRARY = "xul"
 diff --git a/layout/xul/moz.build b/layout/xul/moz.build
+index 6fa1452eeb..9c5e32fb41 100644
 --- a/layout/xul/moz.build
 +++ b/layout/xul/moz.build
-@@ -48,3 +48,6 @@ LOCAL_INCLUDES += [
-     "/dom/base",
-     "/dom/xul",
+@@ -58,3 +58,6 @@ SOURCE_HEADERS += [
+     "nsSplitterFrame.h",
+     "SimpleXULLeafFrame.h",
  ]
 +
 +# Camoufox: MaskConfig, for the claimed OS (menulist-keyboard-claimed-os.patch).
 +LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/layout/xul/nsXULPopupManager.cpp b/layout/xul/nsXULPopupManager.cpp
+index 38e3d658fd..7b578c87a1 100644
 --- a/layout/xul/nsXULPopupManager.cpp
 +++ b/layout/xul/nsXULPopupManager.cpp
 @@ -61,6 +61,7 @@
@@ -83,7 +87,7 @@ diff --git a/layout/xul/nsXULPopupManager.cpp b/layout/xul/nsXULPopupManager.cpp
  
  using namespace mozilla;
  using namespace mozilla::dom;
-@@ -2564,7 +2565,12 @@ bool nsXULPopupManager::HandleKeyboardNa
+@@ -2565,7 +2566,12 @@ bool nsXULPopupManager::HandleKeyboardNavigationInPopup(
  #elif defined XP_MACOSX
            Wrap::No;
  #else

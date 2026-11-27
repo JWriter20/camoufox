@@ -668,6 +668,12 @@ export class NetworkObserver {
         }
         if (this._targetRegistry.shouldBustHTTPAuthCacheForProxy(proxy))
           Services.obs.notifyObservers(null, "net:clear-active-logins");
+        // Camoufox: the DoH request itself, and a context's own proxy (whose
+        // names the launch proxy's DoH must not see), are resolved at the exit.
+        const resolvesHost =
+            this._targetRegistry.carriesDoH(proxy) &&
+            !channel.QueryInterface(Ci.nsIHttpChannelInternal).isTRRServiceChannel
+                ? 0 : Ci.nsIProxyInfo.TRANSPARENT_PROXY_RESOLVES_HOST;
         // Camoufox: a SOCKS5 proxy gets its username and password (RFC 1929);
         // Firefox takes credentials for SOCKS proxies only.
         if (proxy.type === 'socks' && (proxy.username || proxy.password)) {
@@ -679,7 +685,7 @@ export class NetworkObserver {
               proxy.password || '',
               '', /* aProxyAuthorizationHeader */
               '', /* aConnectionIsolationKey */
-              Ci.nsIProxyInfo.TRANSPARENT_PROXY_RESOLVES_HOST, /* aFlags */
+              resolvesHost, /* aFlags */
               UINT32_MAX, /* aFailoverTimeout */
               null, /* failover proxy */
           ));
@@ -691,7 +697,7 @@ export class NetworkObserver {
             proxy.port,
             '', /* aProxyAuthorizationHeader */
             '', /* aConnectionIsolationKey */
-            Ci.nsIProxyInfo.TRANSPARENT_PROXY_RESOLVES_HOST, /* aFlags */
+            resolvesHost, /* aFlags */
             UINT32_MAX, /* aFailoverTimeout */
             null, /* failover proxy */
         ));

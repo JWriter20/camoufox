@@ -10,7 +10,7 @@ index 6d55ea7110..e2ae767b72 100644
  
  #ifdef MOZ_X11
  #  include <X11/Xlib.h>
-@@ -185,6 +186,35 @@
+@@ -185,6 +186,35 @@ static already_AddRefed<Screen> MakeScreenGtk(unsigned int aMonitor,
      }
    }
  
@@ -47,7 +47,7 @@ index 6d55ea7110..e2ae767b72 100644
      NS_WARNING("Reporting screen with zero size!");
    }
 diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
-index 07741a3deb..702d44eed9 100644
+index 5d81bea4ff..4258784fad 100644
 --- a/widget/gtk/nsWindow.cpp
 +++ b/widget/gtk/nsWindow.cpp
 @@ -3,6 +3,9 @@
@@ -60,7 +60,7 @@ index 07741a3deb..702d44eed9 100644
  #ifdef MOZ_X11
  #  include "nsWindowX11.h"
  #endif
-@@ -753,8 +756,8 @@
+@@ -746,8 +749,8 @@ void nsWindow::RegisterTouchWindow() {
  
  LayoutDeviceIntPoint nsWindow::GetScreenEdgeSlop() {
    if (DrawsToCSDTitlebar()) {
@@ -71,7 +71,7 @@ index 07741a3deb..702d44eed9 100644
    }
    return {};
  }
-@@ -806,6 +809,11 @@
+@@ -785,6 +788,11 @@ bool nsWindow::ConstrainSizeWithScale(int* aWidth, int* aHeight,
    if (*aWidth <= mClientMargin.LeftRight()) {
      *aWidth = mClientMargin.LeftRight() + 1;
    }
@@ -83,7 +83,7 @@ index 07741a3deb..702d44eed9 100644
    if (*aHeight <= mClientMargin.TopBottom()) {
      *aHeight = mClientMargin.TopBottom() + 1;
    }
-@@ -821,7 +829,7 @@
+@@ -800,7 +808,7 @@ bool nsWindow::ConstrainSizeWithScale(int* aWidth, int* aHeight,
      *aHeight = int(round(tmpHeight / aScale)) + mClientMargin.TopBottom();
      return true;
    }
@@ -92,7 +92,7 @@ index 07741a3deb..702d44eed9 100644
  }
  
  // Constraints are in desktop pixels. GDK coords are also desktop pixels on
-@@ -877,6 +885,114 @@
+@@ -856,6 +864,114 @@ bool nsWindow::ToplevelUsesCSD() const {
    return GetGtkCSDEnv() == GtkCsd::One;
  }
  
@@ -207,7 +207,7 @@ index 07741a3deb..702d44eed9 100644
  bool nsWindow::DrawsToCSDTitlebar() const {
    return mGtkWindowDecoration == GTK_DECORATION_CLIENT && mDrawInTitlebar;
  }
-@@ -893,7 +1009,7 @@
+@@ -872,7 +988,7 @@ void nsWindow::ApplySizeConstraints() {
                                  constraints.mMinSize.width,
                                  constraints.mMinSize.height);
      if (ToplevelUsesCSD()) {
@@ -216,7 +216,7 @@ index 07741a3deb..702d44eed9 100644
        constraints.mMinSize.height += margin.TopBottom();
        constraints.mMinSize.width += margin.LeftRight();
      }
-@@ -901,7 +1017,7 @@
+@@ -880,7 +996,7 @@ void nsWindow::ApplySizeConstraints() {
    }
    if (mSizeConstraints.mMaxSize != DesktopIntSize(NS_MAXSIZE, NS_MAXSIZE)) {
      if (ToplevelUsesCSD()) {
@@ -225,7 +225,7 @@ index 07741a3deb..702d44eed9 100644
        constraints.mMaxSize.height += margin.TopBottom();
        constraints.mMaxSize.width += margin.LeftRight();
      }
-@@ -1106,6 +1222,8 @@
+@@ -1085,6 +1201,8 @@ void nsWindow::Move(const DesktopPoint& aTopLeft) {
  
    // XXX Should we do some AreBoundsSane check here?
    mLastMoveRequest = request;
@@ -234,7 +234,7 @@ index 07741a3deb..702d44eed9 100644
  
    if (!mCreated) {
      LOG("  is not created, return.\n");
-@@ -1669,10 +1787,64 @@
+@@ -1672,10 +1790,64 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
    }
  
    const auto oldMargin = mClientMargin;
@@ -300,9 +300,9 @@ index 07741a3deb..702d44eed9 100644
  
    if (IsPopup()) {
      // Popup windows is not moved by the window manager, and so any change in
-@@ -1709,6 +1881,41 @@
-     mLastSizeRequest.height +=
-         mClientMargin.TopBottom() - oldMargin.TopBottom();
+@@ -1716,6 +1888,41 @@ void nsWindow::RecomputeBounds(bool aScaleChange) {
+       ApplySizeConstraints();
+     }
    }
 +  // Camoufox: a claimed OS's frame is not the one the window manager places
 +  // the window by, so the window rect lands where Gecko asked only once the
@@ -342,7 +342,7 @@ index 07741a3deb..702d44eed9 100644
  
    // We need to send WindowMoved even if only the client margins changed
    // so that BrowserParent picks up the new offsets.
-@@ -3828,12 +4035,42 @@
+@@ -3835,12 +4042,42 @@ void nsWindow::OnWindowStateEvent(GtkWidget* aWidget,
    if (mSizeMode != oldSizeMode) {
      const bool fullscreenChanging = mSizeMode == nsSizeMode_Fullscreen ||
                                      oldSizeMode == nsSizeMode_Fullscreen;
@@ -386,7 +386,7 @@ index 07741a3deb..702d44eed9 100644
      }
      if (mWidgetListener) {
        mWidgetListener->SizeModeChanged(mSizeMode);
-@@ -4755,6 +4992,20 @@
+@@ -4767,6 +5004,20 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
      mGtkWindowAppName = gAppData->name;
    }
  
@@ -407,7 +407,7 @@ index 07741a3deb..702d44eed9 100644
    mCreated = true;
    return NS_OK;
  }
-@@ -4886,7 +5137,7 @@
+@@ -4898,7 +5149,7 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
      // SSD mode expects coordinates with decorations (outer frame)
      // so put the margin offset back.
      if (!ToplevelUsesCSD()) {
@@ -416,7 +416,7 @@ index 07741a3deb..702d44eed9 100644
      }
      return GdkRectangle{cr.x, cr.y, cr.width, cr.height};
    }();
-@@ -4974,11 +5225,16 @@
+@@ -4986,11 +5237,16 @@ void nsWindow::NativeMoveResize(bool aMoved, bool aResized) {
    // the request is granted.
    bool isOrWillBeVisible = mHasReceivedSizeAllocate || mNeedsShow || mIsShown;
    if (!isOrWillBeVisible || IsPopup()) {
@@ -435,7 +435,7 @@ index 07741a3deb..702d44eed9 100644
        NotifyWindowMoved(mClientArea.TopLeft());
      }
      if (aResized) {
-@@ -7727,8 +7983,9 @@
+@@ -7767,8 +8023,9 @@ void nsWindow::InsertEmoji(RefPtr<nsWindow> aToplevelWindow) {
    auto offset = IsTopLevelWidget()
                      ? DesktopIntPoint()
                      : WidgetToScreenOffsetUnscaled() -
@@ -448,10 +448,10 @@ index 07741a3deb..702d44eed9 100644
    LOG("nsWindow::InsertEmoji() carret [%d, %d] offset [%d, %d] height %d",
        int(input.x), int(input.y), int(offset.x), int(offset.y), input.height);
 diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
-index 787e3c4cc3..a817e03de0 100644
+index 042f5bc2f4..0a89bb85e3 100644
 --- a/widget/gtk/nsWindow.h
 +++ b/widget/gtk/nsWindow.h
-@@ -609,6 +609,9 @@
+@@ -618,6 +618,9 @@ class nsWindow : public nsIWidget {
    GtkTextDirection GetTextDirection();
  
    bool DrawsToCSDTitlebar() const;
@@ -461,7 +461,7 @@ index 787e3c4cc3..a817e03de0 100644
    bool ToplevelUsesCSD() const;
  
    void CreateAndPutGdkScrollEvent(mozilla::LayoutDeviceIntPoint aPoint,
-@@ -660,7 +663,18 @@
+@@ -671,7 +674,18 @@ class nsWindow : public nsIWidget {
  
    // See Bounds for these members.
    DesktopIntRect mClientArea;

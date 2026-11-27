@@ -155,6 +155,7 @@ beforeAll(async () => {
 		height: HOST.display[1],
 	});
 	deps.publicIp = async () => HOST.public_ip;
+	deps.publicIpv6 = async () => HOST.public_ipv6 ?? null;
 	const realSalt = mods.fingerprints.identitySalt;
 	deps.identitySalt = (pinned?: unknown) =>
 		pinned === undefined || pinned === null

@@ -1,0 +1,252 @@
+diff --git a/dom/media/webrtc/transport/nr_socket_prsock.cpp b/dom/media/webrtc/transport/nr_socket_prsock.cpp
+index ee6fb75f85..dda5dedd74 100644
+--- a/dom/media/webrtc/transport/nr_socket_prsock.cpp
++++ b/dom/media/webrtc/transport/nr_socket_prsock.cpp
+@@ -1127,8 +1127,59 @@ int NrUdpRelaySocket::sendto(const void* msg, size_t len, int flags,
+     }
+     return 0;
+   }
+-  return relay_->sendto(datagram.Elements(), datagram.Length(), flags,
+-                        &relay_addr_);
++  return SendToRelay(datagram, flags);
++}
++
++int NrUdpRelaySocket::SendToRelay(const nsTArray<uint8_t>& aDatagram,
++                                  int aFlags) {
++  if (relay_) {
++    return relay_->sendto(aDatagram.Elements(), aDatagram.Length(), aFlags,
++                          &relay_addr_);
++  }
++  // NrSocket::sendto would refuse the relay: it is off this host.
++  PRNetAddr naddr;
++  if (nr_transport_addr_to_praddr(&relay_addr_, &naddr)) {
++    return R_BAD_ARGS;
++  }
++  const int32_t sent = PR_SendTo(fd_, aDatagram.Elements(), aDatagram.Length(),
++                                 aFlags, &naddr, PR_INTERVAL_NO_WAIT);
++  if (sent < 0 || static_cast<size_t>(sent) != aDatagram.Length()) {
++    return PR_GetError() == PR_WOULD_BLOCK_ERROR ? R_WOULDBLOCK : R_IO_ERROR;
++  }
++  return 0;
++}
++
++bool NrUdpRelaySocket::Unframe(size_t aGot, void* buf, size_t maxlen,
++                               size_t* len, nr_transport_addr* from) {
++  const uint8_t* p = recv_buf_.Elements();
++  // Only unfragmented.
++  if (aGot < 4 || p[0] || p[1] || p[2]) {
++    return false;
++  }
++  size_t header;
++  uint16_t nport;
++  if (p[3] == 1 && aGot >= 10) {
++    uint32_t ip;
++    memcpy(&ip, p + 4, 4);
++    memcpy(&nport, p + 8, 2);
++    nr_ip4_port_to_transport_addr(ntohl(ip), ntohs(nport), IPPROTO_UDP, from);
++    header = 10;
++  } else if (p[3] == 4 && aGot >= 22) {
++    in6_addr ip;
++    memcpy(&ip, p + 4, 16);
++    memcpy(&nport, p + 20, 2);
++    nr_ip6_port_to_transport_addr(&ip, ntohs(nport), IPPROTO_UDP, from);
++    header = 22;
++  } else {
++    return false;
++  }
++  // A relay read is larger than the caller's buffer, by the header's maximum.
++  if (aGot - header > maxlen) {
++    return false;
++  }
++  *len = aGot - header;
++  memcpy(buf, p + header, *len);
++  return true;
+ }
+ 
+ int NrUdpRelaySocket::recvfrom(void* buf, size_t maxlen, size_t* len,
+@@ -1142,40 +1193,36 @@ int NrUdpRelaySocket::recvfrom(void* buf, size_t maxlen, size_t* len,
+                          &source)) {
+       break;
+     }
+-    const uint8_t* p = recv_buf_.Elements();
+-    // Only the relay speaks for the internet, and only unfragmented.
+-    if (nr_transport_addr_cmp(&source, &relay_addr_,
+-                              NR_TRANSPORT_ADDR_CMP_MODE_ALL) ||
+-        got < 4 || p[0] || p[1] || p[2]) {
+-      continue;
++    // Only the relay speaks for the internet.
++    if (!nr_transport_addr_cmp(&source, &relay_addr_,
++                               NR_TRANSPORT_ADDR_CMP_MODE_ALL) &&
++        Unframe(got, buf, maxlen, len, from)) {
++      return 0;
+     }
+-    size_t header;
+-    uint16_t nport;
+-    if (p[3] == 1 && got >= 10) {
+-      uint32_t ip;
+-      memcpy(&ip, p + 4, 4);
+-      memcpy(&nport, p + 8, 2);
+-      nr_ip4_port_to_transport_addr(ntohl(ip), ntohs(nport), IPPROTO_UDP,
+-                                    from);
+-      header = 10;
+-    } else if (p[3] == 4 && got >= 22) {
+-      in6_addr ip;
+-      memcpy(&ip, p + 4, 16);
+-      memcpy(&nport, p + 20, 2);
+-      nr_ip6_port_to_transport_addr(&ip, ntohs(nport), IPPROTO_UDP, from);
+-      header = 22;
+-    } else {
+-      continue;
++  }
++  if (state_ != State::Relaying || relay_) {
++    return NrSocket::recvfrom(buf, maxlen, len, flags, from);
++  }
++  // This socket talks to the relay itself: what the relay sends is framed.
++  while (true) {
++    recv_buf_.SetLength(kRelayHeaderMax + maxlen);
++    size_t got = 0;
++    if (int r = NrSocket::recvfrom(recv_buf_.Elements(), recv_buf_.Length(),
++                                   &got, flags, from)) {
++      return r;
+     }
+-    // A relay read is larger than the caller's buffer, by the header's maximum.
+-    if (got - header > maxlen) {
++    if (!nr_transport_addr_cmp(from, &relay_addr_,
++                               NR_TRANSPORT_ADDR_CMP_MODE_ALL)) {
++      if (Unframe(got, buf, maxlen, len, from)) {
++        return 0;
++      }
+       continue;
+     }
+-    *len = got - header;
+-    memcpy(buf, p + header, *len);
++    // A datagram that stays on this host, read as NrSocket would read it.
++    *len = std::min(got, maxlen);
++    memcpy(buf, recv_buf_.Elements(), *len);
+     return 0;
+   }
+-  return NrSocket::recvfrom(buf, maxlen, len, flags, from);
+ }
+ 
+ int NrUdpRelaySocket::async_wait(int how, NR_async_cb cb, void* cb_arg,
+@@ -1212,29 +1259,52 @@ void NrUdpRelaySocket::close() {
+ void NrUdpRelaySocket::OnRelayReady(const net::NetAddr& aRelay) {
+   ASSERT_ON_THREAD(ststhread_);
+   nr_transport_addr relay, local;
+-  if (nr_netaddr_to_transport_addr(&aRelay, &relay, IPPROTO_UDP)) {
++  net::NetAddr self;
++  uint16_t port;
++  if (nr_netaddr_to_transport_addr(&aRelay, &relay, IPPROTO_UDP) ||
++      NS_FAILED(association_->GetSelfAddr(&self)) ||
++      nr_netaddr_to_transport_addr(&self, &local, IPPROTO_UDP) ||
++      nr_transport_addr_get_port(&my_addr_, &port)) {
+     return OnRelayFailed();
+   }
+-  if (relay.ip_version == NR_IPV4) {
+-    nr_ip4_port_to_transport_addr(INADDR_ANY, 0, IPPROTO_UDP, &local);
+-  } else {
+-    in6_addr any = in6addr_any;
+-    nr_ip6_port_to_transport_addr(&any, 0, IPPROTO_UDP, &local);
++  // A relay given by IPv6 address is reached over IPv6 whatever the control
++  // connection used, from wherever the route leaves.
++  if (local.ip_version != relay.ip_version) {
++    if (relay.ip_version == NR_IPV4) {
++      nr_ip4_port_to_transport_addr(INADDR_ANY, 0, IPPROTO_UDP, &local);
++    } else {
++      in6_addr any = in6addr_any;
++      nr_ip6_port_to_transport_addr(&any, 0, IPPROTO_UDP, &local);
++    }
+   }
+-  RefPtr<NrSocket> socket = new NrSocket();
+-  if (socket->create(&local)) {
+-    return OnRelayFailed();
++  // The relay hears from the host candidate's port, as a router hears from a
++  // machine's own socket: an exit that keeps ports, as most home routers do,
++  // then reports the same port to a STUN server. When the control connection
++  // leaves from this socket's address, that is this socket itself.
++  nr_transport_addr_set_port(&local, port);
++  if (nr_transport_addr_cmp(&local, &my_addr_,
++                            NR_TRANSPORT_ADDR_CMP_MODE_ALL)) {
++    RefPtr<NrSocket> socket = new NrSocket();
++    if (socket->create(&local)) {
++      // The port is taken on that address: the relay hears from another, as
++      // a router that cannot keep a port maps it to another.
++      nr_transport_addr_set_port(&local, 0);
++      socket = new NrSocket();
++      if (socket->create(&local)) {
++        return OnRelayFailed();
++      }
++    }
++    relay_ = socket;
+   }
+-  relay_ = socket;
+   relay_addr_ = relay;
+   state_ = State::Relaying;
+   r_log(LOG_GENERIC, LOG_INFO, "UDP of %s goes through the relay at %s",
+         my_addr_.as_string, relay_addr_.as_string);
+   for (const nsTArray<uint8_t>& datagram : pending_) {
+-    relay_->sendto(datagram.Elements(), datagram.Length(), 0, &relay_addr_);
++    SendToRelay(datagram, 0);
+   }
+   pending_.clear();
+-  if (poll_flags() & PR_POLL_READ) {
++  if (relay_ && (poll_flags() & PR_POLL_READ)) {
+     relay_->async_wait(NR_ASYNC_WAIT_READ, RelayReadable, this,
+                        (char*)__FUNCTION__, __LINE__);
+   }
+diff --git a/dom/media/webrtc/transport/nr_socket_prsock.h b/dom/media/webrtc/transport/nr_socket_prsock.h
+index 74e9b52e2b..cbf5cf884d 100644
+--- a/dom/media/webrtc/transport/nr_socket_prsock.h
++++ b/dom/media/webrtc/transport/nr_socket_prsock.h
+@@ -239,14 +239,20 @@ class NrUdpRelaySocket final : public NrSocket,
+   ~NrUdpRelaySocket() override;
+   static void RelayReadable(NR_SOCKET s, int how, void* arg);
+   void EndRelay();
++  int SendToRelay(const nsTArray<uint8_t>& aDatagram, int aFlags);
++  // The datagram in recv_buf_ (aGot bytes, from the relay) without its RFC 1928
++  // header, into buf; false when it is malformed or larger than maxlen.
++  bool Unframe(size_t aGot, void* buf, size_t maxlen, size_t* len,
++               nr_transport_addr* from);
+ 
+   enum class State { Associating, Relaying, Failed };
+   State state_ = State::Associating;
+   std::shared_ptr<NrSocketProxyConfig> config_;
+   RefPtr<net::Socks5UdpAssociation> association_;
+-  // The socket that talks to the relay. It is not bound to the host address,
+-  // so it leaves from the address the control connection does, which is the
+-  // only one the relay accepts.
++  // The socket that talks to the relay when it is not this one: the relay
++  // accepts datagrams only from the address the control connection leaves
++  // from, and this socket is bound to the host candidate's. Null while relaying
++  // means this socket talks to the relay itself (OnRelayReady).
+   RefPtr<NrSocket> relay_;
+   nr_transport_addr relay_addr_;
+   // Datagrams, already framed, sent before the relay was ready.
+diff --git a/netwerk/base/Socks5UdpAssociation.cpp b/netwerk/base/Socks5UdpAssociation.cpp
+index 9803c67c94..956a48b427 100644
+--- a/netwerk/base/Socks5UdpAssociation.cpp
++++ b/netwerk/base/Socks5UdpAssociation.cpp
+@@ -262,6 +262,10 @@ void Socks5UdpAssociation::Fail(const char* aWhy) {
+   }
+ }
+ 
++nsresult Socks5UdpAssociation::GetSelfAddr(NetAddr* aAddr) const {
++  return mTransport ? mTransport->GetSelfAddr(aAddr) : NS_ERROR_NOT_AVAILABLE;
++}
++
+ void Socks5UdpAssociation::Close() {
+   MOZ_ASSERT(mSocketThread->IsOnCurrentThread());
+   mOwner = nullptr;
+diff --git a/netwerk/base/Socks5UdpAssociation.h b/netwerk/base/Socks5UdpAssociation.h
+index 65eaee8c4e..c957467cf4 100644
+--- a/netwerk/base/Socks5UdpAssociation.h
++++ b/netwerk/base/Socks5UdpAssociation.h
+@@ -51,6 +51,8 @@ class Socks5UdpAssociation final : public nsIInputStreamCallback,
+   void Connect(const nsACString& aType, const nsACString& aHost, int32_t aPort,
+                const nsACString& aUsername, const nsACString& aPassword);
+   void Close();
++  // The address the control connection leaves from, once it is connected.
++  nsresult GetSelfAddr(NetAddr* aAddr) const;
+   // How long the proxy took to answer the UDP ASSOCIATE request: one round
+   // trip to it. Zero until the relay is ready.
+   TimeDuration RoundTrip() const { return mRoundTrip; }
